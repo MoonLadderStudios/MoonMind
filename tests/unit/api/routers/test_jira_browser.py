@@ -66,8 +66,12 @@ class _FakeJiraBrowserService:
             items=[JiraBoard(id="42", name="Delivery", projectKey=project_key)],
         )
 
-    async def list_columns(self, board_id: str) -> JiraBoardColumns:
-        self.calls.append(("list_columns", board_id))
+    async def list_columns(
+        self,
+        board_id: str,
+        project_key: str | None = None,
+    ) -> JiraBoardColumns:
+        self.calls.append(("list_columns", {"board_id": board_id, "project_key": project_key}))
         self._maybe_raise()
         board = JiraBoard(id=board_id, name="Delivery", projectKey="ENG")
         return JiraBoardColumns(
@@ -77,8 +81,18 @@ class _FakeJiraBrowserService:
             ],
         )
 
-    async def list_issues(self, board_id: str, q: str | None = None) -> JiraBoardIssues:
-        self.calls.append(("list_issues", {"board_id": board_id, "q": q}))
+    async def list_issues(
+        self,
+        board_id: str,
+        q: str | None = None,
+        project_key: str | None = None,
+    ) -> JiraBoardIssues:
+        self.calls.append(
+            (
+                "list_issues",
+                {"board_id": board_id, "q": q, "project_key": project_key},
+            )
+        )
         self._maybe_raise()
         column = JiraColumn(id="to-do", name="To Do", order=0, count=1, statusIds=["1"])
         item = JiraIssueSummary(
@@ -98,8 +112,18 @@ class _FakeJiraBrowserService:
         self,
         issue_key: str,
         board_id: str | None = None,
+        project_key: str | None = None,
     ) -> JiraIssueDetail:
-        self.calls.append(("get_issue", {"issue_key": issue_key, "board_id": board_id}))
+        self.calls.append(
+            (
+                "get_issue",
+                {
+                    "issue_key": issue_key,
+                    "board_id": board_id,
+                    "project_key": project_key,
+                },
+            )
+        )
         self._maybe_raise()
         return JiraIssueDetail(
             issueKey=issue_key,
@@ -197,16 +221,19 @@ async def test_project_boards_endpoint(router_app: tuple[FastAPI, _FakeJiraBrows
 
 
 async def test_board_columns_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowserService]) -> None:
-    app, _service = router_app
+    app, service = router_app
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
-        response = await client.get("/api/jira/boards/42/columns")
+        response = await client.get("/api/jira/boards/42/columns?projectKey=ENG")
 
     assert response.status_code == 200
     assert response.json()["columns"][0]["statusIds"] == ["1"]
+    assert service.calls == [
+        ("list_columns", {"board_id": "42", "project_key": "ENG"})
+    ]
 
 
 async def test_board_issues_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowserService]) -> None:
@@ -216,11 +243,13 @@ async def test_board_issues_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowser
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
-        response = await client.get("/api/jira/boards/42/issues?q=browser")
+        response = await client.get("/api/jira/boards/42/issues?q=browser&projectKey=ENG")
 
     assert response.status_code == 200
     assert response.json()["itemsByColumn"]["to-do"][0]["issueKey"] == "ENG-1"
-    assert service.calls == [("list_issues", {"board_id": "42", "q": "browser"})]
+    assert service.calls == [
+        ("list_issues", {"board_id": "42", "q": "browser", "project_key": "ENG"})
+    ]
 
 
 async def test_issue_detail_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowserService]) -> None:
@@ -230,12 +259,17 @@ async def test_issue_detail_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowser
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
-        response = await client.get("/api/jira/issues/eng-1?boardId=42")
+        response = await client.get("/api/jira/issues/eng-1?boardId=42&projectKey=ENG")
 
     assert response.status_code == 200
     assert response.json()["recommendedImports"]["stepInstructions"] == "Complete Jira story ENG-1"
     assert response.json()["column"] == {"id": "to-do", "name": "To Do"}
-    assert service.calls == [("get_issue", {"issue_key": "ENG-1", "board_id": "42"})]
+    assert service.calls == [
+        (
+            "get_issue",
+            {"issue_key": "ENG-1", "board_id": "42", "project_key": "ENG"},
+        )
+    ]
 
 
 async def test_issue_attachment_download_endpoint(

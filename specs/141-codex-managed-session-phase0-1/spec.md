@@ -49,7 +49,7 @@ MoonMind workflow callers need the `MoonMind.AgentSession` workflow to expose th
 
 ### Functional Requirements
 
-- **FR-001**: The canonical `docs/ManagedAgents/CodexManagedSessionPlane.md` doc MUST describe artifacts plus bounded workflow metadata as operator/audit truth and `ManagedSessionStore` as the operational recovery/reconciliation index.
+- **FR-001**: The canonical `docs/ManagedAgents/CodexCliManagedSessions.md` doc MUST describe artifacts plus bounded workflow metadata as operator/audit truth and `ManagedSessionStore` as the operational recovery/reconciliation index.
 - **FR-002**: The canonical doc MUST identify the managed-session controller/supervisor path as the production artifact publisher and MUST not present the transitional in-container summary/publication helpers as the production path.
 - **FR-003**: `MoonMind.AgentSession` MUST initialize handler-visible workflow binding state via `@workflow.init`.
 - **FR-004**: `MoonMind.AgentSession` MUST replace the generic mutating `control_action` signal with typed Updates for `SendFollowUp`, `InterruptTurn`, `SteerTurn`, `ClearSession`, `CancelSession`, and `TerminateSession`.

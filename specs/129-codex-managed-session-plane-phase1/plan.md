@@ -28,7 +28,7 @@ Freeze the Codex managed session-plane MVP contract before implementing session 
 | `moonmind/schemas/managed_session_models.py` | Add Codex session-plane contract and state models. | FR-001 through FR-007, NF-001 |
 | `moonmind/schemas/__init__.py` | Export the new session-plane schema symbols. | Keep schema imports consistent for downstream code. |
 | `tests/unit/schemas/test_managed_session_models.py` | Add TDD coverage for fixed MVP defaults and clear/reset semantics. | NF-002 |
-| `docs/ManagedAgents/CodexManagedSessionPlane.md` | Add desired-state canonical doc for the Codex managed session plane. | FR-008 |
+| `docs/ManagedAgents/CodexCliManagedSessions.md` | Add desired-state canonical doc for the Codex managed session plane. | FR-008 |
 | `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` | Add related-doc link to the new canonical session-plane contract. | Keep orchestration docs connected. |
 | `docs/Temporal/ArtifactPresentationContract.md` | Add related-doc link to the new canonical session-plane contract. | Keep artifact continuity docs connected. |
 | `specs/129-codex-managed-session-plane-phase1/*` | Add phase spec artifacts. | Principle XI |

@@ -214,6 +214,7 @@ describe("Task Create Entrypoint", () => {
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        const path = url.split("?")[0];
         if (url.startsWith("/api/tasks/skills")) {
           return Promise.resolve({
             ok: true,
@@ -1112,7 +1113,7 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url === "/api/jira/boards/42/columns") {
+        if (path === "/api/jira/boards/42/columns") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1124,7 +1125,7 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url === "/api/jira/boards/84/columns") {
+        if (path === "/api/jira/boards/84/columns") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1133,7 +1134,7 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url === "/api/jira/boards/42/issues") {
+        if (path === "/api/jira/boards/42/issues") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1167,7 +1168,7 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url === "/api/jira/boards/84/issues") {
+        if (path === "/api/jira/boards/84/issues") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1188,7 +1189,7 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url === "/api/jira/issues/ENG-202") {
+        if (path === "/api/jira/issues/ENG-202") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -1210,7 +1211,7 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url === "/api/jira/issues/MY-PROJ-123") {
+        if (path === "/api/jira/issues/MY-PROJ-123") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -3586,6 +3587,27 @@ describe("Task Create Entrypoint", () => {
     expect(screen.queryByText("ENG-101")).toBeNull();
   });
 
+  it("sends the selected Jira project scope with board and story requests", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira story for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    const requestUrls = fetchSpy.mock.calls.map(([input]) => String(input));
+    expect(requestUrls).toContain("/api/jira/boards/42/columns?projectKey=ENG");
+    expect(requestUrls).toContain("/api/jira/boards/42/issues?projectKey=ENG");
+    expect(requestUrls).toContain(
+      "/api/jira/issues/ENG-202?boardId=42&projectKey=ENG",
+    );
+  });
+
   it("shows project load failures only inside the Jira browser and keeps manual editing available", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -3690,7 +3712,8 @@ describe("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === "/api/jira/boards/42/columns") {
+      const path = url.split("?")[0];
+      if (path === "/api/jira/boards/42/columns") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -3699,7 +3722,7 @@ describe("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url === "/api/jira/boards/42/issues") {
+      if (path === "/api/jira/boards/42/issues") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -3731,7 +3754,8 @@ describe("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === "/api/jira/boards/42/columns") {
+      const path = url.split("?")[0];
+      if (path === "/api/jira/boards/42/columns") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -3740,7 +3764,7 @@ describe("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url === "/api/jira/boards/42/issues") {
+      if (path === "/api/jira/boards/42/issues") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -3963,7 +3987,8 @@ describe("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === "/api/jira/issues/ENG-202") {
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
         return Promise.resolve({
           ok: false,
           status: 502,
@@ -4150,7 +4175,8 @@ describe("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === "/api/jira/issues/ENG-202") {
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -4196,7 +4222,8 @@ describe("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === "/api/jira/issues/ENG-202") {
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -4744,7 +4771,8 @@ describe("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === "/api/jira/issues/ENG-202") {
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
         return Promise.resolve({
           ok: true,
           json: async () => ({

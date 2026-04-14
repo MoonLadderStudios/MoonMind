@@ -314,7 +314,7 @@ managedAgents:
         Run relevant tests before marking work complete.
       references:
         - docs/Architecture/ServiceBoundaries.md
-        - docs/ManagedAgents/CodexManagedSessionPlane.md
+        - docs/ManagedAgents/CodexCliManagedSessions.md
     sessionPolicy:
       reuse: resume-or-create
       retention: keep-history
@@ -589,7 +589,7 @@ This document is the shared, runtime-neutral abstraction layer.
 
 It should be read together with runtime-specific documents such as:
 
-- `docs\ManagedAgents\CodexManagedSessionPlane.md`
+- `docs\ManagedAgents\CodexCliManagedSessions.md`
 
 Future runtime docs should follow the same pattern:
 

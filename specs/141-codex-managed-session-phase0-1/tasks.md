@@ -20,7 +20,7 @@
 
 **Purpose**: Align docs and schema contracts with the intended Phase 0 and Phase 1 surface.
 
-- [X] T005 Update `docs/ManagedAgents/CodexManagedSessionPlane.md` to distinguish operator truth, recovery index, and disposable cache state
+- [X] T005 Update `docs/ManagedAgents/CodexCliManagedSessions.md` to distinguish operator truth, recovery index, and disposable cache state
 - [X] T006 Add typed workflow update request models to `moonmind/schemas/managed_session_models.py`
 
 ---
@@ -31,7 +31,7 @@
 
 **Independent Test**: Read the canonical doc and confirm the production artifact publisher and truth surfaces are explicit.
 
-- [X] T007 [US1] Document the controller/supervisor publication path and demote the in-container summary/publication helpers to fallback-only language in `docs/ManagedAgents/CodexManagedSessionPlane.md`
+- [X] T007 [US1] Document the controller/supervisor publication path and demote the in-container summary/publication helpers to fallback-only language in `docs/ManagedAgents/CodexCliManagedSessions.md`
 
 ---
 

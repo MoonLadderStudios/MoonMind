@@ -3,7 +3,7 @@
 ## Inputs reviewed
 
 - `docs/ManagedAgents/LiveLogs.md`
-- `docs/ManagedAgents/CodexManagedSessionPlane.md`
+- `docs/ManagedAgents/CodexCliManagedSessions.md`
 - `docs/tmp/009-LiveLogsPlan.md`
 - `specs/141-live-logs-history-events/*`
 - `frontend/src/entrypoints/task-detail.tsx`

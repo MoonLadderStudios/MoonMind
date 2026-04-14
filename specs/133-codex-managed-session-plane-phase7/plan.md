@@ -31,7 +31,7 @@ Build the durable reset slice of the Codex managed-session plane. This phase tea
 
 ## Research
 
-- `docs/ManagedAgents/CodexManagedSessionPlane.md` already fixes clear/reset semantics as two artifacts plus an epoch bump, so the implementation only needs to align the Phase 6 durable session layer to that desired-state contract.
+- `docs/ManagedAgents/CodexCliManagedSessions.md` already fixes clear/reset semantics as two artifacts plus an epoch bump, so the implementation only needs to align the Phase 6 durable session layer to that desired-state contract.
 - `CodexManagedSessionRecord` already has `latest_checkpoint_ref` and `latest_control_event_ref`, which means Phase 7 can land without changing activity/workflow schemas.
 - `ManagedSessionSupervisor` already owns durable log/diagnostics publication using the session artifact storage root, making it the correct place to add reset artifact writing instead of embedding file IO in workflow code.
 - The current controller updates epoch/thread/status on `clear_session` but does not publish continuity artifacts, so the minimum viable change is controller-triggered supervisor publication after the remote clear succeeds.

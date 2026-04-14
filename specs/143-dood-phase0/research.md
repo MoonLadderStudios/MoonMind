@@ -14,7 +14,7 @@ Phase 0 of the DooD rollout is a contract-locking step. The main question is not
 
 ### Decision: Add short cross-reference wording instead of duplicating the full DooD design
 
-- **What was chosen**: Add concise references in `docs/ManagedAgents/CodexManagedSessionPlane.md` and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`.
+- **What was chosen**: Add concise references in `docs/ManagedAgents/CodexCliManagedSessions.md` and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`.
 - **Rationale**: Constitution Principle XII requires canonical docs to stay declarative and avoid duplicating volatile rollout detail. The DooD doc should remain the detailed source while adjacent docs state only the boundary relevant to their scope.
 - **Alternatives considered**: Copy large DooD sections into the session-plane and execution-model docs. Rejected because duplication would make drift more likely.
 
@@ -35,7 +35,7 @@ Phase 0 of the DooD rollout is a contract-locking step. The main question is not
 | Area | Current state | Phase 0 action |
 |------|---------------|----------------|
 | `docs/ManagedAgents/DockerOutOfDocker.md` | Already defines glossary and one-shot workload emphasis | Tighten only where tracker/Phase 0 wording needs to stay explicit |
-| `docs/ManagedAgents/CodexManagedSessionPlane.md` | Links to DooD doc but does not explicitly describe session-assisted workload tools | Add short cross-reference paragraph |
+| `docs/ManagedAgents/CodexCliManagedSessions.md` | Links to DooD doc but does not explicitly describe session-assisted workload tools | Add short cross-reference paragraph |
 | `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` | Defines true agent-runtime boundary but does not name Docker-backed workload tools explicitly | Add short execution-model note |
 | `docs/tmp/remaining-work/` | No DooD tracker exists yet | Add tracker and register it in README |
 | `tests/unit/` | No DooD Phase 0 documentation contract test exists | Add focused pytest coverage |

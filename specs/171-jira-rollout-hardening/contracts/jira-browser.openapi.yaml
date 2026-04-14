@@ -71,6 +71,12 @@ paths:
           required: true
           schema:
             type: string
+        - name: projectKey
+          in: query
+          required: false
+          description: Selected project scope from the project-to-board browse path.
+          schema:
+            type: string
       responses:
         "200":
           description: Board columns.
@@ -97,6 +103,12 @@ paths:
           required: false
           schema:
             type: string
+        - name: projectKey
+          in: query
+          required: false
+          description: Selected project scope used for policy checks and issue filtering.
+          schema:
+            type: string
       responses:
         "200":
           description: Issues grouped by column.
@@ -121,6 +133,12 @@ paths:
         - name: boardId
           in: query
           required: false
+          schema:
+            type: string
+        - name: projectKey
+          in: query
+          required: false
+          description: Selected project scope used for policy checks and column context.
           schema:
             type: string
       responses:

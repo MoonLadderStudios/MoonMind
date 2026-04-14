@@ -6560,7 +6560,9 @@ export interface operations {
     };
     list_board_columns_api_jira_boards__board_id__columns_get: {
         parameters: {
-            query?: never;
+            query?: {
+                projectKey?: string | null;
+            };
             header?: never;
             path: {
                 board_id: string;
@@ -6593,6 +6595,7 @@ export interface operations {
         parameters: {
             query?: {
                 q?: string | null;
+                projectKey?: string | null;
             };
             header?: never;
             path: {
@@ -6626,6 +6629,7 @@ export interface operations {
         parameters: {
             query?: {
                 boardId?: string | null;
+                projectKey?: string | null;
             };
             header?: never;
             path: {

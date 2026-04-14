@@ -46,7 +46,7 @@ Detailed true-agent execution lifecycle rules live in `docs/Temporal/ManagedAndE
 - `docs/Temporal/ArtifactPresentationContract.md`
 - `docs/Temporal/ErrorTaxonomy.md`
 - `docs/MoonMindArchitecture.md`
-- `docs/ManagedAgents/CodexManagedSessionPlane.md`
+- `docs/ManagedAgents/CodexCliManagedSessions.md`
 - `docs/ManagedAgents/LiveLogs.md`
 - `docs/ManagedAgents/DockerOutOfDocker.md`
 - `docs/Tools/JiraIntegration.md`

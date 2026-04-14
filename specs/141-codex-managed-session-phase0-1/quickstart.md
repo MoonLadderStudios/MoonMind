@@ -18,7 +18,7 @@
 
 3. Inspect the canonical doc and the workflow surface:
 
-- `docs/ManagedAgents/CodexManagedSessionPlane.md`
+- `docs/ManagedAgents/CodexCliManagedSessions.md`
 - `moonmind/workflows/temporal/workflows/agent_session.py`
 
 Expected outcome: the doc distinguishes truth surfaces explicitly, and workflow mutations go through typed updates with validators rather than the generic `control_action` signal.

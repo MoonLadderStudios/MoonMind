@@ -132,11 +132,12 @@ async def list_project_boards(
 )
 async def list_board_columns(
     board_id: str,
+    project_key: str | None = Query(None, alias="projectKey"),
     _user: User = Depends(get_current_user()),
     service: JiraBrowserService = Depends(_get_service),
 ) -> JiraBoardColumns:
     try:
-        return await service.list_columns(board_id)
+        return await service.list_columns(board_id, project_key=project_key)
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
     except Exception:
@@ -151,11 +152,12 @@ async def list_board_columns(
 async def list_board_issues(
     board_id: str,
     q: str | None = Query(None),
+    project_key: str | None = Query(None, alias="projectKey"),
     _user: User = Depends(get_current_user()),
     service: JiraBrowserService = Depends(_get_service),
 ) -> JiraBoardIssues:
     try:
-        return await service.list_issues(board_id, q=q)
+        return await service.list_issues(board_id, q=q, project_key=project_key)
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
     except Exception:
@@ -170,11 +172,16 @@ async def list_board_issues(
 async def get_issue(
     issue_key: str,
     board_id: str | None = Query(None, alias="boardId"),
+    project_key: str | None = Query(None, alias="projectKey"),
     _user: User = Depends(get_current_user()),
     service: JiraBrowserService = Depends(_get_service),
 ) -> JiraIssueDetail:
     try:
-        return await service.get_issue(issue_key.upper(), board_id=board_id)
+        return await service.get_issue(
+            issue_key.upper(),
+            board_id=board_id,
+            project_key=project_key,
+        )
     except JiraToolError as exc:
         raise _to_http_exception(exc) from None
     except Exception:
