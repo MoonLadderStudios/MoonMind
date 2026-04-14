@@ -1,0 +1,354 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Jira Create-Page Browser API
+  version: 0.1.0
+  description: Read-only MoonMind-owned Jira browser contracts for Create-page story import.
+paths:
+  /api/jira/connections/verify:
+    get:
+      operationId: verifyJiraConnection
+      summary: Verify the configured Jira connection or a project-scoped connection boundary.
+      parameters:
+        - name: projectKey
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Connection verification result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraConnectionVerification"
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserError"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserError"
+  /api/jira/projects:
+    get:
+      operationId: listJiraProjects
+      summary: List Jira projects available under MoonMind policy.
+      responses:
+        "200":
+          description: Available projects.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraProjectList"
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserError"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserError"
+  /api/jira/projects/{projectKey}/boards:
+    get:
+      operationId: listJiraProjectBoards
+      summary: List boards for a Jira project.
+      parameters:
+        - name: projectKey
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Boards for the project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraBoardList"
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserError"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserError"
+  /api/jira/boards/{boardId}/columns:
+    get:
+      operationId: listJiraBoardColumns
+      summary: List board columns in board order.
+      parameters:
+        - name: boardId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Board columns.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraBoardColumns"
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserError"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserError"
+  /api/jira/boards/{boardId}/issues:
+    get:
+      operationId: listJiraBoardIssues
+      summary: List board issues grouped by resolved board column.
+      parameters:
+        - name: boardId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Issues grouped by column.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraBoardIssues"
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserError"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserError"
+  /api/jira/issues/{issueKey}:
+    get:
+      operationId: getJiraIssueDetail
+      summary: Fetch normalized issue detail and recommended import text.
+      parameters:
+        - name: issueKey
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: boardId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Normalized issue detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraIssueDetail"
+        "4XX":
+          $ref: "#/components/responses/JiraBrowserError"
+        "5XX":
+          $ref: "#/components/responses/JiraBrowserError"
+components:
+  responses:
+    JiraBrowserError:
+      description: Structured safe Jira browser error.
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - detail
+            properties:
+              detail:
+                $ref: "#/components/schemas/JiraBrowserErrorDetail"
+  schemas:
+    JiraBrowserErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+        - source
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        source:
+          type: string
+          const: jira_browser
+        action:
+          type: string
+    JiraConnectionVerification:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          type: boolean
+        accountId:
+          type: string
+        displayName:
+          type: string
+        projectKey:
+          type: string
+        projectName:
+          type: string
+    JiraProjectList:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/JiraProject"
+    JiraProject:
+      type: object
+      required:
+        - projectKey
+        - name
+      properties:
+        projectKey:
+          type: string
+        name:
+          type: string
+        id:
+          type: string
+    JiraBoardList:
+      type: object
+      required:
+        - items
+      properties:
+        projectKey:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/JiraBoard"
+    JiraBoard:
+      type: object
+      required:
+        - id
+        - name
+        - projectKey
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        projectKey:
+          type: string
+        type:
+          type: string
+    JiraBoardColumns:
+      type: object
+      required:
+        - board
+        - columns
+      properties:
+        board:
+          $ref: "#/components/schemas/JiraBoard"
+        columns:
+          type: array
+          items:
+            $ref: "#/components/schemas/JiraColumn"
+    JiraColumn:
+      type: object
+      required:
+        - id
+        - name
+        - order
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        order:
+          type: integer
+        count:
+          type: integer
+          minimum: 0
+        statusIds:
+          type: array
+          items:
+            type: string
+    JiraBoardIssues:
+      type: object
+      required:
+        - boardId
+        - columns
+        - itemsByColumn
+      properties:
+        boardId:
+          type: string
+        columns:
+          type: array
+          items:
+            $ref: "#/components/schemas/JiraColumn"
+        itemsByColumn:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: "#/components/schemas/JiraIssueSummary"
+        unmappedItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/JiraIssueSummary"
+    JiraIssueSummary:
+      type: object
+      required:
+        - issueKey
+        - summary
+        - columnId
+      properties:
+        issueKey:
+          type: string
+        summary:
+          type: string
+        issueType:
+          type: string
+        statusId:
+          type: string
+        statusName:
+          type: string
+        assignee:
+          type: string
+        updatedAt:
+          type: string
+        columnId:
+          type: string
+    JiraIssueDetail:
+      allOf:
+        - $ref: "#/components/schemas/JiraIssueSummary"
+        - type: object
+          required:
+            - descriptionText
+            - acceptanceCriteriaText
+            - recommendedImports
+          properties:
+            url:
+              type: string
+            column:
+              $ref: "#/components/schemas/JiraIssueColumn"
+            status:
+              $ref: "#/components/schemas/JiraIssueStatus"
+            descriptionText:
+              type: string
+            acceptanceCriteriaText:
+              type: string
+            recommendedImports:
+              $ref: "#/components/schemas/JiraIssueRecommendations"
+    JiraIssueColumn:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    JiraIssueStatus:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    JiraIssueRecommendations:
+      type: object
+      required:
+        - presetInstructions
+        - stepInstructions
+      properties:
+        presetInstructions:
+          type: string
+        stepInstructions:
+          type: string
