@@ -1,64 +1,98 @@
 # Specification Analysis Report
 
-Prompt B remediation has been applied. No open CRITICAL, HIGH, MEDIUM, or LOW findings remain.
+Feature: `171-jira-rollout-hardening`
 
-| ID | Category | Original Severity | Location(s) | Status | Remediation Applied |
+Analyzed artifacts:
+- `specs/171-jira-rollout-hardening/spec.md`
+- `specs/171-jira-rollout-hardening/plan.md`
+- `specs/171-jira-rollout-hardening/tasks.md`
+- `.specify/memory/constitution.md`
+
+## Executive Summary
+
+The Jira rollout hardening artifacts are broadly aligned and implementation-ready. The spec, plan, and tasks all preserve runtime mode, keep Jira browser integration behind the Create-page runtime gate, reuse the trusted server-side Jira boundary, and include both production runtime code changes and validation tests.
+
+One medium-severity coverage gap remains: the session-only remembered project/board behavior is specified as required but is not called out by an explicit implementation or validation task. One low-severity measurable-outcome ambiguity remains around what "responsive for ordinary Jira boards" means.
+
+## Findings
+
+| ID | Category | Severity | Location(s) | Summary | Recommendation |
 | --- | --- | --- | --- | --- | --- |
-| C1 | Coverage | MEDIUM | `specs/170-temporal-editing-hardening/spec.md`: FR-014; `specs/170-temporal-editing-hardening/tasks.md`: T048, T050 | Remediated | T048 now explicitly inspects and updates current Temporal-native route/copy guidance where needed in `specs/170-temporal-editing-hardening/quickstart.md`, `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and `docs/tmp/101-PlansOverview.md`. T050 now searches those current docs/internal references along with runtime source surfaces. |
-| I1 | Inconsistency | LOW | `specs/170-temporal-editing-hardening/plan.md`: Source Code section; `specs/170-temporal-editing-hardening/tasks.md`: all phases | Remediated | Removed `moonmind/workflows/temporal/service.py` from the planned source surface list because implementation is intentionally scoped to the API/router, dashboard config, schema, frontend helper, and Mission Control entrypoints. |
+| COV-001 | Coverage | MEDIUM | `specs/171-jira-rollout-hardening/spec.md` FR-023; `specs/171-jira-rollout-hardening/tasks.md` | FR-023 requires session-only restoration of the last selected Jira project/board when enabled. The task list includes browser state and provenance work, but no explicit implementation or validation task for session storage behavior. | Add explicit tasks for storing/restoring last project/board only when `rememberLastBoardInSession` is enabled, plus a frontend test covering enabled and disabled behavior. |
+| AMB-001 | Ambiguity | LOW | `specs/171-jira-rollout-hardening/spec.md` SC-001; `specs/171-jira-rollout-hardening/plan.md` Performance Goals | The success criterion says the Jira browser remains responsive for ordinary Jira boards, but it does not define a board size, page size, or latency threshold. | Define a bounded scenario such as N columns and M issues, or keep this as an operator-observed acceptance criterion if no hard performance target is needed for this phase. |
 
-## Coverage Summary
+## Coverage Summary Table
 
 | Requirement Key | Has Task? | Task IDs | Notes |
 | --- | --- | --- | --- |
-| FR-001 client telemetry for detail edit/rerun clicks | Yes | T013, T018, T019, T025 | Covered by frontend click telemetry tests and implementation. |
-| FR-002 draft reconstruction telemetry | Yes | T014, T020, T025 | Covered for success and failure with bounded reasons. |
-| FR-003 UpdateInputs attempt/result telemetry | Yes | T015, T016, T021, T022, T024, T025 | Covered on client and server. |
-| FR-004 RequestRerun attempt/result telemetry | Yes | T015, T017, T021, T022, T024, T025 | Covered on client and server. |
-| FR-005 telemetry excludes sensitive/unbounded content | Yes | T007, T009, T010, T023 | Covered through helper design and server tests. |
-| FR-006 telemetry failures do not block behavior | Yes | T018, T020, T021 | Covered by non-blocking client helper and wiring tasks. |
-| FR-007 active edit happy path regression | Yes | T028, T036, T040 | Covered by frontend regression test and submit implementation. |
-| FR-008 terminal rerun happy path regression | Yes | T029, T037, T040 | Covered by frontend regression test and submit implementation. |
-| FR-009 explicit failure regression coverage | Yes | T030, T031, T032, T035, T036, T037, T038, T040, T041 | Covers unsupported workflow, missing capability/artifacts, malformed artifact, stale state, validation, and artifact externalization failure. |
-| FR-010 route, mode, precedence, payload unit coverage | Yes | T026, T027, T033, T034, T040 | Covered by frontend helper tests and implementation. |
-| FR-011 no queue-era primary flow usage | Yes | T042, T045, T046, T047, T050 | Covered in primary source surfaces; docs/internal-reference scan gap captured separately as C1. |
-| FR-012 success returns to Temporal detail context | Yes | T028, T029, T036, T037, T043, T049 | Covered in happy-path and cleanup tests. |
-| FR-013 copy distinguishes active edit and terminal rerun without queue language | Yes | T044, T046, T049 | Covered by operator-facing copy tests and implementation. |
-| FR-014 current runtime docs/internal references reflect Temporal-native model | Yes | T048, T050 | Current runtime-visible docs/internal references are explicitly inspected, updated where needed, and searched for queue-era leakage. |
-| FR-015 rollout control supports local/staging/dogfood/limited/all-operator exposure | Yes | T008, T011, T051, T054, T055, T057, T058 | Covered by backend config and rollout-gate tasks. |
-| FR-016 rollout readiness health signals | Yes | T057 | Covered in quickstart rollout gates. |
-| FR-017 runtime code changes plus validation tests | Yes | T009-T011, T018-T023, T033-T039, T045-T047, T054-T056, T060-T065 | Runtime scope validation already passes. |
+| FR-001 Jira UI block only when enabled | Yes | T005, T006 | Runtime config implementation and unit coverage. |
+| FR-002 Runtime endpoints and defaults | Yes | T005, T006 | Endpoint templates and configured defaults are tested. |
+| FR-003 Existing Create behavior unchanged when disabled | Yes | T006, T018 | Runtime config and hidden-controls tests cover disabled behavior. |
+| FR-004 Server-side Jira browser endpoints through trusted boundary | Yes | T009-T016 | Service, router, and policy tests cover trusted boundary reuse. |
+| FR-005 Verify/projects/boards/columns/issues/detail endpoints | Yes | T012-T016 | Router tests cover all endpoint families. |
+| FR-006 Policy and project allowlists apply | Yes | T010, T016 | Policy-denied service and router tests. |
+| FR-007 No browser credential exposure | Yes | T010, T016 | Redaction and response-shape regression coverage. |
+| FR-008 Normalize failures into safe errors | Yes | T014, T023 | Backend and frontend local failure handling. |
+| FR-009 Normalize board columns/status mapping | Yes | T009, T012 | Browser service grouping tests and implementation. |
+| FR-010 Normalize issue summaries | Yes | T009, T012 | Browser service list normalization. |
+| FR-011 Normalize issue detail/import recommendations | Yes | T009, T012 | Detail normalization and recommended import text coverage. |
+| FR-012 Jira browser hidden when disabled | Yes | T018 | Frontend disabled-state test. |
+| FR-013 Open from preset/step target | Yes | T020, T026, T027 | Browser state and target-specific tests. |
+| FR-014 One browser surface at a time | Yes | T020 | Shared browser state task. |
+| FR-015 Navigate project/board/column/issue preview | Yes | T021, T022 | Hook/client and browser UI tasks. |
+| FR-016 Import modes | Yes | T030, T033, T036 | Import formatter and tests cover modes. |
+| FR-017 Replace/append into preset instructions | Yes | T034, T035 | Preset replace and append tests. |
+| FR-018 Preserve objective precedence | Yes | T034, T052 | Preset import and submission invariance tests. |
+| FR-019 Preset reapply signaling | Yes | T041, T042, T043 | Reapply and conflict message tests plus implementation. |
+| FR-020 Step import updates only selected step | Yes | T031, T032 | Step import implementation and regression tests. |
+| FR-021 Template-bound step import detaches identity | Yes | T037, T044 | Template-bound detach tests and warning implementation. |
+| FR-022 Provenance chip | Yes | T038, T039 | Provenance state and chip test. |
+| FR-023 Session-only restore last project/board | Partial | T020 | Browser state exists, but no explicit session-memory implementation or validation task. |
+| FR-024 Jira failures remain local/non-blocking | Yes | T014, T023, T054 | Backend safe errors, frontend inline errors, Create-button non-blocking test. |
+| FR-025 Submission contract unchanged | Yes | T052 | Explicit submission-payload invariance test. |
+| FR-026 Required deliverables include runtime code changes | Yes | T005, T009-T016, T018-T024, T030-T044 | Runtime implementation tasks exist across backend and frontend. |
+| FR-027 Required deliverables include validation tests | Yes | T006, T010-T016, T018, T026-T029, T031-T037, T039, T043-T045, T052-T054, T061-T064 | Backend, frontend, and final validation tasks are present. |
+
+Full explicit coverage: 26 / 27 requirements.
+Partial explicit coverage: 1 / 27 requirements.
+
+## Task Quality
+
+The task list is dependency ordered and grouped by independently testable user story. It follows test-driven sequencing: tests precede or accompany the production work for runtime config, backend browser endpoints, frontend browsing, import semantics, preset conflict signaling, provenance, failure handling, and submission invariance.
+
+Parallel markers are used on independent tests and code slices, and the later polish/validation phase keeps generated types, lint/build/test validation, and manual quickstart verification distinct from feature implementation.
+
+No tasks appear to be purely spec-only in a way that would violate runtime scope. Cross-cutting documentation/copy tasks are supporting work after production code and tests.
 
 ## Constitution Alignment Issues
 
-No CRITICAL constitution conflicts found.
+No constitution violations found.
 
-- Principle XI is satisfied: `spec.md`, `plan.md`, and `tasks.md` exist and the plan includes initial and post-design constitution checks.
-- Principle XII is satisfied: rollout sequencing remains in feature artifacts, while T048/T050 only inspect or update current guidance where needed.
-- Principle XIII is supported by queue-era cleanup tasks that remove current primary flow leakage rather than preserving fallback aliases.
-- Principle IX is supported by stale-state, validation-failure, artifact-failure, and non-blocking telemetry tasks.
+Relevant checks:
+- Runtime behavior is backed by production code tasks and validation tests.
+- Jira credential handling remains server-side and policy-aware.
+- Existing Create Task submission semantics remain unchanged.
+- No workflow or activity payload changes are proposed.
+- No compatibility aliases or hidden fallbacks are introduced.
 
 ## Unmapped Tasks
 
-- T001-T005 are setup/review tasks and do not map directly to a single requirement; they are acceptable preparation tasks.
-- T012, T060-T066 are validation/meta-validation tasks and map to FR-017 plus the quickstart validation path.
+- T001-T004 are setup and artifact-review tasks; they support implementation but do not map to a single requirement.
+- T055-T064 are generated-type, accessibility, documentation/copy, quickstart, and validation tasks; they map to rollout hardening and final validation rather than a single feature behavior.
 - No implementation task appears unrelated to the feature scope.
 
 ## Metrics
 
-- Total Requirements: 17
-- Total Tasks: 66
-- Requirements with full task coverage: 17
-- Requirements with partial task coverage: 0
-- Coverage: 100%
-- Ambiguity Count: 0
-- Duplication Count: 0
-- Critical Issues Count: 0
-- High Issues Count: 0
-- Medium Issues Count: 0
-- Low Issues Count: 0
+- Total requirements: 27
+- Total tasks: 64
+- Full explicit requirement coverage: 96%
+- Partial requirement coverage: 4%
+- Ambiguity findings: 1
+- Duplication findings: 0
+- Critical findings: 0
 
 ## Next Actions
 
-- No CRITICAL, HIGH, MEDIUM, or LOW issues block implementation.
-- Proceed to `speckit-implement` when ready.
+- Resolve COV-001 before implementation by adding explicit FR-023 session-memory implementation and validation tasks.
+- Optionally resolve AMB-001 by adding a bounded board-size or latency criterion.
+- After remediation, rerun `speckit-analyze` or proceed to implementation if the team accepts the medium coverage gap.
