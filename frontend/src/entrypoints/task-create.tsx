@@ -672,7 +672,15 @@ function createJiraProvenance(
 }
 
 function jiraProjectKeyFromIssueKey(issueKey: string): string {
-  return String(issueKey || "").split("-", 1)[0]?.trim().toUpperCase() || "";
+  return (
+    String(issueKey || "")
+      .trim()
+      .split("-")
+      .slice(0, -1)
+      .join("-")
+      .trim()
+      .toUpperCase() || ""
+  );
 }
 
 function JiraProvenanceChip({
