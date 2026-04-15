@@ -4463,8 +4463,12 @@ describe("Task Create Entrypoint", () => {
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing preset instructions.",
     );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
     fireEvent.click(
       screen.getByRole("button", {
         name: "Browse Jira issue for Step 1 instructions",
@@ -4483,6 +4487,11 @@ describe("Task Create Entrypoint", () => {
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing step instructions.",
     );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
   });
 
   it("imports selected Jira text by mode", async () => {
@@ -4512,6 +4521,11 @@ describe("Task Create Entrypoint", () => {
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Given a board, users can select a story preview.",
     );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
   });
 
   it("marks preset instructions as needing reapply after Jira import changes an applied preset", async () => {
@@ -4760,8 +4774,12 @@ describe("Task Create Entrypoint", () => {
         "Jira import provenance for Feature Request / Initial Instructions",
       ).textContent,
     ).toBe("Jira: ENG-202");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
     fireEvent.click(
       screen.getByRole("button", {
         name: "Browse Jira issue for Step 1 instructions",
@@ -4794,7 +4812,11 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Replace target text" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -4849,7 +4871,11 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Replace target text" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -4902,8 +4928,12 @@ describe("Task Create Entrypoint", () => {
         "Jira import provenance for Feature Request / Initial Instructions",
       ),
     ).toBeNull();
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
     fireEvent.click(
       screen.getByRole("button", {
         name: "Browse Jira issue for Step 1 instructions",
@@ -5016,7 +5046,11 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Replace target text" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => {

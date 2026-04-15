@@ -2762,67 +2762,71 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (!selectedJiraIssue || !jiraImportTarget) {
       return;
     }
-    if (!selectedJiraImportText.trim()) {
-      return;
-    }
-    if (jiraImportTarget.kind === "preset") {
-      const nextText = writeJiraImportedText(
-        templateFeatureRequest,
-        selectedJiraImportText,
-        writeMode,
-      );
-      if (nextText.trim() === templateFeatureRequest.trim()) {
+    try {
+      if (!selectedJiraImportText.trim()) {
         return;
       }
-      setTemplateFeatureRequest(nextText);
-      setPresetJiraProvenance(
-        createJiraProvenance(
-          selectedJiraIssue,
-          selectedJiraBoardId,
-          jiraImportMode,
-          jiraImportTarget,
-        ),
-      );
-      if (appliedTemplates.length > 0) {
-        setPresetReapplyNeeded(true);
+      if (jiraImportTarget.kind === "preset") {
+        const nextText = writeJiraImportedText(
+          templateFeatureRequest,
+          selectedJiraImportText,
+          writeMode,
+        );
+        if (nextText.trim() === templateFeatureRequest.trim()) {
+          return;
+        }
+        setTemplateFeatureRequest(nextText);
+        setPresetJiraProvenance(
+          createJiraProvenance(
+            selectedJiraIssue,
+            selectedJiraBoardId,
+            jiraImportMode,
+            jiraImportTarget,
+          ),
+        );
+        if (appliedTemplates.length > 0) {
+          setPresetReapplyNeeded(true);
+        }
+        await importSelectedJiraImages(selectedJiraIssue, steps[0]?.localId);
+        return;
       }
-      await importSelectedJiraImages(selectedJiraIssue, steps[0]?.localId);
-      return;
-    }
 
-    const targetStep = steps.find(
-      (step) => step.localId === jiraImportTarget.localId,
-    );
-    if (!targetStep) {
-      return;
+      const targetStep = steps.find(
+        (step) => step.localId === jiraImportTarget.localId,
+      );
+      if (!targetStep) {
+        return;
+      }
+      updateStep(jiraImportTarget.localId, {
+        instructions: writeJiraImportedText(
+          targetStep.instructions,
+          selectedJiraImportText,
+          writeMode,
+        ),
+      });
+      const provenance = createJiraProvenance(
+        selectedJiraIssue,
+        selectedJiraBoardId,
+        jiraImportMode,
+        jiraImportTarget,
+      );
+      setStepJiraProvenance((current) => {
+        if (provenance) {
+          return {
+            ...current,
+            [jiraImportTarget.localId]: provenance,
+          };
+        }
+        if (!current[jiraImportTarget.localId]) {
+          return current;
+        }
+        const { [jiraImportTarget.localId]: _removed, ...rest } = current;
+        return rest;
+      });
+      await importSelectedJiraImages(selectedJiraIssue, jiraImportTarget.localId);
+    } finally {
+      closeJiraBrowser();
     }
-    updateStep(jiraImportTarget.localId, {
-      instructions: writeJiraImportedText(
-        targetStep.instructions,
-        selectedJiraImportText,
-        writeMode,
-      ),
-    });
-    const provenance = createJiraProvenance(
-      selectedJiraIssue,
-      selectedJiraBoardId,
-      jiraImportMode,
-      jiraImportTarget,
-    );
-    setStepJiraProvenance((current) => {
-      if (provenance) {
-        return {
-          ...current,
-          [jiraImportTarget.localId]: provenance,
-        };
-      }
-      if (!current[jiraImportTarget.localId]) {
-        return current;
-      }
-      const { [jiraImportTarget.localId]: _removed, ...rest } = current;
-      return rest;
-    });
-    await importSelectedJiraImages(selectedJiraIssue, jiraImportTarget.localId);
   }
 
   function handleTemplateFeatureRequestChange(value: string) {
