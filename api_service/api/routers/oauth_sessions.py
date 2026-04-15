@@ -1,12 +1,17 @@
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from api_service.db.base import get_async_session
+from api_service.api.schemas_oauth_sessions import (
+    CreateOAuthSessionRequest,
+    OAuthSessionResponse,
+)
 from api_service.auth_providers import get_current_user
-from api_service.api.schemas_oauth_sessions import CreateOAuthSessionRequest, OAuthSessionResponse
+from api_service.db.base import get_async_session
 from api_service.services.provider_profile_service import sync_provider_profile_manager
 from api_service.db.models import (
     ManagedAgentOAuthSession,
@@ -17,8 +22,10 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
     ManagedAgentRateLimitPolicy,
 )
+from moonmind.workflows.temporal.runtime.providers.registry import get_provider_default
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
+logger = logging.getLogger(__name__)
 _ACTIVE_SESSION_STATUSES = (
     OAuthSessionStatus.PENDING,
     OAuthSessionStatus.STARTING,
@@ -28,30 +35,10 @@ _ACTIVE_SESSION_STATUSES = (
     OAuthSessionStatus.REGISTERING_PROFILE,
 )
 _STALE_ACTIVE_SESSION_MINUTES = 45
-_OAUTH_PROVIDER_DEFAULTS = {
-    "codex_cli": {
-        "provider_id": "openai",
-        "provider_label": "OpenAI",
-        "volume_ref": "codex_auth_volume",
-        "volume_mount_path": "/home/app/.codex",
-    },
-    "gemini_cli": {
-        "provider_id": "google",
-        "provider_label": "Google",
-        "volume_ref": "gemini_auth_volume",
-        "volume_mount_path": "/var/lib/gemini-auth",
-    },
-    "claude_code": {
-        "provider_id": "anthropic",
-        "provider_label": "Anthropic",
-        "volume_ref": "claude_auth_volume",
-        "volume_mount_path": "/home/app/.claude",
-    },
-}
 
 
 def _oauth_default(runtime_id: str, key: str) -> str | None:
-    return _OAUTH_PROVIDER_DEFAULTS.get(runtime_id, {}).get(key)
+    return get_provider_default(runtime_id, key)
 
 
 async def _expire_stale_active_sessions(
@@ -104,6 +91,22 @@ async def create_oauth_session(
         )
 
     await _expire_stale_active_sessions(db, profile_id=request.profile_id)
+
+    profile_result = await db.execute(
+        select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.profile_id == request.profile_id
+        )
+    )
+    existing_profile = profile_result.scalars().first()
+    if (
+        existing_profile
+        and existing_profile.owner_user_id is not None
+        and str(existing_profile.owner_user_id) != str(current_user.id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to use this profile ID.",
+        )
 
     # Check for existing active session for this profile
     result = await db.execute(
@@ -269,9 +272,7 @@ async def finalize_oauth_session(
     except HTTPException:
         raise
     except Exception:
-        import logging
-
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "Volume verification unavailable for session %s",
             session_id,
             exc_info=True,
@@ -306,8 +307,15 @@ async def finalize_oauth_session(
             detail=f"Unsupported rate_limit_policy: {policy_str}"
         )
 
-    if existing_profile and existing_profile.owner_user_id is not None and str(existing_profile.owner_user_id) != str(current_user.id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this profile")
+    if (
+        existing_profile
+        and existing_profile.owner_user_id is not None
+        and str(existing_profile.owner_user_id) != str(current_user.id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to update this profile",
+        )
 
     profile_data = {
         "runtime_id": session_obj.runtime_id,
@@ -431,8 +439,7 @@ async def reconnect_oauth_session(
         )
         await start_oauth_session_workflow(new_session)
     except Exception:
-        import logging
-        logging.getLogger(__name__).exception(
+        logger.exception(
             "Failed to start workflow for reconnected session %s",
             new_session_id,
         )

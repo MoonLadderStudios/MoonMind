@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -141,6 +142,82 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
     assert captured["volume_mount_path"] == "/home/app/.codex"
     assert captured["metadata_json"]["provider_id"] == "openai"
     assert captured["metadata_json"]["provider_label"] == "OpenAI"
+
+
+@pytest.mark.asyncio
+async def test_create_codex_oauth_session_uses_configured_volume_defaults(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = {}
+
+    monkeypatch.setenv("CODEX_VOLUME_NAME", "custom_codex_auth")
+    monkeypatch.setenv("CODEX_VOLUME_PATH", "/runtime/codex-home")
+
+    async def _capture_start(session_model):
+        captured["volume_ref"] = session_model.volume_ref
+        captured["volume_mount_path"] = session_model.volume_mount_path
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json={
+                "runtime_id": "codex_cli",
+                "profile_id": "codex-cli-configured-volume",
+                "account_label": "codex account",
+            },
+        )
+
+    assert response.status_code == 201
+    assert captured["volume_ref"] == "custom_codex_auth"
+    assert captured["volume_mount_path"] == "/runtime/codex-home"
+
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_rejects_profile_owned_by_another_user(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-other-owner"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="OpenAI",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                account_label="other owner",
+                owner_user_id=uuid.uuid4(),
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_start(_session_model):
+        raise AssertionError(
+            "workflow start should not be called for another user's profile"
+        )
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _unexpected_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json=_oauth_payload(profile_id),
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Not authorized to use this profile ID."
 
 
 @pytest.mark.asyncio

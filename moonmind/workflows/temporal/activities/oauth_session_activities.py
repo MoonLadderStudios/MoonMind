@@ -26,18 +26,9 @@ from api_service.db.models import (
     ManagedAgentOAuthSession,
     OAuthSessionStatus,
 )
+from moonmind.workflows.temporal.runtime.providers.registry import get_provider_default
 
 logger = logging.getLogger(__name__)
-
-_OAUTH_PROVIDER_DEFAULTS = {
-    "codex_cli": {"provider_id": "openai", "provider_label": "OpenAI"},
-    "gemini_cli": {"provider_id": "google", "provider_label": "Google"},
-    "claude_code": {"provider_id": "anthropic", "provider_label": "Anthropic"},
-}
-
-
-def _oauth_provider_default(runtime_id: str, key: str) -> str | None:
-    return _OAUTH_PROVIDER_DEFAULTS.get(runtime_id, {}).get(key)
 
 
 @activity.defn(name="oauth_session.ensure_volume")
@@ -355,10 +346,10 @@ async def oauth_session_register_profile(
         profile_data = {
             "runtime_id": session_obj.runtime_id,
             "provider_id": metadata.get("provider_id")
-            or _oauth_provider_default(session_obj.runtime_id, "provider_id")
+            or get_provider_default(session_obj.runtime_id, "provider_id")
             or "unknown",
             "provider_label": metadata.get("provider_label")
-            or _oauth_provider_default(session_obj.runtime_id, "provider_label"),
+            or get_provider_default(session_obj.runtime_id, "provider_label"),
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": session_obj.volume_ref,

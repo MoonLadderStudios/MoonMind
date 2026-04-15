@@ -25,9 +25,7 @@ class TestProviderCredentialPaths:
     def test_codex_paths_defined(self) -> None:
         assert "codex_cli" in PROVIDER_CREDENTIAL_PATHS
         paths = PROVIDER_CREDENTIAL_PATHS["codex_cli"]
-        assert len(paths) >= 1
-        assert "auth.json" in paths
-        assert "config.toml" in paths
+        assert paths == ("auth.json", "config.toml")
 
     def test_claude_paths_defined(self) -> None:
         assert "claude_code" in PROVIDER_CREDENTIAL_PATHS
@@ -133,7 +131,7 @@ class TestVerifyVolumeCredentials:
             "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
             new_callable=AsyncMock,
             return_value=(
-                b"FOUND:auth.json\nMISSING:config.toml\nMISSING:.codex/auth.json\nMISSING:.codex/config.toml\n",
+                b"FOUND:auth.json\nMISSING:config.toml\n",
                 b"",
             ),
         ):

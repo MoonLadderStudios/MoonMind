@@ -636,6 +636,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
     from api_service.services.provider_profile_service import (
         normalize_runtime_default_profile,
     )
+    from moonmind.workflows.temporal.runtime.providers.registry import (
+        get_provider_default,
+    )
 
     if os.environ.get("MOONMIND_SKIP_PROVIDER_PROFILE_SEED", "").lower() in ("1", "true", "yes"):
         logger.info("Provider profile auto-seeding disabled via MOONMIND_SKIP_PROVIDER_PROFILE_SEED.")
@@ -652,8 +655,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "default_model": None,  # inherits runtime default: gemini-3.1-pro-preview
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
-            "volume_ref": os.environ.get("GEMINI_VOLUME_NAME", "gemini_auth_volume"),
-            "volume_mount_path": os.environ.get("GEMINI_VOLUME_PATH", "/var/lib/gemini-auth"),
+            "volume_ref": get_provider_default("gemini_cli", "volume_ref"),
+            "volume_mount_path": get_provider_default(
+                "gemini_cli", "volume_mount_path"
+            ),
             "account_label": "Gemini CLI (auto-seeded)",
         },
         {
@@ -665,8 +670,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "default_model": None,  # inherits runtime default: gpt-5.4
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
-            "volume_ref": os.environ.get("CODEX_VOLUME_NAME", "codex_auth_volume"),
-            "volume_mount_path": os.environ.get("CODEX_VOLUME_PATH", "/home/app/.codex"),
+            "volume_ref": get_provider_default("codex_cli", "volume_ref"),
+            "volume_mount_path": get_provider_default("codex_cli", "volume_mount_path"),
             "account_label": "Codex CLI (auto-seeded)",
         },
         {
@@ -678,8 +683,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "default_model": None,  # inherits runtime default: Sonnet 4.6
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
-            "volume_ref": os.environ.get("CLAUDE_VOLUME_NAME", "claude_auth_volume"),
-            "volume_mount_path": os.environ.get("CLAUDE_VOLUME_PATH", "/home/app/.claude"),
+            "volume_ref": get_provider_default("claude_code", "volume_ref"),
+            "volume_mount_path": get_provider_default(
+                "claude_code", "volume_mount_path"
+            ),
             "clear_env_keys": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
             "account_label": "Claude Code (auto-seeded)",
         },
