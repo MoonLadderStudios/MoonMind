@@ -17,7 +17,9 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexAppServerRpcClient,
     CodexManagedSessionRuntime,
+    CodexSessionRuntimeState,
     _ROLLOUT_RECOVERY_MAX_BYTES,
+    _RolloutLiveMirror,
     _run_ready,
 )
 from tests.helpers.codex_session_runtime import (
@@ -53,6 +55,34 @@ def _write_fake_codex_logs(
     finally:
         connection.close()
     return log_path
+
+
+def _runtime_for_rollout_mirror(tmp_path: Path) -> CodexManagedSessionRuntime:
+    request = launch_request(tmp_path)
+    return CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", "-c", "pass"),
+    )
+
+
+def _rollout_state(*, rollout_path: Path) -> CodexSessionRuntimeState:
+    return CodexSessionRuntimeState(
+        sessionId="sess-1",
+        sessionEpoch=1,
+        logicalThreadId="logical-thread-1",
+        vendorThreadId="vendor-thread-1",
+        vendorThreadPath=str(rollout_path),
+        containerId="ctr-1",
+        activeTurnId="vendor-turn-1",
+        lastTurnId="vendor-turn-1",
+        lastTurnStatus="running",
+    )
 
 
 def test_app_server_client_ignores_notifications_until_matching_response(
@@ -235,6 +265,128 @@ def test_runtime_send_turn_mirrors_rollout_updates_to_stdout_spool(
     assert "tool call: exec_command" in stdout_text
     assert "tool output:\nlive-output-works\n" in stdout_text
     assert stdout_text.count("assistant: Streaming update\n") == 1
+
+
+def test_runtime_rollout_live_mirror_preserves_incomplete_tail(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime_for_rollout_mirror(tmp_path)
+    rollout_path = (
+        runtime._codex_home_path
+        / "sessions"
+        / "2026"
+        / "04"
+        / "15"
+        / "rollout-2026-04-15T06-04-58-vendor-thread-1.jsonl"
+    )
+    rollout_path.parent.mkdir(parents=True)
+    complete_line = json.dumps(
+        {
+            "timestamp": _iso_timestamp(minutes_offset=0),
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "call-1",
+            },
+        }
+    )
+    partial_line = json.dumps(
+        {
+            "timestamp": _iso_timestamp(minutes_offset=0),
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": "complete after next poll",
+            },
+        }
+    )
+    split_at = partial_line.index("complete after")
+    rollout_path.write_text(
+        complete_line + "\n" + partial_line[:split_at],
+        encoding="utf-8",
+    )
+    mirror = _RolloutLiveMirror(path=str(rollout_path), offset=0)
+
+    runtime._publish_rollout_live_updates(
+        state=_rollout_state(rollout_path=rollout_path),
+        vendor_turn_id="vendor-turn-1",
+        thread_payload={},
+        mirror=mirror,
+    )
+
+    stdout_path = runtime._artifact_spool_path / "stdout.log"
+    assert stdout_path.read_text(encoding="utf-8") == "tool call: exec_command\n"
+    assert mirror.offset == len((complete_line + "\n").encode("utf-8"))
+
+    with rollout_path.open("a", encoding="utf-8") as handle:
+        handle.write(partial_line[split_at:] + "\n")
+
+    runtime._publish_rollout_live_updates(
+        state=_rollout_state(rollout_path=rollout_path),
+        vendor_turn_id="vendor-turn-1",
+        thread_payload={},
+        mirror=mirror,
+    )
+
+    assert stdout_path.read_text(encoding="utf-8") == (
+        "tool call: exec_command\n"
+        "tool output:\ncomplete after next poll\n"
+    )
+    assert mirror.offset == rollout_path.stat().st_size
+
+
+def test_runtime_rollout_live_mirror_keeps_repeated_identical_tool_events(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime_for_rollout_mirror(tmp_path)
+    rollout_path = (
+        runtime._codex_home_path
+        / "sessions"
+        / "2026"
+        / "04"
+        / "15"
+        / "rollout-2026-04-15T06-04-58-vendor-thread-1.jsonl"
+    )
+    rollout_path.parent.mkdir(parents=True)
+    duplicate_call = {
+        "timestamp": _iso_timestamp(minutes_offset=0),
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "name": "exec_command",
+        },
+    }
+    rollout_path.write_text(
+        json.dumps(duplicate_call) + "\n" + json.dumps(duplicate_call) + "\n",
+        encoding="utf-8",
+    )
+    mirror = _RolloutLiveMirror(path=str(rollout_path), offset=0)
+
+    runtime._publish_rollout_live_updates(
+        state=_rollout_state(rollout_path=rollout_path),
+        vendor_turn_id="vendor-turn-1",
+        thread_payload={},
+        mirror=mirror,
+    )
+
+    stdout_text = (runtime._artifact_spool_path / "stdout.log").read_text(
+        encoding="utf-8"
+    )
+    assert stdout_text == "tool call: exec_command\ntool call: exec_command\n"
+    assert mirror.offset == rollout_path.stat().st_size
+
+    runtime._publish_rollout_live_updates(
+        state=_rollout_state(rollout_path=rollout_path),
+        vendor_turn_id="vendor-turn-1",
+        thread_payload={},
+        mirror=mirror,
+    )
+
+    assert (runtime._artifact_spool_path / "stdout.log").read_text(
+        encoding="utf-8"
+    ) == stdout_text
 
 
 def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_output(

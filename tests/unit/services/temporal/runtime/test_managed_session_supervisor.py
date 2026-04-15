@@ -231,6 +231,50 @@ async def test_session_supervisor_syncs_active_turn_from_runtime_state(
 
 
 @pytest.mark.asyncio
+async def test_session_supervisor_ignores_terminal_runtime_active_turn(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    record = _record(tmp_path)
+    store.save(record)
+    state_path = Path(record.session_workspace_path) / ".moonmind-codex-session-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "sessionId": record.session_id,
+                "sessionEpoch": record.session_epoch,
+                "logicalThreadId": record.thread_id,
+                "vendorThreadId": "vendor-thread-1",
+                "containerId": record.container_id,
+                "activeTurnId": "vendor-turn-1",
+                "lastTurnId": "vendor-turn-1",
+                "lastTurnStatus": "completed",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    await supervisor.start(record)
+    await asyncio.sleep(0.05)
+
+    watched = store.load("sess-1")
+    assert watched is not None
+    assert watched.status == "ready"
+    assert watched.active_turn_id is None
+    assert not (Path(record.workspace_path) / "live_streams.spool").exists()
+
+    await supervisor.finalize("sess-1", status="terminated")
+
+
+@pytest.mark.asyncio
 async def test_session_supervisor_resumes_from_persisted_stream_offsets(
     tmp_path: Path,
 ) -> None:

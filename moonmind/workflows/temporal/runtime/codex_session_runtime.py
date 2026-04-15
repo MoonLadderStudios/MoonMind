@@ -780,8 +780,27 @@ class CodexManagedSessionRuntime:
         stream_name: str,
         label: str,
         text: str,
+        payload: Mapping[str, Any],
+        line_start_offset: int,
     ) -> str:
-        return f"{stream_name}\0{label}\0{text.strip()}"
+        identity = str(
+            payload.get("id")
+            or payload.get("item_id")
+            or payload.get("event_id")
+            or ""
+        ).strip()
+        response_payload = payload.get("payload")
+        if not identity and isinstance(response_payload, Mapping):
+            identity = str(
+                response_payload.get("id")
+                or response_payload.get("item_id")
+                or response_payload.get("call_id")
+                or response_payload.get("event_id")
+                or ""
+            ).strip()
+        if not identity:
+            identity = f"offset:{line_start_offset}"
+        return f"{stream_name}\0{label}\0{identity}\0{text.strip()}"
 
     @staticmethod
     def _append_line_suffix(text: str) -> str:
@@ -865,15 +884,26 @@ class CodexManagedSessionRuntime:
         try:
             with rollout_path.open("rb") as handle:
                 handle.seek(mirror.offset)
-                for raw_line in handle:
+                updates: list[tuple[str, str]] = []
+                while True:
+                    line_start_offset = handle.tell()
+                    raw_line = handle.readline()
+                    if not raw_line:
+                        break
+                    if not raw_line.endswith(b"\n"):
+                        handle.seek(line_start_offset)
+                        break
                     stripped = raw_line.decode("utf-8", errors="replace").strip()
                     if not stripped:
+                        mirror.offset = handle.tell()
                         continue
                     try:
                         payload = json.loads(stripped)
                     except json.JSONDecodeError:
+                        mirror.offset = handle.tell()
                         continue
                     if not isinstance(payload, Mapping):
+                        mirror.offset = handle.tell()
                         continue
                     entry_timestamp = self._rollout_entry_timestamp(payload)
                     references_turn = self._payload_references_turn(
@@ -892,26 +922,40 @@ class CodexManagedSessionRuntime:
                             or (entry_timestamp is None and not references_turn)
                         )
                     ):
+                        mirror.offset = handle.tell()
                         continue
                     live_output = self._rollout_entry_live_output(payload)
                     if live_output is None:
+                        mirror.offset = handle.tell()
                         continue
                     stream_name, label, text = live_output
                     live_key = self._rollout_entry_live_key(
                         stream_name=stream_name,
                         label=label,
                         text=text,
+                        payload=payload,
+                        line_start_offset=line_start_offset,
                     )
                     if live_key in mirror.emitted_live_keys:
+                        mirror.offset = handle.tell()
                         continue
                     mirror.emitted_live_keys.add(live_key)
                     if label == "assistant":
                         normalized_text = text.removeprefix("assistant: ").strip()
                         if normalized_text in mirror.emitted_assistant_texts:
+                            mirror.offset = handle.tell()
                             continue
                         mirror.emitted_assistant_texts.add(normalized_text)
-                    self._append_spool(stream_name, text)
-                mirror.offset = handle.tell()
+                    updates.append((stream_name, text))
+                    mirror.offset = handle.tell()
+                for stream_name in ("stdout", "stderr"):
+                    stream_text = "".join(
+                        text
+                        for update_stream_name, text in updates
+                        if update_stream_name == stream_name
+                    )
+                    if stream_text:
+                        self._append_spool(stream_name, stream_text)
         except OSError:
             return
 

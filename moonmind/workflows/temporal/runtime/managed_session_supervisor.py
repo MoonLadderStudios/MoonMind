@@ -185,9 +185,9 @@ class ManagedSessionSupervisor:
             return None
         last_turn_status = str(payload.get("lastTurnStatus") or "").strip().lower()
         active_turn_id = str(payload.get("activeTurnId") or "").strip() or None
-        if active_turn_id is None and last_turn_status not in {"accepted", "running"}:
-            return None
-        return active_turn_id
+        if active_turn_id and last_turn_status in {"accepted", "running"}:
+            return active_turn_id
+        return None
 
     async def _sync_active_turn_state(
         self,
