@@ -21,7 +21,7 @@
 4. Run the full unit suite before finalizing:
 
    ```bash
-   ./tools/test_unit.sh
+   MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
    ```
 
 Expected result: schema tests validate explicit contracts, workflow tests validate validators and Continue-As-New typing, and lifecycle tests exercise signal/update/query behavior.

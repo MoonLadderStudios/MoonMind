@@ -35,14 +35,14 @@
 - [X] T006 Add explicit typed managed-session signal and update request contracts in `moonmind/schemas/managed_session_models.py` (FR-004, FR-005)
 - [X] T007 Export new managed-session contracts from `moonmind/schemas/__init__.py` (FR-004, FR-005)
 - [X] T008 Update `attach_runtime_handles` to use `CodexManagedSessionAttachRuntimeHandlesSignal` in `moonmind/workflows/temporal/workflows/agent_session.py` (FR-004)
-- [X] T009 Update clear/cancel/terminate updates and validators to use operation-specific request models in `moonmind/workflows/temporal/workflows/agent_session.py` (FR-005, FR-006, FR-007)
+- [X] T009 Update all canonical managed-session update handlers and validators to use operation-specific request models in `moonmind/workflows/temporal/workflows/agent_session.py` (FR-005, FR-006, FR-007)
 - [X] T010 Validate Continue-As-New payload construction through `CodexManagedSessionWorkflowInput` in `moonmind/workflows/temporal/workflows/agent_session.py` (FR-003, FR-009)
 
 ### Validation
 
 - [X] T011 Run focused unit tests for managed-session schemas and workflow behavior (SC-001, SC-002, SC-003)
 - [X] T012 Run lifecycle integration test for managed-session signal/update/query behavior (SC-004)
-- [X] T013 Run full `./tools/test_unit.sh` suite
+- [X] T013 Run full `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` suite
 - [X] T014 Run `/moonspec-verify` final verification
 
 ## Dependencies & Execution Order
