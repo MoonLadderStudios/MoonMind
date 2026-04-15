@@ -1,6 +1,6 @@
 # Tasks: Auth Security Boundaries
 
-**Input**: Design documents from `/specs/177-auth-security-boundaries/`
+**Input**: Design documents from `/specs/178-auth-security-boundaries/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
@@ -25,7 +25,7 @@
 
 **Purpose**: Confirm existing project structure and test harnesses are sufficient.
 
-- [X] T001 Confirm MoonSpec feature directory and active feature pointer in `specs/177-auth-security-boundaries/` and `.specify/feature.json`
+- [X] T001 Confirm MoonSpec feature directory and active feature pointer in `specs/178-auth-security-boundaries/` and `.specify/feature.json`
 - [X] T002 Confirm existing pytest/unit tooling and workload/API test locations in `tests/unit/`
 
 ---
@@ -86,9 +86,9 @@
 
 **Purpose**: Strengthen completed story without changing scope.
 
-- [X] T018 [P] Update quickstart or verification notes only if commands or evidence differ in `specs/177-auth-security-boundaries/quickstart.md`
+- [X] T018 [P] Update quickstart or verification notes only if commands or evidence differ in `specs/178-auth-security-boundaries/quickstart.md`
 - [X] T019 Run `./tools/test_unit.sh` for full required unit verification
-- [X] T020 Run `/moonspec-verify` equivalent by creating `specs/177-auth-security-boundaries/verification.md` after implementation and tests pass
+- [X] T020 Run `/moonspec-verify` equivalent by creating `specs/178-auth-security-boundaries/verification.md` after implementation and tests pass
 
 ---
 

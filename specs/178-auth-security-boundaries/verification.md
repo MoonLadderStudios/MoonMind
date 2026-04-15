@@ -1,7 +1,7 @@
 # MoonSpec Verification Report
 
 **Feature**: Auth Security Boundaries  
-**Spec**: `/work/agent_jobs/mm:032af4f0-2532-49f1-bf81-4cb68c3b0002/repo/specs/177-auth-security-boundaries/spec.md`  
+**Spec**: `specs/178-auth-security-boundaries/spec.md`
 **Original Request Source**: `spec.md` Input for MM-335  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH

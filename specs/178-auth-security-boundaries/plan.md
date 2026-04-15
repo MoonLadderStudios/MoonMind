@@ -1,7 +1,7 @@
 # Implementation Plan: Auth Security Boundaries
 
 **Branch**: `mm-335-fcb06df0` | **Date**: 2026-04-15 | **Spec**: [spec.md](spec.md)
-**Input**: Single-story feature specification from `/specs/177-auth-security-boundaries/spec.md`
+**Input**: Single-story feature specification from `/specs/178-auth-security-boundaries/spec.md`
 
 ## Summary
 
@@ -43,7 +43,7 @@ Enforce and verify OAuth credential security boundaries for MM-335 by tightening
 ### Documentation (this feature)
 
 ```text
-specs/177-auth-security-boundaries/
+specs/178-auth-security-boundaries/
 ├── spec.md
 ├── plan.md
 ├── research.md
