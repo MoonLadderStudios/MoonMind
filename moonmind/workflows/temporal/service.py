@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -755,6 +755,15 @@ class TemporalExecutionService:
             integration=integration,
         )
         stmt = stmt.order_by(
+            case(
+                (
+                    TemporalExecutionCanonicalRecord.state
+                    == MoonMindWorkflowState.SCHEDULED,
+                    0,
+                ),
+                else_=1,
+            ).asc(),
+            TemporalExecutionRecord.scheduled_for.asc(),
             func.coalesce(
                 TemporalExecutionRecord.updated_at,
                 TemporalExecutionCanonicalRecord.updated_at,

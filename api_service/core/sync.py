@@ -257,6 +257,15 @@ async def map_temporal_state_to_projection(
     canonical_updated_at = _parse_temporal_datetime(
         search_attributes.get("mm_updated_at")
     )
+    scheduled_for = _parse_temporal_datetime(
+        search_attributes.get("mm_scheduled_for")
+    )
+    started_at = desc.execution_time or desc.start_time
+    if scheduled_for is not None:
+        if state_value == MoonMindWorkflowState.SCHEDULED:
+            started_at = None
+        elif started_at is not None and started_at < scheduled_for:
+            started_at = scheduled_for
     sanitized_memo = _sanitize_for_json(dict(memo))
     return {
         "workflow_id": desc.id,
@@ -289,9 +298,11 @@ async def map_temporal_state_to_projection(
         "create_idempotency_key": memo.get("create_idempotency_key"),
         "last_update_idempotency_key": memo.get("last_update_idempotency_key"),
         "last_update_response": _sanitize_for_json(memo.get("last_update_response")),
-        "started_at": desc.execution_time or desc.start_time,
+        "created_at": desc.start_time,
+        "started_at": started_at,
         "updated_at": canonical_updated_at,
         "closed_at": desc.close_time,
+        "scheduled_for": scheduled_for,
         "_temporal_memo_loaded": memo_loaded,
     }
 

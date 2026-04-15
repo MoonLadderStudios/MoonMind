@@ -2640,6 +2640,84 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_list_executions_orders_scheduled_rows_by_scheduled_for(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        owner_id = uuid4()
+
+        late = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="late",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="late-scheduled-row",
+        )
+        early = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="early",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="early-scheduled-row",
+        )
+        running = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="running",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="running-row",
+        )
+
+        late_scheduled_for = datetime(2026, 4, 15, 18, 0, tzinfo=UTC)
+        early_scheduled_for = datetime(2026, 4, 15, 9, 0, tzinfo=UTC)
+
+        for workflow_id, scheduled_for in {
+            late.workflow_id: late_scheduled_for,
+            early.workflow_id: early_scheduled_for,
+        }.items():
+            source = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+            projection = await session.get(TemporalExecutionRecord, workflow_id)
+            assert source is not None
+            assert projection is not None
+            source.state = MoonMindWorkflowState.SCHEDULED
+            source.started_at = None
+            projection.state = MoonMindWorkflowState.SCHEDULED
+            projection.scheduled_for = scheduled_for
+            projection.started_at = None
+        await session.commit()
+
+        listed = await service.list_executions(
+            workflow_type="MoonMind.Run",
+            state=None,
+            entry="run",
+            owner_type="user",
+            owner_id=owner_id,
+            repo=None,
+            integration=None,
+            page_size=10,
+            next_page_token=None,
+        )
+
+        assert [item.workflow_id for item in listed.items[:2]] == [
+            early.workflow_id,
+            late.workflow_id,
+        ]
+        assert running.workflow_id in [item.workflow_id for item in listed.items[2:]]
+        assert listed.items[0].started_at is None
+
+
+@pytest.mark.asyncio
 async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)

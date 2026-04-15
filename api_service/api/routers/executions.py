@@ -2304,9 +2304,22 @@ async def list_executions(
             if page:
                 for wf in page:
                     payload = await map_temporal_state_to_projection(wf)
+                    canonical_record = canonical_map.get(wf.id)
                     payload["parameters"] = merged_parameters_for_projection(
-                        payload, canonical_map.get(wf.id)
+                        payload, canonical_record
                     )
+                    if (
+                        payload.get("scheduled_for") is None
+                        and canonical_record is not None
+                    ):
+                        payload["scheduled_for"] = getattr(
+                            canonical_record, "scheduled_for", None
+                        )
+                    if (
+                        payload.get("state") is MoonMindWorkflowState.SCHEDULED
+                        and payload.get("scheduled_for") is not None
+                    ):
+                        payload["started_at"] = None
                     # We need a record-like object for serialization
                     from types import SimpleNamespace
 
@@ -2319,8 +2332,25 @@ async def list_executions(
                             getattr(record_obj, "started_at", None) or datetime.now(UTC)
                         )
                     items.append(
-                        _serialize_execution(record_obj, include_artifact_refs=False, user=user)
+                        _serialize_execution(
+                            record_obj,
+                            include_artifact_refs=False,
+                            user=user,
+                        )
                     )
+
+                items.sort(
+                    key=lambda item: (
+                        (
+                            0
+                            if item.state == MoonMindWorkflowState.SCHEDULED.value
+                            else 1
+                        ),
+                        item.scheduled_for or datetime.max.replace(tzinfo=UTC),
+                        -(item.updated_at.timestamp() if item.updated_at else 0),
+                        item.workflow_id,
+                    )
+                )
 
             new_token_str = None
             if iterator.next_page_token:
