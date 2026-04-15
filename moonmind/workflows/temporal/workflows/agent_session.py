@@ -244,10 +244,14 @@ class MoonMindAgentSessionWorkflow:
         await workflow.wait_condition(self._runtime_handles_attached)
 
     def _validate_mutation_allowed(self) -> None:
-        if self._status in {
-            AGENT_SESSION_STATUS_TERMINATING,
-            AGENT_SESSION_STATUS_TERMINATED,
-        } or self._termination_requested:
+        if (
+            self._status
+            in {
+                AGENT_SESSION_STATUS_TERMINATING,
+                AGENT_SESSION_STATUS_TERMINATED,
+            }
+            or self._termination_requested
+        ):
             raise ValueError("Managed session is terminating or terminated")
 
     def _validate_current_epoch(self, session_epoch: int) -> None:
@@ -272,7 +276,9 @@ class MoonMindAgentSessionWorkflow:
             return {}
         session_state = CodexManagedSessionState.model_validate(dict(payload))
         if session_state.session_id != self._binding.session_id:
-            raise ValueError("Managed session response sessionId does not match the workflow binding")
+            raise ValueError(
+                "Managed session response sessionId does not match the workflow binding"
+            )
         self._binding = self._binding.model_copy(
             update={"session_epoch": session_state.session_epoch}
         )
@@ -476,7 +482,6 @@ class MoonMindAgentSessionWorkflow:
         self,
         payload: CodexManagedSessionAttachRuntimeHandlesSignal,
     ) -> None:
-        payload = CodexManagedSessionAttachRuntimeHandlesSignal.model_validate(payload)
         if payload.container_id is not None:
             self._container_id = payload.container_id
         if payload.thread_id is not None:
@@ -512,9 +517,13 @@ class MoonMindAgentSessionWorkflow:
 
         reason = str(reason_value).strip() or None if reason_value is not None else None
         container_id = (
-            str(container_value).strip() or None if container_value is not None else None
+            str(container_value).strip() or None
+            if container_value is not None
+            else None
         )
-        thread_id = str(thread_value).strip() or None if thread_value is not None else None
+        thread_id = (
+            str(thread_value).strip() or None if thread_value is not None else None
+        )
         active_turn_id = (
             str(active_turn_value).strip() or None
             if active_turn_value is not None
@@ -589,7 +598,7 @@ class MoonMindAgentSessionWorkflow:
         self,
         payload: CodexManagedSessionSendFollowUpRequest,
     ) -> dict[str, Any]:
-        request = CodexManagedSessionSendFollowUpRequest.model_validate(payload)
+        request = payload
         await self._await_runtime_handles()
         async with self._mutation_lock:
             self._validate_mutation_allowed()
@@ -663,7 +672,6 @@ class MoonMindAgentSessionWorkflow:
         self,
         payload: CodexManagedSessionSendFollowUpRequest,
     ) -> None:
-        CodexManagedSessionSendFollowUpRequest.model_validate(payload)
         self._validate_mutation_allowed()
 
     @workflow.update(name="InterruptTurn")
@@ -671,7 +679,7 @@ class MoonMindAgentSessionWorkflow:
         self,
         payload: CodexManagedSessionInterruptRequest,
     ) -> dict[str, Any]:
-        request = CodexManagedSessionInterruptRequest.model_validate(payload)
+        request = payload
         await self._await_runtime_handles()
         async with self._mutation_lock:
             self._validate_mutation_allowed()
@@ -746,7 +754,7 @@ class MoonMindAgentSessionWorkflow:
         self,
         payload: CodexManagedSessionInterruptRequest,
     ) -> None:
-        request = CodexManagedSessionInterruptRequest.model_validate(payload)
+        request = payload
         self._validate_mutation_allowed()
         self._validate_current_epoch(request.session_epoch)
         if self._runtime_handles_attached():
@@ -757,7 +765,7 @@ class MoonMindAgentSessionWorkflow:
         self,
         payload: CodexManagedSessionSteerRequest,
     ) -> dict[str, Any]:
-        request = CodexManagedSessionSteerRequest.model_validate(payload)
+        request = payload
         await self._await_runtime_handles()
         async with self._mutation_lock:
             self._validate_mutation_allowed()
@@ -789,7 +797,9 @@ class MoonMindAgentSessionWorkflow:
                             turnId=turn_id,
                             instructions=request.message,
                             metadata={
-                                **({"reason": request.reason} if request.reason else {}),
+                                **(
+                                    {"reason": request.reason} if request.reason else {}
+                                ),
                             },
                         ).model_dump(by_alias=True),
                     )
@@ -835,7 +845,7 @@ class MoonMindAgentSessionWorkflow:
         self,
         payload: CodexManagedSessionSteerRequest,
     ) -> None:
-        request = CodexManagedSessionSteerRequest.model_validate(payload)
+        request = payload
         self._validate_mutation_allowed()
         self._validate_current_epoch(request.session_epoch)
         if self._runtime_handles_attached():
@@ -845,7 +855,7 @@ class MoonMindAgentSessionWorkflow:
     async def clear_session_update(
         self, payload: CodexManagedSessionClearUpdateRequest
     ) -> dict[str, Any]:
-        request = CodexManagedSessionClearUpdateRequest.model_validate(payload)
+        request = payload
         await self._await_runtime_handles()
         async with self._mutation_lock:
             self._validate_mutation_allowed()
@@ -868,7 +878,9 @@ class MoonMindAgentSessionWorkflow:
             self._status = AGENT_SESSION_STATUS_CLEARING
             self._update_operator_visibility("clearing")
             try:
-                next_thread_id = f"thread:{binding.session_id}:{binding.session_epoch + 1}"
+                next_thread_id = (
+                    f"thread:{binding.session_id}:{binding.session_epoch + 1}"
+                )
                 handle = CodexManagedSessionHandle.model_validate(
                     await self._execute_routed_activity(
                         "agent_runtime.clear_session",
@@ -931,7 +943,6 @@ class MoonMindAgentSessionWorkflow:
         self,
         payload: CodexManagedSessionClearUpdateRequest,
     ) -> None:
-        CodexManagedSessionClearUpdateRequest.model_validate(payload)
         self._validate_mutation_allowed()
         if self._status == AGENT_SESSION_STATUS_CLEARING:
             raise ValueError("Managed session is already clearing")
@@ -940,7 +951,7 @@ class MoonMindAgentSessionWorkflow:
     async def cancel_session_update(
         self, payload: CodexManagedSessionCancelUpdateRequest
     ) -> dict[str, Any]:
-        request = CodexManagedSessionCancelUpdateRequest.model_validate(payload)
+        request = payload
         async with self._mutation_lock:
             request_tracking_id = self._request_tracking_id(request.request_id)
             self._validate_request_not_completed(
@@ -1004,14 +1015,13 @@ class MoonMindAgentSessionWorkflow:
         self,
         payload: CodexManagedSessionCancelUpdateRequest,
     ) -> None:
-        CodexManagedSessionCancelUpdateRequest.model_validate(payload)
         self._validate_mutation_allowed()
 
     @workflow.update(name="TerminateSession")
     async def terminate_session_update(
         self, payload: CodexManagedSessionTerminateUpdateRequest
     ) -> dict[str, Any]:
-        request = CodexManagedSessionTerminateUpdateRequest.model_validate(payload)
+        request = payload
         async with self._mutation_lock:
             if self._termination_requested:
                 return self.get_status()
@@ -1076,7 +1086,6 @@ class MoonMindAgentSessionWorkflow:
         self,
         payload: CodexManagedSessionTerminateUpdateRequest,
     ) -> None:
-        CodexManagedSessionTerminateUpdateRequest.model_validate(payload)
         if (
             self._status == AGENT_SESSION_STATUS_TERMINATING
             and self._last_control_action == "terminate_session"

@@ -8,7 +8,13 @@ import pytest
 from temporalio.common import RetryPolicy
 
 from moonmind.schemas.managed_session_models import (
+    CodexManagedSessionAttachRuntimeHandlesSignal,
+    CodexManagedSessionCancelUpdateRequest,
+    CodexManagedSessionClearUpdateRequest,
+    CodexManagedSessionInterruptRequest,
+    CodexManagedSessionSendFollowUpRequest,
     CodexManagedSessionSnapshot,
+    CodexManagedSessionTerminateUpdateRequest,
     CodexManagedSessionWorkflowInput,
 )
 from moonmind.workflows.temporal.workflows import agent_session as agent_session_module
@@ -48,6 +54,54 @@ def _workflow_input(**overrides: object) -> CodexManagedSessionWorkflowInput:
     }
     payload.update(overrides)
     return CodexManagedSessionWorkflowInput.model_validate(payload)
+
+
+def _runtime_handles(
+    payload: dict[str, object] | None = None,
+    **overrides: object,
+) -> CodexManagedSessionAttachRuntimeHandlesSignal:
+    overrides = {**(payload or {}), **overrides}
+    return CodexManagedSessionAttachRuntimeHandlesSignal.model_validate(overrides)
+
+
+def _send_follow_up(
+    payload: dict[str, object] | None = None,
+    **overrides: object,
+) -> CodexManagedSessionSendFollowUpRequest:
+    overrides = {**(payload or {}), **overrides}
+    return CodexManagedSessionSendFollowUpRequest.model_validate(overrides)
+
+
+def _interrupt_turn(
+    payload: dict[str, object] | None = None,
+    **overrides: object,
+) -> CodexManagedSessionInterruptRequest:
+    overrides = {**(payload or {}), **overrides}
+    return CodexManagedSessionInterruptRequest.model_validate(overrides)
+
+
+def _clear_session(
+    payload: dict[str, object] | None = None,
+    **overrides: object,
+) -> CodexManagedSessionClearUpdateRequest:
+    overrides = {**(payload or {}), **overrides}
+    return CodexManagedSessionClearUpdateRequest.model_validate(overrides)
+
+
+def _cancel_session(
+    payload: dict[str, object] | None = None,
+    **overrides: object,
+) -> CodexManagedSessionCancelUpdateRequest:
+    overrides = {**(payload or {}), **overrides}
+    return CodexManagedSessionCancelUpdateRequest.model_validate(overrides)
+
+
+def _terminate_session(
+    payload: dict[str, object] | None = None,
+    **overrides: object,
+) -> CodexManagedSessionTerminateUpdateRequest:
+    overrides = {**(payload or {}), **overrides}
+    return CodexManagedSessionTerminateUpdateRequest.model_validate(overrides)
 
 
 def _assert_forbidden_metadata_absent(value: object) -> None:
@@ -209,11 +263,13 @@ def test_agent_session_logs_bounded_telemetry_context_without_payload_values(
     )
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
     )
     telemetry_contexts.clear()
     workflow._last_control_reason = "Write a private implementation plan"
@@ -245,7 +301,9 @@ def test_agent_session_send_follow_up_validator_allows_pre_handle_request(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
 
-    workflow.validate_send_follow_up({"message": "Continue the task-scoped session."})
+    workflow.validate_send_follow_up(
+        _send_follow_up({"message": "Continue the task-scoped session."})
+    )
 
 
 def test_agent_session_workflow_input_carries_request_tracking_state(
@@ -412,10 +470,12 @@ async def test_agent_session_request_tracking_prefers_temporal_update_id(
     )
 
     await workflow.send_follow_up(
-        {
-            "message": "Continue the task-scoped session.",
-            "requestId": "caller-request-1",
-        }
+        _send_follow_up(
+            {
+                "message": "Continue the task-scoped session.",
+                "requestId": "caller-request-1",
+            }
+        )
     )
 
     assert workflow.get_status()["requestTrackingState"] == [
@@ -435,15 +495,19 @@ def test_agent_session_interrupt_turn_validator_rejects_stale_epoch(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
     )
 
     with pytest.raises(ValueError, match="stale sessionEpoch"):
-        workflow.validate_interrupt_turn({"sessionEpoch": 2, "reason": "Stop this turn."})
+        workflow.validate_interrupt_turn(
+            _interrupt_turn({"sessionEpoch": 2, "reason": "Stop this turn."})
+        )
 
 
 def test_agent_session_interrupt_turn_validator_requires_active_turn(
@@ -452,14 +516,18 @@ def test_agent_session_interrupt_turn_validator_requires_active_turn(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+            }
+        )
     )
 
     with pytest.raises(ValueError, match="active turn"):
-        workflow.validate_interrupt_turn({"sessionEpoch": 1, "reason": "Stop this turn."})
+        workflow.validate_interrupt_turn(
+            _interrupt_turn({"sessionEpoch": 1, "reason": "Stop this turn."})
+        )
 
 
 def test_agent_session_clear_session_validator_rejects_when_already_clearing(
@@ -468,15 +536,17 @@ def test_agent_session_clear_session_validator_rejects_when_already_clearing(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+            }
+        )
     )
     workflow._status = AGENT_SESSION_STATUS_CLEARING
 
     with pytest.raises(ValueError, match="already clearing"):
-        workflow.validate_clear_session({})
+        workflow.validate_clear_session(_clear_session({}))
 
 
 @pytest.mark.asyncio
@@ -486,7 +556,9 @@ async def test_agent_session_terminate_update_marks_termination_requested(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
 
-    status = await workflow.terminate_session_update({"reason": "done"})
+    status = await workflow.terminate_session_update(
+        _terminate_session({"reason": "done"})
+    )
 
     assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
     assert status["terminationRequested"] is True
@@ -501,11 +573,13 @@ async def test_agent_session_terminate_update_executes_remote_terminate_when_han
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
     )
 
     captured: list[tuple[str, dict[str, object], dict[str, object]]] = []
@@ -539,7 +613,9 @@ async def test_agent_session_terminate_update_executes_remote_terminate_when_han
         _execute_activity,
     )
 
-    status = await workflow.terminate_session_update({"reason": "done"})
+    status = await workflow.terminate_session_update(
+        _terminate_session({"reason": "done"})
+    )
 
     assert [name for name, _, _ in captured] == ["agent_runtime.terminate_session"]
     assert captured[0][1]["containerId"] == "container-1"
@@ -578,11 +654,13 @@ async def test_agent_session_terminate_update_keeps_terminating_when_remote_term
 
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
     )
 
     async def _execute_activity(
@@ -603,7 +681,7 @@ async def test_agent_session_terminate_update_keeps_terminating_when_remote_term
 
     with pytest.raises(RuntimeError, match="terminate failed"):
         await workflow.terminate_session_update(
-            {"reason": "done", "requestId": "request-terminate-1"}
+            _terminate_session({"reason": "done", "requestId": "request-terminate-1"})
         )
 
     status = workflow.get_status()
@@ -628,11 +706,13 @@ async def test_agent_session_cancel_interrupts_active_turn_without_terminating(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
     )
 
     captured: list[str] = []
@@ -667,7 +747,9 @@ async def test_agent_session_cancel_interrupts_active_turn_without_terminating(
         _execute_activity,
     )
 
-    status = await workflow.cancel_session_update({"reason": "operator cancel"})
+    status = await workflow.cancel_session_update(
+        _cancel_session({"reason": "operator cancel"})
+    )
 
     assert captured == ["agent_runtime.interrupt_turn"]
     assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
@@ -714,10 +796,12 @@ async def test_agent_session_completed_identified_request_rejects_duplicate_muta
 
     with pytest.raises(ValueError, match="already completed"):
         await workflow.send_follow_up(
-            {
-                "message": "Do not replay this identified request.",
-                "requestId": "request-1",
-            }
+            _send_follow_up(
+                {
+                    "message": "Do not replay this identified request.",
+                    "requestId": "request-1",
+                }
+            )
         )
 
 
@@ -728,10 +812,12 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+            }
+        )
     )
 
     captured: list[tuple[str, dict[str, object], dict[str, object]]] = []
@@ -800,11 +886,13 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
     )
 
     result = await workflow.send_follow_up(
-        {
-            "message": "Continue the task-scoped session.",
-            "reason": "Operator follow-up",
-            "requestId": "request-send-1",
-        }
+        _send_follow_up(
+            {
+                "message": "Continue the task-scoped session.",
+                "reason": "Operator follow-up",
+                "requestId": "request-send-1",
+            }
+        )
     )
 
     assert result["turnId"] == "turn-2"
@@ -864,11 +952,13 @@ async def test_agent_session_updates_visibility_on_major_transitions(
     )
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
     )
 
     async def _execute_activity(
@@ -925,7 +1015,7 @@ async def test_agent_session_updates_visibility_on_major_transitions(
     )
 
     await workflow.interrupt_turn_update(
-        {"sessionEpoch": 1, "reason": "Stop this turn."}
+        _interrupt_turn({"sessionEpoch": 1, "reason": "Stop this turn."})
     )
 
     assert any("active turn running" in details for details in current_details)
@@ -953,10 +1043,12 @@ async def test_agent_session_refresh_projection_uses_authoritative_binding_task_
         _workflow_input(sessionId="custom-session-id")
     )
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+            }
+        )
     )
 
     publication_payloads: list[dict[str, object]] = []
@@ -1007,7 +1099,9 @@ async def test_agent_session_refresh_projection_uses_authoritative_binding_task_
         _execute_activity,
     )
 
-    await workflow.send_follow_up({"message": "Continue the custom session."})
+    await workflow.send_follow_up(
+        _send_follow_up({"message": "Continue the custom session."})
+    )
 
     assert len(publication_payloads) == 1
     assert publication_payloads[0]["sessionId"] == "custom-session-id"
@@ -1028,11 +1122,13 @@ async def test_agent_session_interrupt_turn_update_executes_session_activity_sur
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
     )
 
     captured: list[str] = []
@@ -1104,7 +1200,7 @@ async def test_agent_session_interrupt_turn_update_executes_session_activity_sur
     )
 
     result = await workflow.interrupt_turn_update(
-        {"sessionEpoch": 1, "reason": "Stop this turn."}
+        _interrupt_turn({"sessionEpoch": 1, "reason": "Stop this turn."})
     )
 
     assert result["turnId"] == "turn-1"
@@ -1127,11 +1223,13 @@ async def test_agent_session_clear_session_update_executes_remote_clear_and_upda
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
     )
 
     captured: list[str] = []
@@ -1202,7 +1300,9 @@ async def test_agent_session_clear_session_update_executes_remote_clear_and_upda
         _execute_activity,
     )
 
-    result = await workflow.clear_session_update({"reason": "Reset stale context"})
+    result = await workflow.clear_session_update(
+        _clear_session({"reason": "Reset stale context"})
+    )
 
     assert result["sessionState"]["sessionEpoch"] == 2
     assert result["latestResetBoundaryRef"] == "art-reset-epoch-2"
@@ -1226,11 +1326,13 @@ def test_agent_session_legacy_control_action_signal_replays_clear_session(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
     )
 
     workflow.apply_control_action(
@@ -1257,11 +1359,13 @@ async def test_agent_session_async_mutators_wait_for_workflow_lock(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindAgentSessionWorkflow(_workflow_input())
     workflow.attach_runtime_handles(
-        {
-            "containerId": "container-1",
-            "threadId": "thread-1",
-            "activeTurnId": "turn-1",
-        }
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
     )
 
     captured: list[str] = []
@@ -1327,7 +1431,7 @@ async def test_agent_session_async_mutators_wait_for_workflow_lock(
 
     await workflow._mutation_lock.acquire()
     clear_task = asyncio.create_task(
-        workflow.clear_session_update({"reason": "Reset stale context"})
+        workflow.clear_session_update(_clear_session({"reason": "Reset stale context"}))
     )
     await asyncio.sleep(0)
 
@@ -1358,10 +1462,12 @@ async def test_agent_session_send_follow_up_waits_for_runtime_handles(
         wait_calls += 1
         assert predicate() is False
         workflow.attach_runtime_handles(
-            {
-                "containerId": "container-1",
-                "threadId": "thread-1",
-            }
+            _runtime_handles(
+                {
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                }
+            )
         )
         assert predicate() is True
 
@@ -1407,14 +1513,18 @@ async def test_agent_session_send_follow_up_waits_for_runtime_handles(
             }
         raise AssertionError(f"unexpected activity: {activity_name}")
 
-    monkeypatch.setattr(agent_session_module.workflow, "wait_condition", _wait_condition)
+    monkeypatch.setattr(
+        agent_session_module.workflow, "wait_condition", _wait_condition
+    )
     monkeypatch.setattr(
         agent_session_module.workflow,
         "execute_activity",
         _execute_activity,
     )
 
-    result = await workflow.send_follow_up({"message": "Continue after launch."})
+    result = await workflow.send_follow_up(
+        _send_follow_up({"message": "Continue after launch."})
+    )
 
     assert wait_calls == 1
     assert result["latestSummaryRef"] == "art-summary-2"
@@ -1441,7 +1551,9 @@ async def test_agent_session_run_waits_for_handlers_before_completion(
         waited_for_handlers = True
         assert predicate() is True
 
-    monkeypatch.setattr(agent_session_module.workflow, "wait_condition", _wait_condition)
+    monkeypatch.setattr(
+        agent_session_module.workflow, "wait_condition", _wait_condition
+    )
 
     status = await workflow.run(_workflow_input())
 
@@ -1469,7 +1581,9 @@ async def test_agent_session_run_waits_for_state_change_without_timeout_polling(
         workflow._termination_requested = True
         assert predicate() is True
 
-    monkeypatch.setattr(agent_session_module.workflow, "wait_condition", _wait_condition)
+    monkeypatch.setattr(
+        agent_session_module.workflow, "wait_condition", _wait_condition
+    )
 
     status = await workflow.run(_workflow_input())
 
@@ -1544,7 +1658,9 @@ async def test_agent_session_continue_as_new_carries_bounded_session_state(
         captured_payload = payload
         raise RuntimeError("continue-as-new requested")
 
-    monkeypatch.setattr(agent_session_module.workflow, "wait_condition", _wait_condition)
+    monkeypatch.setattr(
+        agent_session_module.workflow, "wait_condition", _wait_condition
+    )
     monkeypatch.setattr(
         agent_session_module.workflow,
         "continue_as_new",

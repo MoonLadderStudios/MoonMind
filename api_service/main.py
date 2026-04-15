@@ -391,7 +391,7 @@ if MISSION_CONTROL_STATIC_DIST_DIR.is_dir():
 # Mount static files directory (optional, if you have CSS/JS files). Create the
 # static directory if it doesn't exist, or ensure your deployment process does.
 if not os.path.exists(STATIC_DIR):
-    os.makedirs(STATIC_DIR)
+    os.makedirs(STATIC_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
