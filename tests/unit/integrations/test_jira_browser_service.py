@@ -505,28 +505,51 @@ async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
                         "key": "ENG-2",
                         "fields": {
                             "summary": "Unknown status",
+                            "issuetype": {"name": "Bug"},
                             "status": {"id": "99", "name": "Blocked"},
+                        },
+                    },
+                    {
+                        "key": "ENG-3",
+                        "fields": {
+                            "summary": "Fix issue import",
+                            "issuetype": {"name": "Bug"},
+                            "status": {"id": "1", "name": "Open"},
+                        },
+                    },
+                    {
+                        "key": "ENG-4",
+                        "fields": {
+                            "summary": "Wire issue import",
+                            "issuetype": {"name": "Task"},
+                            "status": {"id": "3", "name": "Done"},
                         },
                     },
                 ]
             },
-            {"issues": [], "total": 2},
+            {"issues": [], "total": 4},
         ],
     )
 
     result = await service.list_issues("42")
 
-    assert [item.issue_key for item in result.items_by_column["to-do"]] == ["ENG-1"]
-    assert result.items_by_column["done"] == []
+    assert [item.issue_key for item in result.items_by_column["to-do"]] == [
+        "ENG-1",
+        "ENG-3",
+    ]
+    assert result.items_by_column["to-do"][1].issue_type == "Bug"
+    assert [item.issue_key for item in result.items_by_column["done"]] == ["ENG-4"]
+    assert result.items_by_column["done"][0].issue_type == "Task"
     assert [item.issue_key for item in result.unmapped_items] == ["ENG-2"]
     assert result.unmapped_items[0].column_id == "__unmapped"
+    assert result.unmapped_items[0].issue_type == "Bug"
     assert [call["path"] for call in service.calls] == [
         "agile:/board/42",
         "agile:/board/42/configuration",
         "agile:/board/42/issue",
     ]
     assert service.calls[2]["params"] == {
-        "fields": "summary,issuetype,status,assignee,updated",
+        "fields": "summary,issuetype,status,assignee,updated,project",
         "maxResults": 50,
         "startAt": 0,
     }
@@ -561,6 +584,7 @@ async def test_board_issues_filter_to_selected_project_scope() -> None:
                     ]
                 },
             },
+            {"id": "10000", "key": "ENG", "name": "Engineering"},
             {
                 "issues": [
                     {
@@ -580,6 +604,72 @@ async def test_board_issues_filter_to_selected_project_scope() -> None:
     result = await service.list_issues("42", project_key="ENG")
 
     assert [item.issue_key for item in result.items_by_column["selected"]] == ["ENG-1"]
+
+
+async def test_board_issues_accepts_selected_project_alias_by_project_id() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="TOOL,OPS"),
+        responses=[
+            {
+                "id": 15,
+                "name": "TOOL board",
+                "type": "kanban",
+                "location": {"projectKey": "MM"},
+            },
+            {
+                "values": [
+                    {
+                        "id": 15,
+                        "name": "TOOL board",
+                        "type": "kanban",
+                        "location": {"projectKey": "MM"},
+                    }
+                ],
+                "total": 1,
+            },
+            {
+                "location": {"projectKey": "MM"},
+                "columnConfig": {
+                    "columns": [
+                        {"name": "Done", "statuses": [{"id": "10014"}]},
+                    ]
+                },
+            },
+            {"id": "10016", "key": "MM", "name": "MoonMind"},
+            {
+                "issues": [
+                    {
+                        "key": "MM-295",
+                        "fields": {
+                            "summary": "Renamed project story",
+                            "status": {"id": "10014", "name": "Done"},
+                            "project": {"id": "10016", "key": "MM"},
+                        },
+                    },
+                    {
+                        "key": "OPS-2",
+                        "fields": {
+                            "summary": "Other project",
+                            "status": {"id": "10014", "name": "Done"},
+                            "project": {"id": "10017", "key": "OPS"},
+                        },
+                    },
+                ],
+                "total": 2,
+            },
+        ],
+    )
+
+    result = await service.list_issues("15", project_key="TOOL")
+
+    assert [item.issue_key for item in result.items_by_column["done"]] == ["MM-295"]
+    assert [call["path"] for call in service.calls] == [
+        "agile:/board/15",
+        "agile:/board",
+        "agile:/board/15/configuration",
+        "/project/TOOL",
+        "agile:/board/15/issue",
+    ]
 
 
 async def test_board_issues_returns_empty_column_buckets_when_jira_has_no_issues() -> None:
@@ -928,6 +1018,61 @@ async def test_issue_detail_maps_status_to_board_column_when_board_context_is_pr
         "/issue/ENG-123",
         "agile:/board/42",
         "agile:/board/42/configuration",
+    ]
+
+
+async def test_issue_detail_accepts_selected_project_alias_by_project_id() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="TOOL"),
+        responses=[
+            {"id": "10016", "key": "MM", "name": "MoonMind"},
+            {
+                "key": "MM-295",
+                "fields": {
+                    "summary": "Renamed project story",
+                    "status": {"id": "10014", "name": "Done"},
+                    "project": {"id": "10016", "key": "MM"},
+                    "description": "Do the work",
+                },
+            },
+            {
+                "id": 15,
+                "name": "TOOL board",
+                "type": "kanban",
+                "location": {"projectKey": "MM"},
+            },
+            {
+                "values": [
+                    {
+                        "id": 15,
+                        "name": "TOOL board",
+                        "type": "kanban",
+                        "location": {"projectKey": "MM"},
+                    }
+                ],
+                "total": 1,
+            },
+            {
+                "columnConfig": {
+                    "columns": [
+                        {"name": "Done", "statuses": [{"id": "10014"}]},
+                    ]
+                }
+            },
+        ],
+    )
+
+    result = await service.get_issue("MM-295", board_id="15", project_key="TOOL")
+
+    assert result.issue_key == "MM-295"
+    assert result.column is not None
+    assert result.column.id == "done"
+    assert [call["path"] for call in service.calls] == [
+        "/project/TOOL",
+        "/issue/MM-295",
+        "agile:/board/15",
+        "agile:/board",
+        "agile:/board/15/configuration",
     ]
 
 

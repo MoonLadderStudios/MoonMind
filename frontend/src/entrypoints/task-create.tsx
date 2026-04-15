@@ -674,7 +674,7 @@ function jiraImportTextForMode(
   const issueTitle =
     [issueKey, summary].filter(Boolean).join(": ") || "(unnamed)";
   return joinJiraText([
-    `Complete Jira story ${issueTitle}`,
+    `Complete Jira issue ${issueTitle}`,
     description ? `Description\n${description}` : "",
     acceptanceCriteria ? `Acceptance criteria\n${acceptanceCriteria}` : "",
   ]);
@@ -2515,13 +2515,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     jiraColumnsQuery.isError || jiraIssuesQuery.isError
       ? localJiraErrorMessage(
           jiraColumnsQuery.error || jiraIssuesQuery.error,
-          "Failed to load Jira stories.",
+          "Failed to load Jira issues.",
         )
       : null;
   const jiraIssueError = jiraIssueDetailQuery.isError
     ? localJiraErrorMessage(
         jiraIssueDetailQuery.error,
-        "Failed to load Jira story.",
+        "Failed to load Jira issue.",
       )
     : null;
   const jiraProjectsEmpty =
@@ -2545,7 +2545,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     activeJiraColumnId &&
     jiraIssuesQuery.isSuccess &&
     activeJiraIssues.length === 0
-      ? localJiraEmptyStateMessage("No Jira stories are available in this column.")
+      ? localJiraEmptyStateMessage("No Jira issues are available in this column.")
       : null;
   const jiraTargetText = jiraTargetLabel(jiraImportTarget, steps);
   const jiraTargetStep =
@@ -4206,7 +4206,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           >
             <div className="queue-step-header">
               <div>
-                <h3 id="jira-browser-title">Browse Jira story</h3>
+                <h3 id="jira-browser-title">Browse Jira issue</h3>
                 <p className="small">{`Target: ${jiraTargetText}`}</p>
                 {jiraImportWillCustomizeTemplateStep ? (
                   <p className="notice small">
@@ -4314,7 +4314,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   {jiraColumnsQuery.isLoading || jiraIssuesQuery.isLoading ? (
                     <p className="small">Loading Jira issues...</p>
                   ) : jiraBoardIssuesError ? (
-                    <p className="small">Jira stories are unavailable right now.</p>
+                    <p className="small">Jira issues are unavailable right now.</p>
                   ) : activeJiraIssues.length > 0 ? (
                     activeJiraIssues.map((issue) => (
                       <button
@@ -4340,7 +4340,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     <p className="small">{jiraActiveColumnEmpty}</p>
                   ) : (
                     <p className="small">
-                      Select a Jira board column to view stories.
+                      Select a Jira board column to view issues.
                     </p>
                   )}
                 </div>
@@ -4350,7 +4350,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 {jiraIssueError ? (
                   <p className="notice small">{jiraIssueError}</p>
                 ) : selectedJiraIssueKey && jiraIssueDetailQuery.isLoading ? (
-                  <p className="small">Loading Jira story...</p>
+                  <p className="small">Loading Jira issue...</p>
                 ) : selectedJiraIssue ? (
                   <>
                     <div>
@@ -4435,7 +4435,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     </div>
                   </>
                 ) : (
-                  <p className="small">Choose a Jira story to preview.</p>
+                  <p className="small">Choose a Jira issue to preview.</p>
                 )}
               </aside>
             </div>
@@ -4544,7 +4544,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         <button
                           type="button"
                           className="secondary jira-browse-button"
-                          aria-label={`Browse Jira story for Step ${index + 1} instructions`}
+                          aria-label={`Browse Jira issue for Step ${index + 1} instructions`}
                           onClick={() =>
                             openJiraBrowser({
                               kind: "step",
@@ -4552,7 +4552,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                             })
                           }
                         >
-                          Browse Jira story
+                          Browse Jira issue
                         </button>
                       ) : null}
                     </div>
@@ -4735,10 +4735,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <button
                     type="button"
                     className="secondary jira-browse-button"
-                    aria-label="Browse Jira story for preset instructions"
+                    aria-label="Browse Jira issue for preset instructions"
                     onClick={() => openJiraBrowser({ kind: "preset" })}
                   >
-                    Browse Jira story
+                    Browse Jira issue
                   </button>
                 ) : null}
               </div>
