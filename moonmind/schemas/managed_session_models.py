@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from moonmind.schemas._validation import NonBlankStr, require_non_blank
+from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
 
 ManagedSessionControlAction = Literal[
@@ -162,6 +163,11 @@ class _CodexManagedSessionRemoteContract(BaseModel):
     control_mode: ManagedSessionControlMode = Field(
         "remote_container", alias="controlMode"
     )
+
+    @field_validator("metadata", mode="after", check_fields=False)
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
 
 
 class CodexManagedSessionLocator(_CodexManagedSessionRemoteContract):

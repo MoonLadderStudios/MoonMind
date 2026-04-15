@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal, NoReturn, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from moonmind.schemas._validation import require_non_blank
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionBinding,
     canonical_codex_managed_runtime_id,
 )
+from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
 AgentKind = Literal["external", "managed"]
 ExternalExecutionStyle = Literal["polling", "streaming_gateway"]
@@ -230,6 +231,11 @@ class AgentRunHandle(BaseModel):
     poll_hint_seconds: int | None = Field(None, alias="pollHintSeconds", ge=1)
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
     @model_validator(mode="after")
     def _normalize(self) -> "AgentRunHandle":
         self.run_id = require_non_blank(self.run_id, field_name="runId")
@@ -253,6 +259,11 @@ class AgentRunStatus(BaseModel):
     )
     poll_hint_seconds: int | None = Field(None, alias="pollHintSeconds", ge=1)
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
 
     @property
     def terminal(self) -> bool:
@@ -280,6 +291,11 @@ class AgentRunResult(BaseModel):
     provider_error_code: str | None = Field(None, alias="providerErrorCode")
     retry_recommendation: str | None = Field(None, alias="retryRecommendation")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
 
     @model_validator(mode="after")
     def _validate_payload(self) -> "AgentRunResult":
