@@ -12,6 +12,7 @@ from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.integrations.jira.models import (
     AddCommentRequest,
     CreateIssueRequest,
+    CreateIssueLinkRequest,
     EditIssueRequest,
     SearchIssuesRequest,
     TransitionIssueRequest,
@@ -259,6 +260,117 @@ async def test_search_issues_preserves_order_by_after_project_scoping() -> None:
         service.calls[0]["json_body"]["jql"]
         == "project = ENG AND (status = 'Todo') ORDER BY created DESC"
     )
+
+
+async def test_create_issue_link_posts_trusted_jira_link_request() -> None:
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(),
+        responses=[{}],
+    )
+
+    result = await service.create_issue_link(
+        CreateIssueLinkRequest(
+            blocksIssueKey="ENG-1",
+            blockedIssueKey="ENG-2",
+        )
+    )
+
+    assert result == {
+        "linked": True,
+        "blocksIssueKey": "ENG-1",
+        "blockedIssueKey": "ENG-2",
+        "linkType": "Blocks",
+    }
+    assert service.calls[0]["method"] == "POST"
+    assert service.calls[0]["path"] == "/issueLink"
+    assert service.calls[0]["action"] == "create_issue_link"
+    assert service.calls[0]["json_body"] == {
+        "type": {"name": "Blocks"},
+        "outwardIssue": {"key": "ENG-1"},
+        "inwardIssue": {"key": "ENG-2"},
+    }
+
+
+async def test_create_issue_link_rejects_self_link() -> None:
+    with pytest.raises(ValidationError):
+        CreateIssueLinkRequest(
+            blocksIssueKey="ENG-1",
+            blockedIssueKey="ENG-1",
+        )
+
+
+async def test_create_issue_link_enforces_action_policy() -> None:
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(
+            jira=JiraSettings(
+                jira_tool_enabled=True,
+                jira_allowed_actions="create_issue",
+                jira_allowed_projects=None,
+            )
+        )
+    )
+
+    with pytest.raises(JiraToolError) as excinfo:
+        await service.create_issue_link(
+            CreateIssueLinkRequest(
+                blocksIssueKey="ENG-1",
+                blockedIssueKey="ENG-2",
+            )
+        )
+
+    assert excinfo.value.code == "jira_policy_denied"
+    assert service.calls == []
+
+
+async def test_create_issue_link_enforces_project_policy_for_both_issues() -> None:
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(
+            jira=JiraSettings(
+                jira_tool_enabled=True,
+                jira_allowed_projects="ENG",
+            )
+        )
+    )
+
+    with pytest.raises(JiraToolError) as excinfo:
+        await service.create_issue_link(
+            CreateIssueLinkRequest(
+                blocksIssueKey="ENG-1",
+                blockedIssueKey="OPS-2",
+            )
+        )
+
+    assert excinfo.value.code == "jira_policy_denied"
+    assert service.calls == []
+
+
+async def test_create_issue_link_reports_existing_duplicate_link() -> None:
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(),
+        responses=[
+            JiraToolError(
+                "Jira issue link already exists.",
+                code="jira_conflict_existing_link",
+                status_code=409,
+                action="create_issue_link",
+            )
+        ],
+    )
+
+    result = await service.create_issue_link(
+        CreateIssueLinkRequest(
+            blocksIssueKey="ENG-1",
+            blockedIssueKey="ENG-2",
+        )
+    )
+
+    assert result == {
+        "linked": False,
+        "existing": True,
+        "blocksIssueKey": "ENG-1",
+        "blockedIssueKey": "ENG-2",
+        "linkType": "Blocks",
+    }
     assert "startAt" not in service.calls[0]["json_body"]
 
 

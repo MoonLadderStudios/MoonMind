@@ -28,6 +28,11 @@ inputs:
     type: text
     required: true
     default: Story
+  - name: jira_dependency_mode
+    label: Jira Dependency Mode
+    type: text
+    required: true
+    default: none
 steps:
   - title: Break down declarative design
     instructions: |-
@@ -48,7 +53,10 @@ steps:
 
       Use the runtime-provided story breakdown JSON path.
       Every Jira issue must include the Source Document path from the story breakdown.
-      Return the created Jira issue keys and URLs.
+      Dependency mode: {{ inputs.jira_dependency_mode }}.
+      If dependency mode is linear_blocker_chain, create an ordered blocker chain so each later story is blocked by the immediately preceding story.
+      If dependency mode is none, create the Jira issues without dependency links.
+      Return the created Jira issue keys, URLs, dependency mode, and created/reused/failed link results.
     skill:
       id: jira-issue-creator
       args: {}

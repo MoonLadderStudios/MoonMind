@@ -14,6 +14,7 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 - Required: summary/title.
 - Required for creation: authenticated Jira access through a connector, API token, OAuth session, or documented local secret.
 - Optional for breakdown-driven creation: `storyBreakdownPath`, `stories`, or `storyOutput` from `moonspec-breakdown`.
+- Optional for ordered Jira story exports: dependency mode `none` or `linear_blocker_chain`.
 - Optional: description, acceptance criteria, priority, labels, assignee, reporter, parent issue key, sprint, component, due date, linked issues, attachments.
 - Required when creating Jira issues from `moonspec-breakdown` output: an original source document reference path. Read it from each story's `sourceReference.path` or from the breakdown-level `source.referencePath` / `source.path`.
 
@@ -43,6 +44,11 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 - Use the available Jira connector's `jira.create_issue` or `jira.create_subtask` operations when present.
 - In MoonMind workflow plans, `jira-issue-creator` is an agent skill, not a deterministic executable tool. Use the available Jira connector/API to inspect projects, issue types, and create fields, then create the requested issues.
 - When the task references a story breakdown directory, look for `stories.json` inside that directory unless an exact `storyBreakdownPath` is provided.
+- Preserve story order and stable story IDs from MoonSpec breakdown when creating Jira issues.
+- For dependency mode `none`, create only the Jira issues and report that no dependency links were requested.
+- For dependency mode `linear_blocker_chain`, after all target Jira issues are created or reused, create trusted Jira dependency links so each later story is blocked by the immediately preceding story.
+- Create dependency links only through MoonMind's trusted Jira tool surface, such as `jira.create_issue_link` when available. Do not call Jira directly from the shell and do not rely on issue descriptions or prompt text as the dependency mechanism.
+- Return created/reused issue keys plus created/reused/failed dependency-link results. If issue creation succeeds but a dependency link fails, report partial success and do not claim the dependency chain is complete.
 - Before creating any issue from `stories.json`, verify every story has an original source document path available through `story.sourceReference.path`, `source.referencePath`, or `source.path`. If the original document path is missing for any story, do not create Jira issues; report the missing source-reference blocker and the breakdown path that must be regenerated or repaired.
 - Otherwise call Jira REST `POST /rest/api/3/issue` for Jira Cloud or the deployment's documented equivalent.
 - Send only the fields needed for the requested issue.
@@ -55,6 +61,7 @@ When invoked after `moonspec-breakdown` or when the request references story bre
 - Read story candidates from the provided JSON breakdown, not from `spec.md`.
 - Require source traceability before Jira creation. Each Jira issue must include `Source Document: <path>` in its description, using the story-level `sourceReference.path` when present and otherwise the breakdown-level `source.referencePath` or `source.path`.
 - Include story-specific `sourceReference.sections` and `sourceReference.coverageIds` when present so the Jira issue points to the relevant part of the original declarative document.
+- Preserve story order, stable story IDs, and dependency IDs so ordered Jira issue chains can be created after issue creation succeeds.
 - Treat missing source document references as a hard blocker, not as an optional warning.
 - Do not create or rename `spec.md`.
 - If Jira issue creation succeeds, return Jira keys/URLs and do not request another output format.
