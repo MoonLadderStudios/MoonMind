@@ -991,7 +991,7 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
 
 
 @pytest.mark.asyncio
-async def test_request_rerun_allowed_for_terminal_execution(
+async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -1016,6 +1016,9 @@ async def test_request_rerun_allowed_for_terminal_execution(
             graceful=True,
         )
 
+        source_workflow_id = created.workflow_id
+        source_run_id = created.run_id
+
         response = await service.update_execution(
             workflow_id=created.workflow_id,
             update_name="RequestRerun",
@@ -1029,20 +1032,25 @@ async def test_request_rerun_allowed_for_terminal_execution(
             node_ids=None,
             idempotency_key="rerun-terminal",
         )
-        refreshed = await service.describe_execution(created.workflow_id)
+        source = await service.describe_execution(source_workflow_id)
+        rerun = await service.describe_execution(response["workflow_id"])
 
         assert response["accepted"] is True
         assert response["applied"] == "continue_as_new"
         assert response["continue_as_new_cause"] == "manual_rerun"
-        assert refreshed.state is MoonMindWorkflowState.EXECUTING
-        assert refreshed.close_status is None
-        assert refreshed.closed_at is None
-        assert refreshed.rerun_count == 1
+        assert response["workflow_id"] != source_workflow_id
+        assert source.state is MoonMindWorkflowState.CANCELED
+        assert source.close_status is TemporalExecutionCloseStatus.CANCELED
+        assert rerun.state is MoonMindWorkflowState.INITIALIZING
+        assert rerun.parameters["rerunSource"] == {
+            "workflowId": source_workflow_id,
+            "runId": source_run_id,
+        }
         assert service._client_adapter.update_workflow.await_count == 0
 
 
 @pytest.mark.asyncio
-async def test_request_rerun_falls_back_when_temporal_reports_completed(
+async def test_request_rerun_creates_fresh_execution_when_temporal_reports_completed(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -1065,6 +1073,7 @@ async def test_request_rerun_falls_back_when_temporal_reports_completed(
             "workflow execution already completed"
         )
 
+        source_workflow_id = created.workflow_id
         response = await service.update_execution(
             workflow_id=created.workflow_id,
             update_name="RequestRerun",
@@ -1078,13 +1087,16 @@ async def test_request_rerun_falls_back_when_temporal_reports_completed(
             node_ids=None,
             idempotency_key="rerun-temporal-completed",
         )
-        refreshed = await service.describe_execution(created.workflow_id)
+        source = await service.describe_execution(source_workflow_id)
+        rerun = await service.describe_execution(response["workflow_id"])
 
         assert response["accepted"] is True
         assert response["applied"] == "continue_as_new"
         assert response["continue_as_new_cause"] == "manual_rerun"
-        assert refreshed.state is MoonMindWorkflowState.EXECUTING
-        assert refreshed.rerun_count == 1
+        assert response["workflow_id"] != source_workflow_id
+        assert source.state is MoonMindWorkflowState.INITIALIZING
+        assert rerun.state is MoonMindWorkflowState.INITIALIZING
+        assert rerun.parameters["rerunSource"]["workflowId"] == source_workflow_id
         assert service._client_adapter.update_workflow.await_count == 1
 
 

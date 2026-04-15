@@ -2606,7 +2606,10 @@ async def update_execution(
             },
         ) from exc
 
-    refreshed_record = await service.describe_execution(record.workflow_id)
+    response_workflow_id = (
+        str(update_result.get("workflow_id") or "").strip() or record.workflow_id
+    )
+    refreshed_record = await service.describe_execution(response_workflow_id)
     if is_task_editing_update:
         accepted = bool(update_result.get("accepted", True))
         applied = str(update_result.get("applied") or "").strip() or None

@@ -2041,6 +2041,44 @@ def test_request_rerun_update_response_includes_continue_as_new_cause() -> None:
         assert response.json()["continueAsNewCause"] == "manual_rerun"
 
 
+def test_request_rerun_update_redirects_response_to_created_rerun_execution() -> None:
+    for test_client, service in _client_with_service():
+        source_record = _build_execution_record()
+        rerun_record = _build_execution_record()
+        rerun_record.workflow_id = "mm:rerun-created"
+        rerun_record.run_id = "run-rerun"
+        rerun_record.memo = {
+            **rerun_record.memo,
+            "latest_temporal_run_id": "run-rerun",
+        }
+        service.describe_execution.side_effect = [source_record, rerun_record]
+        service.update_execution.return_value = {
+            "accepted": True,
+            "applied": "continue_as_new",
+            "message": "Rerun requested. New execution created.",
+            "continue_as_new_cause": "manual_rerun",
+            "workflow_id": "mm:rerun-created",
+        }
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={
+                "updateName": "RequestRerun",
+                "idempotencyKey": "rerun-1",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["execution"]["workflowId"] == "mm:rerun-created"
+        assert body["execution"]["redirectPath"] == (
+            "/tasks/mm:rerun-created?source=temporal"
+        )
+        assert service.describe_execution.await_args_list[-1].args == (
+            "mm:rerun-created",
+        )
+
+
 def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
     metrics = Mock()
     for test_client, service in _client_with_service():
