@@ -28,6 +28,11 @@ async def mock_start_auth_runner(request: dict) -> dict:
 
 @activity.defn(name="oauth_session.update_terminal_session")
 async def mock_update_terminal_session(request: dict) -> dict:
+    if request["session_id"] == "sess_persist_runner":
+        assert request["container_name"] == "mocked_container"
+        assert request["session_transport"] == "moonmind_pty_ws"
+        assert request["terminal_session_id"] == "ts_123"
+        assert request["terminal_bridge_id"] == "br_123"
     return {}
 
 @activity.defn(name="oauth_session.update_status")
@@ -131,3 +136,107 @@ async def test_oauth_session_workflow_cancel() -> None:
             assert result["session_id"] == "sess_default"
             assert result["status"] == "cancelled"
 
+
+async def test_oauth_session_workflow_external_failure() -> None:
+    """Test externally observed terminal failure closes as failed."""
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                mock_ensure_volume,
+                mock_start_auth_runner,
+                mock_update_terminal_session,
+                mock_update_status,
+                mock_verify_cli_fingerprint,
+                mock_register_profile,
+                mock_stop_auth_runner,
+            ],
+        ), Worker(
+            env.client,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            workflows=[MoonMindOAuthSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOAuthSessionWorkflow.run,
+                {
+                    "session_id": "sess_external_failure",
+                    "runtime_id": "codex_cli",
+                    "volume_ref": "vol_123",
+                    "volume_mount_path": "/mnt/auth",
+                },
+                id="oauth-session:sess_external_failure",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+
+            await handle.signal(
+                MoonMindOAuthSessionWorkflow.fail,
+                "Volume verification failed: no_credentials_found",
+            )
+
+            result = await handle.result()
+
+            assert result["session_id"] == "sess_external_failure"
+            assert result["status"] == "failed"
+            assert result["failure_reason"] == (
+                "Volume verification failed: no_credentials_found"
+            )
+
+
+async def test_oauth_session_workflow_api_finalize_skips_verify_and_register() -> None:
+    """API-completed finalization closes without re-running verify/register."""
+    verify_calls = 0
+    register_calls = 0
+
+    @activity.defn(name="oauth_session.verify_cli_fingerprint")
+    async def counted_verify_cli_fingerprint(request: dict) -> dict:
+        nonlocal verify_calls
+        verify_calls += 1
+        return {"verified": True, "fingerprint_verified": True}
+
+    @activity.defn(name="oauth_session.register_profile")
+    async def counted_register_profile(request: dict) -> dict:
+        nonlocal register_calls
+        register_calls += 1
+        return {"profile_id": "prof_123"}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                mock_ensure_volume,
+                mock_start_auth_runner,
+                mock_update_terminal_session,
+                mock_update_status,
+                counted_verify_cli_fingerprint,
+                counted_register_profile,
+                mock_stop_auth_runner,
+            ],
+        ), Worker(
+            env.client,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            workflows=[MoonMindOAuthSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOAuthSessionWorkflow.run,
+                {
+                    "session_id": "sess_persist_runner",
+                    "runtime_id": "codex_cli",
+                    "volume_ref": "vol_123",
+                    "volume_mount_path": "/mnt/auth",
+                },
+                id="oauth-session:sess_persist_runner",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+
+            await handle.signal(MoonMindOAuthSessionWorkflow.api_finalize_succeeded)
+
+            result = await handle.result()
+
+            assert result["session_id"] == "sess_persist_runner"
+            assert result["status"] == "succeeded"
+            assert verify_calls == 0
+            assert register_calls == 0

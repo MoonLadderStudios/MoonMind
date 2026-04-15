@@ -77,7 +77,10 @@ class MoonMindOAuthSessionWorkflow:
     def __init__(self) -> None:
         self._session_id: str = ""
         self._finalize_requested: bool = False
+        self._api_finalize_succeeded: bool = False
         self._cancel_requested: bool = False
+        self._failure_requested: bool = False
+        self._failure_reason: str = ""
         self._container_name: str = ""
         self._terminal_connected: bool = False
 
@@ -89,9 +92,20 @@ class MoonMindOAuthSessionWorkflow:
         self._finalize_requested = True
 
     @workflow.signal
+    def api_finalize_succeeded(self) -> None:
+        """API has already verified credentials and registered the profile."""
+        self._api_finalize_succeeded = True
+
+    @workflow.signal
     def cancel(self) -> None:
         """Cancel the session."""
         self._cancel_requested = True
+
+    @workflow.signal
+    def fail(self, reason: str) -> None:
+        """Externally observed terminal failure."""
+        self._failure_requested = True
+        self._failure_reason = reason or "OAuth terminal session failed"
 
     @workflow.signal
     def terminal_connected(self) -> None:
@@ -110,7 +124,10 @@ class MoonMindOAuthSessionWorkflow:
         return {
             "session_id": self._session_id,
             "finalize_requested": self._finalize_requested,
+            "api_finalize_succeeded": self._api_finalize_succeeded,
             "cancel_requested": self._cancel_requested,
+            "failure_requested": self._failure_requested,
+            "failure_reason": self._failure_reason,
             # Mirrors cancel_requested for consistency with run workflows
             "canceling": self._cancel_requested,
             "container_name": self._container_name,
@@ -185,6 +202,12 @@ class MoonMindOAuthSessionWorkflow:
                     "session_id": self._session_id,
                     "terminal_session_id": terminal_session_id,
                     "terminal_bridge_id": terminal_bridge_id,
+                    "container_name": self._container_name,
+                    "session_transport": runner_result.get(
+                        "session_transport",
+                        "moonmind_pty_ws",
+                    ),
+                    "expires_at": runner_result.get("expires_at"),
                 },
                 task_queue=ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=15),
@@ -208,7 +231,10 @@ class MoonMindOAuthSessionWorkflow:
         # Step 5: Wait for finalize, cancel, or session timeout
         try:
             await workflow.wait_condition(
-                lambda: self._finalize_requested or self._cancel_requested,
+                lambda: self._finalize_requested
+                or self._api_finalize_succeeded
+                or self._cancel_requested
+                or self._failure_requested,
                 timeout=timedelta(seconds=session_ttl),
             )
         except TimeoutError:
@@ -226,6 +252,24 @@ class MoonMindOAuthSessionWorkflow:
             return OAuthSessionOutput(
                 session_id=self._session_id,
                 status="cancelled",
+                failure_reason=None,
+            )
+
+        if self._failure_requested:
+            await self._stop_auth_runner()
+            await self._mark_failed(self._failure_reason)
+            return OAuthSessionOutput(
+                session_id=self._session_id,
+                status="failed",
+                failure_reason=self._failure_reason,
+            )
+
+        if self._api_finalize_succeeded:
+            await self._stop_auth_runner()
+            await self._update_status("succeeded")
+            return OAuthSessionOutput(
+                session_id=self._session_id,
+                status="succeeded",
                 failure_reason=None,
             )
 

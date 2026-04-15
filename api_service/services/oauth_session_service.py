@@ -72,3 +72,42 @@ async def cancel_oauth_session_workflow(session_id: str) -> None:
         logger.exception(
             "Failed to cancel OAuth session workflow %s", session_id
         )
+
+
+async def complete_oauth_session_workflow(session_id: str) -> None:
+    """Signal that the API has already verified and finalized a session."""
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    workflow_id = f"oauth-session:{session_id}"
+
+    try:
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+        handle = client.get_workflow_handle(workflow_id)
+        await handle.signal("api_finalize_succeeded")
+        logger.info(
+            "Sent API finalize completion signal to OAuth session workflow %s",
+            workflow_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to mark OAuth session workflow %s complete", session_id
+        )
+
+
+async def fail_oauth_session_workflow(session_id: str, reason: str) -> None:
+    """Signal an OAuth session workflow that the terminal failed externally."""
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    workflow_id = f"oauth-session:{session_id}"
+
+    try:
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+        handle = client.get_workflow_handle(workflow_id)
+        await handle.signal("fail", reason)
+        logger.info("Sent fail signal to OAuth session workflow %s", workflow_id)
+    except Exception:
+        logger.exception(
+            "Failed to mark OAuth session workflow %s failed", session_id
+        )

@@ -20,6 +20,7 @@ from api_service.db.models import (
 from moonmind.workflows.temporal.activities import oauth_session_activities
 from moonmind.workflows.temporal.activities.oauth_session_activities import (
     oauth_session_register_profile,
+    oauth_session_update_terminal_session,
 )
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.workers import REGISTERED_TEMPORAL_WORKFLOW_TYPES
@@ -177,3 +178,53 @@ async def test_register_profile_activity_persists_oauth_home_codex_profile(
         assert profile.volume_ref == "codex_auth_volume"
         assert profile.volume_mount_path == "/home/app/.codex"
         assert profile.max_parallel_runs == 3
+
+
+@pytest.mark.asyncio
+async def test_update_terminal_session_persists_runner_metadata(
+    _oauth_activity_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "oas_activityterminal1"
+
+    async with _oauth_activity_session_factory() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id="codex-terminal-activity",
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.STARTING,
+                requested_by_user_id="not-a-uuid",
+                account_label="codex account",
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        lambda: _session_context(_oauth_activity_session_factory),
+    )
+
+    result = await oauth_session_update_terminal_session(
+        {
+            "session_id": session_id,
+            "terminal_session_id": "term_oas_activityterminal1",
+            "terminal_bridge_id": "br_oas_activityterminal1",
+            "container_name": "moonmind_auth_oas_activityterminal1",
+            "session_transport": "moonmind_pty_ws",
+            "expires_at": "2026-04-15T12:30:00+00:00",
+        }
+    )
+
+    assert result["session_transport"] == "moonmind_pty_ws"
+    async with _oauth_activity_session_factory() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.terminal_session_id == "term_oas_activityterminal1"
+        assert row.terminal_bridge_id == "br_oas_activityterminal1"
+        assert row.container_name == "moonmind_auth_oas_activityterminal1"
+        assert row.session_transport == "moonmind_pty_ws"
+        assert row.expires_at is not None

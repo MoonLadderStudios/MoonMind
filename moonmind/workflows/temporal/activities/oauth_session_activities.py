@@ -13,7 +13,6 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
@@ -102,6 +101,11 @@ async def oauth_session_start_auth_runner(
         volume_mount_path=volume_mount_path,
         session_ttl=session_ttl,
     )
+    bridge_info.setdefault(
+        "expires_at",
+        (datetime.now(timezone.utc) + timedelta(seconds=session_ttl)).isoformat(),
+    )
+    bridge_info.setdefault("session_transport", "moonmind_pty_ws")
     
     return bridge_info
 
@@ -114,6 +118,9 @@ async def oauth_session_update_terminal_session(
     session_id = request.get("session_id", "")
     terminal_session_id = request.get("terminal_session_id", "")
     terminal_bridge_id = request.get("terminal_bridge_id", "")
+    container_name = request.get("container_name", "")
+    session_transport = request.get("session_transport", "moonmind_pty_ws")
+    expires_at_raw = request.get("expires_at")
 
     if not session_id:
         raise ValueError("session_id is required")
@@ -134,6 +141,17 @@ async def oauth_session_update_terminal_session(
             session_obj.terminal_session_id = terminal_session_id
         if terminal_bridge_id:
             session_obj.terminal_bridge_id = terminal_bridge_id
+        if container_name:
+            session_obj.container_name = container_name
+        if session_transport:
+            session_obj.session_transport = session_transport
+        if expires_at_raw:
+            if isinstance(expires_at_raw, datetime):
+                session_obj.expires_at = expires_at_raw
+            else:
+                session_obj.expires_at = datetime.fromisoformat(
+                    str(expires_at_raw).replace("Z", "+00:00")
+                )
 
         await db.commit()
 
@@ -142,6 +160,8 @@ async def oauth_session_update_terminal_session(
         "session_id": session_id,
         "terminal_session_id": terminal_session_id,
         "terminal_bridge_id": terminal_bridge_id,
+        "container_name": container_name,
+        "session_transport": session_transport,
     }
 
 
@@ -173,28 +193,12 @@ async def oauth_session_stop_auth_runner(
         logger.info("No container to stop for session %s", session_id)
         return {"session_id": session_id, "stopped": False, "reason": "no_container"}
 
-    try:
-        stop_proc = await asyncio.create_subprocess_exec(
-            "docker", "stop", "-t", "5", container_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await asyncio.wait_for(stop_proc.communicate(), timeout=30)
-    except (FileNotFoundError, asyncio.TimeoutError, Exception) as exc:
-        logger.warning("Failed to stop container %s: %s", container_name, exc)
+    from api_service.services.oauth_auth_runner import stop_auth_runner_container
 
-    try:
-        rm_proc = await asyncio.create_subprocess_exec(
-            "docker", "rm", "-f", container_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await asyncio.wait_for(rm_proc.communicate(), timeout=15)
-    except (FileNotFoundError, asyncio.TimeoutError, Exception) as exc:
-        logger.warning("Failed to remove container %s: %s", container_name, exc)
-
-    logger.info("Stopped auth runner container %s for session %s", container_name, session_id)
-    return {"session_id": session_id, "stopped": True, "container_name": container_name}
+    return await stop_auth_runner_container(
+        session_id=session_id,
+        container_name=container_name,
+    )
 
 
 @activity.defn(name="oauth_session.verify_volume")
