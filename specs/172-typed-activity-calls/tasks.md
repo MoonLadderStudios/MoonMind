@@ -42,15 +42,16 @@ Run the targeted tests in `quickstart.md` and confirm typed request models are s
 - [X] T011 Update `moonmind/workflows/temporal/activity_runtime.py` to validate retained legacy dicts into typed models at public activity edges. [FR-006, FR-008]
 - [X] T012 Update any affected existing tests/mocks to use typed request models where they inspect migrated call-site payloads. [FR-004, FR-005]
 - [X] T013 Run targeted tests from `quickstart.md` and fix regressions.
-- [X] T014 Run final unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` or record exact blocker.
-- [X] T015 Run `/speckit.verify` equivalent read-only verification and record verdict.
+- [X] T014 Run hermetic integration verification with `./tools/test_integration.sh` when Docker is available, or record the exact Docker blocker in verification notes.
+- [X] T015 Run final unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` or record exact blocker.
+- [X] T016 Run `/moonspec-verify` equivalent read-only verification and record verdict.
 
 ## Dependencies and Execution Order
 
 1. T001-T004 establish artifacts and shared contracts.
 2. T005-T009 create red-first evidence.
 3. T010-T012 implement and update tests.
-4. T013-T015 verify.
+4. T013-T016 verify.
 
 ## Parallel Examples
 
