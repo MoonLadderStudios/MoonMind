@@ -12,6 +12,10 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunStatus,
 )
+from moonmind.schemas.temporal_activity_models import (
+    AgentRuntimeFetchResultInput,
+    ExternalAgentRunInput,
+)
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
@@ -168,6 +172,68 @@ async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     assert result.metadata["publishOutcome"] == "publish_failed"
 
 
+async def test_agent_run_external_poll_and_fetch_use_typed_activity_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    routed_calls: list[tuple[str, Any]] = []
+
+    _configure_workflow_runtime(monkeypatch)
+
+    wait_calls = 0
+
+    async def fake_wait_condition(_condition: Any, timeout: timedelta) -> None:
+        nonlocal wait_calls
+        wait_calls += 1
+        raise asyncio.TimeoutError()
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        routed_calls.append((activity_name, payload))
+        if activity_name == "integration.resolve_adapter_metadata":
+            return {"agent_id": payload, "execution_style": "polling"}
+        if activity_name == "integration.jules.start":
+            return {"external_id": "session-typed-1", "status": "queued"}
+        if activity_name == "integration.jules.status":
+            assert isinstance(payload, ExternalAgentRunInput)
+            return AgentRunStatus(
+                runId=payload.run_id,
+                agentKind="external",
+                agentId="jules",
+                status="completed",
+            )
+        if activity_name == "integration.jules.fetch_result":
+            assert isinstance(payload, ExternalAgentRunInput)
+            return AgentRunResult(summary="Done", metadata={})
+        if activity_name == "agent_runtime.publish_artifacts":
+            assert isinstance(payload, AgentRunResult)
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+
+    result = await run.run(_request())
+
+    assert wait_calls == 1
+    assert result.summary == "Done"
+    status_payload = next(
+        payload for name, payload in routed_calls if name == "integration.jules.status"
+    )
+    fetch_payload = next(
+        payload
+        for name, payload in routed_calls
+        if name == "integration.jules.fetch_result"
+    )
+    assert isinstance(status_payload, ExternalAgentRunInput)
+    assert status_payload.run_id == "session-typed-1"
+    assert isinstance(fetch_payload, ExternalAgentRunInput)
+    assert fetch_payload.run_id == "session-typed-1"
+
+
 async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -263,9 +329,10 @@ async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
     fetch_payload = next(
         payload for name, payload in routed_calls if name == "agent_runtime.fetch_result"
     )
-    assert fetch_payload["publish_mode"] == "pr"
-    assert fetch_payload["commit_message"] == "Use producer commit text"
-    assert fetch_payload["target_branch"] == "main"
+    assert isinstance(fetch_payload, AgentRuntimeFetchResultInput)
+    assert fetch_payload.publish_mode == "pr"
+    assert fetch_payload.commit_message == "Use producer commit text"
+    assert fetch_payload.target_branch == "main"
 
 
 async def test_agent_run_managed_preserves_task_scoped_session_metadata(
@@ -414,10 +481,9 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
     fetch_payload = next(
         payload for name, payload in routed_calls if name == "agent_runtime.fetch_result"
     )
-    assert fetch_payload == {
-        "run_id": "wf-run-1",
-        "agent_id": "codex_cli",
-    }
+    assert isinstance(fetch_payload, AgentRuntimeFetchResultInput)
+    assert fetch_payload.run_id == "wf-run-1"
+    assert fetch_payload.agent_id == "codex_cli"
     assert result.metadata["managedSession"] == {
         "workflowId": "wf-run-1:session:codex_cli",
         "taskRunId": "wf-run-1",

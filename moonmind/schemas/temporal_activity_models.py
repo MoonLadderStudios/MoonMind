@@ -16,11 +16,17 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
-from typing import Any
-
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, PlainValidator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    PlainValidator,
+    model_validator,
+)
 
 from .temporal_artifact_models import ArtifactRefModel
 
@@ -162,3 +168,121 @@ class DependencyStatusSnapshotInput(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     workflow_ids: list[str] = Field(default_factory=list, alias="workflowIds")
+
+
+class ExternalAgentRunInput(BaseModel):
+    """Public input for external provider run status/fetch/cancel activities."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    run_id: str = Field(
+        ...,
+        alias="runId",
+        validation_alias=AliasChoices("runId", "run_id", "externalId", "external_id"),
+        min_length=1,
+    )
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ExternalAgentRunInput":
+        self.run_id = self.run_id.strip()
+        if not self.run_id:
+            raise ValueError("runId must be nonblank")
+        return self
+
+
+class AgentRuntimeStatusInput(BaseModel):
+    """Public input for agent_runtime.status."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    run_id: str = Field(
+        ...,
+        alias="runId",
+        validation_alias=AliasChoices("runId", "run_id"),
+        min_length=1,
+    )
+    agent_id: str = Field(
+        default="managed",
+        alias="agentId",
+        validation_alias=AliasChoices("agentId", "agent_id", "agent"),
+        min_length=1,
+    )
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "AgentRuntimeStatusInput":
+        self.run_id = self.run_id.strip()
+        self.agent_id = self.agent_id.strip() or "managed"
+        if not self.run_id:
+            raise ValueError("runId must be nonblank")
+        return self
+
+
+class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
+    """Public input for agent_runtime.fetch_result."""
+
+    publish_mode: Literal["none", "pr", "branch"] = Field(
+        default="none",
+        alias="publishMode",
+        validation_alias=AliasChoices("publishMode", "publish_mode"),
+    )
+    commit_message: str | None = Field(
+        default=None,
+        alias="commitMessage",
+        validation_alias=AliasChoices("commitMessage", "commit_message"),
+    )
+    target_branch: str | None = Field(
+        default=None,
+        alias="targetBranch",
+        validation_alias=AliasChoices("targetBranch", "target_branch"),
+    )
+    head_branch: str | None = Field(
+        default=None,
+        alias="headBranch",
+        validation_alias=AliasChoices("headBranch", "head_branch"),
+    )
+    pr_resolver_expected: bool = Field(
+        default=False,
+        alias="prResolverExpected",
+        validation_alias=AliasChoices("prResolverExpected", "pr_resolver_expected"),
+    )
+
+    @model_validator(mode="after")
+    def _normalize_fetch(self) -> "AgentRuntimeFetchResultInput":
+        for field_name in ("commit_message", "target_branch", "head_branch"):
+            value = getattr(self, field_name)
+            if value is not None:
+                normalized = value.strip()
+                setattr(self, field_name, normalized or None)
+        return self
+
+
+class AgentRuntimeCancelInput(BaseModel):
+    """Public input for agent_runtime.cancel."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    run_id: str = Field(
+        ...,
+        alias="runId",
+        validation_alias=AliasChoices("runId", "run_id"),
+        min_length=1,
+    )
+    agent_kind: Literal["managed", "external", "unknown"] = Field(
+        default="unknown",
+        alias="agentKind",
+        validation_alias=AliasChoices("agentKind", "agent_kind"),
+    )
+    agent_id: str | None = Field(
+        default=None,
+        alias="agentId",
+        validation_alias=AliasChoices("agentId", "agent_id", "agent"),
+    )
+
+    @model_validator(mode="after")
+    def _normalize_cancel(self) -> "AgentRuntimeCancelInput":
+        self.run_id = self.run_id.strip()
+        if not self.run_id:
+            raise ValueError("runId must be nonblank")
+        if self.agent_id is not None:
+            self.agent_id = self.agent_id.strip() or None
+        return self

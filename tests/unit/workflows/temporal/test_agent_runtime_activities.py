@@ -32,6 +32,10 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionTurnResponse,
     LaunchCodexManagedSessionRequest,
 )
+from moonmind.schemas.temporal_activity_models import (
+    AgentRuntimeCancelInput,
+    AgentRuntimeStatusInput,
+)
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal import client as temporal_client_module
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
@@ -163,6 +167,58 @@ async def test_status_missing_run_id_raises_error(tmp_path: Path) -> None:
 
     with pytest.raises(TemporalActivityRuntimeError):
         await activities.agent_runtime_status({"agent_id": "codex_cli"})
+
+
+async def test_status_accepts_typed_request_model(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    _save_record(store, run_id="typed-status-1", status="running")
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+
+    result = await activities.agent_runtime_status(
+        AgentRuntimeStatusInput(runId="typed-status-1", agentId="codex_cli")
+    )
+
+    assert isinstance(result, AgentRunStatus)
+    assert result.run_id == "typed-status-1"
+
+
+async def test_fetch_result_validates_legacy_dict_to_typed_request(
+    tmp_path: Path,
+) -> None:
+    store = _make_store(tmp_path)
+    _save_record(store, run_id="typed-fetch-1", status="completed")
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+
+    result = await activities.agent_runtime_fetch_result(
+        {
+            "run_id": "typed-fetch-1",
+            "agent_id": "codex_cli",
+            "publish_mode": "none",
+            "pr_resolver_expected": True,
+        }
+    )
+
+    assert isinstance(result, AgentRunResult)
+
+
+async def test_cancel_accepts_typed_request_model() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_cancel(
+        AgentRuntimeCancelInput(agentKind="external", runId="external-run-1")
+    )
+
+    assert isinstance(result, AgentRunStatus)
+    assert result.run_id == "external-run-1"
+
+
+async def test_external_agent_run_activity_wrapper_rejects_unknown_fields() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    with pytest.raises(Exception):
+        await activities.integration_jules_status(
+            {"runId": "jules-1", "rawProviderPayload": {"status": "done"}}
+        )
 
 
 # ---------------------------------------------------------------------------

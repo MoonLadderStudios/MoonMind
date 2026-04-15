@@ -19,12 +19,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.schemas.temporal_activity_models import (
+    AgentRuntimeCancelInput,
+    AgentRuntimeFetchResultInput,
+    AgentRuntimeStatusInput,
+    ExternalAgentRunInput,
     PlanGenerateInput,
 )
 from moonmind.workflows.tasks.routing import _coerce_bool
@@ -892,6 +896,59 @@ def _coerce_activity_request(
             f"{activity_type} payload must be a JSON object"
         )
     return dict(request)
+
+
+def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
+    """Validate external activity input, including scalar legacy histories."""
+
+    if isinstance(payload, str):
+        payload = {"runId": payload}
+    try:
+        return ExternalAgentRunInput.model_validate(payload)
+    except ValidationError as exc:
+        raise TemporalActivityRuntimeError(
+            f"external agent run payload is invalid: {exc}"
+        ) from exc
+
+
+def _validate_agent_runtime_status_input(payload: Any) -> AgentRuntimeStatusInput:
+    if isinstance(payload, AgentRuntimeStatusInput):
+        return payload
+    try:
+        return AgentRuntimeStatusInput.model_validate(payload)
+    except ValidationError as exc:
+        raise TemporalActivityRuntimeError(
+            f"agent_runtime.status payload is invalid: {exc}"
+        ) from exc
+
+
+def _validate_agent_runtime_fetch_result_input(
+    payload: Any,
+) -> AgentRuntimeFetchResultInput:
+    if isinstance(payload, AgentRuntimeFetchResultInput):
+        return payload
+    if isinstance(payload, AgentRuntimeStatusInput):
+        return AgentRuntimeFetchResultInput(
+            runId=payload.run_id,
+            agentId=payload.agent_id,
+        )
+    try:
+        return AgentRuntimeFetchResultInput.model_validate(payload)
+    except ValidationError as exc:
+        raise TemporalActivityRuntimeError(
+            f"agent_runtime.fetch_result payload is invalid: {exc}"
+        ) from exc
+
+
+def _validate_agent_runtime_cancel_input(payload: Any) -> AgentRuntimeCancelInput:
+    if isinstance(payload, AgentRuntimeCancelInput):
+        return payload
+    try:
+        return AgentRuntimeCancelInput.model_validate(payload)
+    except ValidationError as exc:
+        raise TemporalActivityRuntimeError(
+            f"agent_runtime.cancel payload is invalid: {exc}"
+        ) from exc
 
 
 async def _maybe_call_heartbeat(
@@ -1874,30 +1931,18 @@ class TemporalIntegrationActivities:
 
     async def integration_jules_status(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_status_activity
-        run_id = payload
-        if isinstance(payload, Mapping):
-            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
-        if not run_id or not isinstance(run_id, str):
-            raise TemporalActivityRuntimeError("integration.jules.status requires a non-empty run_id string")
-        return await jules_status_activity(run_id.strip())
+        request = _validate_external_agent_run_input(payload)
+        return await jules_status_activity(request.run_id)
 
     async def integration_jules_fetch_result(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_fetch_result_activity
-        run_id = payload
-        if isinstance(payload, Mapping):
-            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
-        if not run_id or not isinstance(run_id, str):
-            raise TemporalActivityRuntimeError("integration.jules.fetch_result requires a non-empty run_id string")
-        return await jules_fetch_result_activity(run_id.strip())
+        request = _validate_external_agent_run_input(payload)
+        return await jules_fetch_result_activity(request.run_id)
 
     async def integration_jules_cancel(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_cancel_activity
-        run_id = payload
-        if isinstance(payload, Mapping):
-            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
-        if not run_id or not isinstance(run_id, str):
-            raise TemporalActivityRuntimeError("integration.jules.cancel requires a non-empty run_id string")
-        return await jules_cancel_activity(run_id.strip())
+        request = _validate_external_agent_run_input(payload)
+        return await jules_cancel_activity(request.run_id)
 
     async def repo_create_pr(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
@@ -1947,30 +1992,18 @@ class TemporalIntegrationActivities:
 
     async def integration_codex_cloud_status(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_status_activity
-        run_id = payload
-        if isinstance(payload, Mapping):
-            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
-        if not run_id or not isinstance(run_id, str):
-            raise TemporalActivityRuntimeError("integration.codex_cloud.status requires a non-empty run_id string")
-        return await codex_cloud_status_activity(run_id.strip())
+        request = _validate_external_agent_run_input(payload)
+        return await codex_cloud_status_activity(request.run_id)
 
     async def integration_codex_cloud_fetch_result(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_fetch_result_activity
-        run_id = payload
-        if isinstance(payload, Mapping):
-            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
-        if not run_id or not isinstance(run_id, str):
-            raise TemporalActivityRuntimeError("integration.codex_cloud.fetch_result requires a non-empty run_id string")
-        return await codex_cloud_fetch_result_activity(run_id.strip())
+        request = _validate_external_agent_run_input(payload)
+        return await codex_cloud_fetch_result_activity(request.run_id)
 
     async def integration_codex_cloud_cancel(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.codex_cloud_activities import codex_cloud_cancel_activity
-        run_id = payload
-        if isinstance(payload, Mapping):
-            run_id = payload.get("external_id") or payload.get("externalId") or payload.get("run_id") or payload.get("runId")
-        if not run_id or not isinstance(run_id, str):
-            raise TemporalActivityRuntimeError("integration.codex_cloud.cancel requires a non-empty run_id string")
-        return await codex_cloud_cancel_activity(run_id.strip())
+        request = _validate_external_agent_run_input(payload)
+        return await codex_cloud_cancel_activity(request.run_id)
 
     async def integration_openclaw_execute(self, request, /, **kwargs):
         from moonmind.workflows.temporal.activities.openclaw_activities import openclaw_execute_activity
@@ -3372,23 +3405,11 @@ class TemporalAgentRuntimeActivities:
         request: Any,
     ) -> tuple[str, str]:
         """Extract ``run_id`` and ``agent_id`` from a flexible request shape."""
+        if isinstance(request, (AgentRuntimeStatusInput, AgentRuntimeFetchResultInput)):
+            return request.run_id, request.agent_id
         if isinstance(request, Mapping):
-            run_id = str(
-                request.get("run_id")
-                or request.get("runId")
-                or ""
-            ).strip()
-            agent_id = str(
-                request.get("agent_id")
-                or request.get("agentId")
-                or request.get("agent")
-                or "managed"
-            ).strip() or "managed"
-            if not run_id:
-                raise TemporalActivityRuntimeError(
-                    "agent_runtime request requires run_id"
-                )
-            return run_id, agent_id
+            validated = _validate_agent_runtime_status_input(request)
+            return validated.run_id, validated.agent_id
         if isinstance(request, str):
             run_id = request.strip()
             if not run_id:
@@ -3443,6 +3464,8 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError(
                 "run_store is required for agent_runtime.status"
             )
+        if isinstance(request, Mapping):
+            request = _validate_agent_runtime_status_input(request)
         run_id, agent_id = self._agent_runtime_request_identifiers(request)
 
         from temporalio import activity
@@ -3484,36 +3507,33 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError(
                 "run_store is required for agent_runtime.fetch_result"
             )
-        run_id, _agent_id = self._agent_runtime_request_identifiers(request)
         if isinstance(request, Mapping):
-            raw_publish_mode = (
-                request.get("publish_mode")
-                or request.get("publishMode")
-                or "none"
+            request = _validate_agent_runtime_fetch_result_input(request)
+        elif isinstance(request, AgentRuntimeStatusInput) and not isinstance(
+            request, AgentRuntimeFetchResultInput
+        ):
+            request = AgentRuntimeFetchResultInput(
+                runId=request.run_id,
+                agentId=request.agent_id,
             )
-        else:
-            raw_publish_mode = "none"
+        run_id, _agent_id = self._agent_runtime_request_identifiers(request)
 
-        publish_mode = str(raw_publish_mode).strip().lower()
-        _ALLOWED_PUBLISH_MODES = {"none", "pr", "branch"}
-        if publish_mode not in _ALLOWED_PUBLISH_MODES:
-            logger.warning(
-                "Received invalid publish_mode %r for run_id %s; defaulting to 'none'",
-                raw_publish_mode,
-                run_id,
-            )
-            publish_mode = "none"
+        publish_mode = (
+            request.publish_mode
+            if isinstance(request, AgentRuntimeFetchResultInput)
+            else "none"
+        )
 
         target_branch = (
-            request.get("target_branch")
-            or request.get("targetBranch")
-            or request.get("publish_base_branch")
-            or request.get("publishBaseBranch")
-        ) if isinstance(request, Mapping) else None
+            request.target_branch
+            if isinstance(request, AgentRuntimeFetchResultInput)
+            else None
+        )
         head_branch = (
-            request.get("head_branch")
-            or request.get("headBranch")
-        ) if isinstance(request, Mapping) else None
+            request.head_branch
+            if isinstance(request, AgentRuntimeFetchResultInput)
+            else None
+        )
 
         async def _unused_profile_fetcher(**_kwargs: Any) -> dict[str, Any]:
             return {"profiles": []}
@@ -3521,15 +3541,10 @@ class TemporalAgentRuntimeActivities:
         async def _unused_slot_signal(**_kwargs: Any) -> None:
             return None
 
-        if isinstance(request, Mapping):
-            raw_pr_resolver_expected = (
-                request.get("pr_resolver_expected")
-                or request.get("prResolverExpected")
-            )
-        else:
-            raw_pr_resolver_expected = None
-        pr_resolver_expected = _coerce_bool(
-            raw_pr_resolver_expected, default=False
+        pr_resolver_expected = (
+            request.pr_resolver_expected
+            if isinstance(request, AgentRuntimeFetchResultInput)
+            else False
         )
 
         adapter = ManagedAgentAdapter(
@@ -3577,12 +3592,11 @@ class TemporalAgentRuntimeActivities:
             # Push the agent's work branch if publish_mode requires it and the
             # agent completed without failure.
             if result.failure_class is None and publish_mode != "none":
-                raw_commit_message = None
-                if isinstance(request, Mapping):
-                    raw_commit_message = (
-                        request.get("commit_message")
-                        or request.get("commitMessage")
-                    )
+                raw_commit_message = (
+                    request.commit_message
+                    if isinstance(request, AgentRuntimeFetchResultInput)
+                    else None
+                )
                 push_kwargs: dict[str, Any] = {
                     "target_branch": target_branch,
                 }
@@ -4606,15 +4620,23 @@ class TemporalAgentRuntimeActivities:
         terminate the subprocess.  For external runs, logs the request
         (external cancel must go through the provider adapter).
         """
-        if isinstance(request, Mapping):
-            agent_kind = request.get("agent_kind", "unknown")
-            run_id = request.get("run_id", "unknown")
+        if isinstance(request, AgentRuntimeCancelInput):
+            cancel_input = request
+        elif isinstance(request, Mapping):
+            cancel_input = _validate_agent_runtime_cancel_input(request)
         elif isinstance(request, (list, tuple)) and len(request) >= 2:
-            agent_kind, run_id = request[0], request[1]
+            cancel_input = AgentRuntimeCancelInput(
+                agentKind=str(request[0] or "unknown"),
+                runId=str(request[1] or ""),
+            )
         else:
-            agent_kind, run_id = "unknown", str(request)
+            cancel_input = AgentRuntimeCancelInput(
+                agentKind="unknown",
+                runId=str(request or "unknown"),
+            )
 
-        run_id_str = str(run_id)
+        agent_kind = cancel_input.agent_kind
+        run_id_str = cancel_input.run_id
 
         if agent_kind == "managed":
             try:
