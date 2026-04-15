@@ -600,6 +600,46 @@ class TestProviderProfileManagerHelpers:
         ]
         assert "run-1" not in wf._handoff_reservations
 
+    def test_handoff_reservation_blocks_only_one_slot(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=2,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        wf._handoff_reservations["run-1"] = HandoffReservation(
+            profile_id="p1",
+            expires_at="2026-04-15T00:00:10+00:00",
+        )
+
+        profile = wf._find_available_profile(lease_group_id="run-2")
+
+        assert profile is wf._profiles["p1"]
+
+    def test_handoff_reservation_holds_last_slot_for_reserved_group(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        wf._handoff_reservations["run-1"] = HandoffReservation(
+            profile_id="p1",
+            expires_at="2026-04-15T00:00:10+00:00",
+        )
+
+        assert wf._find_available_profile(lease_group_id="run-2") is None
+        assert (
+            wf._find_available_profile(lease_group_id="run-1")
+            is wf._profiles["p1"]
+        )
+
     def test_clear_expired_cooldowns(self):
         wf = self._make_workflow()
         past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()

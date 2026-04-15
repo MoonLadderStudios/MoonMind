@@ -44,6 +44,32 @@ def test_request_reserves_slot_for_immediate_followup_reads_moonmind_metadata() 
     assert _request_reserves_slot_for_immediate_followup(request)
 
 
+def test_request_reserves_slot_for_immediate_followup_ignores_legacy_metadata() -> None:
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="run-1",
+        idempotencyKey="run-1:step-1",
+        parameters={
+            "metadata": {
+                "moonmind": {
+                    "slotContinuity": {
+                        "hasImmediateManagedFollowup": True,
+                    }
+                }
+            }
+        },
+    )
+
+    assert not _request_reserves_slot_for_immediate_followup(request)
+
+
+def test_managed_runtime_id_normalizes_aliases() -> None:
+    assert MoonMindAgentRun._managed_runtime_id("Codex-CLI") == "codex_cli"
+    assert MoonMindAgentRun._managed_runtime_id("claude") == "claude_code"
+    assert MoonMindAgentRun._managed_runtime_id("CLAUDE_CODE") == "claude_code"
+
+
 def test_coerce_external_status_payload_maps_integration_shape() -> None:
     workflow_instance = MoonMindAgentRun()
 

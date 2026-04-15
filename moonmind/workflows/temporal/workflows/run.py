@@ -3016,13 +3016,14 @@ class MoonMindRunWorkflow:
         resolved_skillset_ref: str | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
-        runtime_block = node_inputs.get("runtime") or {}
-        agent_id = str(
-            runtime_block.get("mode")
-            or runtime_block.get("agent_id")
-            or node_inputs.get("targetRuntime")
-            or tool_name
-        ).strip()
+        runtime_block_raw = node_inputs.get("runtime")
+        runtime_block = (
+            runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
+        )
+        agent_id = self._agent_id_from_runtime_inputs(
+            node_inputs=node_inputs,
+            fallback_name=tool_name,
+        )
         if not agent_id:
             raise ValueError(
                 "agent_runtime plan node must specify an agent_id "
@@ -3201,6 +3202,24 @@ class MoonMindRunWorkflow:
             return skill
         return None
 
+    @staticmethod
+    def _agent_id_from_runtime_inputs(
+        *,
+        node_inputs: Mapping[str, Any],
+        fallback_name: str | None = None,
+    ) -> str:
+        runtime_block_raw = node_inputs.get("runtime")
+        runtime_block = (
+            runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
+        )
+        return str(
+            runtime_block.get("mode")
+            or runtime_block.get("agent_id")
+            or node_inputs.get("targetRuntime")
+            or fallback_name
+            or ""
+        ).strip()
+
     def _agent_runtime_id_for_plan_node(
         self,
         node: Mapping[str, Any],
@@ -3217,18 +3236,10 @@ class MoonMindRunWorkflow:
             return None
         node_inputs_raw = node.get("inputs")
         node_inputs = node_inputs_raw if isinstance(node_inputs_raw, Mapping) else {}
-        runtime_block_raw = node_inputs.get("runtime")
-        runtime_block = (
-            runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
+        agent_id = self._agent_id_from_runtime_inputs(
+            node_inputs=node_inputs,
+            fallback_name=selected_node.get("name") or selected_node.get("id"),
         )
-        agent_id = str(
-            runtime_block.get("mode")
-            or runtime_block.get("agent_id")
-            or node_inputs.get("targetRuntime")
-            or selected_node.get("name")
-            or selected_node.get("id")
-            or ""
-        ).strip()
         return agent_id or None
 
     def _mark_slot_continuity_for_next_step(

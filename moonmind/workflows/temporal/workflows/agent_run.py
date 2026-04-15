@@ -185,10 +185,14 @@ def _request_reserves_slot_for_immediate_followup(
     moonmind_map = moonmind if isinstance(moonmind, Mapping) else {}
     continuity = moonmind_map.get("slotContinuity")
     continuity_map = continuity if isinstance(continuity, Mapping) else {}
-    return bool(
-        continuity_map.get("reserveForImmediateFollowup")
-        or continuity_map.get("hasImmediateManagedFollowup")
-    )
+    return bool(continuity_map.get("reserveForImmediateFollowup"))
+
+
+def _normalize_agent_runtime_id(agent_id: str) -> str:
+    """Normalize runtime identifiers for managed runtime routing."""
+
+    return str(agent_id).strip().lower().replace("-", "_")
+
 
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
     # Preserve legacy workflow IDs for in-flight histories. New executions use
@@ -342,9 +346,12 @@ class MoonMindAgentRun:
         runtime_mapping = {
             "gemini_cli": "gemini_cli",
             "claude": "claude_code",
+            "claude_code": "claude_code",
             "codex": "codex_cli",
+            "codex_cli": "codex_cli",
         }
-        return runtime_mapping.get(agent_id, agent_id)
+        normalized_agent_id = _normalize_agent_runtime_id(agent_id)
+        return runtime_mapping.get(normalized_agent_id, normalized_agent_id)
 
     def _cooldown_seconds_for_profile(self, profile_id: str | None) -> int:
         normalized_profile_id = str(profile_id or "").strip()

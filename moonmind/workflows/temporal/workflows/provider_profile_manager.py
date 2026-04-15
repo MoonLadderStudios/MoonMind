@@ -623,17 +623,18 @@ class MoonMindProviderProfileManagerWorkflow:
             if now >= expires_at:
                 self._handoff_reservations.pop(group_id, None)
 
-    def _profile_is_reserved_for_other_group(
+    def _reserved_slot_count_for_other_groups(
         self,
         profile_id: str,
         lease_group_id: str | None,
-    ) -> bool:
+    ) -> int:
+        reserved_slots = 0
         for reserved_group_id, reservation in self._handoff_reservations.items():
             if reservation.profile_id != profile_id:
                 continue
             if reserved_group_id != lease_group_id:
-                return True
-        return False
+                reserved_slots += 1
+        return reserved_slots
 
     @staticmethod
     def _profile_matches_request(
@@ -750,9 +751,6 @@ class MoonMindProviderProfileManagerWorkflow:
         lease_group_id: str | None = None,
     ) -> Optional[ProfileSlotState]:
         """Find the best available profile matching the selector."""
-        if self._handoff_reservations:
-            now = workflow.now()
-            self._clear_expired_handoff_reservations(now)
         selector = self._normalize_selector(selector)
         exact_profile_id = str(execution_profile_ref or "").strip()
         normalized_group_id = self._normalize_optional_string(lease_group_id)
@@ -773,10 +771,10 @@ class MoonMindProviderProfileManagerWorkflow:
             exact_profile = self._profiles.get(exact_profile_id)
             if exact_profile is None or not exact_profile.is_available():
                 return None
-            if self._profile_is_reserved_for_other_group(
-                exact_profile.profile_id,
-                normalized_group_id,
-            ):
+            reserved_slots = self._reserved_slot_count_for_other_groups(
+                exact_profile.profile_id, normalized_group_id
+            )
+            if exact_profile.available_slots <= reserved_slots:
                 return None
             return (
                 exact_profile
@@ -792,10 +790,10 @@ class MoonMindProviderProfileManagerWorkflow:
         for profile in self._profiles.values():
             if not profile.is_available():
                 continue
-            if self._profile_is_reserved_for_other_group(
-                profile.profile_id,
-                normalized_group_id,
-            ):
+            reserved_slots = self._reserved_slot_count_for_other_groups(
+                profile.profile_id, normalized_group_id
+            )
+            if profile.available_slots <= reserved_slots:
                 continue
             if not self._profile_matches_request(
                 profile,
