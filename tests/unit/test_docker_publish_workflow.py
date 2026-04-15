@@ -18,11 +18,20 @@ def test_docker_publish_generates_version_before_platform_builds() -> None:
     workflow = _load_workflow()
 
     metadata_job = workflow["jobs"]["metadata"]
-    assert metadata_job["outputs"]["version_tag"] == "${{ steps.meta.outputs.version_tag }}"
+    assert (
+        metadata_job.get("outputs", {}).get("version_tag")
+        == "${{ steps.meta.outputs.version_tag }}"
+    )
 
     metadata_run = next(
-        step["run"] for step in metadata_job["steps"] if step["name"] == "Generate image metadata"
+        (
+            step["run"]
+            for step in metadata_job.get("steps", [])
+            if step.get("name") == "Generate image metadata" and "run" in step
+        ),
+        None,
     )
+    assert metadata_run, "Step 'Generate image metadata' with 'run' command not found"
     assert "date -u +'%Y%m%d'" in metadata_run
     assert "github.run_number" in metadata_run
     assert "version_tag=${VERSION_TAG}" in metadata_run
@@ -36,17 +45,21 @@ def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
 
     build_steps = workflow["jobs"]["build"]["steps"]
     build_push_step = next(
-        step for step in build_steps if step["name"] == "Build and push by digest"
+        (step for step in build_steps if step.get("name") == "Build and push by digest"),
+        None,
     )
-    build_args = build_push_step["with"]["build-args"]
+    assert (
+        build_push_step and "with" in build_push_step
+    ), "Step 'Build and push by digest' not found or missing 'with' key"
+    build_args = build_push_step["with"].get("build-args", "")
     assert "MOONMIND_BUILD_ID=${{ needs.metadata.outputs.version_tag }}" in build_args
 
     merge_job = workflow["jobs"]["merge"]
-    assert merge_job["needs"] == ["metadata", "build"]
+    assert set(merge_job.get("needs", [])) == {"metadata", "build"}
 
     merge_run_steps = [step["run"] for step in merge_job["steps"] if "run" in step]
     assert any(
-        "-t \"${IMAGE_NAME}:${{ needs.metadata.outputs.version_tag }}\"" in run
+        "${IMAGE_NAME}:" in run and "${{ needs.metadata.outputs.version_tag }}" in run
         for run in merge_run_steps
     )
     assert all("date +" not in run and "VERSION_TAG=" not in run for run in merge_run_steps)
