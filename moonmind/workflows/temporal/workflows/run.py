@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any, Optional, TypedDict
 
@@ -159,6 +159,7 @@ DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
+RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
@@ -1767,6 +1768,12 @@ class MoonMindRunWorkflow:
                                 tool_name=tool_name,
                                 resolved_skillset_ref=registry_snapshot_ref,
                             )
+                            if workflow.patched(RUN_SLOT_CONTINUITY_PATCH):
+                                self._mark_slot_continuity_for_next_step(
+                                    request=request,
+                                    ordered_nodes=ordered_nodes,
+                                    current_index=index,
+                                )
                             request = await self._maybe_bind_task_scoped_session(request)
                             child_workflow_id = (
                                 f"{workflow.info().workflow_id}:agent:{node_id}"
@@ -3009,13 +3016,14 @@ class MoonMindRunWorkflow:
         resolved_skillset_ref: str | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
-        runtime_block = node_inputs.get("runtime") or {}
-        agent_id = str(
-            runtime_block.get("mode")
-            or runtime_block.get("agent_id")
-            or node_inputs.get("targetRuntime")
-            or tool_name
-        ).strip()
+        runtime_block_raw = node_inputs.get("runtime")
+        runtime_block = (
+            runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
+        )
+        agent_id = self._agent_id_from_runtime_inputs(
+            node_inputs=node_inputs,
+            fallback_name=tool_name,
+        )
         if not agent_id:
             raise ValueError(
                 "agent_runtime plan node must specify an agent_id "
@@ -3171,6 +3179,105 @@ class MoonMindRunWorkflow:
             callback_policy=node_inputs.get("callbackPolicy") or {},
             profile_selector=profile_selector,
         )
+
+    @staticmethod
+    def _managed_runtime_id(agent_id: str) -> str:
+        runtime_mapping = {
+            "gemini_cli": "gemini_cli",
+            "claude": "claude_code",
+            "claude_code": "claude_code",
+            "codex": "codex_cli",
+            "codex_cli": "codex_cli",
+        }
+        normalized_agent_id = _normalize_agent_runtime_id(agent_id)
+        return runtime_mapping.get(normalized_agent_id, normalized_agent_id)
+
+    @staticmethod
+    def _plan_node_tool_mapping(node: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        tool = node.get("tool")
+        skill = node.get("skill")
+        if isinstance(tool, Mapping):
+            return tool
+        if isinstance(skill, Mapping):
+            return skill
+        return None
+
+    @staticmethod
+    def _agent_id_from_runtime_inputs(
+        *,
+        node_inputs: Mapping[str, Any],
+        fallback_name: str | None = None,
+    ) -> str:
+        runtime_block_raw = node_inputs.get("runtime")
+        runtime_block = (
+            runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
+        )
+        return str(
+            runtime_block.get("mode")
+            or runtime_block.get("agent_id")
+            or node_inputs.get("targetRuntime")
+            or fallback_name
+            or ""
+        ).strip()
+
+    def _agent_runtime_id_for_plan_node(
+        self,
+        node: Mapping[str, Any],
+    ) -> str | None:
+        selected_node = self._plan_node_tool_mapping(node)
+        if selected_node is None:
+            return None
+        tool_type = (
+            str(selected_node.get("type") or selected_node.get("kind") or "skill")
+            .strip()
+            .lower()
+        )
+        if tool_type != "agent_runtime":
+            return None
+        node_inputs_raw = node.get("inputs")
+        node_inputs = node_inputs_raw if isinstance(node_inputs_raw, Mapping) else {}
+        agent_id = self._agent_id_from_runtime_inputs(
+            node_inputs=node_inputs,
+            fallback_name=selected_node.get("name") or selected_node.get("id"),
+        )
+        return agent_id or None
+
+    def _mark_slot_continuity_for_next_step(
+        self,
+        *,
+        request: "AgentExecutionRequest",
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_index: int,
+    ) -> None:
+        if request.agent_kind != "managed" or current_index >= len(ordered_nodes):
+            return
+        next_agent_id = self._agent_runtime_id_for_plan_node(
+            ordered_nodes[current_index]
+        )
+        if not next_agent_id or self._agent_kind_for_id(next_agent_id) != "managed":
+            return
+        if self._managed_runtime_id(next_agent_id) != self._managed_runtime_id(
+            request.agent_id
+        ):
+            return
+
+        parameters = dict(request.parameters or {})
+        metadata = (
+            dict(parameters.get("metadata"))
+            if isinstance(parameters.get("metadata"), Mapping)
+            else {}
+        )
+        moonmind_payload = (
+            dict(metadata.get("moonmind"))
+            if isinstance(metadata.get("moonmind"), Mapping)
+            else {}
+        )
+        moonmind_payload["slotContinuity"] = {
+            "reserveForImmediateFollowup": True,
+        }
+        metadata["moonmind"] = moonmind_payload
+        parameters["metadata"] = metadata
+        request.parameters = parameters
 
     def _build_profile_selector(
         self,

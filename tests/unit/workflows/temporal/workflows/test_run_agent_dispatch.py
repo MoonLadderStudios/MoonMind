@@ -10,6 +10,7 @@ import pytest
 
 pytest.importorskip("temporalio")
 
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
@@ -39,6 +40,63 @@ class TestAgentKindForId(unittest.TestCase):
                 "managed",
                 f"{agent_id} should be managed",
             )
+
+
+class TestSlotContinuityMetadata(unittest.TestCase):
+    def test_marks_request_when_next_step_uses_same_managed_runtime(self) -> None:
+        wf = MoonMindRunWorkflow()
+        request = AgentExecutionRequest(
+            agentKind="managed",
+            agentId="codex_cli",
+            correlationId="run-1",
+            idempotencyKey="run-1:step-1",
+        )
+        ordered_nodes = [
+            {
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                "inputs": {"runtime": {"mode": "codex_cli"}},
+            },
+            {
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                "inputs": {"runtime": {"mode": "codex_cli"}},
+            },
+        ]
+
+        wf._mark_slot_continuity_for_next_step(
+            request=request,
+            ordered_nodes=ordered_nodes,
+            current_index=1,
+        )
+
+        continuity = request.parameters["metadata"]["moonmind"]["slotContinuity"]
+        self.assertTrue(continuity["reserveForImmediateFollowup"])
+
+    def test_does_not_mark_request_when_next_step_uses_different_runtime(self) -> None:
+        wf = MoonMindRunWorkflow()
+        request = AgentExecutionRequest(
+            agentKind="managed",
+            agentId="codex_cli",
+            correlationId="run-1",
+            idempotencyKey="run-1:step-1",
+        )
+        ordered_nodes = [
+            {
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                "inputs": {"runtime": {"mode": "codex_cli"}},
+            },
+            {
+                "tool": {"type": "agent_runtime", "name": "gemini_cli"},
+                "inputs": {"runtime": {"mode": "gemini_cli"}},
+            },
+        ]
+
+        wf._mark_slot_continuity_for_next_step(
+            request=request,
+            ordered_nodes=ordered_nodes,
+            current_index=1,
+        )
+
+        self.assertEqual(request.parameters, {})
 
 
 class TestJiraAgentPublishHelpers(unittest.TestCase):

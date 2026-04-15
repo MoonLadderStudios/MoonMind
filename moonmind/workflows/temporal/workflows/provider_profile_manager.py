@@ -34,6 +34,7 @@ WORKFLOW_ID_PREFIX = "provider-profile-manager"
 # "auth-profile" spellings in identifiers until a deliberate workflow migration.
 VERIFY_LEASE_HOLDERS_PATCH = "auth-profile-manager-verify-leases-v1"
 DB_LEASE_PERSISTENCE_PATCH = "provider-profile-manager-db-lease-persistence-v1"
+SLOT_HANDOFF_RESERVATION_PATCH = "provider-profile-manager-slot-handoff-v1"
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -64,6 +65,7 @@ class ProviderProfileManagerInput(TypedDict, total=False):
     cooldowns: dict[str, str]
     lease_granted_at: dict[str, dict[str, str]]
     pending_requests: list[dict[str, str]]
+    handoff_reservations: dict[str, dict[str, str]]
 
 
 class ProviderProfileManagerOutput(TypedDict):
@@ -82,6 +84,7 @@ class SlotRequestPayload(TypedDict):
     requester_workflow_id: str
     runtime_id: str
     execution_profile_ref: str | None
+    lease_group_id: str | None
 
 
 class SlotReleasePayload(TypedDict):
@@ -89,6 +92,8 @@ class SlotReleasePayload(TypedDict):
 
     requester_workflow_id: str
     profile_id: str
+    lease_group_id: str | None
+    handoff_ttl_seconds: int | None
 
 
 class CooldownReportPayload(TypedDict):
@@ -110,6 +115,7 @@ class ProfileSyncPayload(TypedDict):
 
 
 _MAX_LEASE_DURATION_SECONDS = 5400  # 1.5 hours — safety net for leaked slots
+_MAX_HANDOFF_RESERVATION_SECONDS = 30
 
 
 @dataclass
@@ -209,6 +215,15 @@ class PendingRequest:
     runtime_id: str
     execution_profile_ref: str | None = None
     profile_selector: Optional[dict[str, Any]] = None
+    lease_group_id: str | None = None
+
+
+@dataclass
+class HandoffReservation:
+    """Short-lived profile reservation for the next step in the same run."""
+
+    profile_id: str
+    expires_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +274,7 @@ class MoonMindProviderProfileManagerWorkflow:
         self._runtime_id: Optional[str] = None
         self._profiles: dict[str, ProfileSlotState] = {}
         self._pending_requests: list[PendingRequest] = []
+        self._handoff_reservations: dict[str, HandoffReservation] = {}
         self._event_count: int = 0
         self._shutdown_requested: bool = False
         self._has_new_events: bool = False
@@ -270,14 +286,30 @@ class MoonMindProviderProfileManagerWorkflow:
         """An AgentRun requests a profile slot for this runtime family."""
         self._event_count += 1
         self._has_new_events = True
-        self._pending_requests.append(
-            PendingRequest(
-                requester_workflow_id=payload["requester_workflow_id"],
-                runtime_id=payload.get("runtime_id", self._runtime_id or ""),
-                execution_profile_ref=payload.get("execution_profile_ref"),
-                profile_selector=payload.get("profile_selector"),
+        if not workflow.patched(SLOT_HANDOFF_RESERVATION_PATCH):
+            self._pending_requests.append(
+                PendingRequest(
+                    requester_workflow_id=payload["requester_workflow_id"],
+                    runtime_id=payload.get("runtime_id", self._runtime_id or ""),
+                    execution_profile_ref=payload.get("execution_profile_ref"),
+                    profile_selector=payload.get("profile_selector"),
+                )
             )
+            return
+        request = PendingRequest(
+            requester_workflow_id=payload["requester_workflow_id"],
+            runtime_id=payload.get("runtime_id", self._runtime_id or ""),
+            execution_profile_ref=payload.get("execution_profile_ref"),
+            profile_selector=payload.get("profile_selector"),
+            lease_group_id=self._normalize_optional_string(
+                payload.get("lease_group_id")
+            ),
         )
+        for index, existing in enumerate(self._pending_requests):
+            if existing.requester_workflow_id == request.requester_workflow_id:
+                self._pending_requests[index] = request
+                return
+        self._pending_requests.append(request)
 
     @workflow.signal
     async def release_slot(self, payload: dict[str, Any]) -> None:
@@ -287,8 +319,28 @@ class MoonMindProviderProfileManagerWorkflow:
         profile_id = payload["profile_id"]
         requester_id = payload["requester_workflow_id"]
         profile = self._profiles.get(profile_id)
+        released = False
         if profile:
-            profile.release(requester_id)
+            released = profile.release(requester_id)
+        if workflow.patched(SLOT_HANDOFF_RESERVATION_PATCH):
+            self._pending_requests = [
+                req
+                for req in self._pending_requests
+                if req.requester_workflow_id != requester_id
+            ]
+            lease_group_id = self._normalize_optional_string(
+                payload.get("lease_group_id")
+            )
+            handoff_ttl_seconds = self._coerce_handoff_ttl_seconds(
+                payload.get("handoff_ttl_seconds")
+            )
+            if released and lease_group_id and handoff_ttl_seconds > 0:
+                self._handoff_reservations[lease_group_id] = HandoffReservation(
+                    profile_id=profile_id,
+                    expires_at=(
+                        workflow.now() + timedelta(seconds=handoff_ttl_seconds)
+                    ).isoformat(),
+                )
         # Always remove from DB regardless of whether profile exists in memory,
         # so stale rows don't survive profile removals or disablement.
         if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
@@ -340,9 +392,17 @@ class MoonMindProviderProfileManagerWorkflow:
                     "runtime_id": r.runtime_id,
                     "execution_profile_ref": r.execution_profile_ref,
                     "profile_selector": r.profile_selector,
+                    "lease_group_id": r.lease_group_id,
                 }
                 for r in self._pending_requests
             ],
+            "handoff_reservations": {
+                group_id: {
+                    "profile_id": reservation.profile_id,
+                    "expires_at": reservation.expires_at,
+                }
+                for group_id, reservation in self._handoff_reservations.items()
+            },
             "event_count": self._event_count,
         }
 
@@ -428,6 +488,7 @@ class MoonMindProviderProfileManagerWorkflow:
         cooldowns_data = input_payload.get("cooldowns", {})
         lease_times_data = input_payload.get("lease_granted_at", {})
         pending_data = input_payload.get("pending_requests", [])
+        reservations_data = input_payload.get("handoff_reservations", {})
 
         self._pending_requests = [
             PendingRequest(
@@ -435,10 +496,32 @@ class MoonMindProviderProfileManagerWorkflow:
                 runtime_id=req.get("runtime_id", ""),
                 execution_profile_ref=req.get("execution_profile_ref"),
                 profile_selector=req.get("profile_selector"),
+                lease_group_id=self._normalize_optional_string(
+                    req.get("lease_group_id")
+                ),
             )
             for req in pending_data
             if req.get("requester_workflow_id")
         ]
+        self._handoff_reservations = {}
+        if isinstance(reservations_data, dict):
+            for group_id, reservation in reservations_data.items():
+                normalized_group_id = self._normalize_optional_string(group_id)
+                if not normalized_group_id or not isinstance(reservation, dict):
+                    continue
+                profile_id = self._normalize_optional_string(
+                    reservation.get("profile_id")
+                )
+                expires_at = self._normalize_optional_string(
+                    reservation.get("expires_at")
+                )
+                if profile_id and expires_at:
+                    self._handoff_reservations[normalized_group_id] = (
+                        HandoffReservation(
+                            profile_id=profile_id,
+                            expires_at=expires_at,
+                        )
+                    )
 
         for p in profiles_data:
             pid = p["profile_id"]
@@ -515,9 +598,83 @@ class MoonMindProviderProfileManagerWorkflow:
             if pid not in seen:
                 self._profiles[pid].enabled = False
 
+    @staticmethod
+    def _normalize_optional_string(value: object) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+    @staticmethod
+    def _coerce_handoff_ttl_seconds(value: object) -> int:
+        try:
+            seconds = int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(seconds, _MAX_HANDOFF_RESERVATION_SECONDS))
+
+    def _clear_expired_handoff_reservations(self, now: datetime) -> None:
+        for group_id, reservation in list(self._handoff_reservations.items()):
+            try:
+                expires_at = datetime.fromisoformat(reservation.expires_at)
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                self._handoff_reservations.pop(group_id, None)
+                continue
+            if now >= expires_at:
+                self._handoff_reservations.pop(group_id, None)
+
+    def _reserved_slot_count_for_other_groups(
+        self,
+        profile_id: str,
+        lease_group_id: str | None,
+    ) -> int:
+        reserved_slots = 0
+        for reserved_group_id, reservation in self._handoff_reservations.items():
+            if reservation.profile_id != profile_id:
+                continue
+            if reserved_group_id != lease_group_id:
+                reserved_slots += 1
+        return reserved_slots
+
+    @staticmethod
+    def _profile_matches_request(
+        profile: ProfileSlotState,
+        *,
+        selector: Optional[dict[str, Any]],
+        exact_profile_id: str | None,
+    ) -> bool:
+        if not profile.is_available():
+            return False
+        if exact_profile_id and profile.profile_id != exact_profile_id:
+            return False
+        if not selector:
+            return True
+        if (
+            selector.get("providerId")
+            and profile.provider_id != selector.get("providerId")
+        ):
+            return False
+        if (
+            selector.get("runtimeMaterializationMode")
+            and profile.runtime_materialization_mode
+            != selector.get("runtimeMaterializationMode")
+        ):
+            return False
+
+        tags_any = selector.get("tagsAny", [])
+        if tags_any and not set(tags_any).intersection(set(profile.tags)):
+            return False
+
+        tags_all = selector.get("tagsAll", [])
+        if tags_all and not set(tags_all).issubset(set(profile.tags)):
+            return False
+
+        return True
+
     async def _drain_queue(self) -> None:
         """Try to assign slots to pending requests in FIFO order."""
         now = workflow.now()
+        self._clear_expired_handoff_reservations(now)
         remaining: list[PendingRequest] = []
         leases_changed = False
         for req in self._pending_requests:
@@ -546,6 +703,7 @@ class MoonMindProviderProfileManagerWorkflow:
             profile = self._find_available_profile(
                 selector=req.profile_selector,
                 execution_profile_ref=req.execution_profile_ref,
+                lease_group_id=req.lease_group_id,
             )
             if profile and profile.reserve(req.requester_workflow_id, now):
                 leases_changed = True
@@ -590,52 +748,59 @@ class MoonMindProviderProfileManagerWorkflow:
         self,
         selector: Optional[dict[str, Any]] = None,
         execution_profile_ref: str | None = None,
+        lease_group_id: str | None = None,
     ) -> Optional[ProfileSlotState]:
         """Find the best available profile matching the selector."""
         selector = self._normalize_selector(selector)
         exact_profile_id = str(execution_profile_ref or "").strip()
+        normalized_group_id = self._normalize_optional_string(lease_group_id)
+        if normalized_group_id:
+            reservation = self._handoff_reservations.get(normalized_group_id)
+            if reservation:
+                reserved_profile = self._profiles.get(reservation.profile_id)
+                if reserved_profile and self._profile_matches_request(
+                    reserved_profile,
+                    selector=selector,
+                    exact_profile_id=exact_profile_id,
+                ):
+                    self._handoff_reservations.pop(normalized_group_id, None)
+                    return reserved_profile
+                self._handoff_reservations.pop(normalized_group_id, None)
+
         if exact_profile_id:
             exact_profile = self._profiles.get(exact_profile_id)
             if exact_profile is None or not exact_profile.is_available():
                 return None
-
-            if selector:
-                if selector.get("providerId") and exact_profile.provider_id != selector.get("providerId"):
-                    return None
-                if (
-                    selector.get("runtimeMaterializationMode")
-                    and exact_profile.runtime_materialization_mode != selector.get("runtimeMaterializationMode")
-                ):
-                    return None
-
-                tags_any = selector.get("tagsAny", [])
-                if tags_any and not set(tags_any).intersection(set(exact_profile.tags)):
-                    return None
-
-                tags_all = selector.get("tagsAll", [])
-                if tags_all and not set(tags_all).issubset(set(exact_profile.tags)):
-                    return None
-
-            return exact_profile
+            reserved_slots = self._reserved_slot_count_for_other_groups(
+                exact_profile.profile_id, normalized_group_id
+            )
+            if exact_profile.available_slots <= reserved_slots:
+                return None
+            return (
+                exact_profile
+                if self._profile_matches_request(
+                    exact_profile,
+                    selector=selector,
+                    exact_profile_id=exact_profile_id,
+                )
+                else None
+            )
 
         eligible_profiles: list[ProfileSlotState] = []
         for profile in self._profiles.values():
             if not profile.is_available():
                 continue
-
-            if selector:
-                if selector.get("providerId") and profile.provider_id != selector.get("providerId"):
-                    continue
-                if selector.get("runtimeMaterializationMode") and profile.runtime_materialization_mode != selector.get("runtimeMaterializationMode"):
-                    continue
-
-                tags_any = selector.get("tagsAny", [])
-                if tags_any and not set(tags_any).intersection(set(profile.tags)):
-                    continue
-
-                tags_all = selector.get("tagsAll", [])
-                if tags_all and not set(tags_all).issubset(set(profile.tags)):
-                    continue
+            reserved_slots = self._reserved_slot_count_for_other_groups(
+                profile.profile_id, normalized_group_id
+            )
+            if profile.available_slots <= reserved_slots:
+                continue
+            if not self._profile_matches_request(
+                profile,
+                selector=selector,
+                exact_profile_id=None,
+            ):
+                continue
 
             eligible_profiles.append(profile)
 
@@ -797,9 +962,17 @@ class MoonMindProviderProfileManagerWorkflow:
                     "runtime_id": r.runtime_id,
                     "execution_profile_ref": r.execution_profile_ref,
                     "profile_selector": r.profile_selector,
+                    "lease_group_id": r.lease_group_id,
                 }
                 for r in self._pending_requests
             ],
+            "handoff_reservations": {
+                group_id: {
+                    "profile_id": reservation.profile_id,
+                    "expires_at": reservation.expires_at,
+                }
+                for group_id, reservation in self._handoff_reservations.items()
+            },
         }
 
     async def _load_profiles_from_db(self) -> None:
