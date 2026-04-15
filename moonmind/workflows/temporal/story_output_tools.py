@@ -12,6 +12,7 @@ import httpx
 
 from moonmind.integrations.jira.models import (
     CreateIssueRequest,
+    CreateIssueLinkRequest,
     CreateSubtaskRequest,
     SearchIssuesRequest,
 )
@@ -22,6 +23,11 @@ from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 JIRA_STORY_TOOL_NAMES = frozenset({"story.create_jira_issues"})
 JIRA_DESCRIPTION_MAX_CHARS = 32767
 JIRA_DESCRIPTION_TRUNCATION_SUFFIX = "\n\n[Truncated by MoonMind before Jira export]"
+JIRA_DEPENDENCY_MODE_NONE = "none"
+JIRA_DEPENDENCY_MODE_LINEAR_BLOCKER_CHAIN = "linear_blocker_chain"
+JIRA_DEPENDENCY_MODES = frozenset(
+    {JIRA_DEPENDENCY_MODE_NONE, JIRA_DEPENDENCY_MODE_LINEAR_BLOCKER_CHAIN}
+)
 
 StoryFetcher = Callable[
     [str, str, str],
@@ -166,6 +172,37 @@ def _extract_search_issues(payload: Any) -> list[dict[str, Any]]:
     return [dict(issue) for issue in _list(candidates) if isinstance(issue, Mapping)]
 
 
+def _story_id(story: Mapping[str, Any], *, index: int) -> str:
+    for key in ("id", "storyId", "story_id", "key"):
+        value = _string(story.get(key))
+        if value:
+            return value
+    return f"STORY-{index:03d}"
+
+
+def _dependency_mode(
+    *,
+    inputs: Mapping[str, Any],
+    story_output: Mapping[str, Any],
+    jira_payload: Mapping[str, Any],
+) -> tuple[str, str]:
+    for source in (jira_payload, story_output, inputs):
+        for key in ("dependencyMode", "dependency_mode", "jiraDependencyMode"):
+            if key not in source:
+                continue
+            raw = source.get(key)
+            normalized = str(raw or "").strip().lower()
+            if not normalized:
+                return "", "Jira dependencyMode must not be blank."
+            if normalized not in JIRA_DEPENDENCY_MODES:
+                return normalized, (
+                    "Unsupported Jira dependencyMode "
+                    f"'{normalized}'. Supported values: none, linear_blocker_chain."
+                )
+            return normalized, ""
+    return JIRA_DEPENDENCY_MODE_NONE, ""
+
+
 async def _find_existing_issue_for_story(
     *,
     service: JiraToolService,
@@ -243,6 +280,7 @@ def _fallback_result(
     inputs: Mapping[str, Any],
     story_count: int = 0,
     created: Sequence[Mapping[str, Any]] = (),
+    dependency_mode: str = "",
 ) -> ToolResult:
     branch = _string(inputs.get("targetBranch") or inputs.get("branch"))
     base_ref = _string(inputs.get("startingBranch") or inputs.get("baseBranch"))
@@ -254,6 +292,8 @@ def _fallback_result(
         "storyCount": story_count,
         "path": _string(inputs.get("storyBreakdownPath")),
     }
+    if dependency_mode and dependency_mode != JIRA_DEPENDENCY_MODE_NONE:
+        story_output["dependencyMode"] = dependency_mode
     jira_output: dict[str, Any] = {}
     if created_issues:
         story_output["createdCount"] = len(created_issues)
@@ -273,6 +313,78 @@ def _fallback_result(
             "repository": _string(inputs.get("repository") or inputs.get("repo")),
         },
     )
+
+
+def _issue_mapping(
+    *,
+    story: Mapping[str, Any],
+    issue: Mapping[str, Any],
+    index: int,
+    summary: str,
+) -> dict[str, Any]:
+    mapping = dict(issue)
+    mapping["storyId"] = _story_id(story, index=index)
+    mapping["storyIndex"] = index
+    mapping["summary"] = summary
+    return mapping
+
+
+async def _create_dependency_links(
+    *,
+    service: JiraToolService,
+    dependency_mode: str,
+    issue_mappings: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], bool | None]:
+    if dependency_mode == JIRA_DEPENDENCY_MODE_NONE:
+        return [], None
+    if dependency_mode != JIRA_DEPENDENCY_MODE_LINEAR_BLOCKER_CHAIN:
+        raise ValueError(f"Unsupported Jira dependencyMode '{dependency_mode}'.")
+
+    link_results: list[dict[str, Any]] = []
+    for previous, current in zip(issue_mappings, issue_mappings[1:]):
+        blocks_issue_key = _string(previous.get("issueKey"))
+        blocked_issue_key = _string(current.get("issueKey"))
+        base_result = {
+            "fromStoryId": _string(previous.get("storyId")),
+            "fromStoryIndex": previous.get("storyIndex"),
+            "toStoryId": _string(current.get("storyId")),
+            "toStoryIndex": current.get("storyIndex"),
+            "blocksIssueKey": blocks_issue_key,
+            "blockedIssueKey": blocked_issue_key,
+            "linkType": "Blocks",
+        }
+        if not blocks_issue_key or not blocked_issue_key:
+            link_results.append(
+                {
+                    **base_result,
+                    "status": "failed",
+                    "errorCode": "jira_validation_failed",
+                    "message": "Jira dependency link requires both issue keys.",
+                }
+            )
+            continue
+        try:
+            result = await service.create_issue_link(
+                CreateIssueLinkRequest(
+                    blocksIssueKey=blocks_issue_key,
+                    blockedIssueKey=blocked_issue_key,
+                )
+            )
+        except Exception as exc:
+            link_results.append(
+                {
+                    **base_result,
+                    "status": "failed",
+                    "errorCode": _string(getattr(exc, "code", "")) or exc.__class__.__name__,
+                    "message": "Jira dependency link creation failed.",
+                }
+            )
+            continue
+        status = "existing" if result.get("existing") else "created"
+        link_results.append({**base_result, "status": status})
+
+    chain_complete = all(item.get("status") in {"created", "existing"} for item in link_results)
+    return link_results, chain_complete
 
 
 async def create_jira_issues_from_stories(
@@ -304,6 +416,19 @@ async def create_jira_issues_from_stories(
         or story_output.get("on_failure")
         or "docs_tmp"
     ).strip().lower() not in {"fail", "none", "false"}
+    dependency_mode, dependency_mode_error = _dependency_mode(
+        inputs=inputs,
+        story_output=story_output,
+        jira_payload=jira_payload,
+    )
+    if dependency_mode_error:
+        if fallback_on_failure:
+            return _fallback_result(
+                reason=dependency_mode_error,
+                inputs=inputs,
+                dependency_mode=dependency_mode,
+            )
+        raise ValueError(dependency_mode_error)
 
     stories = _coerce_story_payload(
         inputs.get("stories")
@@ -333,6 +458,7 @@ async def create_jira_issues_from_stories(
                     return _fallback_result(
                         reason=f"Unable to read story breakdown for Jira output: {exc}",
                         inputs=inputs,
+                        dependency_mode=dependency_mode,
                     )
                 raise
 
@@ -341,6 +467,7 @@ async def create_jira_issues_from_stories(
             return _fallback_result(
                 reason="No stories were available for Jira issue creation.",
                 inputs=inputs,
+                dependency_mode=dependency_mode,
             )
         raise ValueError("No stories were available for Jira issue creation.")
     if not project_key or not issue_type_id:
@@ -349,11 +476,13 @@ async def create_jira_issues_from_stories(
                 reason="Jira projectKey and issueTypeId are required.",
                 inputs=inputs,
                 story_count=len(stories),
+                dependency_mode=dependency_mode,
             )
         raise ValueError("Jira projectKey and issueTypeId are required.")
 
     service = jira_service_factory()
     created: list[dict[str, Any]] = []
+    issue_mappings: list[dict[str, Any]] = []
     marker_label = _workflow_marker_label(inputs=inputs, context=_context)
     try:
         for index, story in enumerate(stories, start=1):
@@ -366,6 +495,14 @@ async def create_jira_issues_from_stories(
             )
             if existing_issue:
                 created.append(existing_issue)
+                issue_mappings.append(
+                    _issue_mapping(
+                        story=story,
+                        issue=existing_issue,
+                        index=index,
+                        summary=summary,
+                    )
+                )
                 continue
 
             fields = _merge_fields(
@@ -398,7 +535,16 @@ async def create_jira_issues_from_stories(
                     fields=fields,
                 )
                 result = await service.create_issue(request)
-            created.append(dict(result))
+            issue_result = dict(result)
+            created.append(issue_result)
+            issue_mappings.append(
+                _issue_mapping(
+                    story=story,
+                    issue=issue_result,
+                    index=index,
+                    summary=summary,
+                )
+            )
     except Exception as exc:
         if fallback_on_failure:
             return _fallback_result(
@@ -406,21 +552,40 @@ async def create_jira_issues_from_stories(
                 inputs=inputs,
                 story_count=len(stories),
                 created=created,
+                dependency_mode=dependency_mode,
             )
         raise
+
+    link_results, dependency_chain_complete = await _create_dependency_links(
+        service=service,
+        dependency_mode=dependency_mode,
+        issue_mappings=issue_mappings,
+    )
+    link_count = sum(
+        1 for item in link_results if item.get("status") in {"created", "existing"}
+    )
+    partial = any(item.get("status") == "failed" for item in link_results)
+    story_status = "jira_partial" if partial else "jira_created"
 
     return ToolResult(
         status="COMPLETED",
         outputs={
             "storyOutput": {
                 "mode": "jira",
-                "status": "jira_created",
+                "status": story_status,
                 "storyCount": len(stories),
                 "createdCount": len(created),
+                "dependencyMode": dependency_mode,
             },
             "jira": {
                 "createdCount": len(created),
                 "createdIssues": created,
+                "dependencyMode": dependency_mode,
+                "issueMappings": issue_mappings,
+                "linkResults": link_results,
+                "linkCount": link_count,
+                "dependencyChainComplete": dependency_chain_complete,
+                **({"partial": True} if partial else {}),
             },
         },
     )

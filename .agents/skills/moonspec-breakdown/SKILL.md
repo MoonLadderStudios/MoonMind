@@ -133,6 +133,7 @@ For each story, define:
 - Merge duplicates and near-duplicates.
 - Keep dependencies explicit: story A depends on story B only when A cannot be independently validated first.
 - Rank stories by dependency order, risk, and user value.
+- Preserve stable story IDs, story order, and dependency IDs in `stories.json` so downstream Jira export can map created Jira issue keys back to ordered stories and optionally create a linear blocker chain.
 - Prefer high-risk contract, state, migration, or integration stories early when they unlock reliable TDD for later stories.
 
 ### 5. Run The Coverage Gate

@@ -24,6 +24,7 @@ _JIRA_PROJECT_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9]+$")
 _JIRA_ALLOWED_ACTIONS = frozenset(
     {
         "create_issue",
+        "create_issue_link",
         "create_subtask",
         "edit_issue",
         "get_issue",

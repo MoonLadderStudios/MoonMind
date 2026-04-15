@@ -293,6 +293,13 @@ class JiraClient:
                 action=action,
             )
         if status in {400, 422}:
+            if action == "create_issue_link" and "already exists" in response.text.lower():
+                return JiraToolError(
+                    "Jira issue link already exists.",
+                    code="jira_conflict_existing_link",
+                    status_code=409,
+                    action=action,
+                )
             return JiraToolError(
                 "Jira rejected the request because one or more fields or workflow values were invalid.",
                 code="jira_validation_failed",

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 from moonmind.integrations.jira.models import (
     AddCommentRequest,
     CreateIssueRequest,
+    CreateIssueLinkRequest,
     CreateSubtaskRequest,
     EditIssueRequest,
     GetCreateFieldsRequest,
@@ -88,6 +89,12 @@ class JiraToolRegistry:
             "Create a Jira issue through the trusted MoonMind Jira tool path.",
             CreateIssueRequest,
             self._handle_create_issue,
+        )
+        self._register(
+            "jira.create_issue_link",
+            "Create a Jira issue dependency link through the trusted MoonMind Jira tool path.",
+            CreateIssueLinkRequest,
+            self._handle_create_issue_link,
         )
         self._register(
             "jira.create_subtask",
@@ -190,6 +197,15 @@ class JiraToolRegistry:
                 "jira.create_subtask", detail="Invalid payload type"
             )
         return await context.service.create_subtask(args)
+
+    async def _handle_create_issue_link(
+        self, args: BaseModel, context: JiraToolExecutionContext
+    ) -> dict[str, Any]:
+        if not isinstance(args, CreateIssueLinkRequest):
+            raise ToolArgumentsValidationError(
+                "jira.create_issue_link", detail="Invalid payload type"
+            )
+        return await context.service.create_issue_link(args)
 
     async def _handle_edit_issue(
         self, args: BaseModel, context: JiraToolExecutionContext

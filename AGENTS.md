@@ -171,6 +171,8 @@ Key diagnostics:
 ## Active Technologies
 - Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers (176-temporal-type-gates)
 - No new persistent storage; review findings are produced as deterministic validation output and test evidence (176-temporal-type-gates)
+- Python 3.12 + YAML seed templates + Pydantic v2, FastAPI/MCP tool registry, `httpx`, existing Jira integration service, Temporal story-output tool handlers, task preset catalog (177-jira-chain-blockers)
+- No new persistent storage; deterministic outputs carry issue mappings and link results (177-jira-chain-blockers)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
