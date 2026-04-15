@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -67,6 +68,7 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.FAILED,
     MoonMindWorkflowState.CANCELED,
 }
+CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
 
 import logging
 
@@ -895,14 +897,24 @@ class TemporalExecutionService:
                 "message": "Workflow is in a terminal state and no longer accepts updates.",
             }
 
-        skip_temporal_update = (
-            update_name == "RequestRerun" and record.state in TERMINAL_STATES
-        )
-        if skip_temporal_update:
-            logger.info(
-                "Skipping Temporal update call for terminal rerun request on %s",
-                record.workflow_id,
+        if update_name == "RequestRerun" and record.state in TERMINAL_STATES:
+            # Closed Temporal workflows cannot execute updates; terminal rerun
+            # is a fresh execution seeded from the reviewed source inputs.
+            response = await self._create_fresh_rerun_execution(
+                record,
+                input_artifact_ref=input_artifact_ref,
+                plan_artifact_ref=plan_artifact_ref,
+                parameters_patch=parameters_patch,
+                idempotency_key=idempotency_key,
             )
+            await self._session.refresh(record)
+            if idempotency_key:
+                record.last_update_idempotency_key = idempotency_key
+                record.last_update_response = dict(response)
+            await self._session.commit()
+            await self._session.refresh(record)
+            return response
+
         else:
             update_arg = {
                 "input_artifact_ref": input_artifact_ref,
@@ -925,10 +937,24 @@ class TemporalExecutionService:
                     exc
                 ):
                     logger.info(
-                        "Temporal rerun update ignored for terminal workflow %s: %s",
+                        "Temporal rerun update found closed workflow %s; creating fresh rerun: %s",
                         record.workflow_id,
                         exc,
                     )
+                    response = await self._create_fresh_rerun_execution(
+                        record,
+                        input_artifact_ref=input_artifact_ref,
+                        plan_artifact_ref=plan_artifact_ref,
+                        parameters_patch=parameters_patch,
+                        idempotency_key=idempotency_key,
+                    )
+                    await self._session.refresh(record)
+                    if idempotency_key:
+                        record.last_update_idempotency_key = idempotency_key
+                        record.last_update_response = dict(response)
+                    await self._session.commit()
+                    await self._session.refresh(record)
+                    return response
                 else:
                     raise TemporalExecutionValidationError(
                         f"Temporal update failed: {exc}"
@@ -1942,6 +1968,77 @@ class TemporalExecutionService:
             "continue_as_new_cause": "manual_rerun",
         }
 
+    async def _create_fresh_rerun_execution(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        *,
+        input_artifact_ref: str | None,
+        plan_artifact_ref: str | None,
+        parameters_patch: dict[str, Any] | None,
+        idempotency_key: str | None,
+    ) -> dict[str, Any]:
+        params = dict(record.parameters or {})
+        if parameters_patch:
+            params.update(parameters_patch)
+        for key in TASK_RUN_ID_PARAM_KEYS:
+            params.pop(key, None)
+
+        rerun_source = {
+            "workflowId": record.workflow_id,
+            "runId": record.run_id,
+        }
+        params["rerunSource"] = rerun_source
+
+        next_input_ref = input_artifact_ref or record.input_ref
+        next_plan_ref = plan_artifact_ref or record.plan_ref
+        task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
+        repository = str(params.get("repository") or "").strip() or None
+        title = (
+            str(task_params.get("title") or "").strip()
+            or str((record.memo or {}).get("title") or "").strip()
+            or None
+        )
+
+        rerun_create_idempotency_key = self._rerun_create_idempotency_key(
+            record.workflow_id,
+            idempotency_key,
+        )
+        created = await self.create_execution(
+            workflow_type=record.workflow_type.value,
+            owner_id=record.owner_id,
+            owner_type=record.owner_type.value if record.owner_type else "user",
+            title=title,
+            input_artifact_ref=next_input_ref,
+            plan_artifact_ref=next_plan_ref,
+            manifest_artifact_ref=record.manifest_ref,
+            failure_policy=None,
+            initial_parameters=params,
+            idempotency_key=rerun_create_idempotency_key,
+            repository=repository,
+            integration=None,
+            summary=f"Rerun of {record.workflow_id}.",
+        )
+        return {
+            "accepted": True,
+            "applied": "continue_as_new",
+            "message": "Rerun requested. New execution created.",
+            "continue_as_new_cause": "manual_rerun",
+            "workflow_id": created.workflow_id,
+        }
+
+    @staticmethod
+    def _rerun_create_idempotency_key(
+        workflow_id: str,
+        idempotency_key: str | None,
+    ) -> str | None:
+        if not idempotency_key:
+            return None
+        derived_key = f"rerun:{workflow_id}:{idempotency_key}"
+        if len(derived_key) <= CREATE_IDEMPOTENCY_KEY_MAX_LENGTH:
+            return derived_key
+        digest = hashlib.sha256(derived_key.encode("utf-8")).hexdigest()
+        return f"rerun:{digest}"
+
     def _continue_as_new(
         self,
         record: TemporalExecutionCanonicalRecord,
@@ -2628,9 +2725,10 @@ class TemporalExecutionService:
         workflow_id: str,
     ) -> TemporalExecutionCanonicalRecord | None:
         canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
-        return await self._session.get(
+        record = await self._session.get(
             TemporalExecutionCanonicalRecord, canonical_workflow_id
         )
+        return record
 
     async def _require_source_execution(
         self,

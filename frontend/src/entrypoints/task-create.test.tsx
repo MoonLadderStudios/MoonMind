@@ -805,8 +805,8 @@ describe("Task Create Entrypoint", () => {
             json: async () => ({
               accepted: true,
               applied: "continue_as_new",
-              message: "Rerun requested.",
-              execution: { workflowId: "mm:rerun-123" },
+              message: "Rerun requested. New execution created.",
+              execution: { workflowId: "mm:rerun-created" },
               continueAsNewCause: "manual_rerun",
             }),
           } as Response);
@@ -1640,7 +1640,7 @@ describe("Task Create Entrypoint", () => {
     expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
   });
 
-  it("submits terminal rerun mode through RequestRerun and returns to the Temporal detail view", async () => {
+  it("submits terminal rerun mode through RequestRerun and opens the created rerun detail view", async () => {
     window.history.pushState(
       {},
       "Task Rerun",
@@ -1710,7 +1710,7 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
     await waitFor(() => {
       expect(navigateTo).toHaveBeenCalledWith(
-        "/tasks/mm%3Arerun-123?source=temporal",
+        "/tasks/mm%3Arerun-created?source=temporal",
       );
     });
     expect(

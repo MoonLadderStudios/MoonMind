@@ -991,7 +991,71 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
 
 
 @pytest.mark.asyncio
-async def test_request_rerun_allowed_for_terminal_execution(
+async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "taskRunId": "old-task-run",
+                "task_run_id": "old-task-run-snake",
+            },
+            idempotency_key=None,
+        )
+
+        await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason="done",
+            graceful=True,
+        )
+
+        source_workflow_id = created.workflow_id
+        source_run_id = created.run_id
+
+        response = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="RequestRerun",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
+            idempotency_key="rerun-terminal",
+        )
+        source = await service.describe_execution(source_workflow_id)
+        rerun = await service.describe_execution(response["workflow_id"])
+
+        assert response["accepted"] is True
+        assert response["applied"] == "continue_as_new"
+        assert response["continue_as_new_cause"] == "manual_rerun"
+        assert response["workflow_id"] != source_workflow_id
+        assert source.state is MoonMindWorkflowState.CANCELED
+        assert source.close_status is TemporalExecutionCloseStatus.CANCELED
+        assert rerun.state is MoonMindWorkflowState.INITIALIZING
+        assert rerun.parameters["rerunSource"] == {
+            "workflowId": source_workflow_id,
+            "runId": source_run_id,
+        }
+        assert "taskRunId" not in rerun.parameters
+        assert "task_run_id" not in rerun.parameters
+        assert service._client_adapter.update_workflow.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_request_rerun_bounds_fresh_execution_idempotency_key(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -1009,14 +1073,14 @@ async def test_request_rerun_allowed_for_terminal_execution(
             initial_parameters={},
             idempotency_key=None,
         )
-
         await service.cancel_execution(
             workflow_id=created.workflow_id,
             reason="done",
             graceful=True,
         )
 
-        response = await service.update_execution(
+        long_idempotency_key = "k" * 128
+        first_response = await service.update_execution(
             workflow_id=created.workflow_id,
             update_name="RequestRerun",
             input_artifact_ref=None,
@@ -1027,22 +1091,31 @@ async def test_request_rerun_allowed_for_terminal_execution(
             mode=None,
             max_concurrency=None,
             node_ids=None,
-            idempotency_key="rerun-terminal",
+            idempotency_key=long_idempotency_key,
         )
-        refreshed = await service.describe_execution(created.workflow_id)
+        second_response = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="RequestRerun",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
+            idempotency_key=long_idempotency_key,
+        )
 
-        assert response["accepted"] is True
-        assert response["applied"] == "continue_as_new"
-        assert response["continue_as_new_cause"] == "manual_rerun"
-        assert refreshed.state is MoonMindWorkflowState.EXECUTING
-        assert refreshed.close_status is None
-        assert refreshed.closed_at is None
-        assert refreshed.rerun_count == 1
-        assert service._client_adapter.update_workflow.await_count == 0
+        rerun = await service.describe_execution(first_response["workflow_id"])
+        assert first_response["workflow_id"] == second_response["workflow_id"]
+        assert rerun.create_idempotency_key is not None
+        assert len(rerun.create_idempotency_key) <= 128
+        assert rerun.create_idempotency_key.startswith("rerun:")
 
 
 @pytest.mark.asyncio
-async def test_request_rerun_falls_back_when_temporal_reports_completed(
+async def test_request_rerun_creates_fresh_execution_when_temporal_reports_completed(
     tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
@@ -1065,6 +1138,7 @@ async def test_request_rerun_falls_back_when_temporal_reports_completed(
             "workflow execution already completed"
         )
 
+        source_workflow_id = created.workflow_id
         response = await service.update_execution(
             workflow_id=created.workflow_id,
             update_name="RequestRerun",
@@ -1078,13 +1152,16 @@ async def test_request_rerun_falls_back_when_temporal_reports_completed(
             node_ids=None,
             idempotency_key="rerun-temporal-completed",
         )
-        refreshed = await service.describe_execution(created.workflow_id)
+        source = await service.describe_execution(source_workflow_id)
+        rerun = await service.describe_execution(response["workflow_id"])
 
         assert response["accepted"] is True
         assert response["applied"] == "continue_as_new"
         assert response["continue_as_new_cause"] == "manual_rerun"
-        assert refreshed.state is MoonMindWorkflowState.EXECUTING
-        assert refreshed.rerun_count == 1
+        assert response["workflow_id"] != source_workflow_id
+        assert source.state is MoonMindWorkflowState.INITIALIZING
+        assert rerun.state is MoonMindWorkflowState.INITIALIZING
+        assert rerun.parameters["rerunSource"]["workflowId"] == source_workflow_id
         assert service._client_adapter.update_workflow.await_count == 1
 
 
