@@ -25,8 +25,7 @@ class TestProviderCredentialPaths:
     def test_codex_paths_defined(self) -> None:
         assert "codex_cli" in PROVIDER_CREDENTIAL_PATHS
         paths = PROVIDER_CREDENTIAL_PATHS["codex_cli"]
-        assert len(paths) >= 1
-        assert any("codex" in p for p in paths)
+        assert paths == ("auth.json", "config.toml")
 
     def test_claude_paths_defined(self) -> None:
         assert "claude_code" in PROVIDER_CREDENTIAL_PATHS
@@ -116,6 +115,37 @@ class TestVerifyVolumeCredentials:
 
         assert result["verified"] is True
         assert ".config/gemini/credentials.json" in result["found"]
+
+    @pytest.mark.asyncio
+    async def test_codex_verification_checks_volume_root_when_mounted_as_codex_home(
+        self,
+    ) -> None:
+        mock_process = AsyncMock()
+        mock_process.communicate = MagicMock(return_value="dummy")
+        mock_process.returncode = 0
+
+        with patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ) as exec_mock, patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
+            new_callable=AsyncMock,
+            return_value=(
+                b"FOUND:auth.json\nMISSING:config.toml\n",
+                b"",
+            ),
+        ):
+            result = await verify_volume_credentials(
+                runtime_id="codex_cli",
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+            )
+
+        assert result["verified"] is True
+        assert "auth.json" in result["found"]
+        docker_args = exec_mock.call_args.args
+        assert "-v" in docker_args
+        assert "codex_auth_volume:/home/app/.codex:ro" in docker_args
 
     @pytest.mark.asyncio
     async def test_no_credentials_found(self) -> None:

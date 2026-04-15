@@ -26,6 +26,7 @@ from api_service.db.models import (
     ManagedAgentOAuthSession,
     OAuthSessionStatus,
 )
+from moonmind.workflows.temporal.runtime.providers.registry import get_provider_default
 
 logger = logging.getLogger(__name__)
 
@@ -311,7 +312,12 @@ async def oauth_session_register_profile(
 
     async with get_async_session_context() as db:
         from sqlalchemy.future import select
-        from api_service.db.models import ManagedAgentProviderProfile, ManagedAgentRateLimitPolicy, ProviderCredentialSource
+        from api_service.db.models import (
+            ManagedAgentProviderProfile,
+            ManagedAgentRateLimitPolicy,
+            ProviderCredentialSource,
+            RuntimeMaterializationMode,
+        )
         from api_service.services.provider_profile_service import sync_provider_profile_manager
 
         result = await db.execute(
@@ -339,7 +345,13 @@ async def oauth_session_register_profile(
 
         profile_data = {
             "runtime_id": session_obj.runtime_id,
+            "provider_id": metadata.get("provider_id")
+            or get_provider_default(session_obj.runtime_id, "provider_id")
+            or "unknown",
+            "provider_label": metadata.get("provider_label")
+            or get_provider_default(session_obj.runtime_id, "provider_label"),
             "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
+            "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": session_obj.volume_ref,
             "volume_mount_path": session_obj.volume_mount_path,
             "account_label": session_obj.account_label,

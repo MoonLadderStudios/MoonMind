@@ -1,16 +1,31 @@
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from api_service.db.base import get_async_session
+from api_service.api.schemas_oauth_sessions import (
+    CreateOAuthSessionRequest,
+    OAuthSessionResponse,
+)
 from api_service.auth_providers import get_current_user
-from api_service.api.schemas_oauth_sessions import CreateOAuthSessionRequest, OAuthSessionResponse
+from api_service.db.base import get_async_session
 from api_service.services.provider_profile_service import sync_provider_profile_manager
-from api_service.db.models import ManagedAgentOAuthSession, OAuthSessionStatus, User, ManagedAgentProviderProfile, ProviderCredentialSource, ManagedAgentRateLimitPolicy
+from api_service.db.models import (
+    ManagedAgentOAuthSession,
+    OAuthSessionStatus,
+    User,
+    ManagedAgentProviderProfile,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
+    ManagedAgentRateLimitPolicy,
+)
+from moonmind.workflows.temporal.runtime.providers.registry import get_provider_default
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
+logger = logging.getLogger(__name__)
 _ACTIVE_SESSION_STATUSES = (
     OAuthSessionStatus.PENDING,
     OAuthSessionStatus.STARTING,
@@ -20,6 +35,10 @@ _ACTIVE_SESSION_STATUSES = (
     OAuthSessionStatus.REGISTERING_PROFILE,
 )
 _STALE_ACTIVE_SESSION_MINUTES = 45
+
+
+def _oauth_default(runtime_id: str, key: str) -> str | None:
+    return get_provider_default(runtime_id, key)
 
 
 async def _expire_stale_active_sessions(
@@ -56,7 +75,38 @@ async def create_oauth_session(
     db: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user()),
 ):
+    volume_ref = request.volume_ref or _oauth_default(request.runtime_id, "volume_ref")
+    volume_mount_path = request.volume_mount_path or _oauth_default(
+        request.runtime_id, "volume_mount_path"
+    )
+    if not volume_ref:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="volume_ref is required for OAuth sessions.",
+        )
+    if not volume_mount_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="volume_mount_path is required for OAuth sessions.",
+        )
+
     await _expire_stale_active_sessions(db, profile_id=request.profile_id)
+
+    profile_result = await db.execute(
+        select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.profile_id == request.profile_id
+        )
+    )
+    existing_profile = profile_result.scalars().first()
+    if (
+        existing_profile
+        and existing_profile.owner_user_id is not None
+        and str(existing_profile.owner_user_id) != str(current_user.id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to use this profile ID.",
+        )
 
     # Check for existing active session for this profile
     result = await db.execute(
@@ -78,11 +128,17 @@ async def create_oauth_session(
         session_id=session_id,
         runtime_id=request.runtime_id,
         profile_id=request.profile_id,
-        volume_ref=request.volume_ref,
+        volume_ref=volume_ref,
+        volume_mount_path=volume_mount_path,
         account_label=request.account_label,
         status=OAuthSessionStatus.PENDING,
         requested_by_user_id=str(current_user.id),
         metadata_json={
+            "provider_id": request.provider_id
+            or _oauth_default(request.runtime_id, "provider_id")
+            or "unknown",
+            "provider_label": request.provider_label
+            or _oauth_default(request.runtime_id, "provider_label"),
             "max_parallel_runs": request.max_parallel_runs,
             "cooldown_after_429_seconds": request.cooldown_after_429_seconds,
             "rate_limit_policy": request.rate_limit_policy.value,
@@ -191,7 +247,6 @@ async def finalize_oauth_session(
     if session_obj.status not in [OAuthSessionStatus.AWAITING_USER, OAuthSessionStatus.VERIFYING]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot finalize session in {session_obj.status.name} state")
 
-    # Attempt volume verification (best-effort — Docker may not be available)
     try:
         from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
             verify_volume_credentials,
@@ -203,20 +258,32 @@ async def finalize_oauth_session(
             volume_mount_path=session_obj.volume_mount_path,
         )
         if not verification.get("verified", False):
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "Volume verification failed for session %s: %s",
-                session_id,
-                verification.get("reason", "unknown"),
+            session_obj.status = OAuthSessionStatus.FAILED
+            session_obj.completed_at = datetime.now(timezone.utc)
+            session_obj.failure_reason = (
+                "Volume verification failed: "
+                f"{verification.get('reason', 'unknown')}"
             )
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=session_obj.failure_reason,
+            )
+    except HTTPException:
+        raise
     except Exception:
-        import logging
-
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "Volume verification unavailable for session %s",
             session_id,
             exc_info=True,
+        )
+        session_obj.status = OAuthSessionStatus.FAILED
+        session_obj.completed_at = datetime.now(timezone.utc)
+        session_obj.failure_reason = "Volume verification unavailable"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=session_obj.failure_reason,
         )
 
     session_obj.status = OAuthSessionStatus.SUCCEEDED
@@ -240,12 +307,25 @@ async def finalize_oauth_session(
             detail=f"Unsupported rate_limit_policy: {policy_str}"
         )
 
-    if existing_profile and existing_profile.owner_user_id is not None and str(existing_profile.owner_user_id) != str(current_user.id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this profile")
+    if (
+        existing_profile
+        and existing_profile.owner_user_id is not None
+        and str(existing_profile.owner_user_id) != str(current_user.id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to update this profile",
+        )
 
     profile_data = {
         "runtime_id": session_obj.runtime_id,
+        "provider_id": metadata.get("provider_id")
+        or _oauth_default(session_obj.runtime_id, "provider_id")
+        or "unknown",
+        "provider_label": metadata.get("provider_label")
+        or _oauth_default(session_obj.runtime_id, "provider_label"),
         "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
+        "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
         "volume_ref": session_obj.volume_ref,
         "volume_mount_path": session_obj.volume_mount_path,
         "account_label": session_obj.account_label,
@@ -359,8 +439,7 @@ async def reconnect_oauth_session(
         )
         await start_oauth_session_workflow(new_session)
     except Exception:
-        import logging
-        logging.getLogger(__name__).exception(
+        logger.exception(
             "Failed to start workflow for reconnected session %s",
             new_session_id,
         )

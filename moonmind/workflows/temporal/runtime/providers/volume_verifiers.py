@@ -28,8 +28,8 @@ _GEMINI_CREDENTIAL_PATHS = (
 )
 
 _CODEX_CREDENTIAL_PATHS = (
-    ".codex/auth.json",
-    ".codex/config.json",
+    "auth.json",
+    "config.toml",
 )
 
 _CLAUDE_CREDENTIAL_PATHS = (

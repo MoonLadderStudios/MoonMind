@@ -17,6 +17,10 @@ class OAuthProviderSpec(TypedDict):
     session_transport: str
     default_volume_name: str
     default_mount_path: str
+    default_volume_name_env: str
+    default_mount_path_env: str
+    provider_id: str
+    provider_label: str
     bootstrap_command: list[str]
     success_check: str
     account_label_prefix: str
