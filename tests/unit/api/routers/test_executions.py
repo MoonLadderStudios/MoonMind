@@ -1309,6 +1309,34 @@ def test_serialize_execution_treats_system_owner_id_as_system_owner_type() -> No
     assert payload.owner_id == "system"
 
 
+def test_serialize_execution_uses_created_at_for_immediate_schedule() -> None:
+    created_at = datetime(2026, 3, 6, 0, 0, tzinfo=UTC)
+    record = SimpleNamespace(
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={},
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        state=MoonMindWorkflowState.EXECUTING,
+        workflow_id="wf-1",
+        namespace="moonmind",
+        run_id="run-1",
+        artifact_refs=[],
+        scheduled_for=None,
+        created_at=created_at,
+        started_at=created_at,
+        updated_at=created_at,
+        closed_at=None,
+        integration_state=None,
+    )
+
+    payload = _serialize_execution(record)
+
+    assert payload.scheduled_for == created_at
+    assert payload.created_at == created_at
+
+
 def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> None:
     """Ensure runtime/model/effort stored in record.parameters are surfaced."""
     record = SimpleNamespace(

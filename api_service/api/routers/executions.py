@@ -616,6 +616,9 @@ def _serialize_execution(
         else None
     )
 
+    created_at = getattr(record, "created_at", None) or record.started_at
+    scheduled_for = getattr(record, "scheduled_for", None) or created_at
+
     return ExecutionModel(
         task_id=record.workflow_id,
         task_run_id=task_run_id,
@@ -686,8 +689,8 @@ def _serialize_execution(
         paused=_manifest_attr(manifest_status, "paused"),
         counts=_manifest_attr(manifest_status, "counts"),
         artifacts_count=len(record.artifact_refs or []),
-        scheduled_for=getattr(record, "scheduled_for", None),
-        created_at=getattr(record, "created_at", None) or record.started_at,
+        scheduled_for=scheduled_for,
+        created_at=created_at,
         steps_href=steps_href,
         actions=actions,
         debug_fields=debug_fields,
