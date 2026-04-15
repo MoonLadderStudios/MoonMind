@@ -9,6 +9,9 @@ from unittest.mock import patch
 import pytest
 
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+    HandoffReservation,
+    PendingRequest,
+    SLOT_HANDOFF_RESERVATION_PATCH,
     WORKFLOW_NAME,
     MoonMindProviderProfileManagerWorkflow,
     ProfileSlotState,
@@ -466,6 +469,136 @@ class TestProviderProfileManagerHelpers:
         assert len(data["profiles"]) == 1
         assert data["leases"]["p1"] == ["wf1"]
         assert data["cooldowns"]["p1"] == "2099-01-01T00:00:00+00:00"
+
+    def test_build_continue_as_new_preserves_handoff_reservations(self):
+        wf = self._make_workflow()
+        wf._handoff_reservations["run-1"] = HandoffReservation(
+            profile_id="p1",
+            expires_at="2026-04-15T00:00:10+00:00",
+        )
+
+        data = wf._build_continue_as_new_input()
+
+        assert data["handoff_reservations"] == {
+            "run-1": {
+                "profile_id": "p1",
+                "expires_at": "2026-04-15T00:00:10+00:00",
+            }
+        }
+
+    def test_request_slot_dedupes_by_requester(self):
+        wf = self._make_workflow()
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            wf.request_slot(
+                {
+                    "requester_workflow_id": "run-1:agent:step-1",
+                    "runtime_id": "gemini_cli",
+                    "lease_group_id": "run-1",
+                }
+            )
+            wf.request_slot(
+                {
+                    "requester_workflow_id": "run-1:agent:step-1",
+                    "runtime_id": "gemini_cli",
+                    "execution_profile_ref": "p2",
+                    "lease_group_id": "run-1",
+                }
+            )
+
+        assert len(wf._pending_requests) == 1
+        assert wf._pending_requests[0].execution_profile_ref == "p2"
+        assert wf._pending_requests[0].lease_group_id == "run-1"
+
+    @pytest.mark.asyncio
+    async def test_release_slot_creates_short_handoff_reservation(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            current_leases=["run-1:agent:step-1"],
+            lease_granted_at={
+                "run-1:agent:step-1": "2026-04-15T00:00:00+00:00"
+            },
+        )
+        now = datetime(2026, 4, 15, tzinfo=timezone.utc)
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = now
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == SLOT_HANDOFF_RESERVATION_PATCH
+            )
+            await wf.release_slot(
+                {
+                    "requester_workflow_id": "run-1:agent:step-1",
+                    "profile_id": "p1",
+                    "lease_group_id": "run-1",
+                    "handoff_ttl_seconds": 10,
+                }
+            )
+
+        reservation = wf._handoff_reservations["run-1"]
+        assert reservation.profile_id == "p1"
+        assert reservation.expires_at == "2026-04-15T00:00:10+00:00"
+        assert wf._profiles["p1"].current_leases == []
+
+    @pytest.mark.asyncio
+    async def test_drain_queue_prefers_reserved_same_group_over_unrelated_fifo(
+        self,
+    ):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        wf._handoff_reservations["run-1"] = HandoffReservation(
+            profile_id="p1",
+            expires_at="2026-04-15T00:00:10+00:00",
+        )
+        wf._pending_requests = [
+            PendingRequest(
+                requester_workflow_id="run-2:agent:step-1",
+                runtime_id="gemini_cli",
+                lease_group_id="run-2",
+            ),
+            PendingRequest(
+                requester_workflow_id="run-1:agent:step-2",
+                runtime_id="gemini_cli",
+                lease_group_id="run-1",
+            ),
+        ]
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+        now = datetime(2026, 4, 15, tzinfo=timezone.utc)
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = now
+            mock_wf.patched.return_value = False
+            await wf._drain_queue()
+
+        assert assigned == [("run-1:agent:step-2", "p1")]
+        assert wf._profiles["p1"].current_leases == ["run-1:agent:step-2"]
+        assert [req.requester_workflow_id for req in wf._pending_requests] == [
+            "run-2:agent:step-1"
+        ]
+        assert "run-1" not in wf._handoff_reservations
 
     def test_clear_expired_cooldowns(self):
         wf = self._make_workflow()

@@ -107,6 +107,7 @@ MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-prepare-turn-instructions-activity-v1"
 )
 MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
+SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.Run (run.py:50).
@@ -125,6 +126,7 @@ _DEFAULT_SESSION_IMAGE_REF = os.environ.get(
     "WORKFLOW_JOB_IMAGE",
     "ghcr.io/moonladderstudios/moonmind:latest",
 )
+_SLOT_HANDOFF_TTL_SECONDS = 10
 
 
 def _request_selected_skill(request: AgentExecutionRequest) -> str | None:
@@ -169,6 +171,24 @@ def _request_step_ledger_context(
     if scope:
         context["scope"] = scope
     return context
+
+
+def _request_reserves_slot_for_immediate_followup(
+    request: AgentExecutionRequest,
+) -> bool:
+    """Return whether a successful run should reserve its slot for next step."""
+
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    metadata = parameters.get("metadata")
+    metadata_map = metadata if isinstance(metadata, Mapping) else {}
+    moonmind = metadata_map.get("moonmind")
+    moonmind_map = moonmind if isinstance(moonmind, Mapping) else {}
+    continuity = moonmind_map.get("slotContinuity")
+    continuity_map = continuity if isinstance(continuity, Mapping) else {}
+    return bool(
+        continuity_map.get("reserveForImmediateFollowup")
+        or continuity_map.get("hasImmediateManagedFollowup")
+    )
 
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
     # Preserve legacy workflow IDs for in-flight histories. New executions use
@@ -600,6 +620,10 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
         }
+        if workflow.patched(SLOT_HANDOFF_PATCH_ID):
+            lease_group_id = self._lease_group_id()
+            if lease_group_id:
+                signal_payload["lease_group_id"] = lease_group_id
         if execution_profile_ref:
             signal_payload["execution_profile_ref"] = execution_profile_ref
         if profile_selector:
@@ -720,6 +744,33 @@ class MoonMindAgentRun:
         if workflow.patched(PROVIDER_PROFILE_MANAGER_ID_PATCH):
             return workflow_id_for_runtime(runtime_id)
         return _legacy_manager_workflow_id(runtime_id)
+
+    def _lease_group_id(self) -> str | None:
+        parent_info = workflow.info().parent
+        if parent_info is None:
+            return None
+        return str(parent_info.workflow_id or "").strip() or None
+
+    def _release_slot_payload(
+        self,
+        *,
+        profile_id: str | None,
+        request: AgentExecutionRequest,
+        reserve_for_followup: bool = False,
+    ) -> dict[str, Any]:
+        payload = {
+            "requester_workflow_id": workflow.info().workflow_id,
+            "profile_id": profile_id,
+        }
+        if workflow.patched(SLOT_HANDOFF_PATCH_ID):
+            lease_group_id = self._lease_group_id()
+            if lease_group_id:
+                payload["lease_group_id"] = lease_group_id
+            if reserve_for_followup and _request_reserves_slot_for_immediate_followup(
+                request
+            ):
+                payload["handoff_ttl_seconds"] = _SLOT_HANDOFF_TTL_SECONDS
+        return payload
 
     @workflow.signal
     def completion_signal(self, result_dict: dict) -> None:
@@ -1179,20 +1230,35 @@ class MoonMindAgentRun:
                             "requester_workflow_id": wf_id,
                             "runtime_id": kw.get("runtime_id", runtime_id),
                         }
+                        if workflow.patched(SLOT_HANDOFF_PATCH_ID):
+                            lease_group_id = self._lease_group_id()
+                            if lease_group_id:
+                                payload["lease_group_id"] = lease_group_id
                         exact_profile_id = kw.get(
                             "execution_profile_ref", request.execution_profile_ref
                         )
                         if exact_profile_id:
                             payload["execution_profile_ref"] = exact_profile_id
                         if request.profile_selector:
-                            payload["profile_selector"] = request.profile_selector.model_dump(by_alias=True, exclude_none=True)
+                            payload["profile_selector"] = (
+                                request.profile_selector.model_dump(
+                                    by_alias=True,
+                                    exclude_none=True,
+                                )
+                            )
                         await manager_handle.signal("request_slot", payload)
 
                     async def _slot_releaser(**kw):
-                        await manager_handle.signal("release_slot", {
-                            "requester_workflow_id": wf_id,
-                            "profile_id": kw.get("profile_id", request.execution_profile_ref),
-                        })
+                        await manager_handle.signal(
+                            "release_slot",
+                            self._release_slot_payload(
+                                profile_id=kw.get(
+                                    "profile_id",
+                                    request.execution_profile_ref,
+                                ),
+                                request=request,
+                            ),
+                        )
 
                     async def _cooldown_reporter(**kw):
                         await manager_handle.signal("report_cooldown", {
@@ -1652,7 +1718,13 @@ class MoonMindAgentRun:
                 if elapsed >= timeout_seconds and not self.completion_event.is_set():
                     self.run_status = RunStatus.timed_out
                     if manager_handle and request.execution_profile_ref:
-                        await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                        await manager_handle.signal(
+                            "release_slot",
+                            self._release_slot_payload(
+                                profile_id=request.execution_profile_ref,
+                                request=request,
+                            ),
+                        )
                     return AgentRunResult(failure_class="execution_error")
 
                 if self.final_result is None:
@@ -1797,10 +1869,10 @@ class MoonMindAgentRun:
                         )
                         await manager_handle.signal(
                             "release_slot",
-                            {
-                                "requester_workflow_id": workflow.info().workflow_id,
-                                "profile_id": profile_id or request.execution_profile_ref,
-                            },
+                            self._release_slot_payload(
+                                profile_id=profile_id or request.execution_profile_ref,
+                                request=request,
+                            ),
                         )
                         self._awaiting_slot_reason_override = waiting_reason
                         self._slot_wait_timeout_override_seconds = max(
@@ -1812,18 +1884,37 @@ class MoonMindAgentRun:
                         self._assigned_profile_id = None
                         request.execution_profile_ref = requested_execution_profile_ref
                         self.run_status = RunStatus.awaiting_slot
-                        continue # Retries loop
+                        continue  # Retries loop
                     else:
-                        await manager_handle.signal("report_cooldown", {"profile_id": request.execution_profile_ref, "cooldown_seconds": 300})
-                        await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                        await manager_handle.signal(
+                            "report_cooldown",
+                            {
+                                "profile_id": request.execution_profile_ref,
+                                "cooldown_seconds": 300,
+                            },
+                        )
+                        await manager_handle.signal(
+                            "release_slot",
+                            self._release_slot_payload(
+                                profile_id=request.execution_profile_ref,
+                                request=request,
+                            ),
+                        )
                         self.completion_event.clear()
                         self.final_result = None
                         request.execution_profile_ref = requested_execution_profile_ref
-                        continue # Retries loop
+                        continue  # Retries loop
 
                 # Not a 429 or external agent
                 if manager_handle and request.execution_profile_ref:
-                    await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                    await manager_handle.signal(
+                        "release_slot",
+                        self._release_slot_payload(
+                            profile_id=request.execution_profile_ref,
+                            request=request,
+                            reserve_for_followup=True,
+                        ),
+                    )
 
                 self.final_result = self._enrich_result_metadata(
                     request=request,
@@ -1856,7 +1947,13 @@ class MoonMindAgentRun:
                     runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                     manager_id = self._manager_workflow_id(runtime_id)
                     manager_handle = workflow.get_external_workflow_handle(manager_id)
-                    await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                    await manager_handle.signal(
+                        "release_slot",
+                        self._release_slot_payload(
+                            profile_id=request.execution_profile_ref,
+                            request=request,
+                        ),
+                    )
                 except Exception:
                     self._get_logger().warning("Failed to release slot on timeout, which may lead to a leak.", exc_info=True)
             return AgentRunResult(failure_class="execution_error")
@@ -1872,7 +1969,13 @@ class MoonMindAgentRun:
                 async def _release_slot():
                     try:
                         manager_handle = workflow.get_external_workflow_handle(manager_id)
-                        await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                        await manager_handle.signal(
+                            "release_slot",
+                            self._release_slot_payload(
+                                profile_id=request.execution_profile_ref,
+                                request=request,
+                            ),
+                        )
                     except Exception:
                         # Errors are intentionally ignored to avoid masking the original cancellation
                         self._get_logger().warning("Failed to release slot on cancellation, which may lead to a leak.", exc_info=True)
@@ -1914,7 +2017,13 @@ class MoonMindAgentRun:
                 manager_id = self._manager_workflow_id(runtime_id)
                 try:
                     manager_handle = workflow.get_external_workflow_handle(manager_id)
-                    await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                    await manager_handle.signal(
+                        "release_slot",
+                        self._release_slot_payload(
+                            profile_id=request.execution_profile_ref,
+                            request=request,
+                        ),
+                    )
                 except Exception:
                     self._get_logger().warning("Failed to release slot on unexpected exception, which may lead to a leak.", exc_info=True)
             raise
