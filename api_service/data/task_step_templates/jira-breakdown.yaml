@@ -1,0 +1,54 @@
+slug: jira-breakdown
+title: Jira Breakdown
+description: Break a declarative design into MoonSpec story candidates, then create Jira Story issues from the generated breakdown.
+scope: global
+version: 1.0.0
+tags:
+  - jira
+  - moonspec
+  - breakdown
+  - stories
+requiredCapabilities:
+  - git
+annotations:
+  sourceSkill: moonspec-breakdown
+  output: jira
+inputs:
+  - name: feature_request
+    label: Declarative Design Path or Text
+    type: markdown
+    required: true
+  - name: jira_project_key
+    label: Jira Project Key
+    type: text
+    required: true
+    default: TOOL
+  - name: jira_issue_type
+    label: Jira Issue Type
+    type: text
+    required: true
+    default: Story
+steps:
+  - title: Break down declarative design
+    instructions: |-
+      Run moonspec-breakdown for this declarative design:
+
+      {{ inputs.feature_request }}
+
+      If the input is a readable repo path, use that file as the original declarative document and preserve its path in every story's sourceReference.
+      Write the coverage-checked story breakdown to the runtime-provided story breakdown paths.
+    skill:
+      id: moonspec-breakdown
+      args: {}
+      requiredCapabilities:
+        - git
+  - title: Create Jira stories
+    instructions: |-
+      Create one Jira {{ inputs.jira_issue_type }} issue in project {{ inputs.jira_project_key }} for each story from the generated MoonSpec breakdown.
+
+      Use the runtime-provided story breakdown JSON path.
+      Every Jira issue must include the Source Document path from the story breakdown.
+      Return the created Jira issue keys and URLs.
+    skill:
+      id: jira-issue-creator
+      args: {}

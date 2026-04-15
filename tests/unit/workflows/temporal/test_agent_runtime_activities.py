@@ -1685,12 +1685,14 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint() -> 
                     "instructions": "Create Jira stories from the breakdown.",
                     "selectedSkill": "jira-issue-creator",
                     "publishMode": "none",
+                    "storyBreakdownPath": "docs/tmp/story-breakdowns/demo/stories.json",
                 },
             },
         }
     )
 
     assert "MoonMind trusted Jira tools:" in result
+    assert "docs/tmp/story-breakdowns/demo/stories.json" in result
     assert "`$MOONMIND_URL`" in result
     assert "POST $MOONMIND_URL/mcp/tools/call" in result
     assert "jira.create_issue" in result

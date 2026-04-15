@@ -293,6 +293,52 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
     )
 
 
+def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Jira Breakdown",
+                "instructions": "Break down docs/Design.md into Jira stories.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "steps": [
+                    {
+                        "id": "breakdown",
+                        "tool": {"type": "skill", "name": "moonspec-breakdown"},
+                        "instructions": "Extract MoonSpec stories.",
+                    },
+                    {
+                        "id": "jira",
+                        "tool": {"type": "skill", "name": "jira-issue-creator"},
+                        "instructions": "Create Jira issues from the generated breakdown.",
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    breakdown = plan["nodes"][0]
+    jira = plan["nodes"][1]
+
+    assert breakdown["inputs"]["storyBreakdownPath"].startswith(
+        "docs/tmp/story-breakdowns/"
+    )
+    assert (
+        jira["inputs"]["storyBreakdownPath"]
+        == breakdown["inputs"]["storyBreakdownPath"]
+    )
+    assert jira["inputs"]["selectedSkill"] == "jira-issue-creator"
+    assert jira["inputs"]["publishMode"] == "none"
+
+
 def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

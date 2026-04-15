@@ -3123,9 +3123,16 @@ class TemporalAgentRuntimeActivities:
             return instructions
         if "MoonMind trusted Jira tools" in instructions:
             return instructions
+        story_breakdown_path = str(params.get("storyBreakdownPath") or "").strip()
+        story_breakdown_hint = (
+            f"- Read MoonSpec story candidates from `{story_breakdown_path}`.\n"
+            if story_breakdown_path
+            else ""
+        )
         return (
             instructions.rstrip()
             + "\n\nMoonMind trusted Jira tools:\n"
+            + story_breakdown_hint
             + "- Use the internal MoonMind API from the managed session via "
             + "`$MOONMIND_URL` for Jira operations; do not look for raw Jira "
             + "credentials in the shell.\n"

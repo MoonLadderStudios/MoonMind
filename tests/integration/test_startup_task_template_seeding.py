@@ -61,3 +61,19 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         assert "/moonspec-verify" in tasks_step["instructions"]
         assert "/speckit.verify" not in tasks_step["instructions"]
+
+        result = await session.execute(
+            select(TaskStepTemplate)
+            .where(
+                TaskStepTemplate.slug == "jira-breakdown",
+                TaskStepTemplate.scope_type == TaskTemplateScopeType.GLOBAL,
+                TaskStepTemplate.scope_ref.is_(None),
+            )
+            .options(selectinload(TaskStepTemplate.latest_version))
+        )
+        jira_template = result.scalar_one_or_none()
+        assert jira_template is not None
+        assert jira_template.latest_version is not None
+        assert [
+            step["skill"]["id"] for step in jira_template.latest_version.steps
+        ] == ["moonspec-breakdown", "jira-issue-creator"]
