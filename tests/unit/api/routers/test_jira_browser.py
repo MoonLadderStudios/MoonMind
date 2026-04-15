@@ -137,7 +137,7 @@ class _FakeJiraBrowserService:
             acceptanceCriteriaText="Given a board",
             recommendedImports=JiraIssueRecommendations(
                 presetInstructions="ENG-1: Build browser",
-                stepInstructions="Complete Jira story ENG-1",
+                stepInstructions="Complete Jira issue ENG-1",
             ),
         )
 
@@ -262,7 +262,7 @@ async def test_issue_detail_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowser
         response = await client.get("/api/jira/issues/eng-1?boardId=42&projectKey=ENG")
 
     assert response.status_code == 200
-    assert response.json()["recommendedImports"]["stepInstructions"] == "Complete Jira story ENG-1"
+    assert response.json()["recommendedImports"]["stepInstructions"] == "Complete Jira issue ENG-1"
     assert response.json()["column"] == {"id": "to-do", "name": "To Do"}
     assert service.calls == [
         (

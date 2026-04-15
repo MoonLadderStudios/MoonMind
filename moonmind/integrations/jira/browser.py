@@ -7,6 +7,7 @@ import logging
 import re
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, Generic, TypeVar
 from urllib.parse import urlparse
 
@@ -33,6 +34,12 @@ _JIRA_BROWSER_PAGE_SIZE = 50
 _ACCEPTANCE_HEADING_RE = re.compile(
     r"(?im)^\s*(acceptance\s+criteria|acceptance|ac)\s*:?\s*$"
 )
+
+
+@dataclass(frozen=True)
+class _JiraProjectScope:
+    keys: frozenset[str]
+    ids: frozenset[str]
 
 
 class JiraBrowserModel(BaseModel):
@@ -330,6 +337,11 @@ class JiraBrowserService:
                 client=client,
                 policy_project_key=normalized_project,
             )
+            project_scope = (
+                await self._fetch_project_scope(normalized_project, client=client)
+                if normalized_project is not None
+                else None
+            )
             issues_payload = await self._fetch_board_issues(
                 normalized_board_id,
                 client=client,
@@ -346,7 +358,11 @@ class JiraBrowserService:
         unmapped_items: list[JiraIssueSummary] = []
         filter_text = str(q or "").strip().lower()
         for raw_issue in issues_payload:
-            if not self._issue_matches_policy_scope(raw_issue, normalized_project):
+            if not self._issue_matches_policy_scope(
+                raw_issue,
+                normalized_project,
+                project_scope=project_scope,
+            ):
                 continue
             summary = self._normalize_issue_summary(raw_issue, status_to_column)
             if (
@@ -379,34 +395,36 @@ class JiraBrowserService:
     ) -> JiraIssueDetail:
         self._ensure_enabled()
         normalized_issue_key = self._normalize_issue_key(issue_key)
-        issue_project = self._project_from_issue_key(normalized_issue_key)
         normalized_project = self._normalize_project_key_optional(project_key)
-        self._ensure_project_allowed(issue_project)
         if normalized_project is not None:
             self._ensure_project_allowed(normalized_project)
-            if issue_project != normalized_project:
-                raise JiraToolError(
-                    "Project is not allowed by Jira policy.",
-                    code="jira_policy_denied",
-                    status_code=403,
-                    action="jira_browser.policy",
-                )
+        else:
+            self._ensure_project_allowed(
+                self._project_from_issue_key(normalized_issue_key)
+            )
         normalized_board_id = (
             self._normalize_board_id(board_id) if board_id is not None else None
         )
-        payload = await self._request_json(
-            method="GET",
-            path=f"/issue/{normalized_issue_key}",
-            action="jira_browser.get_issue",
-            params={
-                "fields": "*all",
-                "expand": "names",
-            },
-            context={"issueKey": normalized_issue_key},
-        )
         board_columns: list[JiraColumn] = []
-        if normalized_board_id is not None:
-            async with self._jira_client() as client:
+        async with self._jira_client() as client:
+            project_scope = (
+                await self._fetch_project_scope(normalized_project, client=client)
+                if normalized_project is not None
+                else None
+            )
+            payload = await self._request_json_with_client(
+                client,
+                method="GET",
+                path=f"/issue/{normalized_issue_key}",
+                action="jira_browser.get_issue",
+                params={
+                    "fields": "*all",
+                    "expand": "names",
+                },
+                context={"issueKey": normalized_issue_key},
+            )
+            self._ensure_issue_allowed_by_policy(payload, project_scope=project_scope)
+            if normalized_board_id is not None:
                 board_columns = (
                     await self._list_columns_with_client(
                         normalized_board_id,
@@ -667,7 +685,7 @@ class JiraBrowserService:
                 path=f"agile:/board/{board_id}/issue",
                 action="jira_browser.list_issues",
                 params={
-                    "fields": "summary,issuetype,status,assignee,updated",
+                    "fields": "summary,issuetype,status,assignee,updated,project",
                     "maxResults": _JIRA_BROWSER_PAGE_SIZE,
                     "startAt": start_at,
                 },
@@ -710,17 +728,111 @@ class JiraBrowserService:
                 action="jira_browser.policy",
             )
 
+    async def _fetch_project_scope(
+        self,
+        project_key: str,
+        *,
+        client: JiraClient,
+    ) -> _JiraProjectScope:
+        self._ensure_project_allowed(project_key)
+        payload = await self._request_json_with_client(
+            client,
+            method="GET",
+            path=f"/project/{project_key}",
+            action="jira_browser.get_project_scope",
+            context={"projectKey": project_key},
+        )
+        keys = {project_key.upper()}
+        ids: set[str] = set()
+        if isinstance(payload, Mapping):
+            payload_key = str(payload.get("key") or "").strip().upper()
+            payload_id = str(payload.get("id") or "").strip()
+            if payload_key:
+                keys.add(payload_key)
+            if payload_id:
+                ids.add(payload_id)
+        return _JiraProjectScope(keys=frozenset(keys), ids=frozenset(ids))
+
     def _issue_matches_policy_scope(
         self,
         payload: Mapping[str, Any],
         policy_project_key: str | None,
+        *,
+        project_scope: _JiraProjectScope | None = None,
     ) -> bool:
-        issue_key = str(payload.get("key") or "").strip().upper()
-        issue_project = self._project_from_issue_key(issue_key) if "-" in issue_key else ""
-        if policy_project_key is not None and issue_project != policy_project_key:
-            return False
+        if policy_project_key is not None:
+            scope = project_scope or _JiraProjectScope(
+                keys=frozenset({policy_project_key.upper()}),
+                ids=frozenset(),
+            )
+            return self._issue_matches_project_scope(payload, scope)
         allowed = self._allowed_projects()
-        return not allowed or issue_project in allowed
+        if not allowed:
+            return True
+        issue_keys, _issue_ids = self._issue_project_identifiers(payload)
+        return bool(issue_keys & allowed)
+
+    def _ensure_issue_allowed_by_policy(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        project_scope: _JiraProjectScope | None = None,
+    ) -> None:
+        if project_scope is not None:
+            if self._issue_matches_project_scope(payload, project_scope):
+                return
+            raise JiraToolError(
+                "Project is not allowed by Jira policy.",
+                code="jira_policy_denied",
+                status_code=403,
+                action="jira_browser.policy",
+            )
+
+        allowed = self._allowed_projects()
+        if not allowed:
+            return
+        issue_keys, _issue_ids = self._issue_project_identifiers(payload)
+        if issue_keys & allowed:
+            return
+        raise JiraToolError(
+            "Project is not allowed by Jira policy.",
+            code="jira_policy_denied",
+            status_code=403,
+            action="jira_browser.policy",
+        )
+
+    def _issue_matches_project_scope(
+        self,
+        payload: Mapping[str, Any],
+        project_scope: _JiraProjectScope,
+    ) -> bool:
+        issue_keys, issue_ids = self._issue_project_identifiers(payload)
+        return bool(
+            (issue_keys & project_scope.keys) or (issue_ids & project_scope.ids)
+        )
+
+    def _issue_project_identifiers(
+        self,
+        payload: Mapping[str, Any],
+    ) -> tuple[set[str], set[str]]:
+        fields = (
+            payload.get("fields") if isinstance(payload.get("fields"), Mapping) else {}
+        )
+        project = (
+            fields.get("project") if isinstance(fields.get("project"), Mapping) else {}
+        )
+        keys: set[str] = set()
+        ids: set[str] = set()
+        project_key = str(project.get("key") or "").strip().upper()
+        project_id = str(project.get("id") or "").strip()
+        if project_key:
+            keys.add(project_key)
+        if project_id:
+            ids.add(project_id)
+        issue_key = str(payload.get("key") or "").strip().upper()
+        if "-" in issue_key:
+            keys.add(self._project_from_issue_key(issue_key))
+        return keys, ids
 
     def _normalize_project(
         self,
@@ -896,7 +1008,7 @@ class JiraBrowserService:
         preset_parts = [f"{issue_key}: {summary}".strip()]
         if description_text:
             preset_parts.append(description_text)
-        step_parts = [f"Complete Jira story {issue_key}: {summary}".strip()]
+        step_parts = [f"Complete Jira issue {issue_key}: {summary}".strip()]
         if description_text:
             step_parts.append(f"Description\n{description_text}")
         if acceptance_text:
