@@ -84,6 +84,19 @@ MoonMind maps the managed session plane to Codex App Server concepts:
 
 `codex exec --json` remains a bring-up and smoke-test harness, not the primary long-lived session protocol.
 
+### 3.1 In-flight Live Output
+
+During `send_turn`, the container-side Codex runtime mirrors visible Codex rollout
+events into the managed-session artifact spool while the turn is still running.
+The mirrored stream includes assistant messages, tool-call markers, and tool-call
+outputs that Codex records in the rollout transcript. The managed-session
+supervisor tails that spool and publishes normalized `stdout`/`stderr` chunks into
+the run-global Live Logs sequence.
+
+The rollout transcript remains a container-local runtime cache. MoonMind does not
+present the raw transcript as durable operator truth; it converts selected visible
+entries into artifact-backed output and observability events.
+
 ## 4. Session Identity
 
 The canonical bounded session identity is:
@@ -101,6 +114,12 @@ Rules:
 3. `container_id` identifies the active Docker container for the task-scoped session.
 4. `thread_id` identifies the active Codex App Server thread for the current epoch.
 5. `active_turn_id` identifies the in-flight Codex turn when one exists.
+
+The managed-session supervisor reconciles `active_turn_id` from the
+container-written session state file while `send_turn` is still executing. This
+keeps operator-visible summaries and Live Logs headers truthful during long
+Codex turns, before the long-running `send_turn` activity returns a terminal
+response.
 
 ## 5. Control Actions
 

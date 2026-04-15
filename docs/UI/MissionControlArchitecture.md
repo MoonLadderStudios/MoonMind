@@ -385,7 +385,7 @@ Rules:
 
 For the task detail observability area (Live Logs panel), the correct fetch sequence is:
 
-1. `GET /api/task-runs/{id}/observability-summary` — fetch observability summary (run status, artifact refs, live stream availability)
+1. `GET /api/task-runs/{id}/observability-summary` — fetch observability summary (run status, artifact refs, live stream availability, and the freshest managed-session snapshot when present)
 2. `GET /api/task-runs/{id}/logs/merged` — fetch initial merged log tail; **initial content must be visible before any SSE connection is attempted**
 3. If the run is active and `supports_live_streaming: true`, attach to `GET /api/task-runs/{id}/logs/stream`
 4. If the stream connection fails or is unavailable, remain in artifact-backed mode — do not leave the panel blank
@@ -395,6 +395,7 @@ Rules:
 * ended runs must skip step 3 entirely; never attempt a live stream connection on a completed run
 * step 2 must always happen first and must always produce visible content when artifacts exist
 * stream failure at step 3 transitions the viewer to `error` state backed by artifact content
+* for Codex managed sessions, `activeTurnId` and related session header fields come from the managed-session record when it is fresher than the run record
 * this sequence replaces any legacy approach of connecting SSE first and loading content through the stream
 
 ---

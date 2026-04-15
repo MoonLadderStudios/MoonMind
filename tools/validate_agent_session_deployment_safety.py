@@ -45,7 +45,7 @@ def _repo_paths() -> list[str]:
     return sorted(set(tracked + untracked))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Validate AgentSession workflow deployment-safety gates."
     )
@@ -59,7 +59,7 @@ def main() -> int:
             "the intended feature artifacts."
         ),
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     playbook = REPO_ROOT / AGENT_SESSION_CUTOVER_PLAYBOOK_PATH
     playbook_text = playbook.read_text(encoding="utf-8") if playbook.exists() else ""

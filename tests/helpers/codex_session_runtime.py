@@ -19,6 +19,7 @@ def write_fake_app_server(
     resume_requires_existing_rollout_path: bool = False,
     start_thread_id: str = "vendor-thread-1",
     start_thread_path: str | None = "/tmp/vendor-thread-1.jsonl",
+    rollout_entries_on_read: list[dict] | None = None,
     steer_record_path: Path | None = None,
     interrupt_record_path: Path | None = None,
     codex_home_record_path: Path | None = None,
@@ -55,6 +56,7 @@ OMIT_TURNS_WHEN_INCOMPLETE = __OMIT_TURNS_WHEN_INCOMPLETE__
 ASSISTANT_TEXT = __ASSISTANT_TEXT__
 THREAD_STATUS_TYPE = __THREAD_STATUS_TYPE__
 THREAD_STATUS_REASON = __THREAD_STATUS_REASON__
+ROLLOUT_ENTRIES_ON_READ = __ROLLOUT_ENTRIES_ON_READ__
 turn_completed = False
 
 for line in sys.stdin:
@@ -208,6 +210,11 @@ __COMPLETION_BLOCK__
         sys.stdout.flush()
     elif method == "thread/read":
         thread_id = message["params"]["threadId"]
+        if START_THREAD_PATH and ROLLOUT_ENTRIES_ON_READ:
+            os.makedirs(os.path.dirname(START_THREAD_PATH), exist_ok=True)
+            with open(START_THREAD_PATH, "a", encoding="utf-8") as rollout_handle:
+                for rollout_entry in ROLLOUT_ENTRIES_ON_READ:
+                    rollout_handle.write(json.dumps(rollout_entry) + "\\n")
         turn_status = "completed" if turn_completed else "inProgress"
         turn_items = []
         if turn_completed:
@@ -294,6 +301,7 @@ __COMPLETION_BLOCK__
         .replace("__ASSISTANT_TEXT__", repr(assistant_text))
         .replace("__THREAD_STATUS_TYPE__", repr(thread_status_type))
         .replace("__THREAD_STATUS_REASON__", repr(thread_status_reason))
+        .replace("__ROLLOUT_ENTRIES_ON_READ__", repr(rollout_entries_on_read or []))
         .replace("__COMPLETION_BLOCK__", completion_block),
         encoding="utf-8",
     )

@@ -103,7 +103,7 @@ def test_validate_cli_main_includes_git_stderr_in_failure(monkeypatch, capsys) -
         lambda *, repo_root, active_feature: None,
     )
 
-    assert cli.main() == 1
+    assert cli.main([]) == 1
     captured = capsys.readouterr()
     assert "fatal: bad revision" in captured.err
     assert "merge-base failed" in captured.err

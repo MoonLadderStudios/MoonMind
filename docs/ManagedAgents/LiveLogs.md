@@ -165,6 +165,7 @@ Behavior:
 - upgrades to a live stream only when the run is active and live streaming is supported
 - shows provenance per row or chunk, including `stdout`, `stderr`, `system`, and session-plane events
 - shows the current session snapshot in the panel header: `session_id`, `session_epoch`, `container_id`, `thread_id`, and `active_turn_id` when available
+- for Codex managed sessions, receives in-flight rollout-derived output while `send_turn` is still running, including assistant messages, tool-call markers, and tool-call output
 - renders epoch boundaries and reset boundaries as explicit timeline banners rather than burying them as plain text
 - can reconnect from the last known `sequence`; resume is best-effort and artifacts remain the durable fallback
 - falls back to artifact-backed mode if live streaming is unavailable or reconnect fails
@@ -178,6 +179,7 @@ The merged Live Logs timeline should support at least these row types:
 - `system` annotations from MoonMind supervision
 - session lifecycle rows such as `session_started`, `session_resumed`, `session_cleared`, and `session_terminated`
 - turn lifecycle rows such as `turn_started`, `turn_completed`, and `turn_interrupted`
+- Codex managed-session output rows derived from visible rollout entries, normalized as `stdout`/`stderr` events rather than raw provider transcript records
 - approval rows such as `approval_requested` and `approval_resolved`
 - continuity publication rows such as `summary_published`, `checkpoint_published`, and `reset_boundary_published`
 

@@ -18,6 +18,7 @@ from .managed_session_store import ManagedSessionStore
 logger = logging.getLogger(__name__)
 
 _LOG_READ_CHUNK_BYTES = 64 * 1024
+_SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 
 
 class ArtifactStorageWriter(Protocol):
@@ -56,6 +57,10 @@ class ManagedSessionSupervisor:
     @staticmethod
     def _stderr_path(record: CodexManagedSessionRecord) -> Path:
         return Path(record.artifact_spool_path) / "stderr.log"
+
+    @staticmethod
+    def _session_state_path(record: CodexManagedSessionRecord) -> Path:
+        return Path(record.session_workspace_path) / _SESSION_STATE_FILENAME
 
     @staticmethod
     def _initial_stream_offsets(
@@ -155,6 +160,65 @@ class ManagedSessionSupervisor:
                 continue
         return emitted
 
+    @staticmethod
+    def _runtime_state_active_turn_id(
+        record: CodexManagedSessionRecord,
+    ) -> str | None:
+        state_path = ManagedSessionSupervisor._session_state_path(record)
+        try:
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if str(payload.get("sessionId") or "").strip() != record.session_id:
+            return None
+        if str(payload.get("containerId") or "").strip() != record.container_id:
+            return None
+        if str(payload.get("logicalThreadId") or "").strip() != record.thread_id:
+            return None
+        try:
+            session_epoch = int(payload.get("sessionEpoch"))
+        except (TypeError, ValueError):
+            return None
+        if session_epoch != record.session_epoch:
+            return None
+        last_turn_status = str(payload.get("lastTurnStatus") or "").strip().lower()
+        active_turn_id = str(payload.get("activeTurnId") or "").strip() or None
+        if active_turn_id and last_turn_status in {"accepted", "running"}:
+            return active_turn_id
+        return None
+
+    async def _sync_active_turn_state(
+        self,
+        record: CodexManagedSessionRecord,
+    ) -> CodexManagedSessionRecord:
+        active_turn_id = self._runtime_state_active_turn_id(record)
+        if not active_turn_id:
+            return record
+        if record.active_turn_id == active_turn_id and record.status == "busy":
+            return record
+
+        updated = await self._store.update(
+            record.session_id,
+            active_turn_id=active_turn_id,
+            status="busy",
+            updated_at=datetime.now(tz=UTC),
+        )
+        if record.active_turn_id != active_turn_id:
+            self.emit_session_event(
+                record=updated,
+                kind="turn_started",
+                text=f"Turn started: {active_turn_id}.",
+                turn_id=active_turn_id,
+                active_turn_id=active_turn_id,
+                metadata={
+                    "action": "send_turn",
+                    "source": "managed_session_runtime_state",
+                },
+            )
+        return updated
+
     def emit_session_event(
         self,
         *,
@@ -203,6 +267,7 @@ class ManagedSessionSupervisor:
             record = self._store.load(session_id)
             if record is None:
                 return
+            record = await self._sync_active_turn_state(record)
             emitted = self._publish_new_output_chunks(
                 record,
                 stream_offsets,
