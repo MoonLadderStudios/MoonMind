@@ -1211,6 +1211,13 @@ async def get_observability_summary(
 
         base = record.model_dump(by_alias=True)
         session_record = await asyncio.to_thread(_load_task_run_session_record, str(id))
+        if session_record is not None:
+            base["sessionId"] = session_record.session_id
+            base["sessionEpoch"] = session_record.session_epoch
+            base["containerId"] = session_record.container_id
+            base["threadId"] = session_record.thread_id
+            base["activeTurnId"] = session_record.active_turn_id
+            base["sessionStatus"] = session_record.status
         base["supportsLiveStreaming"] = supports_live
         base["liveStreamStatus"] = live_stream_status
         base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)

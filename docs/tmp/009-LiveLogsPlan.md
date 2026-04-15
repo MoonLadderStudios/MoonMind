@@ -169,7 +169,7 @@ Have the session plane publish passive lifecycle events into the same run-global
 
 ### Tasks
 
-- Add an observability sink/adapter at the session-plane boundary.
+- [x] Add an observability sink/adapter at the session-plane boundary.
 - For each stable session-plane action, emit a normalized `session` event:
   - `start_session`
   - `resume_session`
@@ -182,7 +182,7 @@ Have the session plane publish passive lifecycle events into the same run-global
 - Emit session events for major session lifecycle transitions:
   - session started
   - session resumed
-  - turn started
+  - [x] turn started while `send_turn` is still running
   - turn completed
   - turn interrupted
   - approval requested
@@ -192,9 +192,15 @@ Have the session plane publish passive lifecycle events into the same run-global
 - For `clear_session`, emit both:
   - a passive control event row, and
   - a dedicated `session_reset_boundary` row carrying the new epoch/thread info
-- Ensure each emitted session event includes the latest known session snapshot fields when available.
-- Update the managed session store/workflow adapter so the latest session snapshot is mirrored onto the run record or other summary source.
-- Sanity-check that session-plane publishing failures do not break runtime control or artifact persistence.
+- [x] Ensure emitted in-flight turn events include the latest known session snapshot fields when available.
+- [x] Update the managed session store/API summary path so the latest session snapshot is exposed even when the run record is stale.
+- [x] Sanity-check that session-plane publishing failures do not break runtime control or artifact persistence.
+
+Completed implementation note: Codex managed sessions now mirror selected visible
+rollout entries into the managed-session artifact spool during `send_turn`.
+The managed-session supervisor publishes those chunks into the run-global Live
+Logs sequence and reconciles `activeTurnId` from the container session state file
+while the long-running activity is still executing.
 
 ### Exit criteria
 

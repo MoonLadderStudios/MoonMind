@@ -14,7 +14,7 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
@@ -62,6 +62,15 @@ class _RolloutTurnScan:
     assistant_text: str = ""
     saw_task_complete: bool = False
     error_text: str | None = None
+
+
+@dataclass
+class _RolloutLiveMirror:
+    path: str | None = None
+    offset: int = 0
+    turn_started_at: float | None = None
+    emitted_assistant_texts: set[str] = field(default_factory=set)
+    emitted_live_keys: set[str] = field(default_factory=set)
 
 
 class CodexSessionRuntimeState(BaseModel):
@@ -725,6 +734,187 @@ class CodexManagedSessionRuntime:
             for raw_line in handle:
                 yield raw_line.decode("utf-8", errors="replace").strip()
 
+    def _new_rollout_live_mirror(
+        self,
+        state: CodexSessionRuntimeState,
+    ) -> _RolloutLiveMirror:
+        path = self._allowed_rollout_path(state.vendor_thread_path)
+        if path is None:
+            path = self._find_vendor_thread_path(state.vendor_thread_id)
+        offset = 0
+        if path is not None:
+            try:
+                offset = Path(path).stat().st_size
+            except OSError:
+                offset = 0
+        return _RolloutLiveMirror(path=path, offset=offset)
+
+    def _resolve_live_rollout_path(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        thread_payload: Mapping[str, Any],
+        mirror: _RolloutLiveMirror,
+    ) -> Path | None:
+        path = mirror.path
+        if path is None:
+            resolved = self._resolved_rollout_path(
+                state=state,
+                thread_payload=thread_payload,
+            )
+            if resolved is None:
+                return None
+            path = resolved
+            mirror.path = path
+            mirror.offset = 0
+        allowed = self._allowed_rollout_path(path)
+        if allowed is None:
+            mirror.path = None
+            mirror.offset = 0
+            return None
+        return Path(allowed)
+
+    @staticmethod
+    def _rollout_entry_live_key(
+        *,
+        stream_name: str,
+        label: str,
+        text: str,
+    ) -> str:
+        return f"{stream_name}\0{label}\0{text.strip()}"
+
+    @staticmethod
+    def _append_line_suffix(text: str) -> str:
+        return text if text.endswith("\n") else text + "\n"
+
+    @classmethod
+    def _rollout_entry_live_output(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> tuple[str, str, str] | None:
+        entry_type = str(payload.get("type") or "").strip().lower()
+        if entry_type == "response_item":
+            response_payload = payload.get("payload")
+            if not isinstance(response_payload, Mapping):
+                return None
+            response_type = str(response_payload.get("type") or "").strip().lower()
+            if response_type == "message":
+                role = str(response_payload.get("role") or "").strip().lower()
+                if role != "assistant":
+                    return None
+                text = cls._content_text(response_payload.get("content"))
+                if not text:
+                    return None
+                return "stdout", "assistant", f"assistant: {cls._append_line_suffix(text)}"
+            if response_type == "function_call":
+                name = str(response_payload.get("name") or "").strip()
+                if not name:
+                    return None
+                return "stdout", "tool_call", f"tool call: {name}\n"
+            if response_type == "function_call_output":
+                output = str(response_payload.get("output") or "")
+                if not output.strip():
+                    return None
+                return (
+                    "stdout",
+                    "tool_output",
+                    f"tool output:\n{cls._append_line_suffix(output)}",
+                )
+            return None
+        if entry_type == "event_msg":
+            event_payload = payload.get("payload")
+            if not isinstance(event_payload, Mapping):
+                return None
+            event_type = str(event_payload.get("type") or "").strip().lower()
+            if event_type == "agent_message":
+                text = str(event_payload.get("message") or "").strip()
+                if not text:
+                    return None
+                return "stdout", "assistant", f"assistant: {cls._append_line_suffix(text)}"
+            if event_type == "task_complete":
+                error_text = str(event_payload.get("error") or "").strip()
+                if error_text:
+                    return "stderr", "task_complete", f"task complete error: {error_text}\n"
+                return "stdout", "task_complete", "task complete\n"
+        return None
+
+    def _publish_rollout_live_updates(
+        self,
+        *,
+        state: CodexSessionRuntimeState,
+        vendor_turn_id: str,
+        thread_payload: Mapping[str, Any],
+        mirror: _RolloutLiveMirror,
+    ) -> None:
+        rollout_path = self._resolve_live_rollout_path(
+            state=state,
+            thread_payload=thread_payload,
+            mirror=mirror,
+        )
+        if rollout_path is None:
+            return
+        try:
+            current_size = rollout_path.stat().st_size
+        except OSError:
+            return
+        if current_size < mirror.offset:
+            mirror.offset = 0
+        if current_size <= mirror.offset:
+            return
+
+        try:
+            with rollout_path.open("rb") as handle:
+                handle.seek(mirror.offset)
+                for raw_line in handle:
+                    stripped = raw_line.decode("utf-8", errors="replace").strip()
+                    if not stripped:
+                        continue
+                    try:
+                        payload = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, Mapping):
+                        continue
+                    entry_timestamp = self._rollout_entry_timestamp(payload)
+                    references_turn = self._payload_references_turn(
+                        payload,
+                        vendor_turn_id,
+                    )
+                    if (
+                        mirror.turn_started_at is not None
+                        and (
+                            (
+                                entry_timestamp is not None
+                                and entry_timestamp
+                                < mirror.turn_started_at
+                                - _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS
+                            )
+                            or (entry_timestamp is None and not references_turn)
+                        )
+                    ):
+                        continue
+                    live_output = self._rollout_entry_live_output(payload)
+                    if live_output is None:
+                        continue
+                    stream_name, label, text = live_output
+                    live_key = self._rollout_entry_live_key(
+                        stream_name=stream_name,
+                        label=label,
+                        text=text,
+                    )
+                    if live_key in mirror.emitted_live_keys:
+                        continue
+                    mirror.emitted_live_keys.add(live_key)
+                    if label == "assistant":
+                        normalized_text = text.removeprefix("assistant: ").strip()
+                        if normalized_text in mirror.emitted_assistant_texts:
+                            continue
+                        mirror.emitted_assistant_texts.add(normalized_text)
+                    self._append_spool(stream_name, text)
+                mirror.offset = handle.tell()
+        except OSError:
+            return
+
     @classmethod
     def _assistant_text_from_rollout_entry(cls, payload: Mapping[str, Any]) -> str:
         entry_type = str(payload.get("type") or "").strip().lower()
@@ -987,13 +1177,21 @@ class CodexManagedSessionRuntime:
     def _wait_for_turn_completion(
         self,
         *,
+        state: CodexSessionRuntimeState,
         client: CodexAppServerRpcClient,
         vendor_thread_id: str,
         vendor_turn_id: str,
+        rollout_mirror: _RolloutLiveMirror,
     ) -> tuple[Mapping[str, Any], tuple[str, str | None]]:
         deadline = time.monotonic() + self._turn_completion_timeout_seconds
         while True:
             thread_payload = client.request("thread/read", {"threadId": vendor_thread_id})
+            self._publish_rollout_live_updates(
+                state=state,
+                vendor_turn_id=vendor_turn_id,
+                thread_payload=thread_payload,
+                mirror=rollout_mirror,
+            )
             turn_payload = self._find_turn_payload(
                 thread_payload,
                 vendor_turn_id=vendor_turn_id,
@@ -1132,6 +1330,7 @@ class CodexManagedSessionRuntime:
         status: str,
         assistant_text: str | None = None,
         error_text: str | None = None,
+        append_assistant_to_spool: bool = True,
     ) -> None:
         previous_status = state.last_turn_status
         state.active_turn_id = None
@@ -1141,7 +1340,12 @@ class CodexManagedSessionRuntime:
         if status == "completed":
             state.last_assistant_text = assistant_text or None
         self._save_state(state)
-        if status == "completed" and assistant_text and previous_status != "completed":
+        if (
+            append_assistant_to_spool
+            and status == "completed"
+            and assistant_text
+            and previous_status != "completed"
+        ):
             self._append_spool("stdout", f"assistant: {assistant_text}\n")
         if status in {"failed", "interrupted"} and error_text and previous_status != status:
             self._append_spool("stderr", f"turn {status}: {error_text}\n")
@@ -1293,6 +1497,7 @@ class CodexManagedSessionRuntime:
         client = self._app_server_client()
         client.initialize()
         vendor_thread_id = self._resume_thread(client=client, state=state)
+        rollout_mirror = self._new_rollout_live_mirror(state)
 
         started = client.request(
             "turn/start",
@@ -1319,13 +1524,16 @@ class CodexManagedSessionRuntime:
         state.last_turn_error = None
         state.last_control_action = "send_turn"
         state.last_control_at = time.time()
+        rollout_mirror.turn_started_at = state.last_control_at
         self._save_state(state)
         self._append_spool("stdout", f"turn started: {vendor_turn_id}\n")
         try:
             thread_payload, (status, error_text) = self._wait_for_turn_completion(
+                state=state,
                 client=client,
                 vendor_thread_id=vendor_thread_id,
                 vendor_turn_id=vendor_turn_id,
+                rollout_mirror=rollout_mirror,
             )
         except RuntimeError as exc:
             message = str(exc).strip()
@@ -1379,6 +1587,9 @@ class CodexManagedSessionRuntime:
             status=status,
             assistant_text=assistant_text,
             error_text=error_text,
+            append_assistant_to_spool=(
+                assistant_text.strip() not in rollout_mirror.emitted_assistant_texts
+            ),
         )
         return CodexManagedSessionTurnResponse(
             sessionState=self._session_state(state),

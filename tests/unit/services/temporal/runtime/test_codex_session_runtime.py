@@ -145,6 +145,98 @@ def test_runtime_send_turn_returns_terminal_completed_response(
     assert handle.metadata["lastAssistantText"] == "OK"
 
 
+def test_runtime_send_turn_mirrors_rollout_updates_to_stdout_spool(
+    tmp_path: Path,
+) -> None:
+    request = launch_request(tmp_path)
+    rollout_path = (
+        Path(request.codex_home_path)
+        / "sessions"
+        / "2026"
+        / "04"
+        / "15"
+        / "rollout-2026-04-15T06-04-58-vendor-thread-1.jsonl"
+    )
+    rollout_path.parent.mkdir(parents=True)
+    rollout_path.write_text("", encoding="utf-8")
+    script = write_fake_app_server(
+        tmp_path,
+        start_thread_path=str(rollout_path),
+        rollout_entries_on_read=[
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "exec_command",
+                    "arguments": "{}",
+                    "call_id": "call-1",
+                },
+            },
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call-1",
+                    "output": "live-output-works\n",
+                },
+            },
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "message": "Streaming update",
+                    "phase": "commentary",
+                },
+            },
+            {
+                "timestamp": _iso_timestamp(minutes_offset=0),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Streaming update"},
+                    ],
+                    "phase": "commentary",
+                },
+            },
+        ],
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+    runtime.launch_session(request)
+
+    response = runtime.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            instructions="Reply with exactly the word OK",
+        )
+    )
+
+    assert response.status == "completed"
+    stdout_text = (Path(request.artifact_spool_path) / "stdout.log").read_text(
+        encoding="utf-8"
+    )
+    assert "turn started: vendor-turn-1" in stdout_text
+    assert "tool call: exec_command" in stdout_text
+    assert "tool output:\nlive-output-works\n" in stdout_text
+    assert stdout_text.count("assistant: Streaming update\n") == 1
+
+
 def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_output(
     tmp_path: Path,
 ) -> None:

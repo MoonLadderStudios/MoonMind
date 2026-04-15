@@ -367,6 +367,57 @@ def test_get_observability_summary_preserves_active_record_snapshot_and_events_r
     }
 
 
+def test_get_observability_summary_prefers_fresh_session_record(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    run_id = uuid4()
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {
+        "status": "running",
+        "sessionId": "sess-stale",
+        "sessionEpoch": 1,
+        "containerId": "ctr-stale",
+        "threadId": "thread-stale",
+        "activeTurnId": None,
+    }
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    session_record = CodexManagedSessionRecord(
+        sessionId="sess-fresh",
+        sessionEpoch=2,
+        taskRunId=str(run_id),
+        containerId="ctr-fresh",
+        threadId="thread-fresh",
+        runtimeId="codex_cli",
+        imageRef="img",
+        controlUrl="docker-exec://ctr-fresh",
+        status="busy",
+        workspacePath="/work/repo",
+        sessionWorkspacePath="/work/session",
+        artifactSpoolPath="/work/artifacts",
+        activeTurnId="turn-fresh",
+        startedAt=datetime(2026, 4, 6, 12, 0, tzinfo=UTC),
+    )
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.task_runs._load_task_run_session_record",
+            return_value=session_record,
+        ):
+            response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+
+    assert response.status_code == 200
+    body = response.json()["summary"]
+    assert body["sessionId"] == "sess-fresh"
+    assert body["sessionEpoch"] == 2
+    assert body["containerId"] == "ctr-fresh"
+    assert body["threadId"] == "thread-fresh"
+    assert body["activeTurnId"] == "turn-fresh"
+    assert body["sessionStatus"] == "busy"
+    assert body["sessionSnapshot"]["activeTurnId"] == "turn-fresh"
+
+
 def test_get_observability_summary_live_stream_ended_for_terminal_run(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
