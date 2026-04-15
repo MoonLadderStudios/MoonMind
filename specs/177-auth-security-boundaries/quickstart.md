@@ -5,7 +5,7 @@
 Run the targeted MM-335 unit checks:
 
 ```bash
-./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/workloads/test_workload_models.py tests/unit/workloads/test_docker_launcher.py
+./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py
 ```
 
 Expected evidence:

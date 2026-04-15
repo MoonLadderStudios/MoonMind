@@ -11,7 +11,7 @@
 
 **Test Commands**:
 
-- Unit tests: `./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/workloads/test_workload_models.py tests/unit/workloads/test_docker_launcher.py`
+- Unit tests: `./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py`
 - Integration tests: `./tools/test_integration.sh` only if Temporal workflow/activity boundaries change
 - Final verification: `/moonspec-verify`
 
@@ -61,8 +61,8 @@
 
 - [X] T006 [P] Add failing unit tests for provider-profile management authorization and sanitized responses covering FR-003/FR-004/FR-005/SC-002/DESIGN-REQ-018/019 in `tests/unit/api_service/api/routers/test_provider_profiles.py`
 - [X] T007 [P] Add failing unit tests for OAuth session sanitized failure responses covering FR-003/FR-004/SC-001/DESIGN-REQ-009/019 in `tests/unit/api_service/api/routers/test_oauth_sessions.py`
-- [X] T008 [P] Add failing unit tests for workload auth-volume fail-closed validation covering FR-006/FR-007/SC-003/SC-004/DESIGN-REQ-008/022 in `tests/unit/workloads/test_workload_models.py`
-- [X] T009 [P] Add failing unit tests for workload artifact/result redaction covering FR-001/FR-002/FR-008/FR-009/SC-001/DESIGN-REQ-009/017/021 in `tests/unit/workloads/test_docker_launcher.py`
+- [X] T008 [P] Add failing unit tests for workload auth-volume fail-closed validation covering FR-006/FR-007/SC-003/SC-004/DESIGN-REQ-008/022 in `tests/unit/workloads/test_workload_contract.py`
+- [X] T009 [P] Add failing unit tests for workload artifact/result redaction covering FR-001/FR-002/FR-008/FR-009/SC-001/DESIGN-REQ-009/017/021 in `tests/unit/workloads/test_docker_workload_launcher.py`
 - [X] T010 Run targeted unit tests to confirm T006-T009 fail for expected reasons
 
 ### Integration Tests (write first)

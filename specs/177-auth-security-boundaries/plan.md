@@ -77,8 +77,8 @@ tests/
 │   ├── api_service/api/routers/test_oauth_sessions.py
 │   ├── api_service/api/routers/test_provider_profiles.py
 │   └── workloads/
-│       ├── test_docker_launcher.py
-│       └── test_workload_models.py
+│       ├── test_docker_workload_launcher.py
+│       └── test_workload_contract.py
 └── integration/
     └── services/temporal/workflows/
 ```
