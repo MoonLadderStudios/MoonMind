@@ -54,5 +54,6 @@ def test_inventory_preserves_existing_temporal_names() -> None:
     assert ("workflow", "MoonMind.AgentSession", "MoonMind.AgentSession") in names
     assert ("continue_as_new", "MoonMind.AgentSession", "MoonMind.AgentSession") in names
     assert ("activity", "artifact", "artifact.read") in names
+    assert ("query", "MoonMind.AgentSession", "get_status") in names
     assert ("update", "MoonMind.AgentSession", "SendFollowUp") in names
     assert ("signal", "MoonMind.Run", "DependencyResolved") in names

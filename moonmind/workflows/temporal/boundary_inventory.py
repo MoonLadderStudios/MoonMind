@@ -174,7 +174,7 @@ _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
     ),
     TemporalBoundaryContract(
         kind="query",
-        name="snapshot",
+        name="get_status",
         owner="MoonMind.AgentSession",
         requestModel=_model(
             module=_MANAGED_SESSION_MODELS,
@@ -238,13 +238,13 @@ _INVENTORY = TemporalBoundaryInventory(
 def get_temporal_boundary_inventory() -> TemporalBoundaryInventory:
     """Return the deterministic MM-327 Temporal boundary inventory."""
 
-    return _INVENTORY
+    return _INVENTORY.model_copy(deep=True)
 
 
 def iter_temporal_boundary_contracts() -> tuple[TemporalBoundaryContract, ...]:
     """Return covered Temporal boundary contracts in deterministic order."""
 
-    return _INVENTORY.contracts
+    return tuple(contract.model_copy(deep=True) for contract in _INVENTORY.contracts)
 
 
 __all__ = [
