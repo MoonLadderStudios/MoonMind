@@ -53,6 +53,10 @@ _SENSITIVE_ENV_KEY_PATTERN = re.compile(
     r"(?i)(?:token|secret|password|key|credential|auth)"
 )
 _GIT_COMMAND_LOCALE = {"LC_ALL": "C", "LANG": "C"}
+_GITHUB_TOKEN_GIT_CREDENTIAL_HELPER = (
+    '!f() { test "$1" = get || exit 0; '
+    'echo username=x-access-token; echo password="$GITHUB_TOKEN"; }; f'
+)
 _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 _CONTAINER_LOG_EXCERPT_TAIL_LINES = 40
 _CONTAINER_LOG_EXCERPT_MAX_CHARS = 2000
@@ -542,19 +546,48 @@ class DockerCodexManagedSessionController:
             rendered_command, rendered_detail = self._scrub_command_failure(
                 command,
                 stderr.strip() or stdout.strip(),
+                extra_env=extra_env,
             )
             raise RuntimeError(
                 f"{rendered_command} failed with exit code {returncode}: {rendered_detail}"
             )
         return stdout, stderr
 
+    @staticmethod
+    def _git_host_environment(
+        request: LaunchCodexManagedSessionRequest | None = None,
+    ) -> dict[str, str]:
+        env = dict(_GIT_COMMAND_LOCALE)
+        request_env = request.environment if request is not None else {}
+        token = str(request_env.get("GITHUB_TOKEN") or "").strip()
+        if token:
+            env["GITHUB_TOKEN"] = token
+            env["GIT_TERMINAL_PROMPT"] = str(
+                request_env.get("GIT_TERMINAL_PROMPT") or "0"
+            )
+            # Avoid depending on persistent per-user gh setup in the worker. The
+            # clone happens before the managed agent container starts.
+            env["GIT_CONFIG_COUNT"] = "2"
+            env["GIT_CONFIG_KEY_0"] = "credential.https://github.com.helper"
+            env["GIT_CONFIG_VALUE_0"] = ""
+            env["GIT_CONFIG_KEY_1"] = "credential.https://github.com.helper"
+            env["GIT_CONFIG_VALUE_1"] = _GITHUB_TOKEN_GIT_CREDENTIAL_HELPER
+            return env
+
+        terminal_prompt = str(request_env.get("GIT_TERMINAL_PROMPT") or "").strip()
+        if terminal_prompt:
+            env["GIT_TERMINAL_PROMPT"] = terminal_prompt
+        return env
+
     async def _run_git_host_command(
         self,
         command: Sequence[str],
+        *,
+        request: LaunchCodexManagedSessionRequest | None = None,
     ) -> tuple[str, str]:
         return await self._run_host_command(
             command,
-            extra_env=_GIT_COMMAND_LOCALE,
+            extra_env=self._git_host_environment(request),
             run_as_managed_session_user=True,
         )
 
@@ -576,11 +609,13 @@ class DockerCodexManagedSessionController:
     async def _git_command_result(
         self,
         command: Sequence[str],
+        *,
+        request: LaunchCodexManagedSessionRequest | None = None,
     ) -> tuple[int, str, str]:
         command_kwargs = self._managed_session_user_command_kwargs()
         return await self._command_runner(
             tuple(command),
-            env=dict(_GIT_COMMAND_LOCALE),
+            env=self._git_host_environment(request),
             **command_kwargs,
         )
 
@@ -626,7 +661,7 @@ class DockerCodexManagedSessionController:
         if branch:
             clone_command.extend(["--branch", branch, "--single-branch"])
         clone_command.extend([source, str(workspace_path)])
-        await self._run_git_host_command(clone_command)
+        await self._run_git_host_command(clone_command, request=request)
         self._normalize_container_path_ownership((workspace_path,))
 
     @staticmethod
@@ -741,15 +776,23 @@ class DockerCodexManagedSessionController:
                 target_branch,
             )
         )
-        returncode, stdout, stderr = await self._git_command_result(checkout_command)
+        returncode, stdout, stderr = await self._git_command_result(
+            checkout_command,
+            request=request,
+        )
         if returncode == 0:
             return
 
         failure_detail = stderr or stdout
         if not self._branch_missing_checkout_failure(failure_detail):
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                checkout_command,
+                stderr.strip() or stdout.strip(),
+                extra_env=self._git_host_environment(request),
+            )
             raise RuntimeError(
-                f"{' '.join(checkout_command)} failed with exit code {returncode}: "
-                f"{stderr.strip() or stdout.strip()}"
+                f"{rendered_command} failed with exit code {returncode}: "
+                f"{rendered_detail}"
             )
 
         fetch_command = self._workspace_git_command(
@@ -759,7 +802,8 @@ class DockerCodexManagedSessionController:
             target_branch,
         )
         fetch_returncode, fetch_stdout, fetch_stderr = await self._git_command_result(
-            fetch_command
+            fetch_command,
+            request=request,
         )
         if fetch_returncode == 0:
             await self._run_git_host_command(
@@ -769,15 +813,21 @@ class DockerCodexManagedSessionController:
                     "-B",
                     target_branch,
                     f"origin/{target_branch}",
-                )
+                ),
+                request=request,
             )
             return
 
         fetch_detail = fetch_stderr or fetch_stdout
         if not self._remote_branch_missing_failure(fetch_detail):
+            rendered_command, rendered_detail = self._scrub_command_failure(
+                fetch_command,
+                fetch_stderr.strip() or fetch_stdout.strip(),
+                extra_env=self._git_host_environment(request),
+            )
             raise RuntimeError(
-                f"{' '.join(fetch_command)} failed with exit code {fetch_returncode}: "
-                f"{fetch_stderr.strip() or fetch_stdout.strip()}"
+                f"{rendered_command} failed with exit code {fetch_returncode}: "
+                f"{rendered_detail}"
             )
 
         await self._run_git_host_command(
@@ -786,7 +836,8 @@ class DockerCodexManagedSessionController:
                 "checkout",
                 "-b",
                 target_branch,
-            )
+            ),
+            request=request,
         )
 
     @staticmethod
