@@ -764,10 +764,24 @@ class TemporalExecutionService:
                 else_=1,
             ).asc(),
             case(
-                (TemporalExecutionRecord.scheduled_for.is_(None), 1),
+                (
+                    (
+                        TemporalExecutionCanonicalRecord.state
+                        == MoonMindWorkflowState.SCHEDULED
+                    )
+                    & TemporalExecutionRecord.scheduled_for.is_(None),
+                    1,
+                ),
                 else_=0,
             ).asc(),
-            TemporalExecutionRecord.scheduled_for.desc(),
+            case(
+                (
+                    TemporalExecutionCanonicalRecord.state
+                    == MoonMindWorkflowState.SCHEDULED,
+                    TemporalExecutionRecord.scheduled_for,
+                ),
+                else_=None,
+            ).desc(),
             func.coalesce(
                 TemporalExecutionRecord.updated_at,
                 TemporalExecutionCanonicalRecord.updated_at,

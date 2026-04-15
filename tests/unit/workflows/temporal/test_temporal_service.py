@@ -2600,11 +2600,13 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
         older_updated_at = datetime(2026, 3, 6, 12, 0, tzinfo=UTC)
         newer_updated_at = datetime(2026, 3, 6, 12, 5, tzinfo=UTC)
         tied_updated_at = datetime(2026, 3, 6, 12, 3, tzinfo=UTC)
-        for workflow_id, updated_at in {
-            older.workflow_id: older_updated_at,
-            newer.workflow_id: newer_updated_at,
-            tied_a.workflow_id: tied_updated_at,
-            tied_b.workflow_id: tied_updated_at,
+        older_scheduled_for = datetime(2026, 3, 8, 12, 0, tzinfo=UTC)
+        newer_scheduled_for = datetime(2026, 3, 7, 12, 0, tzinfo=UTC)
+        for workflow_id, (updated_at, scheduled_for) in {
+            older.workflow_id: (older_updated_at, older_scheduled_for),
+            newer.workflow_id: (newer_updated_at, newer_scheduled_for),
+            tied_a.workflow_id: (tied_updated_at, None),
+            tied_b.workflow_id: (tied_updated_at, None),
         }.items():
             source = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
             projection = await session.get(TemporalExecutionRecord, workflow_id)
@@ -2614,6 +2616,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
             source.search_attributes["mm_updated_at"] = updated_at.isoformat()
             projection.updated_at = updated_at
             projection.search_attributes["mm_updated_at"] = updated_at.isoformat()
+            projection.scheduled_for = scheduled_for
         await session.commit()
 
         listed = await service.list_executions(
