@@ -205,6 +205,26 @@ def test_registry_rejects_env_key_outside_profile_allowlist(tmp_path: Path) -> N
     }
 
 
+def test_registry_rejects_auth_like_profile_mounts_even_when_read_only(
+    tmp_path: Path,
+) -> None:
+    profile = _profile_payload(
+        optional_mounts=[
+            {
+                "type": "volume",
+                "source": "codex_auth_volume",
+                "target": "/work/codex-auth",
+                "read_only": True,
+            }
+        ]
+    )
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(json.dumps({"profiles": [profile]}), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="explicit workload credential declaration"):
+        RunnerProfileRegistry.load_file(registry_path, workspace_root=WORKSPACE_ROOT)
+
+
 def test_registry_rejects_workspace_paths_outside_workspace_root(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 

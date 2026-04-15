@@ -190,7 +190,10 @@ class WorkloadMount(BaseModel):
         if _VOLUME_NAME_PATTERN.match(self.source) is None:
             raise ValueError("mount source must be a Docker named volume")
         if _AUTH_VOLUME_PATTERN.search(self.source):
-            raise ValueError("auth volumes must not be mounted into workload containers")
+            raise ValueError(
+                "auth volumes require an explicit workload credential declaration "
+                "with justification and must not be mounted implicitly"
+            )
         if not _is_safe_absolute_profile_path(self.target):
             raise ValueError("mount target must be an absolute safe path")
         return self
