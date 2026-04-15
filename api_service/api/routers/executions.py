@@ -616,7 +616,8 @@ def _serialize_execution(
         else None
     )
 
-    created_at = getattr(record, "created_at", None) or record.started_at
+    started_at = getattr(record, "started_at", None)
+    created_at = getattr(record, "created_at", None) or started_at or record.updated_at
     scheduled_for = getattr(record, "scheduled_for", None) or created_at
 
     return ExecutionModel(
@@ -708,7 +709,7 @@ def _serialize_execution(
         failed_dependency_id=failed_dependency_id,
         blocked_on_dependencies=raw_state == "waiting_on_dependencies",
         dependency_outcomes=dependency_outcomes,
-        started_at=record.started_at,
+        started_at=started_at,
         updated_at=record.updated_at,
         closed_at=record.closed_at,
         detail_href=f"/tasks/{record.workflow_id}",
@@ -2349,7 +2350,11 @@ async def list_executions(
                             if item.state == MoonMindWorkflowState.SCHEDULED.value
                             else 1
                         ),
-                        item.scheduled_for or datetime.max.replace(tzinfo=UTC),
+                        (
+                            item.scheduled_for
+                            if item.state == MoonMindWorkflowState.SCHEDULED.value
+                            else datetime.max.replace(tzinfo=UTC)
+                        ),
                         -(item.updated_at.timestamp() if item.updated_at else 0),
                         item.workflow_id,
                     )
