@@ -3,7 +3,30 @@
 **Feature Branch**: `175-temporal-payload-policy`
 **Created**: 2026-04-15
 **Status**: Draft
-**Input**: MM-330: Move binary and large Temporal payloads to explicit serializers or artifacts. User Story: As a MoonMind operator, I need Temporal histories to carry only intentional compact payloads and artifact references so large diagnostics, transcripts, summaries, checkpoints, binary data, and special JSON fields do not bloat histories or depend on accidental encoder behavior. Source Document: `docs/Temporal/TemporalTypeSafety.md`; Source Sections: 9 Binary, large payload, and serialization policy; 12 Approved escape hatches. Coverage IDs: DESIGN-REQ-017, DESIGN-REQ-019. Story Metadata: STORY-004, short name `temporal-payload-policy`; Breakdown JSON: `docs/tmp/story-breakdowns/breakdown-docs-temporal-temporaltypesafety-md-in-9e0bd9a2/stories.json`.
+**Input**: Jira issue MM-330 on TOOL board. Original Jira preset brief:
+
+```text
+MM-330: MM-316: Move binary and large Temporal payloads to explicit serializers or artifacts
+
+User Story
+As a MoonMind operator, I need Temporal histories to carry only intentional compact payloads and artifact references so large diagnostics, transcripts, summaries, checkpoints, binary data, and special JSON fields do not bloat histories or depend on accidental encoder behavior.
+
+Source Document
+docs/Temporal/TemporalTypeSafety.md
+
+Source Sections
+- 9 Binary, large payload, and serialization policy
+- 12 Approved escape hatches
+
+Coverage IDs
+- DESIGN-REQ-017
+- DESIGN-REQ-019
+
+Story Metadata
+- Story ID: STORY-004
+- Short name: temporal-payload-policy
+- Breakdown JSON: docs/tmp/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json
+```
 
 ## User Story & Testing
 

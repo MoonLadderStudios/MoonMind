@@ -11,7 +11,8 @@ Add a reusable compact Temporal mapping validator and apply it to the existing T
 **Language/Version**: Python 3.12
 **Primary Dependencies**: Pydantic v2, Temporal Python SDK
 **Storage**: Existing artifact refs only; no new storage
-**Testing**: `./tools/test_unit.sh` for final verification; focused pytest during iteration
+**Unit Testing**: Focused schema tests during iteration; `./tools/test_unit.sh` for final required unit-suite verification.
+**Integration Testing**: No new compose-backed integration fixture is required because this story changes schema-level Temporal payload contracts only; if workflow/activity invocation code changes while implementing this story, run `./tools/test_integration.sh` to cover hermetic Temporal boundaries.
 **Source Design**: `docs/Temporal/TemporalTypeSafety.md` sections 9 and 12
 
 ## Constitution Check
@@ -48,6 +49,7 @@ tests/schemas/test_temporal_activity_models.py
 2. Apply the validator to Temporal-facing `metadata` and `providerSummary` fields that function as approved escape hatches.
 3. Add schema tests that prove rejection of raw bytes/large bodies and acceptance of compact artifact refs.
 4. Re-run existing explicit binary serializer tests to confirm `Base64Bytes` behavior remains intact.
+5. Run the full required unit suite; run hermetic integration only if the implementation expands from schema models into workflow/activity invocation wiring.
 
 ## Complexity Tracking
 
