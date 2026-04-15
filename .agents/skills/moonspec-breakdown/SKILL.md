@@ -1,6 +1,6 @@
 ---
 name: moonspec-breakdown
-description: Extract coverage-checked, independently testable Moon Spec user stories from a technical or declarative design and write a breakdown handoff under docs/tmp. Use when the user asks to run or reproduce `/speckit.breakdown`, split a broad design into one-story candidates, preserve source coverage, or build a coverage matrix before `/speckit.specify`.
+description: Extract coverage-checked, independently testable Moon Spec user stories from a technical or declarative design and write breakdown output under docs/tmp. Use when the user asks to run or reproduce `/speckit.breakdown`, split a broad design into one-story candidates, preserve source coverage, or build a coverage matrix before `/speckit.specify`.
 ---
 
 # MoonSpec Breakdown
@@ -25,7 +25,7 @@ Do not use this skill for a single natural-language feature request. Use `moonsp
 - Treat the user's request text as the source design unless it names a readable file path.
 - If a file path is provided, resolve it relative to the repo root unless it is absolute, then read it before extracting stories.
 - If no design text or readable design path is provided, stop with: `ERROR "No technical design provided"`.
-- Preserve the original design text verbatim in the breakdown handoff so later `/speckit.specify` output can keep it in `spec.md` `**Input**`.
+- Preserve the original design text verbatim in the breakdown output so later `/speckit.specify` output can keep it in `spec.md` `**Input**`.
 - Preserve the source document reference path whenever the source design came from a file. Use the repo-relative path when possible; otherwise use the absolute path provided by the user. This reference is required downstream so every Jira story can point back to the original declarative document.
 - Do not implement, plan, generate tasks, create Jira issues, create `spec.md`, or create directories under `specs/`.
 
@@ -127,7 +127,6 @@ For each story, define:
 - Dependencies.
 - Risks or open questions.
 - Owned `DESIGN-REQ-*` coverage points.
-- A short handoff paragraph suitable for a generated one-story `spec.md`.
 
 ### 4. Normalize And Order Stories
 
@@ -158,7 +157,7 @@ After the coverage gate passes, write story candidates under `docs/tmp/story-bre
 
 Use the explicit `storyBreakdownPath` and `storyBreakdownMarkdownPath` values from the prompt when present. If they are not present, create a timestamped folder under `docs/tmp/story-breakdowns/<short-name>-<YYYYMMDD-HHMMSS>/` and write:
 
-- `stories.json`: machine-readable handoff for Jira issue creation or later specify.
+- `stories.json`: machine-readable breakdown output for Jira issue creation or later specify.
 - `stories.md`: human-readable summary.
 
 Never name any breakdown output `spec.md`. Never write to `specs/` during breakdown.
@@ -247,8 +246,8 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 ## Key Rules
 
 - One breakdown story candidate equals one future `spec.md`.
-- Preserve the original technical or declarative design verbatim in the breakdown handoff for later specify.
-- Every story candidate must carry a `sourceReference.path` back to the original declarative document when the source came from a file, and the story handoff paragraph must mention that path.
+- Preserve the original technical or declarative design verbatim in the breakdown output for later specify.
+- Every story candidate must carry a `sourceReference.path` back to the original declarative document when the source came from a file.
 - Prefer vertical user or operational outcomes over technical-layer slices.
 - Extract stable `DESIGN-REQ-*` coverage points before drafting story candidates.
 - Do not write specs in this skill.
