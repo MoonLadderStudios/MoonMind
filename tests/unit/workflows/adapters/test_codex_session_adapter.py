@@ -570,6 +570,104 @@ async def test_start_fails_jira_issue_creator_when_no_issues_created(
     assert persisted_record.failure_class == "execution_error"
 
 
+async def test_start_allows_jira_issue_creator_mixed_output_with_created_issue_keys(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    assistant_text = (
+        "An earlier attempt reported that no Jira issues were created.\n\n"
+        "Created issue keys:\n"
+        "- PROJ-1\n"
+        "- PROJ-2"
+    )
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _session_status(_locator: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
+        return _turn_response(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+            assistant_text=assistant_text,
+        )
+
+    async def _fetch_summary(_request: Any) -> CodexManagedSessionSummary:
+        return _summary(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+            last_assistant_text=assistant_text,
+        )
+
+    async def _publish_artifacts(_request: Any) -> CodexManagedSessionArtifactsPublication:
+        return _publication(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=_session_status,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_fetch_summary,
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+    request = _request(binding, workspace_path=str(workspace_path))
+    request.parameters["selectedSkill"] = "jira-issue-creator"
+
+    handle = await adapter.start(request)
+    result = await adapter.fetch_result(handle.run_id)
+
+    persisted_record = run_store.load(binding.task_run_id)
+    assert handle.status == "completed"
+    assert persisted_record is not None
+    assert persisted_record.status == "completed"
+    assert persisted_record.failure_class is None
+    assert result.failure_class is None
+    assert result.summary == assistant_text
+
+
 async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path) -> None:
     binding = _binding()
     workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"

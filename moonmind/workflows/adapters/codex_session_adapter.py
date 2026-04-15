@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -95,6 +96,12 @@ PublishArtifactsFunc = Callable[
 ]
 
 _MAX_AGENT_RUN_RESULT_SUMMARY_CHARS = 4096
+_JIRA_CREATED_ISSUE_KEYS_PATTERN = re.compile(
+    r"\b(?:created\s+(?:jira\s+)?(?:issues?|stories?|tickets?)|"
+    r"created\s+(?:issue\s+)?keys?|issue\s+keys?\s+created)\b"
+    r"[\s\S]{0,240}?\b[A-Z][A-Z0-9]+-\d+\b",
+    re.IGNORECASE,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -121,6 +128,8 @@ def _jira_issue_creator_blocker_summary(
         return None
     normalized = " ".join(str(assistant_text or "").lower().split())
     if not normalized:
+        return None
+    if _JIRA_CREATED_ISSUE_KEYS_PATTERN.search(str(assistant_text or "")):
         return None
     blocker_markers = (
         "no jira issues were created",
