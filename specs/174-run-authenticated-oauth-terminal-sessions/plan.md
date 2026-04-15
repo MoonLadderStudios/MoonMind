@@ -36,8 +36,8 @@
 
 ## Test Strategy
 
-- Unit: targeted pytest tests for schemas/router behavior, activity metadata persistence, terminal authorization helper behavior, and runner stop behavior.
-- Integration: existing Temporal OAuth workflow tests cover workflow success and cancellation locally; not marked `integration_ci` due Temporal test-server timeout policy.
+- Unit: targeted pytest tests for schemas/router behavior, activity metadata persistence, terminal authorization helper behavior, provider bootstrap command selection, and runner stop behavior.
+- Integration: Temporal OAuth workflow tests cover workflow success, cancellation, and externally observed failure locally; not marked `integration_ci` due Temporal test-server timeout policy.
 
 ## Risks
 

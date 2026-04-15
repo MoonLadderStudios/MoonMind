@@ -10,5 +10,5 @@
 Targeted verification:
 
 ```bash
-python -m pytest tests/unit/auth/test_oauth_session_activities.py tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/api_service/api/test_oauth_terminal_websocket.py -q
+python -m pytest tests/unit/auth/test_oauth_session_activities.py tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/api_service/api/test_oauth_terminal_websocket.py tests/integration/temporal/test_oauth_session.py -q
 ```
