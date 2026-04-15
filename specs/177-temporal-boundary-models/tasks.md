@@ -42,13 +42,13 @@
 - [X] T007 Implement strict boundary inventory schema models in `moonmind/schemas/temporal_boundary_models.py` (FR-002, FR-003, FR-004)
 - [X] T008 Implement deterministic MM-327 boundary inventory in `moonmind/workflows/temporal/boundary_inventory.py` (FR-001, FR-002, FR-003, FR-005, FR-006, FR-008)
 - [X] T009 Add docs/tmp migration tracker for compatibility-sensitive and incomplete boundary modeling in `docs/tmp/177-TemporalBoundaryModels.md` (FR-007, SC-004)
-- [X] T010 Run focused unit and integration boundary tests until they pass (SC-001, SC-002, SC-003)
+- [X] T010 Run focused unit and integration boundary tests and validate the single story until they pass in `tests/unit/schemas/test_temporal_boundary_models.py`, `tests/unit/workflows/temporal/test_boundary_inventory.py`, and `tests/integration/temporal/test_temporal_boundary_inventory_contract.py` (SC-001, SC-002, SC-003)
 
 ## Phase 4: Polish And Verification
 
 - [X] T011 Run full unit suite with `./tools/test_unit.sh` or document exact blocker (all FRs)
 - [X] T012 Run hermetic integration suite with `./tools/test_integration.sh` or document exact blocker (all acceptance scenarios)
-- [X] T013 Run `/speckit.verify` equivalent against `specs/177-temporal-boundary-models/` and record verdict (all FRs)
+- [X] T013 Run `/moonspec-verify` equivalent against `specs/177-temporal-boundary-models/` and record verdict (all FRs)
 
 ## Dependencies And Execution Order
 
