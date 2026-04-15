@@ -14,6 +14,7 @@ from moonmind.integrations.jira.models import (
     ALL_JIRA_ACTIONS,
     AddCommentRequest,
     CreateIssueRequest,
+    CreateIssueLinkRequest,
     CreateSubtaskRequest,
     EditIssueRequest,
     GetCreateFieldsRequest,
@@ -104,6 +105,49 @@ class JiraToolService:
             "issueKey": payload.get("key"),
             "issueId": payload.get("id"),
             "self": payload.get("self"),
+        }
+
+    async def create_issue_link(
+        self, request: CreateIssueLinkRequest
+    ) -> dict[str, Any]:
+        self._ensure_enabled()
+        self._ensure_action_allowed("create_issue_link")
+        self._ensure_project_allowed(self._project_from_issue_key(request.blocks_issue_key))
+        self._ensure_project_allowed(self._project_from_issue_key(request.blocked_issue_key))
+        try:
+            await self._request_json(
+                method="POST",
+                path="/issueLink",
+                action="create_issue_link",
+                json_body={
+                    "type": {"name": request.link_type},
+                    "outwardIssue": {"key": request.blocks_issue_key},
+                    "inwardIssue": {"key": request.blocked_issue_key},
+                },
+                context={
+                    "blocksIssueKey": request.blocks_issue_key,
+                    "blockedIssueKey": request.blocked_issue_key,
+                    "linkType": request.link_type,
+                },
+            )
+        except JiraToolError as exc:
+            if exc.code == "jira_conflict_existing_link" or (
+                exc.code == "jira_validation_failed"
+                and "already exists" in str(exc).lower()
+            ):
+                return {
+                    "linked": False,
+                    "existing": True,
+                    "blocksIssueKey": request.blocks_issue_key,
+                    "blockedIssueKey": request.blocked_issue_key,
+                    "linkType": request.link_type,
+                }
+            raise
+        return {
+            "linked": True,
+            "blocksIssueKey": request.blocks_issue_key,
+            "blockedIssueKey": request.blocked_issue_key,
+            "linkType": request.link_type,
         }
 
     async def edit_issue(self, request: EditIssueRequest) -> dict[str, Any]:

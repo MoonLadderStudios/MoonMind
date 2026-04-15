@@ -452,6 +452,7 @@ async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "TOOL",
                     "jira_issue_type": "Story",
+                    "jira_dependency_mode": "linear_blocker_chain",
                 },
                 context={},
             )
@@ -461,6 +462,8 @@ async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
             assert "docs/Designs/RuntimeTypes.md" in expanded["steps"][0]["instructions"]
             assert expanded["steps"][1]["skill"]["id"] == "jira-issue-creator"
             assert "Jira Story issue in project TOOL" in expanded["steps"][1]["instructions"]
+            assert "linear_blocker_chain" in expanded["steps"][1]["instructions"]
+            assert "ordered blocker chain" in expanded["steps"][1]["instructions"]
             assert "Source Document path" in expanded["steps"][1]["instructions"]
 
 

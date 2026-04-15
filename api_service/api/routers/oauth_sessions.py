@@ -22,6 +22,7 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
     ManagedAgentRateLimitPolicy,
 )
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.runtime.providers.registry import get_provider_default
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
@@ -51,7 +52,7 @@ def _oauth_session_response(session: ManagedAgentOAuthSession) -> OAuthSessionRe
         terminal_session_id=session.terminal_session_id,
         terminal_bridge_id=session.terminal_bridge_id,
         session_transport=session.session_transport,
-        failure_reason=session.failure_reason,
+        failure_reason=redact_sensitive_text(session.failure_reason),
         created_at=session.created_at,
     )
 

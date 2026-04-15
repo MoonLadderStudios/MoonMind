@@ -174,6 +174,38 @@ async def test_create_oauth_session_returns_terminal_transport_refs(
 
 
 @pytest.mark.asyncio
+async def test_oauth_session_response_redacts_secret_like_failure_reason(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_redactfailure1"
+    raw_secret = "sk-test-oauth-secret-value"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id="codex-cli-redact-failure",
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.FAILED,
+                requested_by_user_id="None",
+                failure_reason=f"token={raw_secret} in /home/app/.codex/auth.json",
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/oauth-sessions/{session_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert raw_secret not in response.text
+    assert "/home/app/.codex/auth.json" not in response.text
+    assert payload["failure_reason"] == "token=[REDACTED] in [REDACTED_AUTH_PATH]"
+
+
+@pytest.mark.asyncio
 async def test_create_codex_oauth_session_uses_configured_volume_defaults(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:

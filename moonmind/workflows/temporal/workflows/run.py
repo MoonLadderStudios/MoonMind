@@ -2124,9 +2124,9 @@ class MoonMindRunWorkflow:
                     story_output_mode = str(
                         story_output_result.get("mode") or ""
                     ).strip()
-                    if (
-                        story_output_mode == "jira"
-                        and story_output_status == "jira_created"
+                    if self._is_successful_jira_story_output(
+                        mode=story_output_mode,
+                        status=story_output_status,
                     ):
                         require_pull_request_url = False
                         self._publish_status = "published"
@@ -2781,6 +2781,10 @@ class MoonMindRunWorkflow:
         if push_status == "pushed" and publish_mode == "branch":
             self._publish_status = "published"
             self._publish_reason = "published branch"
+
+    @staticmethod
+    def _is_successful_jira_story_output(*, mode: str, status: str) -> bool:
+        return mode == "jira" and status in {"jira_created", "jira_partial"}
 
     def _record_execution_context(self, *, node_id: str, execution_result: Any) -> None:
         outputs = self._get_from_result(execution_result, "outputs")

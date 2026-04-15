@@ -13,8 +13,11 @@ class _FakeJiraService:
     def __init__(self) -> None:
         self.requests: list[Any] = []
         self.subtask_requests: list[Any] = []
+        self.link_requests: list[Any] = []
         self.search_requests: list[Any] = []
         self.search_response: Any = {"issues": []}
+        self.existing_links: set[tuple[str, str]] = set()
+        self.fail_link_after: int | None = None
 
     async def create_issue(self, request):
         self.requests.append(request)
@@ -37,6 +40,26 @@ class _FakeJiraService:
     async def search_issues(self, request):
         self.search_requests.append(request)
         return self.search_response
+
+    async def create_issue_link(self, request):
+        self.link_requests.append(request)
+        if self.fail_link_after is not None and len(self.link_requests) > self.fail_link_after:
+            raise RuntimeError("jira link unavailable")
+        key = (request.blocks_issue_key, request.blocked_issue_key)
+        if key in self.existing_links:
+            return {
+                "linked": False,
+                "existing": True,
+                "blocksIssueKey": request.blocks_issue_key,
+                "blockedIssueKey": request.blocked_issue_key,
+                "linkType": request.link_type,
+            }
+        return {
+            "linked": True,
+            "blocksIssueKey": request.blocks_issue_key,
+            "blockedIssueKey": request.blocked_issue_key,
+            "linkType": request.link_type,
+        }
 
 
 @pytest.mark.asyncio
@@ -196,3 +219,204 @@ async def test_create_jira_issues_fallback_reports_partial_success():
     assert result.outputs["storyOutput"]["createdCount"] == 1
     assert result.outputs["jira"]["partial"] is True
     assert result.outputs["jira"]["createdIssues"][0]["issueKey"] == "MM-1"
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_linear_blocker_chain_creates_adjacent_links():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "linear_blocker_chain",
+                },
+            },
+            "stories": [
+                {"id": "STORY-001", "summary": "First"},
+                {"id": "STORY-002", "summary": "Second"},
+                {"id": "STORY-003", "summary": "Third"},
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    jira = result.outputs["jira"]
+    assert jira["dependencyMode"] == "linear_blocker_chain"
+    assert jira["dependencyChainComplete"] is True
+    assert jira["linkCount"] == 2
+    assert [item["issueKey"] for item in jira["issueMappings"]] == [
+        "MM-1",
+        "MM-2",
+        "MM-3",
+    ]
+    assert [(req.blocks_issue_key, req.blocked_issue_key) for req in service.link_requests] == [
+        ("MM-1", "MM-2"),
+        ("MM-2", "MM-3"),
+    ]
+    assert [item["status"] for item in jira["linkResults"]] == ["created", "created"]
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_dependency_mode_none_skips_links():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "none",
+                },
+            },
+            "stories": [
+                {"id": "STORY-001", "summary": "First"},
+                {"id": "STORY-002", "summary": "Second"},
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert service.link_requests == []
+    assert result.outputs["jira"]["dependencyMode"] == "none"
+    assert result.outputs["jira"]["linkCount"] == 0
+    assert result.outputs["jira"]["dependencyChainComplete"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_partial_link_failure_preserves_created_issues():
+    service = _FakeJiraService()
+    service.fail_link_after = 1
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "linear_blocker_chain",
+                },
+            },
+            "stories": [
+                {"id": "STORY-001", "summary": "First"},
+                {"id": "STORY-002", "summary": "Second"},
+                {"id": "STORY-003", "summary": "Third"},
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_partial"
+    jira = result.outputs["jira"]
+    assert jira["partial"] is True
+    assert jira["createdCount"] == 3
+    assert [item["issueKey"] for item in jira["createdIssues"]] == [
+        "MM-1",
+        "MM-2",
+        "MM-3",
+    ]
+    assert jira["dependencyChainComplete"] is False
+    assert [item["status"] for item in jira["linkResults"]] == ["created", "failed"]
+    assert jira["linkResults"][1]["blocksIssueKey"] == "MM-2"
+    assert jira["linkResults"][1]["blockedIssueKey"] == "MM-3"
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_reuses_existing_issues_and_links():
+    service = _FakeJiraService()
+    service.search_response = {
+        "issues": [
+            {
+                "key": "MM-10",
+                "id": "10",
+                "self": "https://jira.example/rest/api/3/issue/10",
+                "fields": {"summary": "First"},
+            },
+            {
+                "key": "MM-11",
+                "id": "11",
+                "self": "https://jira.example/rest/api/3/issue/11",
+                "fields": {"summary": "Second"},
+            },
+        ]
+    }
+    service.existing_links = {("MM-10", "MM-11")}
+
+    result = await create_jira_issues_from_stories(
+        {
+            "workflowId": "wf-123",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "linear_blocker_chain",
+                },
+            },
+            "stories": [
+                {"id": "STORY-001", "summary": "First"},
+                {"id": "STORY-002", "summary": "Second"},
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert not service.requests
+    assert [item["existing"] for item in result.outputs["jira"]["issueMappings"]] == [
+        True,
+        True,
+    ]
+    assert result.outputs["jira"]["linkResults"][0]["status"] == "existing"
+    assert result.outputs["jira"]["dependencyChainComplete"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_rejects_unsupported_dependency_mode_before_mutation():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "graph",
+                },
+            },
+            "stories": [{"summary": "First"}],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert service.requests == []
+    assert result.outputs["storyOutput"]["status"] == "fallback"
+    assert "Unsupported Jira dependencyMode" in result.outputs["storyOutput"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_fallback_preserves_dependency_mode_metadata():
+    result = await create_jira_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetBranch": "breakdown-branch",
+            "startingBranch": "main",
+            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {"dependencyMode": "linear_blocker_chain"},
+            },
+            "stories": [{"summary": "Story without Jira config"}],
+        }
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "fallback"
+    assert result.outputs["storyOutput"]["dependencyMode"] == "linear_blocker_chain"
+    assert result.outputs["storyOutput"]["reason"] == "Jira projectKey and issueTypeId are required."

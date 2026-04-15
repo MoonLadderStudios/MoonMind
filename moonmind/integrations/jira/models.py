@@ -5,10 +5,11 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 JiraActionName = Literal[
     "create_issue",
+    "create_issue_link",
     "create_subtask",
     "edit_issue",
     "get_issue",
@@ -24,6 +25,7 @@ JiraActionName = Literal[
 
 ALL_JIRA_ACTIONS: tuple[JiraActionName, ...] = (
     "create_issue",
+    "create_issue_link",
     "create_subtask",
     "edit_issue",
     "get_issue",
@@ -115,6 +117,37 @@ class CreateSubtaskRequest(CreateIssueRequest):
         if not _JIRA_ISSUE_KEY_RE.fullmatch(normalized):
             raise ValueError("parentIssueKey must match a Jira issue-key pattern")
         return normalized
+
+
+class CreateIssueLinkRequest(JiraBaseModel):
+    blocks_issue_key: str = Field(..., alias="blocksIssueKey")
+    blocked_issue_key: str = Field(..., alias="blockedIssueKey")
+    link_type: str = Field("Blocks", alias="linkType")
+
+    @field_validator("blocks_issue_key", "blocked_issue_key", mode="before")
+    @classmethod
+    def _normalize_issue_key(cls, value: object) -> str:
+        normalized = str(value or "").strip().upper()
+        if not normalized:
+            raise ValueError("issue key is required")
+        if not _JIRA_ISSUE_KEY_RE.fullmatch(normalized):
+            raise ValueError("issue key must match a Jira issue-key pattern")
+        return normalized
+
+    @field_validator("link_type", mode="before")
+    @classmethod
+    def _normalize_link_type(cls, value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("linkType is required")
+        return normalized
+
+    @field_validator("blocked_issue_key")
+    @classmethod
+    def _reject_self_link(cls, value: str, info: ValidationInfo) -> str:
+        if value == info.data.get("blocks_issue_key"):
+            raise ValueError("blocksIssueKey and blockedIssueKey must differ")
+        return value
 
 
 class EditIssueRequest(JiraIssueScopedRequest):
