@@ -83,9 +83,11 @@ The Create page already supports all of the following, and this design keeps the
    - one required primary step
    - add / remove / reorder controls
    - per-step instructions
-   - optional per-step skill selection
+   - optional per-step runtime selection from one mixed selector surface:
+     - `agent_skill`
+     - `runtime_command`
    - optional per-step required-capability CSV
-   - optional per-step skill args JSON
+   - optional per-step arguments JSON
 2. a task preset area with:
    - preset selection
    - a preset objective field labeled `Feature Request / Initial Instructions`
@@ -146,7 +148,7 @@ Each step card must expose:
 
 - `Instructions`
 - `Skill (optional)`
-- `Skill Args (optional JSON object)` when a non-empty explicit skill is selected
+- `Arguments (optional JSON object)` when the selected item accepts args
 
 Rules:
 
@@ -154,6 +156,45 @@ Rules:
 - when any additional step is present, the primary step must contain instructions
 - non-primary steps may omit instructions to continue from the task objective
 - non-primary steps may omit skill to inherit the primary-step skill defaults
+
+### 7.2.1 Mixed selector contract
+
+The existing `Skill (optional)` control is a mixed selector surface.
+
+It may present:
+
+- agent skills
+- runtime commands
+
+Representative browser model:
+
+```ts
+type StepRuntimeSelection =
+  | {
+      kind: "agent_skill";
+      name: string;
+      args?: Record<string, unknown> | null;
+    }
+  | {
+      kind: "runtime_command";
+      name: string;
+      args?: Record<string, unknown> | null;
+    };
+```
+
+Rules:
+
+* the browser may keep the visible label `Skill` for continuity, but the
+  submitted payload must preserve the selected item's `kind`
+* `runtime_command` items must be filtered by the currently selected runtime
+* changing runtime must revalidate the current selection and clear or mark
+  invalid any unsupported `runtime_command`
+* `agent_skill` and `runtime_command` items may share one dropdown, but they
+  must not be flattened to one undifferentiated string in the backend
+* `Arguments` applies to the selected item regardless of kind
+* selecting a `runtime_command` does not make that command part of the task's
+  resolved skill set; it is execution configuration for the `agent_runtime`
+  step
 
 ### 7.3 Advanced settings
 
@@ -163,7 +204,7 @@ Rules:
 
 - each step may still author optional skill required capabilities
 - required capabilities remain an advanced routing override, not part of the default visible Create Task flow
-- runtime, publish mode, selected skills, and presets derive the common capability set automatically
+- runtime, publish mode, selected skills, selected runtime commands, and presets derive the common capability set automatically
 
 ### 7.4 Template-bound steps
 
@@ -265,6 +306,11 @@ Rules:
 
 - runtime defaults come from server-provided runtime config
 - provider-profile options are runtime-specific
+- available `runtime_command` items are runtime-specific and must update when
+  `Runtime` changes
+- if a runtime change invalidates an already-selected `runtime_command`, the
+  page must show an explicit validation error until the user clears or replaces
+  that selection
 - resolver-style skills may still force publish mode to `none`
 - repository validation rules remain unchanged by Jira integration
 - Jira import must never bypass or weaken repository validation

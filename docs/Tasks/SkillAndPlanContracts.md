@@ -63,6 +63,25 @@ There are two tool subtypes:
 * `tool.type = "skill"` — dispatched as a Temporal Activity (`mm.tool.execute` / `mm.skill.execute`). Uses a `ToolDefinition` from the tool registry snapshot.
 * `tool.type = "agent_runtime"` — dispatched as a child `MoonMind.AgentRun` workflow. Uses an `AgentExecutionRequest`.
 
+A runtime-native command is not a third `tool.type`.
+
+A runtime-native command is a MoonMind-native typed selection carried inside a
+`tool.type = "agent_runtime"` step and interpreted by the owning runtime adapter
+or managed-session plane.
+
+Examples include:
+
+* `review`
+
+Runtime-native commands are:
+
+* not `ToolDefinition` registry entries
+* not dispatched through `mm.tool.execute`
+* not `AgentSkillDefinition`s
+* not members of a `ResolvedSkillSet`
+
+They are execution-shaping selections for `agent_runtime` steps only.
+
 > **Important:** Executable tool skills and agent instruction skills are separate systems.
 > The term **"Agent Skill"** (in `.agents/skills/` directories and `SKILL.md` files)
 > refers to reusable instruction bundles that AI agents read for guidance as defined in
@@ -263,6 +282,96 @@ Legacy compatibility form (accepted only during migration):
 
 ---
 
+### 4.3.1 Runtime selection for `agent_runtime` steps
+
+`tool.type = "agent_runtime"` steps may carry one optional typed runtime
+selection inside `inputs.runtimeSelection`.
+
+Canonical shapes:
+
+```json
+{
+  "kind": "agent_skill",
+  "name": "jira-issue-creator",
+  "args": {}
+}
+```
+
+```json
+{
+  "kind": "runtime_command",
+  "name": "review",
+  "args": {}
+}
+```
+
+Representative `agent_runtime` step using an agent skill:
+
+```json
+{
+  "id": "n1",
+  "tool": { "type": "agent_runtime", "name": "codex_cli", "version": "1.0" },
+  "inputs": {
+    "instructions": "Use the selected runtime skill to create Jira stories.",
+    "runtimeSelection": {
+      "kind": "agent_skill",
+      "name": "jira-issue-creator",
+      "args": {}
+    },
+    "runtime": {
+      "mode": "codex_cli"
+    }
+  }
+}
+```
+
+Representative `agent_runtime` step using a runtime-native command:
+
+```json
+{
+  "id": "n2",
+  "tool": { "type": "agent_runtime", "name": "codex_cli", "version": "1.0" },
+  "inputs": {
+    "instructions": "Review the current changes and publish the review as artifacts.",
+    "runtimeSelection": {
+      "kind": "runtime_command",
+      "name": "review",
+      "args": {}
+    },
+    "runtime": {
+      "mode": "codex_cli"
+    }
+  }
+}
+```
+
+Rules:
+
+* `runtimeSelection` is valid only for `tool.type = "agent_runtime"`.
+* `kind = "agent_skill"` selects a runtime-facing agent skill or skill preset
+  for that step.
+* `kind = "runtime_command"` selects a MoonMind-native runtime command
+  implemented by the owning runtime adapter or managed-session plane.
+* A runtime command is not resolved from the executable tool registry snapshot.
+* A runtime command must be capability-gated by runtime. Unsupported commands
+  must fail validation or fail fast before the run starts.
+* `args` must remain small JSON and must validate against command-specific
+  runtime validation rules.
+* Any outputs produced by a runtime command use the normal `AgentRunResult` and
+  artifact contracts.
+
+Migration rule:
+
+* Legacy `selectedSkill` and `selectedSkillArgs` payloads may be accepted during
+  migration and normalized to
+  `inputs.runtimeSelection = { "kind": "agent_skill", ... }`.
+* This legacy acceptance is deprecated and exists only for in-flight runs
+  created before `runtimeSelection` became the canonical contract. Remove
+  `selectedSkill` and `selectedSkillArgs` acceptance once those in-flight runs
+  have completed or been explicitly cut over.
+
+---
+
 ### 4.4 ToolResult schema
 
 Tool execution returns a structured result:
@@ -362,8 +471,12 @@ When a task requests Jira issue creation from ambiguous user intent, the planner
     "version": "1.0"
   },
   "inputs": {
-    "selectedSkill": "jira-issue-creator",
-    "instructions": "Use $jira-issue-creator.\n\nCreate a Jira story for each story in docs/tmp/story-breakdowns/example.",
+    "runtimeSelection": {
+      "kind": "agent_skill",
+      "name": "jira-issue-creator",
+      "args": {}
+    },
+    "instructions": "Use the selected runtime skill to create a Jira story for each story in docs/tmp/story-breakdowns/example.",
     "runtime": {
       "mode": "codex_cli"
     }
@@ -551,6 +664,10 @@ Planning is expressed as one or more tools (e.g., `plan.generate`) executed as A
 
 * Resolve `ToolDefinition` from the pinned tool registry snapshot.
 * Any agent instruction skill snapshot used by an agent-runtime step is resolved separately and passed as execution context, not looked up in the executable tool registry.
+* For `tool.type = "agent_runtime"`, any `inputs.runtimeSelection` is passed
+  through the `AgentExecutionRequest` or equivalent managed-session input and is
+  interpreted by the owning runtime adapter or managed-session plane. It is not
+  resolved from the executable tool registry snapshot.
 * Derive Activity Type and routing target (task queue) from ToolDefinition + worker capabilities.
 
 **Invocation payload**
