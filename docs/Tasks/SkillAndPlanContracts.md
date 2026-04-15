@@ -365,6 +365,10 @@ Migration rule:
 * Legacy `selectedSkill` and `selectedSkillArgs` payloads may be accepted during
   migration and normalized to
   `inputs.runtimeSelection = { "kind": "agent_skill", ... }`.
+* This legacy acceptance is deprecated and exists only for in-flight runs
+  created before `runtimeSelection` became the canonical contract. Remove
+  `selectedSkill` and `selectedSkillArgs` acceptance once those in-flight runs
+  have completed or been explicitly cut over.
 
 ---
 
