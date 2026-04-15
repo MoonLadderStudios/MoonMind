@@ -326,6 +326,101 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
     assert "commit your work" not in node["inputs"]["instructions"]
 
 
+def test_runtime_planner_inherits_top_level_jira_skill_for_multi_step_publish():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {"type": "skill", "name": "jira-issue-creator"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "steps": [
+                    {"id": "one", "instructions": "Create the first Jira story."},
+                    {"id": "two", "instructions": "Create the second Jira story."},
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert len(plan["nodes"]) == 2
+    for node in plan["nodes"]:
+        assert node["tool"]["type"] == "agent_runtime"
+        assert node["inputs"]["selectedSkill"] == "jira-issue-creator"
+        assert node["inputs"]["publishMode"] == "none"
+        assert "targetBranch" not in node["inputs"]
+        assert node["inputs"]["instructions"].startswith("Use $jira-issue-creator.")
+
+
+def test_runtime_planner_single_step_tool_does_not_override_top_level_publish_scope():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {"type": "skill", "name": "pr-resolver"},
+                "inputs": {"pr": "1434"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "steps": [
+                    {
+                        "id": "ignored",
+                        "tool": {"type": "skill", "name": "jira-issue-creator"},
+                        "instructions": "This single step is not expanded.",
+                    }
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+    assert node["inputs"]["selectedSkill"] == "pr-resolver"
+    assert node["inputs"]["publishMode"] == "pr"
+    assert "targetBranch" in node["inputs"]
+
+
+def test_runtime_planner_invalid_step_list_keeps_non_jira_publish_scope():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {"type": "skill", "name": "pr-resolver"},
+                "inputs": {"pr": "1434"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+                "steps": [
+                    {"tool": {"type": "skill", "name": "jira-issue-creator"}},
+                    "not-a-step",
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+    assert node["inputs"]["selectedSkill"] == "pr-resolver"
+    assert node["inputs"]["publishMode"] == "pr"
+    assert "targetBranch" in node["inputs"]
+
+
 def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
     """When pr-resolver has no inputs.pr but git.startingBranch is set,
     the auto-generated instruction must include the branch as the pr selector

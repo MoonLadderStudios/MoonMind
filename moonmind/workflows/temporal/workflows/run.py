@@ -2847,13 +2847,11 @@ class MoonMindRunWorkflow:
         selected_skill = str(inputs.get("selectedSkill") or "").strip().lower()
         if selected_skill:
             return selected_skill
-        runtime = inputs.get("runtime")
-        if isinstance(runtime, Mapping):
-            metadata = runtime.get("metadata")
-            if isinstance(metadata, Mapping):
-                moonmind = metadata.get("moonmind")
-                if isinstance(moonmind, Mapping):
-                    return str(moonmind.get("selectedSkill") or "").strip().lower()
+        metadata = inputs.get("metadata")
+        if isinstance(metadata, Mapping):
+            moonmind = metadata.get("moonmind")
+            if isinstance(moonmind, Mapping):
+                return str(moonmind.get("selectedSkill") or "").strip().lower()
         return ""
 
     @classmethod

@@ -289,14 +289,15 @@ def _jira_agent_skill_selected(tool_name: str) -> bool:
 def _task_uses_only_jira_agent_skill(
     *, selected_skill_name: str, raw_steps: Any
 ) -> bool:
-    if isinstance(raw_steps, list) and raw_steps:
-        step_tool_names = [
-            _selected_step_tool_name(step).lower()
+    if isinstance(raw_steps, list) and len(raw_steps) > 1:
+        if not all(isinstance(step, Mapping) for step in raw_steps):
+            return False
+        effective_step_tool_names = [
+            (_selected_step_tool_name(step) or selected_skill_name).lower()
             for step in raw_steps
-            if isinstance(step, Mapping)
         ]
-        return bool(step_tool_names) and all(
-            _jira_agent_skill_selected(name) for name in step_tool_names
+        return bool(effective_step_tool_names) and all(
+            _jira_agent_skill_selected(name) for name in effective_step_tool_names
         )
     return _jira_agent_skill_selected(selected_skill_name)
 
@@ -671,14 +672,16 @@ def _build_runtime_planner():
                 step_tool_name = _selected_step_tool_name(step_entry)
                 step_runtime = runtime_mode
                 tool_type = _selected_step_tool_type(step_tool_name)
+                effective_step_skill_name = step_tool_name or selected_skill_name
                 if step_tool_name:
                     step_runtime = step_tool_name
                     step_node_inputs["selectedSkill"] = step_tool_name
                     if _jira_agent_skill_selected(step_tool_name):
                         step_node_inputs["publishMode"] = "none"
+                if effective_step_skill_name:
                     step_node_inputs["instructions"] = _append_agent_skill_instructions(
                         step_node_inputs["instructions"],
-                        selected_skill=step_tool_name,
+                        selected_skill=effective_step_skill_name,
                     )
                 if step_tool_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
                     if story_output_mode == "jira" and not step_node_inputs.get(

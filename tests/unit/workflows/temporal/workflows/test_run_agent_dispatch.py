@@ -52,6 +52,36 @@ class TestJiraAgentPublishHelpers(unittest.TestCase):
 
         self.assertTrue(MoonMindRunWorkflow._pr_publish_optional_for_plan(nodes))
 
+    def test_jira_issue_creator_metadata_on_inputs_makes_pr_publish_optional(self) -> None:
+        nodes = [
+            {
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                "inputs": {
+                    "metadata": {"moonmind": {"selectedSkill": "jira-issue-creator"}}
+                },
+            }
+        ]
+
+        self.assertTrue(MoonMindRunWorkflow._pr_publish_optional_for_plan(nodes))
+
+    def test_runtime_metadata_skill_does_not_affect_plan_publish_classification(
+        self,
+    ) -> None:
+        nodes = [
+            {
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                "inputs": {
+                    "runtime": {
+                        "metadata": {
+                            "moonmind": {"selectedSkill": "jira-issue-creator"}
+                        }
+                    }
+                },
+            }
+        ]
+
+        self.assertFalse(MoonMindRunWorkflow._pr_publish_optional_for_plan(nodes))
+
     def test_mixed_agent_plan_still_requires_requested_pr_publish(self) -> None:
         nodes = [
             {
