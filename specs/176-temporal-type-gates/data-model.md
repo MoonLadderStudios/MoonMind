@@ -54,15 +54,15 @@
   - `semanticRisk` must be false for accepted escape hatches.
   - Hidden business logic behind an escape hatch fails the gate.
 
-## Temporal Anti-Pattern Case
+## Temporal Pattern Case
 
-- **Purpose**: Representative fixture used to prove a known unsafe pattern is rejected.
+- **Purpose**: Representative fixture used to prove known unsafe patterns are rejected and approved alternatives are accepted.
 - **Fields**:
-  - `pattern`: raw dictionary activity payload, public raw dictionary handler, generic action envelope, provider-shaped workflow-facing result, untyped status leak, nested raw bytes, or large workflow-history state
+  - `pattern`: raw dictionary activity payload, public raw dictionary handler, generic action envelope, provider-shaped workflow-facing result, untyped status leak, nested raw bytes, large workflow-history state, or an approved safe alternative
   - `target`: fixture or source target being checked
-  - `expectedRuleId`: rule that must fail the case
-  - `expectedOutcome`: pass or fail
+  - `expectedRuleId`: associated rule identifier for the evaluated case
 - **Validation rules**:
+  - The evaluator determines pass or fail from the pattern registry, not caller-provided outcome metadata.
   - Every anti-pattern listed in the source brief must have at least one failing fixture.
   - Safe alternatives must pass so the gate does not merely reject all Temporal changes.
 

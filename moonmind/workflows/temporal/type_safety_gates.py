@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 FindingStatus = Literal["pass", "fail"]
 ChangeKind = Literal["workflow", "activity", "signal", "update", "query", "continue_as_new"]
 SafetyMode = Literal["additive", "replay_tested", "in_flight_tested", "versioned_cutover"]
-AntiPattern = Literal[
+TemporalPatternKind = Literal[
     "raw_dict_activity_payload",
     "public_raw_dict_handler",
     "generic_action_envelope",
@@ -33,10 +33,10 @@ class ReviewGateFinding(_GateModel):
     remediation: str | None = None
     evidence_ref: str | None = Field(default=None, alias="evidenceRef")
 
-    @field_validator("rule_id", "target", "message")
+    @field_validator("rule_id", "target", "message", "remediation", "evidence_ref")
     @classmethod
-    def _require_non_empty_text(cls, value: str) -> str:
-        if not value.strip():
+    def _require_non_empty_text(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
             raise ValueError("must not be empty")
         return value
 
@@ -55,6 +55,13 @@ class CompatibilityEvidence(_GateModel):
     callers_tolerate_unknown: bool = Field(default=False, alias="callersTolerateUnknown")
     target: str | None = None
 
+    @field_validator("evidence_ref", "non_additive_reason", "target")
+    @classmethod
+    def _require_non_empty_optional_text(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("must not be empty")
+        return value
+
 
 class EscapeHatchJustification(_GateModel):
     target: str
@@ -63,12 +70,25 @@ class EscapeHatchJustification(_GateModel):
     transitional: bool
     semantic_risk: bool = Field(alias="semanticRisk")
 
+    @field_validator("target", "reason")
+    @classmethod
+    def _require_non_empty_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty")
+        return value
 
-class TemporalAntiPatternCase(_GateModel):
-    pattern: AntiPattern
+
+class TemporalPatternCase(_GateModel):
+    pattern: TemporalPatternKind
     target: str
     expected_rule_id: str = Field(alias="expectedRuleId")
-    expected_outcome: FindingStatus = Field(alias="expectedOutcome")
+
+    @field_validator("target", "expected_rule_id")
+    @classmethod
+    def _require_non_empty_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty")
+        return value
 
 
 _ANTI_PATTERN_RULES: dict[str, tuple[str, str, str]] = {
@@ -196,8 +216,8 @@ def evaluate_compatibility_evidence(evidence: CompatibilityEvidence) -> ReviewGa
     )
 
 
-def evaluate_anti_pattern_case(case: TemporalAntiPatternCase) -> ReviewGateFinding:
-    if case.expected_outcome == "pass" or case.pattern in _SAFE_PATTERNS:
+def evaluate_temporal_pattern_case(case: TemporalPatternCase) -> ReviewGateFinding:
+    if case.pattern in _SAFE_PATTERNS:
         return ReviewGateFinding(
             ruleId=case.expected_rule_id,
             status="pass",
@@ -278,12 +298,11 @@ def build_self_check_findings() -> list[ReviewGateFinding]:
     ):
         rule_id = _ANTI_PATTERN_RULES[pattern][0]
         findings.append(
-            evaluate_anti_pattern_case(
-                TemporalAntiPatternCase(
+            evaluate_temporal_pattern_case(
+                TemporalPatternCase(
                     pattern=pattern,
                     target=f"fixture:{pattern}",
                     expectedRuleId=rule_id,
-                    expectedOutcome="fail",
                 )
             )
         )

@@ -7,10 +7,10 @@ from moonmind.workflows.temporal.type_safety_gates import (
     CompatibilityEvidence,
     EscapeHatchJustification,
     ReviewGateFinding,
-    TemporalAntiPatternCase,
-    evaluate_anti_pattern_case,
+    TemporalPatternCase,
     evaluate_compatibility_evidence,
     evaluate_escape_hatch,
+    evaluate_temporal_pattern_case,
 )
 
 
@@ -68,12 +68,11 @@ def test_non_additive_change_requires_cutover_reason() -> None:
 def test_known_temporal_anti_patterns_fail_with_rule_specific_findings(
     pattern: str, expected_rule: str
 ) -> None:
-    finding = evaluate_anti_pattern_case(
-        TemporalAntiPatternCase(
+    finding = evaluate_temporal_pattern_case(
+        TemporalPatternCase(
             pattern=pattern,
             target=f"fixture:{pattern}",
             expectedRuleId=expected_rule,
-            expectedOutcome="fail",
         )
     )
 
@@ -83,12 +82,11 @@ def test_known_temporal_anti_patterns_fail_with_rule_specific_findings(
 
 
 def test_safe_temporal_contract_case_passes() -> None:
-    finding = evaluate_anti_pattern_case(
-        TemporalAntiPatternCase(
+    finding = evaluate_temporal_pattern_case(
+        TemporalPatternCase(
             pattern="typed_request_model",
             target="fixture:typed-request",
             expectedRuleId="TEMPORAL-ANTI-SAFE",
-            expectedOutcome="pass",
         )
     )
 
@@ -134,4 +132,59 @@ def test_failed_finding_requires_remediation() -> None:
             status="fail",
             target="fixture",
             message="failed",
+        )
+
+
+def test_temporal_pattern_evaluation_ignores_fixture_outcome_metadata() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        TemporalPatternCase(
+            pattern="raw_dict_activity_payload",
+            target="fixture:unsafe",
+            expectedRuleId="TEMPORAL-ANTI-001",
+            expectedOutcome="pass",
+        )
+
+    finding = evaluate_temporal_pattern_case(
+        TemporalPatternCase(
+            pattern="raw_dict_activity_payload",
+            target="fixture:unsafe",
+            expectedRuleId="TEMPORAL-ANTI-001",
+        )
+    )
+
+    assert finding.status == "fail"
+    assert finding.rule_id == "TEMPORAL-ANTI-001"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "ruleId": "TEMPORAL-COMPAT-001",
+            "status": "pass",
+            "target": "fixture",
+            "message": "ok",
+            "evidenceRef": "   ",
+        },
+        {
+            "ruleId": "TEMPORAL-COMPAT-001",
+            "status": "fail",
+            "target": "fixture",
+            "message": "failed",
+            "remediation": "   ",
+        },
+    ],
+)
+def test_finding_rejects_blank_optional_text(payload: dict[str, object]) -> None:
+    with pytest.raises(ValidationError, match="must not be empty"):
+        ReviewGateFinding(**payload)
+
+
+def test_compatibility_evidence_rejects_blank_evidence_reference() -> None:
+    with pytest.raises(ValidationError, match="must not be empty"):
+        CompatibilityEvidence(
+            changeKind="activity",
+            safetyMode="additive",
+            evidenceRef="   ",
+            callersTolerateUnknown=True,
         )
