@@ -49,9 +49,9 @@
 
 **Purpose**: Confirm feature artifacts and test targets are ready before TDD work starts.
 
-- [ ] T001 Confirm MM-331 from TOOL board, source design mappings, and single-story scope remain preserved in `specs/176-temporal-type-gates/spec.md`. [SC-005]
-- [ ] T002 [P] Create the planned gate test placeholder path in `tests/unit/workflows/temporal/test_temporal_type_safety_gates.py`. [FR-001, FR-008]
-- [ ] T003 [P] Create the planned workflow-boundary test placeholder path in `tests/integration/temporal/test_temporal_type_safety_gates.py`. [DESIGN-REQ-018]
+- [X] T001 Confirm MM-331 from TOOL board, source design mappings, and single-story scope remain preserved in `specs/176-temporal-type-gates/spec.md`. [SC-005]
+- [X] T002 [P] Create the planned gate test placeholder path in `tests/unit/workflows/temporal/test_temporal_type_safety_gates.py`. [FR-001, FR-008]
+- [X] T003 [P] Create the planned workflow-boundary test placeholder path in `tests/integration/temporal/test_temporal_type_safety_gates.py`. [DESIGN-REQ-018]
 
 ---
 
@@ -82,34 +82,34 @@ No separate foundational code task is required before the story phase. Existing 
 
 ### Unit Tests (write first)
 
-- [ ] T004 Add failing unit tests for compatibility evidence, additive evolution, unsafe non-additive changes, and actionable compatibility findings in `tests/unit/workflows/temporal/test_temporal_type_safety_gates.py`. [FR-001, FR-002, FR-003, FR-008, SC-001, SC-004, DESIGN-REQ-005]
-- [ ] T005 Add failing unit tests for raw dictionary activity payloads, public raw dictionary handlers, generic action envelopes, provider-shaped workflow-facing results, untyped status leaks, nested raw bytes, and large workflow-history state in `tests/unit/workflows/temporal/test_temporal_type_safety_gates.py`. [FR-004, FR-005, FR-006, FR-008, SC-002, DESIGN-REQ-020]
-- [ ] T006 Add failing unit tests for transitional, boundary-only, compatibility-justified escape hatch acceptance and rejection in `tests/unit/workflows/temporal/test_temporal_type_safety_gates.py`. [FR-007, FR-008, SC-003, DESIGN-REQ-019]
+- [X] T004 Add failing unit tests for compatibility evidence, additive evolution, unsafe non-additive changes, and actionable compatibility findings in `tests/unit/workflows/temporal/test_temporal_type_safety_gates.py`. [FR-001, FR-002, FR-003, FR-008, SC-001, SC-004, DESIGN-REQ-005]
+- [X] T005 Add failing unit tests for raw dictionary activity payloads, public raw dictionary handlers, generic action envelopes, provider-shaped workflow-facing results, untyped status leaks, nested raw bytes, and large workflow-history state in `tests/unit/workflows/temporal/test_temporal_type_safety_gates.py`. [FR-004, FR-005, FR-006, FR-008, SC-002, DESIGN-REQ-020]
+- [X] T006 Add failing unit tests for transitional, boundary-only, compatibility-justified escape hatch acceptance and rejection in `tests/unit/workflows/temporal/test_temporal_type_safety_gates.py`. [FR-007, FR-008, SC-003, DESIGN-REQ-019]
 
 ### Integration Tests (write first)
 
-- [ ] T007 Add failing integration or workflow-boundary tests for acceptance scenarios 1-5 with `integration` and `integration_ci` markers in `tests/integration/temporal/test_temporal_type_safety_gates.py`. [FR-001, FR-004, FR-006, SC-001, SC-002, SC-004, DESIGN-REQ-018]
+- [X] T007 Add failing integration or workflow-boundary tests for acceptance scenarios 1-5 with `integration` and `integration_ci` markers in `tests/integration/temporal/test_temporal_type_safety_gates.py`. [FR-001, FR-004, FR-006, SC-001, SC-002, SC-004, DESIGN-REQ-018]
 
 ### Red-First Confirmation
 
-- [ ] T008 Run `pytest tests/unit/workflows/temporal/test_temporal_type_safety_gates.py -q` and confirm T004-T006 fail for the expected missing gate implementation. [DESIGN-REQ-018]
-- [ ] T009 Run `pytest tests/integration/temporal/test_temporal_type_safety_gates.py -q` and confirm T007 fails for the expected missing gate implementation or fixture support. [DESIGN-REQ-018]
+- [X] T008 Run `pytest tests/unit/workflows/temporal/test_temporal_type_safety_gates.py -q` and confirm T004-T006 fail for the expected missing gate implementation. [DESIGN-REQ-018]
+- [X] T009 Run `pytest tests/integration/temporal/test_temporal_type_safety_gates.py -q` and confirm T007 fails for the expected missing gate implementation or fixture support. [DESIGN-REQ-018]
 
 **Checkpoint**: Red-first evidence exists. Production implementation may begin after T008 and T009 record expected failures.
 
 ### Implementation
 
-- [ ] T010 Create review gate rule, finding, compatibility evidence, and anti-pattern fixture models in `moonmind/workflows/temporal/type_safety_gates.py`. [FR-001, FR-002, FR-003, FR-008, DESIGN-REQ-005]
-- [ ] T011 Implement compatibility evidence evaluation and non-additive migration/cutover rejection in `moonmind/workflows/temporal/type_safety_gates.py`. [FR-001, FR-002, FR-003, DESIGN-REQ-005]
-- [ ] T012 Implement anti-pattern rule evaluation for raw dictionary payloads, public raw dictionary handlers, generic action envelopes, provider-shaped workflow-facing results, untyped status leaks, nested raw bytes, and large workflow-history state in `moonmind/workflows/temporal/type_safety_gates.py`. [FR-004, FR-005, FR-006, DESIGN-REQ-020]
-- [ ] T013 Wire representative Temporal contract fixtures into the gate tests in `tests/unit/workflows/temporal/test_temporal_type_safety_gates.py`. [FR-004, FR-005, FR-006, SC-002]
-- [ ] T014 Implement escape-hatch justification evaluation in `moonmind/workflows/temporal/type_safety_gates.py`. [FR-007, FR-008, DESIGN-REQ-019]
-- [ ] T015 Add a reusable CLI/repository validation entry point in `tools/validate_temporal_type_safety.py` only for the gate contract defined in `specs/176-temporal-type-gates/contracts/temporal-type-safety-gates.md`. [FR-008]
-- [ ] T016 Wire the CLI validation entry point to the gate implementation without adding network calls, runtime polling, or persistent storage in `tools/validate_temporal_type_safety.py`. [FR-008]
-- [ ] T017 Update package exports only if needed for test imports in `moonmind/workflows/temporal/__init__.py`. [FR-008]
-- [ ] T018 Run `pytest tests/unit/workflows/temporal/test_temporal_type_safety_gates.py tests/integration/temporal/test_temporal_type_safety_gates.py -q` and fix failures until the single story passes independently. [FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, SC-001, SC-002, SC-003, SC-004]
-- [ ] T019 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and record PASS or exact blocker in `specs/176-temporal-type-gates/verification.md`. [DESIGN-REQ-018]
-- [ ] T020 Run `./tools/test_integration.sh` when Docker is available, or record the exact Docker socket blocker and targeted workflow-boundary evidence in `specs/176-temporal-type-gates/verification.md`. [SC-005, DESIGN-REQ-018]
+- [X] T010 Create review gate rule, finding, compatibility evidence, and anti-pattern fixture models in `moonmind/workflows/temporal/type_safety_gates.py`. [FR-001, FR-002, FR-003, FR-008, DESIGN-REQ-005]
+- [X] T011 Implement compatibility evidence evaluation and non-additive migration/cutover rejection in `moonmind/workflows/temporal/type_safety_gates.py`. [FR-001, FR-002, FR-003, DESIGN-REQ-005]
+- [X] T012 Implement anti-pattern rule evaluation for raw dictionary payloads, public raw dictionary handlers, generic action envelopes, provider-shaped workflow-facing results, untyped status leaks, nested raw bytes, and large workflow-history state in `moonmind/workflows/temporal/type_safety_gates.py`. [FR-004, FR-005, FR-006, DESIGN-REQ-020]
+- [X] T013 Wire representative Temporal contract fixtures into the gate tests in `tests/unit/workflows/temporal/test_temporal_type_safety_gates.py`. [FR-004, FR-005, FR-006, SC-002]
+- [X] T014 Implement escape-hatch justification evaluation in `moonmind/workflows/temporal/type_safety_gates.py`. [FR-007, FR-008, DESIGN-REQ-019]
+- [X] T015 Add a reusable CLI/repository validation entry point in `tools/validate_temporal_type_safety.py` only for the gate contract defined in `specs/176-temporal-type-gates/contracts/temporal-type-safety-gates.md`. [FR-008]
+- [X] T016 Wire the CLI validation entry point to the gate implementation without adding network calls, runtime polling, or persistent storage in `tools/validate_temporal_type_safety.py`. [FR-008]
+- [X] T017 Update package exports only if needed for test imports in `moonmind/workflows/temporal/__init__.py`. [FR-008]
+- [X] T018 Run `pytest tests/unit/workflows/temporal/test_temporal_type_safety_gates.py tests/integration/temporal/test_temporal_type_safety_gates.py -q` and fix failures until the single story passes independently. [FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, SC-001, SC-002, SC-003, SC-004]
+- [X] T019 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and record PASS or exact blocker in `specs/176-temporal-type-gates/verification.md`. [DESIGN-REQ-018]
+- [X] T020 Run `./tools/test_integration.sh` when Docker is available, or record the exact Docker socket blocker and targeted workflow-boundary evidence in `specs/176-temporal-type-gates/verification.md`. [SC-005, DESIGN-REQ-018]
 
 **Checkpoint**: The story is fully functional, covered by unit and integration or documented integration-blocker evidence, and testable independently.
 
@@ -119,11 +119,11 @@ No separate foundational code task is required before the story phase. Existing 
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [ ] T021 [P] Update `specs/176-temporal-type-gates/quickstart.md` if implementation changes the targeted validation commands. [SC-005]
-- [ ] T022 [P] Update `specs/176-temporal-type-gates/contracts/temporal-type-safety-gates.md` if the final finding shape or rule IDs change during implementation. [FR-008]
-- [ ] T023 Review `moonmind/workflows/temporal/type_safety_gates.py` and `tools/validate_temporal_type_safety.py` for scope drift, hidden compatibility aliases, network calls, runtime polling, or persistent storage. [DESIGN-REQ-005, DESIGN-REQ-019]
-- [ ] T024 Run the quickstart validation commands from `specs/176-temporal-type-gates/quickstart.md` and update `specs/176-temporal-type-gates/verification.md` with command results. [SC-001, SC-002, SC-003, SC-004]
-- [ ] T025 Run `/speckit.verify` for `specs/176-temporal-type-gates` after implementation and tests pass, then record the verdict in `specs/176-temporal-type-gates/verification.md`. [SC-005]
+- [X] T021 [P] Update `specs/176-temporal-type-gates/quickstart.md` if implementation changes the targeted validation commands. [SC-005]
+- [X] T022 [P] Update `specs/176-temporal-type-gates/contracts/temporal-type-safety-gates.md` if the final finding shape or rule IDs change during implementation. [FR-008]
+- [X] T023 Review `moonmind/workflows/temporal/type_safety_gates.py` and `tools/validate_temporal_type_safety.py` for scope drift, hidden compatibility aliases, network calls, runtime polling, or persistent storage. [DESIGN-REQ-005, DESIGN-REQ-019]
+- [X] T024 Run the quickstart validation commands from `specs/176-temporal-type-gates/quickstart.md` and update `specs/176-temporal-type-gates/verification.md` with command results. [SC-001, SC-002, SC-003, SC-004]
+- [X] T025 Run `/speckit.verify` for `specs/176-temporal-type-gates` after implementation and tests pass, then record the verdict in `specs/176-temporal-type-gates/verification.md`. [SC-005]
 
 ---
 

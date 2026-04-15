@@ -12,7 +12,6 @@ Add schema or payload-policy fixtures as needed:
 
 ```bash
 pytest tests/unit/schemas/test_temporal_payload_policy.py \
-  tests/unit/schemas/test_temporal_activity_models.py \
   tests/unit/schemas/test_temporal_signal_contracts.py \
   tests/unit/schemas/test_managed_session_models.py -q
 ```
