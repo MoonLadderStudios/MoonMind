@@ -3172,7 +3172,7 @@ class TemporalAgentRuntimeActivities:
             + "- List available tools with `GET $MOONMIND_URL/mcp/tools`.\n"
             + "- Invoke Jira tools with `POST $MOONMIND_URL/mcp/tools/call` and "
             + "JSON like `{\"tool\":\"jira.list_create_issue_types\","
-            + "\"arguments\":{\"projectKey\":\"TOOL\"}}`.\n"
+            + "\"arguments\":{\"projectKey\":\"<PROJECT_KEY>\"}}`.\n"
             + "- Resolve the Story issue type through `jira.list_create_issue_types` "
             + "and create issues through `jira.create_issue`.\n"
             + "- Treat the task as blocked if Jira tool calls are unavailable or no "
