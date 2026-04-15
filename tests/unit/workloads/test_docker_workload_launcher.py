@@ -538,6 +538,55 @@ async def test_launcher_diagnostics_omit_env_values_and_auth_paths(
 
 
 @pytest.mark.asyncio
+async def test_launcher_redacts_secret_like_runtime_output_and_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-runtime-redaction" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    raw_secret = "sk-test-workload-secret-value"
+    private_key = "-----BEGIN PRIVATE KEY-----\\nabc123\\n-----END PRIVATE KEY-----"
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(
+                returncode=0,
+                stdout=f"token={raw_secret}\\n{private_key}\\n".encode(),
+                stderr=f"Authorization: Bearer {raw_secret}\\n".encode(),
+            )
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            taskRunId="task-runtime-redaction",
+            repoDir=str(workspace_root / "task-runtime-redaction" / "repo"),
+            artifactsDir=str(artifact_dir),
+        )
+    )
+
+    stdout_text = Path(result.stdout_ref or "").read_text("utf-8")
+    stderr_text = Path(result.stderr_ref or "").read_text("utf-8")
+    diagnostics_text = Path(result.diagnostics_ref or "").read_text("utf-8")
+    metadata_text = json.dumps(result.metadata, sort_keys=True)
+
+    for text in (stdout_text, stderr_text, diagnostics_text, metadata_text):
+        assert raw_secret not in text
+        assert "BEGIN PRIVATE KEY" not in text
+        assert "Bearer" not in text
+    assert "token=[REDACTED]" in stdout_text
+    assert result.metadata["stdout"] == stdout_text
+    assert result.metadata["stderr"] == stderr_text
+
+
+@pytest.mark.asyncio
 async def test_launcher_publishes_failure_artifacts_with_session_association(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

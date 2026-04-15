@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from base64 import b64encode
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import quote_plus
 
 _SENSITIVE_KEY_PATTERN = re.compile(
@@ -15,8 +15,29 @@ _GITHUB_TOKEN_PATTERN = re.compile(
     r"(?:ghp|gho|ghu|ghs|ghr|github_pat)[_-][A-Za-z0-9_-]{20,}",
     re.IGNORECASE,
 )
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b(token|password|secret|api[_-]?key|credential)\s*[:=]\s*([^\s,;\"']+)"
+)
+_AUTHORIZATION_PATTERN = re.compile(
+    r"(?i)\b(authorization\s*:\s*)?bearer\s+[A-Za-z0-9._~+/=-]+"
+)
+_PRIVATE_KEY_PATTERN = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.DOTALL,
+)
+_AUTH_PATH_PATTERN = re.compile(
+    r"(?i)(?:/[^\s\"']*)?(?:\.codex|codex-auth|claude-auth|gemini-auth|auth-volume)[^\s\"']*"
+)
 _NON_SECRET_SENTINEL_VALUES = frozenset(
     {"true", "false", "none", "null", "yes", "no", "on", "off"}
+)
+_NON_SECRET_REF_KEYS = frozenset(
+    {
+        "credential_source",
+        "credentialsource",
+        "runtime_materialization_mode",
+        "runtimematerializationmode",
+    }
 )
 
 
@@ -47,6 +68,54 @@ def scrub_github_tokens(text: str) -> str:
     if not text:
         return ""
     return _GITHUB_TOKEN_PATTERN.sub("[REDACTED]", text)
+
+
+def redact_sensitive_text(text: str | None) -> str:
+    """Scrub common credential-shaped values from browser/artifact text."""
+
+    if not text:
+        return ""
+    redacted = scrub_github_tokens(str(text))
+    redacted = _PRIVATE_KEY_PATTERN.sub("[REDACTED_PRIVATE_KEY]", redacted)
+    redacted = _AUTHORIZATION_PATTERN.sub("[REDACTED_AUTHORIZATION]", redacted)
+    redacted = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1=[REDACTED]", redacted)
+    redacted = _AUTH_PATH_PATTERN.sub("[REDACTED_AUTH_PATH]", redacted)
+    return redacted
+
+
+def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
+    """Recursively redact sensitive values while preserving compact refs."""
+
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        normalized_key = str(key or "").strip().lower()
+        normalized_key_compact = normalized_key.replace("_", "")
+        if (
+            normalized_key in _NON_SECRET_REF_KEYS
+            or normalized_key_compact in _NON_SECRET_REF_KEYS
+        ):
+            return payload
+        if normalized_key.endswith("_ref") or normalized_key.endswith("ref"):
+            return payload
+        if _is_sensitive_key(normalized_key):
+            if payload.startswith(("env://", "secret://", "vault://", "ref://")):
+                return payload
+            return "[REDACTED]"
+        return redact_sensitive_text(payload)
+    if isinstance(payload, Mapping):
+        return {
+            str(nested_key): redact_sensitive_payload(
+                nested_value,
+                key=str(nested_key),
+            )
+            for nested_key, nested_value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [redact_sensitive_payload(item, key=key) for item in payload]
+    if isinstance(payload, tuple):
+        return tuple(redact_sensitive_payload(item, key=key) for item in payload)
+    return payload
 
 
 class SecretRedactor:
@@ -98,4 +167,9 @@ class SecretRedactor:
         return [self.scrub(value) for value in values]
 
 
-__all__ = ["SecretRedactor", "scrub_github_tokens"]
+__all__ = [
+    "SecretRedactor",
+    "redact_sensitive_payload",
+    "redact_sensitive_text",
+    "scrub_github_tokens",
+]
