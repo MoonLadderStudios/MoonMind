@@ -43,7 +43,7 @@ Expected coverage:
 
 ## Final Verification
 
-Before `/speckit.verify`, run:
+Before `/moonspec-verify`, run:
 
 ```bash
 ./tools/test_unit.sh
