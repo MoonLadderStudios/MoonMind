@@ -5,6 +5,11 @@
 **Status**: Draft  
 **Input**: MM-335: [MM-318] Enforce auth security boundaries for workloads and browser surfaces
 
+## Original Jira Preset Brief
+
+```text
+MM-335: [MM-318] Enforce auth security boundaries for workloads and browser surfaces
+
 User Story
 As a security reviewer, I can verify that OAuth credentials never leak into workflow history, browser responses, logs, artifacts, raw volume listings, or Docker-backed workload containers unless a workload credential mount is explicitly declared and justified.
 
@@ -50,6 +55,7 @@ Source Design Coverage
 - DESIGN-REQ-019: Owns browser response safety.
 - DESIGN-REQ-021: Owns cross-component boundary enforcement tests.
 - DESIGN-REQ-022: Owns non-goal enforcement around auth inheritance and generic shell exposure.
+```
 
 ## User Story - Verify OAuth Credential Security Boundaries
 
