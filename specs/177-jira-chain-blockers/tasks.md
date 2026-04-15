@@ -13,7 +13,7 @@
 
 - Unit tests: `./tools/test_unit.sh tests/unit/workflows/temporal/test_story_output_tools.py tests/unit/integrations/test_jira_tool_service.py tests/unit/api/test_task_step_templates_service.py`
 - Integration tests: `./tools/test_integration.sh` if implementation touches integration-ci boundaries beyond the planned unit-test surface
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -66,6 +66,9 @@
 - [X] T010 [P] Add failing story-output unit test for partial link failure preserving created issue keys and reporting incomplete chain covering FR-008, SC-003 in `tests/unit/workflows/temporal/test_story_output_tools.py`
 - [X] T011 [P] Add failing story-output unit test for retry/reuse of existing issues and existing links without duplicate creation covering FR-009, SC-004 in `tests/unit/workflows/temporal/test_story_output_tools.py`
 - [X] T012 [P] Add failing story-output unit test for missing Jira target configuration with dependency mode preserving docs/tmp fallback covering FR-010 and acceptance scenario 5 in `tests/unit/workflows/temporal/test_story_output_tools.py`
+
+### Integration Tests (write first)
+
 - [X] T013 [P] Add failing preset expansion unit test for Jira Breakdown dependency mode input and rendered Jira creation instructions covering FR-001, FR-011, SC-005 in `tests/unit/api/test_task_step_templates_service.py`
 - [X] T014 Run `./tools/test_unit.sh tests/unit/workflows/temporal/test_story_output_tools.py tests/unit/integrations/test_jira_tool_service.py tests/unit/api/test_task_step_templates_service.py` and confirm T008-T013 fail for expected missing behavior
 
@@ -91,7 +94,7 @@
 - [X] T023 [P] Review trusted Jira contract against `specs/177-jira-chain-blockers/contracts/jira-dependency-links.md` and update it only to match implemented request/result names
 - [X] T024 Run `./tools/test_unit.sh` for full unit verification and record result
 - [X] T025 Run `./tools/test_integration.sh` if any integration-ci boundary changed; otherwise document why it was not required. Result: not required because the implementation changes Jira service/model behavior, deterministic story-output handling, preset expansion, and agent skill instructions without changing compose-backed services, persistence, or Temporal workflow payload shapes.
-- [X] T026 Run `/speckit.verify` to validate final implementation against MM-339 and `specs/177-jira-chain-blockers/spec.md`
+- [X] T026 Run `/moonspec-verify` to validate final implementation against MM-339 and `specs/177-jira-chain-blockers/spec.md`
 
 ---
 
