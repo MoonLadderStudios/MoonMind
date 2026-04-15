@@ -26,6 +26,7 @@ Do not use this skill for a single natural-language feature request. Use `moonsp
 - If a file path is provided, resolve it relative to the repo root unless it is absolute, then read it before extracting stories.
 - If no design text or readable design path is provided, stop with: `ERROR "No technical design provided"`.
 - Preserve the original design text verbatim in the breakdown handoff so later `/speckit.specify` output can keep it in `spec.md` `**Input**`.
+- Preserve the source document reference path whenever the source design came from a file. Use the repo-relative path when possible; otherwise use the absolute path provided by the user. This reference is required downstream so every Jira story can point back to the original declarative document.
 - Do not implement, plan, generate tasks, create Jira issues, create `spec.md`, or create directories under `specs/`.
 
 ## Pre-Breakdown Hooks
@@ -119,6 +120,7 @@ For each story, define:
 - Title.
 - 2-4 word short name for directory naming.
 - Why the story exists.
+- Source document reference: the original declarative document path plus the relevant source section or heading when available.
 - Scope and out of scope.
 - Independent test.
 - Acceptance criteria.
@@ -163,7 +165,7 @@ Never name any breakdown output `spec.md`. Never write to `specs/` during breakd
 
 The JSON file must be an object with:
 
-- `source`: title or path, plus the original design text.
+- `source`: object containing `title`, `path`, `referencePath`, and the original design text. For file-backed designs, `path` and `referencePath` must both contain the original design document path. For pasted designs without a file path, set them to `null` and use a clear title such as `inline user request`.
 - `extractedAt`: ISO-8601 timestamp.
 - `coverageGate`: exactly `PASS - every major design point is owned by at least one story.`
 - `stories`: ordered list of story objects.
@@ -174,6 +176,7 @@ Each story object must include:
 - `id`: stable story ID, such as `STORY-001`.
 - `summary`: concise title suitable for a Jira issue summary.
 - `description`: user-story or task narrative.
+- `sourceReference`: object containing `path`, `title`, `sections`, and `coverageIds`. For file-backed designs, `path` must be the same original design document path from `source.referencePath`; do not omit it from any story.
 - `independentTest`: how this story can be validated independently.
 - `acceptanceCriteria`: concrete acceptance criteria.
 - `requirements`: functional requirements owned by the story.
@@ -185,6 +188,7 @@ Each story object must include:
 The markdown file must include the same substance for human review:
 
 - Source design title or path.
+- Original source document reference path for the breakdown and for each story.
 - Story extraction date.
 - Design summary.
 - Coverage points.
@@ -244,6 +248,7 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 
 - One breakdown story candidate equals one future `spec.md`.
 - Preserve the original technical or declarative design verbatim in the breakdown handoff for later specify.
+- Every story candidate must carry a `sourceReference.path` back to the original declarative document when the source came from a file, and the story handoff paragraph must mention that path.
 - Prefer vertical user or operational outcomes over technical-layer slices.
 - Extract stable `DESIGN-REQ-*` coverage points before drafting story candidates.
 - Do not write specs in this skill.
