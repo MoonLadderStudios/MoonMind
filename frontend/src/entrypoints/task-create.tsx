@@ -20,6 +20,7 @@ const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
 const EFFORT_OPTIONS_DATALIST_ID = "queue-effort-options";
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
+const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
 const JIRA_LAST_PROJECT_SESSION_KEY =
   "moonmind.task-create.jira.last-project-key";
@@ -2477,6 +2478,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
+
+  useEffect(() => {
+    if (selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG) {
+      setPublishMode("none");
+    }
+  }, [selectedPreset?.slug]);
 
   const availableDependencyOptions = useMemo(
     () =>
