@@ -5,9 +5,10 @@
 - Jira issue: MM-335
 - Board scope: MM
 - Issue type: Story
-- Current status at fetch time: Backlog
+- Current status at fetch time: In Progress
 - Summary: [MM-318] Enforce auth security boundaries for workloads and browser surfaces
-- Canonical source: Synthesized from the trusted `jira.search_issues` MCP response because the response did not expose `recommendedImports.presetInstructions`; `jira.get_issue` was policy-denied for project `MM`.
+- Trusted fetch tool: `jira.get_issue`
+- Canonical source: Synthesized from the trusted `jira.get_issue` MCP response because the response did not expose `recommendedImports.presetInstructions`, `normalizedPresetBrief`, or `presetBrief`.
 
 ## Canonical MoonSpec Feature Request
 

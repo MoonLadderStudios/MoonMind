@@ -1,6 +1,6 @@
 # Feature Specification: Auth Security Boundaries
 
-**Feature Branch**: `177-auth-security-boundaries`  
+**Feature Branch**: `178-auth-security-boundaries`
 **Created**: 2026-04-15  
 **Status**: Draft  
 **Input**: MM-335: [MM-318] Enforce auth security boundaries for workloads and browser surfaces
