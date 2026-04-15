@@ -1,7 +1,7 @@
 # MoonSpec Verification Report
 
 **Feature**: Auth Security Boundaries  
-**Spec**: `/work/agent_jobs/mm:e5bbcfe7-cc4c-47fb-a668-2ecbb56b8cfb/repo/specs/177-auth-security-boundaries/spec.md`  
+**Spec**: `/work/agent_jobs/mm:032af4f0-2532-49f1-bf81-4cb68c3b0002/repo/specs/177-auth-security-boundaries/spec.md`  
 **Original Request Source**: `spec.md` Input for MM-335  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH
@@ -10,8 +10,8 @@
 
 | Suite | Command | Result | Notes |
 |-------|---------|--------|-------|
-| Targeted unit | `./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py` | PASS | 87 Python tests and 221 frontend tests passed through the unit runner. |
-| Full unit | `./tools/test_unit.sh` | PASS | 3170 Python tests, 16 subtests, and 221 frontend tests passed. |
+| Targeted unit | `./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py` | PASS | 88 Python tests and 221 frontend tests passed through the unit runner. |
+| Full unit | `./tools/test_unit.sh` | PASS | 3195 Python tests, 1 xpassed, 16 subtests, and 221 frontend tests passed. |
 | Integration | `./tools/test_integration.sh` | NOT RUN | No Temporal workflow/activity signature, payload, signal, update, or worker-binding boundary changed. |
 
 ## Requirement Coverage
