@@ -1006,7 +1006,10 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters={
+                "taskRunId": "old-task-run",
+                "task_run_id": "old-task-run-snake",
+            },
             idempotency_key=None,
         )
 
@@ -1046,7 +1049,69 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             "workflowId": source_workflow_id,
             "runId": source_run_id,
         }
+        assert "taskRunId" not in rerun.parameters
+        assert "task_run_id" not in rerun.parameters
         assert service._client_adapter.update_workflow.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_request_rerun_bounds_fresh_execution_idempotency_key(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason="done",
+            graceful=True,
+        )
+
+        long_idempotency_key = "k" * 128
+        first_response = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="RequestRerun",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
+            idempotency_key=long_idempotency_key,
+        )
+        second_response = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="RequestRerun",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
+            idempotency_key=long_idempotency_key,
+        )
+
+        rerun = await service.describe_execution(first_response["workflow_id"])
+        assert first_response["workflow_id"] == second_response["workflow_id"]
+        assert rerun.create_idempotency_key is not None
+        assert len(rerun.create_idempotency_key) <= 128
+        assert rerun.create_idempotency_key.startswith("rerun:")
 
 
 @pytest.mark.asyncio

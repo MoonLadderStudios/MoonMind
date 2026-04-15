@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -67,6 +68,7 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.FAILED,
     MoonMindWorkflowState.CANCELED,
 }
+CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
 
 import logging
 
@@ -910,6 +912,7 @@ class TemporalExecutionService:
                 record.last_update_idempotency_key = idempotency_key
                 record.last_update_response = dict(response)
             await self._session.commit()
+            await self._session.refresh(record)
             return response
 
         else:
@@ -950,6 +953,7 @@ class TemporalExecutionService:
                         record.last_update_idempotency_key = idempotency_key
                         record.last_update_response = dict(response)
                     await self._session.commit()
+                    await self._session.refresh(record)
                     return response
                 else:
                     raise TemporalExecutionValidationError(
@@ -1976,6 +1980,8 @@ class TemporalExecutionService:
         params = dict(record.parameters or {})
         if parameters_patch:
             params.update(parameters_patch)
+        for key in TASK_RUN_ID_PARAM_KEYS:
+            params.pop(key, None)
 
         rerun_source = {
             "workflowId": record.workflow_id,
@@ -1993,10 +1999,9 @@ class TemporalExecutionService:
             or None
         )
 
-        rerun_create_idempotency_key = (
-            f"rerun:{record.workflow_id}:{idempotency_key}"
-            if idempotency_key
-            else None
+        rerun_create_idempotency_key = self._rerun_create_idempotency_key(
+            record.workflow_id,
+            idempotency_key,
         )
         created = await self.create_execution(
             workflow_type=record.workflow_type.value,
@@ -2020,6 +2025,19 @@ class TemporalExecutionService:
             "continue_as_new_cause": "manual_rerun",
             "workflow_id": created.workflow_id,
         }
+
+    @staticmethod
+    def _rerun_create_idempotency_key(
+        workflow_id: str,
+        idempotency_key: str | None,
+    ) -> str | None:
+        if not idempotency_key:
+            return None
+        derived_key = f"rerun:{workflow_id}:{idempotency_key}"
+        if len(derived_key) <= CREATE_IDEMPOTENCY_KEY_MAX_LENGTH:
+            return derived_key
+        digest = hashlib.sha256(derived_key.encode("utf-8")).hexdigest()
+        return f"rerun:{digest}"
 
     def _continue_as_new(
         self,
@@ -2710,8 +2728,6 @@ class TemporalExecutionService:
         record = await self._session.get(
             TemporalExecutionCanonicalRecord, canonical_workflow_id
         )
-        if record is not None:
-            await self._session.refresh(record)
         return record
 
     async def _require_source_execution(
