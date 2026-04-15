@@ -2955,7 +2955,13 @@ export interface components {
             /** Profile Id */
             profile_id: string;
             /** Volume Ref */
-            volume_ref: string;
+            volume_ref?: string | null;
+            /** Volume Mount Path */
+            volume_mount_path?: string | null;
+            /** Provider Id */
+            provider_id?: string | null;
+            /** Provider Label */
+            provider_label?: string | null;
             /** Account Label */
             account_label: string;
             /**

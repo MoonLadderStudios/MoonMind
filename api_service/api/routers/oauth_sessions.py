@@ -8,7 +8,15 @@ from api_service.db.base import get_async_session
 from api_service.auth_providers import get_current_user
 from api_service.api.schemas_oauth_sessions import CreateOAuthSessionRequest, OAuthSessionResponse
 from api_service.services.provider_profile_service import sync_provider_profile_manager
-from api_service.db.models import ManagedAgentOAuthSession, OAuthSessionStatus, User, ManagedAgentProviderProfile, ProviderCredentialSource, ManagedAgentRateLimitPolicy
+from api_service.db.models import (
+    ManagedAgentOAuthSession,
+    OAuthSessionStatus,
+    User,
+    ManagedAgentProviderProfile,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
+    ManagedAgentRateLimitPolicy,
+)
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
 _ACTIVE_SESSION_STATUSES = (
@@ -20,6 +28,30 @@ _ACTIVE_SESSION_STATUSES = (
     OAuthSessionStatus.REGISTERING_PROFILE,
 )
 _STALE_ACTIVE_SESSION_MINUTES = 45
+_OAUTH_PROVIDER_DEFAULTS = {
+    "codex_cli": {
+        "provider_id": "openai",
+        "provider_label": "OpenAI",
+        "volume_ref": "codex_auth_volume",
+        "volume_mount_path": "/home/app/.codex",
+    },
+    "gemini_cli": {
+        "provider_id": "google",
+        "provider_label": "Google",
+        "volume_ref": "gemini_auth_volume",
+        "volume_mount_path": "/var/lib/gemini-auth",
+    },
+    "claude_code": {
+        "provider_id": "anthropic",
+        "provider_label": "Anthropic",
+        "volume_ref": "claude_auth_volume",
+        "volume_mount_path": "/home/app/.claude",
+    },
+}
+
+
+def _oauth_default(runtime_id: str, key: str) -> str | None:
+    return _OAUTH_PROVIDER_DEFAULTS.get(runtime_id, {}).get(key)
 
 
 async def _expire_stale_active_sessions(
@@ -56,6 +88,21 @@ async def create_oauth_session(
     db: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user()),
 ):
+    volume_ref = request.volume_ref or _oauth_default(request.runtime_id, "volume_ref")
+    volume_mount_path = request.volume_mount_path or _oauth_default(
+        request.runtime_id, "volume_mount_path"
+    )
+    if not volume_ref:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="volume_ref is required for OAuth sessions.",
+        )
+    if not volume_mount_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="volume_mount_path is required for OAuth sessions.",
+        )
+
     await _expire_stale_active_sessions(db, profile_id=request.profile_id)
 
     # Check for existing active session for this profile
@@ -78,11 +125,17 @@ async def create_oauth_session(
         session_id=session_id,
         runtime_id=request.runtime_id,
         profile_id=request.profile_id,
-        volume_ref=request.volume_ref,
+        volume_ref=volume_ref,
+        volume_mount_path=volume_mount_path,
         account_label=request.account_label,
         status=OAuthSessionStatus.PENDING,
         requested_by_user_id=str(current_user.id),
         metadata_json={
+            "provider_id": request.provider_id
+            or _oauth_default(request.runtime_id, "provider_id")
+            or "unknown",
+            "provider_label": request.provider_label
+            or _oauth_default(request.runtime_id, "provider_label"),
             "max_parallel_runs": request.max_parallel_runs,
             "cooldown_after_429_seconds": request.cooldown_after_429_seconds,
             "rate_limit_policy": request.rate_limit_policy.value,
@@ -191,7 +244,6 @@ async def finalize_oauth_session(
     if session_obj.status not in [OAuthSessionStatus.AWAITING_USER, OAuthSessionStatus.VERIFYING]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot finalize session in {session_obj.status.name} state")
 
-    # Attempt volume verification (best-effort — Docker may not be available)
     try:
         from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
             verify_volume_credentials,
@@ -203,13 +255,19 @@ async def finalize_oauth_session(
             volume_mount_path=session_obj.volume_mount_path,
         )
         if not verification.get("verified", False):
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "Volume verification failed for session %s: %s",
-                session_id,
-                verification.get("reason", "unknown"),
+            session_obj.status = OAuthSessionStatus.FAILED
+            session_obj.completed_at = datetime.now(timezone.utc)
+            session_obj.failure_reason = (
+                "Volume verification failed: "
+                f"{verification.get('reason', 'unknown')}"
             )
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=session_obj.failure_reason,
+            )
+    except HTTPException:
+        raise
     except Exception:
         import logging
 
@@ -217,6 +275,14 @@ async def finalize_oauth_session(
             "Volume verification unavailable for session %s",
             session_id,
             exc_info=True,
+        )
+        session_obj.status = OAuthSessionStatus.FAILED
+        session_obj.completed_at = datetime.now(timezone.utc)
+        session_obj.failure_reason = "Volume verification unavailable"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=session_obj.failure_reason,
         )
 
     session_obj.status = OAuthSessionStatus.SUCCEEDED
@@ -245,7 +311,13 @@ async def finalize_oauth_session(
 
     profile_data = {
         "runtime_id": session_obj.runtime_id,
+        "provider_id": metadata.get("provider_id")
+        or _oauth_default(session_obj.runtime_id, "provider_id")
+        or "unknown",
+        "provider_label": metadata.get("provider_label")
+        or _oauth_default(session_obj.runtime_id, "provider_label"),
         "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
+        "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
         "volume_ref": session_obj.volume_ref,
         "volume_mount_path": session_obj.volume_mount_path,
         "account_label": session_obj.account_label,

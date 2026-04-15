@@ -9,7 +9,10 @@ from api_service.db.models import ManagedAgentRateLimitPolicy, OAuthSessionStatu
 class CreateOAuthSessionRequest(BaseModel):
     runtime_id: str
     profile_id: str
-    volume_ref: str
+    volume_ref: Optional[str] = None
+    volume_mount_path: Optional[str] = None
+    provider_id: Optional[str] = None
+    provider_label: Optional[str] = None
     account_label: str
     max_parallel_runs: int = 1
     cooldown_after_429_seconds: int = 900
