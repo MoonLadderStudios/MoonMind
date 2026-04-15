@@ -685,6 +685,54 @@ class CodexManagedSessionWorkflowControlRequest(BaseModel):
         return self
 
 
+class CodexManagedSessionAttachRuntimeHandlesSignal(BaseModel):
+    """Typed workflow signal for attaching bounded runtime handles."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
+    container_id: str | None = Field(None, alias="containerId")
+    thread_id: str | None = Field(None, alias="threadId")
+    active_turn_id: str | None = Field(None, alias="activeTurnId")
+    last_control_action: ManagedSessionControlAction | None = Field(
+        None, alias="lastControlAction"
+    )
+    last_control_reason: str | None = Field(None, alias="lastControlReason")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionAttachRuntimeHandlesSignal":
+        if self.container_id is not None:
+            self.container_id = require_non_blank(
+                self.container_id,
+                field_name="containerId",
+            )
+        if self.thread_id is not None:
+            self.thread_id = require_non_blank(self.thread_id, field_name="threadId")
+        if self.active_turn_id is not None:
+            self.active_turn_id = require_non_blank(
+                self.active_turn_id,
+                field_name="activeTurnId",
+            )
+        if self.last_control_reason is not None:
+            self.last_control_reason = require_non_blank(
+                self.last_control_reason,
+                field_name="lastControlReason",
+            )
+        return self
+
+
+class CodexManagedSessionClearUpdateRequest(CodexManagedSessionWorkflowControlRequest):
+    """Typed workflow update request for clearing session context."""
+
+
+class CodexManagedSessionCancelUpdateRequest(CodexManagedSessionWorkflowControlRequest):
+    """Typed workflow update request for canceling the active session turn."""
+
+
+class CodexManagedSessionTerminateUpdateRequest(CodexManagedSessionWorkflowControlRequest):
+    """Typed workflow update request for terminating the managed session."""
+
+
 class CodexManagedSessionSnapshot(BaseModel):
     """Workflow-owned snapshot of one task-scoped Codex session."""
 
@@ -712,8 +760,11 @@ class CodexManagedSessionSnapshot(BaseModel):
 __all__ = [
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
     "CodexManagedSessionArtifactsPublication",
+    "CodexManagedSessionAttachRuntimeHandlesSignal",
     "CodexManagedSessionBinding",
+    "CodexManagedSessionCancelUpdateRequest",
     "CodexManagedSessionClearRequest",
+    "CodexManagedSessionClearUpdateRequest",
     "CodexManagedSessionHandle",
     "CodexManagedSessionInterruptRequest",
     "CodexManagedSessionLocator",
@@ -725,6 +776,7 @@ __all__ = [
     "CodexManagedSessionState",
     "CodexManagedSessionSteerRequest",
     "CodexManagedSessionSummary",
+    "CodexManagedSessionTerminateUpdateRequest",
     "CodexManagedSessionTurnResponse",
     "CodexManagedSessionWorkflowControlRequest",
     "CodexManagedSessionWorkflowInput",

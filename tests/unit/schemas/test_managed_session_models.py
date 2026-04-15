@@ -7,13 +7,17 @@ from pydantic import ValidationError
 
 from moonmind.schemas.managed_session_models import (
     CODEX_MANAGED_SESSION_CONTROL_ACTIONS,
+    CodexManagedSessionAttachRuntimeHandlesSignal,
     CodexManagedSessionArtifactsPublication,
+    CodexManagedSessionCancelUpdateRequest,
     CodexManagedSessionClearRequest,
+    CodexManagedSessionClearUpdateRequest,
     CodexManagedSessionHandle,
     CodexManagedSessionLocator,
     CodexManagedSessionPlaneContract,
     CodexManagedSessionState,
     CodexManagedSessionSummary,
+    CodexManagedSessionTerminateUpdateRequest,
     CodexManagedSessionTurnResponse,
     LaunchCodexManagedSessionRequest,
     SendCodexManagedSessionTurnRequest,
@@ -292,3 +296,49 @@ def test_send_codex_managed_session_turn_request_trims_instruction_and_reason() 
 
     assert request.instructions == "Investigate the failing test"
     assert request.reason == "Operator follow-up"
+
+
+def test_attach_runtime_handles_signal_is_explicit_typed_contract() -> None:
+    signal = CodexManagedSessionAttachRuntimeHandlesSignal.model_validate(
+        {
+            "sessionEpoch": 2,
+            "containerId": "  ctr-123  ",
+            "threadId": "  thread-2  ",
+            "activeTurnId": "  turn-2  ",
+            "lastControlAction": "send_turn",
+            "lastControlReason": "  operator follow-up  ",
+        }
+    )
+
+    assert signal.session_epoch == 2
+    assert signal.container_id == "ctr-123"
+    assert signal.thread_id == "thread-2"
+    assert signal.active_turn_id == "turn-2"
+    assert signal.last_control_action == "send_turn"
+    assert signal.last_control_reason == "operator follow-up"
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        CodexManagedSessionClearUpdateRequest,
+        CodexManagedSessionCancelUpdateRequest,
+        CodexManagedSessionTerminateUpdateRequest,
+    ],
+)
+def test_each_session_control_update_has_its_own_request_model(
+    model_type: type[CodexManagedSessionClearUpdateRequest],
+) -> None:
+    request = model_type.model_validate(
+        {"reason": "  operator control  ", "requestId": "  request-1  "}
+    )
+
+    assert request.reason == "operator control"
+    assert request.request_id == "request-1"
+
+
+def test_session_control_update_models_forbid_unknown_fields() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        CodexManagedSessionCancelUpdateRequest.model_validate(
+            {"reason": "stop", "action": "terminate_session"}
+        )

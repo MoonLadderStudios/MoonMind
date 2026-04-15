@@ -1526,7 +1526,7 @@ async def test_agent_session_continue_as_new_carries_bounded_session_state(
         )
     )
     waited_for_handlers = False
-    captured_payload: dict[str, object] | None = None
+    captured_payload: CodexManagedSessionWorkflowInput | None = None
     wait_calls = 0
     monkeypatch.setattr(agent_session_module.workflow, "all_handlers_finished", True)
 
@@ -1539,7 +1539,7 @@ async def test_agent_session_continue_as_new_carries_bounded_session_state(
         assert predicate() is True
         waited_for_handlers = True
 
-    def _continue_as_new(payload: dict[str, object]) -> None:
+    def _continue_as_new(payload: CodexManagedSessionWorkflowInput) -> None:
         nonlocal captured_payload
         captured_payload = payload
         raise RuntimeError("continue-as-new requested")
@@ -1555,7 +1555,8 @@ async def test_agent_session_continue_as_new_carries_bounded_session_state(
         await workflow.run(_workflow_input())
 
     assert waited_for_handlers is True
-    assert captured_payload == {
+    assert isinstance(captured_payload, CodexManagedSessionWorkflowInput)
+    assert captured_payload.model_dump(mode="json", by_alias=True) == {
         "taskRunId": "wf-run-1",
         "runtimeId": "codex_cli",
         "sessionId": "sess:wf-run-1:codex_cli",
