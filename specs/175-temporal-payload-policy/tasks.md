@@ -16,13 +16,13 @@
 ## Phase 2: Story - Compact Temporal Payloads
 
 - [X] T003 Add failing unit/schema tests for nested raw bytes and large text rejection in `tests/schemas/test_temporal_payload_policy.py` (FR-001, FR-002, FR-003, SC-001, SC-002).
-- [X] T004 Add failing unit/schema tests for compact managed-session artifact refs and integration provider-summary refs in `tests/schemas/test_temporal_payload_policy.py` (FR-004, FR-005, SC-002).
+- [X] T004 Add failing unit/schema tests for compact managed-session artifact refs and integration provider-summary refs in `tests/schemas/test_temporal_payload_policy.py` (FR-003, FR-004, FR-005, SC-002).
 - [X] T005 Add failing explicit binary serializer regression tests in `tests/schemas/test_temporal_activity_models.py` (FR-001, SC-003).
 - [X] T006 Confirm red-first failure for payload-policy tests in `tests/schemas/test_temporal_payload_policy.py` and `tests/schemas/test_temporal_activity_models.py` before production implementation (SC-001, SC-002, SC-003).
 - [X] T007 Add reusable compact Temporal mapping validation in `moonmind/schemas/temporal_payload_policy.py` (FR-001, FR-002, FR-003).
 - [X] T008 Apply compact metadata validation to agent-runtime models in `moonmind/schemas/agent_runtime_models.py` (FR-002, FR-003, FR-004).
-- [X] T009 Apply compact metadata validation to managed-session models in `moonmind/schemas/managed_session_models.py` (FR-002, FR-004).
-- [X] T010 Apply provider-summary validation to integration Temporal models and signals in `moonmind/schemas/temporal_models.py` and `moonmind/schemas/temporal_signal_contracts.py` (FR-002, FR-005).
+- [X] T009 Apply compact metadata validation to managed-session models in `moonmind/schemas/managed_session_models.py` (FR-002, FR-003, FR-004).
+- [X] T010 Apply provider-summary validation to integration Temporal models and signals in `moonmind/schemas/temporal_models.py` and `moonmind/schemas/temporal_signal_contracts.py` (FR-002, FR-003, FR-005).
 - [X] T011 Story validation: run focused schema and explicit binary serialization tests for `tests/schemas/test_temporal_payload_policy.py` and `tests/schemas/test_temporal_activity_models.py` (SC-001, SC-002, SC-003, SC-004).
 
 ## Final Phase: Verification

@@ -9,8 +9,8 @@ Verdict: PASS
 ## Coverage
 
 - MM-330 on TOOL board and the original Jira preset brief are preserved in `spec.md`.
-- DESIGN-REQ-017 maps to explicit binary serializers, raw-byte rejection, large-body rejection, artifact-ref acceptance, and task coverage T003, T005, T007, T008, T013, and T014.
-- DESIGN-REQ-019 maps to bounded metadata/provider-summary escape-hatch validation and task coverage T004, T010, T013, and T014.
+- DESIGN-REQ-017 maps to explicit binary serializers, raw-byte rejection, large-body rejection, artifact-ref acceptance, and task coverage T003, T004, T005, T007, T008, T009, T010, T013, and T014.
+- DESIGN-REQ-019 maps to bounded metadata/provider-summary escape-hatch validation and task coverage T003, T004, T007, T008, T009, T010, T013, and T014.
 - Unit test strategy is explicit in `plan.md`, `quickstart.md`, and tasks T003-T006, T011, and T012.
 - Integration strategy is explicit in `plan.md`, `research.md`, `quickstart.md`, and tasks T002 and T013.
 - Final `/moonspec-verify` work is covered by T014.
