@@ -1523,6 +1523,14 @@ def test_publish_completion_accepts_jira_output_without_pr_url() -> None:
     assert failed is False
 
 
+@pytest.mark.parametrize("story_status", ["jira_created", "jira_partial"])
+def test_jira_story_output_status_satisfies_pr_publish(story_status: str) -> None:
+    assert MoonMindRunWorkflow._is_successful_jira_story_output(
+        mode="jira",
+        status=story_status,
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
     monkeypatch: pytest.MonkeyPatch,

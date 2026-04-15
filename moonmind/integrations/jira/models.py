@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 JiraActionName = Literal[
     "create_issue",
@@ -144,7 +144,7 @@ class CreateIssueLinkRequest(JiraBaseModel):
 
     @field_validator("blocked_issue_key")
     @classmethod
-    def _reject_self_link(cls, value: str, info: Any) -> str:
+    def _reject_self_link(cls, value: str, info: ValidationInfo) -> str:
         if value == info.data.get("blocks_issue_key"):
             raise ValueError("blocksIssueKey and blockedIssueKey must differ")
         return value
