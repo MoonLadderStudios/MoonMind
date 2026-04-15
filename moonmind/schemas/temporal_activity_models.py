@@ -248,7 +248,6 @@ class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
 
     @model_validator(mode="after")
     def _normalize_fetch(self) -> "AgentRuntimeFetchResultInput":
-        super()._normalize()
         for field_name in ("commit_message", "target_branch", "head_branch"):
             value = getattr(self, field_name)
             if value is not None:

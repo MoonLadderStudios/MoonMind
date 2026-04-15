@@ -38,6 +38,24 @@ def test_agent_runtime_fetch_result_input_rejects_unsupported_publish_mode() -> 
         )
 
 
+def test_agent_runtime_fetch_result_input_normalizes_parent_and_fetch_fields() -> None:
+    request = AgentRuntimeFetchResultInput.model_validate(
+        {
+            "runId": " managed-1 ",
+            "agentId": " codex ",
+            "commitMessage": " Use typed payloads ",
+            "targetBranch": " main ",
+            "headBranch": "   ",
+        }
+    )
+
+    assert request.run_id == "managed-1"
+    assert request.agent_id == "codex"
+    assert request.commit_message == "Use typed payloads"
+    assert request.target_branch == "main"
+    assert request.head_branch is None
+
+
 @activity.defn(name="typed.boundary.status")
 async def _typed_status_activity(request: ExternalAgentRunInput) -> AgentRunStatus:
     assert isinstance(request, ExternalAgentRunInput)
