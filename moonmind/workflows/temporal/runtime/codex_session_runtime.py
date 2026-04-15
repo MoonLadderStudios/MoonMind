@@ -382,6 +382,14 @@ class CodexManagedSessionRuntime:
         if self._auth_volume_path is None:
             return
         source_root = self._auth_volume_path
+        if (
+            source_root.expanduser().resolve()
+            == self._codex_home_path.expanduser().resolve()
+        ):
+            raise RuntimeError(
+                "MANAGED_AUTH_VOLUME_PATH must not equal "
+                "MOONMIND_SESSION_CODEX_HOME_PATH"
+            )
         if not source_root.exists():
             raise RuntimeError(
                 f"MANAGED_AUTH_VOLUME_PATH does not exist: {source_root}"

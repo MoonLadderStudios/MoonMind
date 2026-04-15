@@ -2189,6 +2189,31 @@ def test_runtime_launch_session_seeds_auth_volume_without_overwriting_materializ
     assert not Path(request.codex_home_path, "logs_1.sqlite").exists()
 
 
+def test_runtime_launch_session_rejects_auth_volume_equal_to_codex_home(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="MANAGED_AUTH_VOLUME_PATH must not equal MOONMIND_SESSION_CODEX_HOME_PATH",
+    ):
+        runtime.launch_session(request)
+
+
 def test_run_ready_requires_runtime_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     workspace_path = tmp_path / "repo"
     workspace_path.mkdir()
