@@ -1,10 +1,14 @@
 """Unit/Integration tests for ManagedAgentProviderProfile CRUD API."""
 
+from types import SimpleNamespace
+from uuid import uuid4
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.db.models import Base, ManagedAgentProviderProfile, ProviderCredentialSource, ManagedAgentRateLimitPolicy
 from api_service.main import app
@@ -44,6 +48,26 @@ def client_app(_module_db) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
 
+def _override_current_user(*, user_id=None, is_superuser: bool = False):
+    user = SimpleNamespace(
+        id=user_id if user_id is not None else uuid4(),
+        email="provider-profile-test@example.com",
+        is_active=True,
+        is_superuser=is_superuser,
+    )
+    dependencies = {
+        dep.call
+        for route in app.routes
+        if getattr(route, "path", "").startswith("/api/v1/provider-profiles")
+        and getattr(route, "dependant", None) is not None
+        for dep in route.dependant.dependencies
+        if getattr(dep.call, "__name__", "") == "_current_user_fallback"
+    } or {get_current_user()}
+    for dependency in dependencies:
+        app.dependency_overrides[dependency] = lambda user=user: user
+    return user
+
+
 async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
     """Helper to create a baseline profile in the test DB."""
     profile_id = "test_gemini_profile"
@@ -68,6 +92,83 @@ async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
         await session.commit()
         await session.refresh(profile)
         return profile
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_response_redacts_secret_like_runtime_fields(
+    client_app: AsyncClient, _module_db
+) -> None:
+    """Browser-visible profile responses must not expose raw secret-like values."""
+    profile_id = "profile_with_raw_runtime_secret"
+    raw_secret = "sk-test-raw-secret-value"
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="redaction_runtime",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode="api_key_env",
+                    env_template={"OPENAI_API_KEY": raw_secret},
+                    command_behavior={"authorization": f"Bearer {raw_secret}"},
+                    secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 200
+    response_text = response.text
+    assert raw_secret not in response_text
+    assert "Bearer" not in response_text
+    assert response.json()["env_template"]["OPENAI_API_KEY"] == "[REDACTED]"
+    assert response.json()["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_update_rejects_non_owner(
+    client_app: AsyncClient, _module_db
+) -> None:
+    profile_id = "profile_owned_by_someone_else"
+    owner_id = uuid4()
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="owner_runtime",
+                    provider_id="openai",
+                    owner_user_id=owner_id,
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode="oauth_home",
+                    volume_ref="codex_auth_volume",
+                    volume_mount_path="/home/app/.codex",
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    other_user = _override_current_user(user_id=uuid4(), is_superuser=False)
+    try:
+        async with client_app as client:
+            response = await client.patch(
+                f"/api/v1/provider-profiles/{profile_id}",
+                json={"enabled": False},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert str(other_user.id) != str(owner_id)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Not authorized to manage this provider profile."
 
 
 @pytest.mark.asyncio

@@ -12,12 +12,15 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.auth_providers import get_current_user
 from api_service.db.models import (
     ProviderCredentialSource,
     RuntimeMaterializationMode,
     ManagedAgentProviderProfile,
     ManagedAgentRateLimitPolicy,
+    User,
 )
+from moonmind.utils.logging import redact_sensitive_payload
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
@@ -198,6 +201,7 @@ async def list_profiles(
     runtime_id: Optional[str] = None,
     enabled_only: bool = False,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
 ) -> list[dict[str, Any]]:
     stmt = select(ManagedAgentProviderProfile)
     if runtime_id:
@@ -212,17 +216,23 @@ async def list_profiles(
 
     result = await session.execute(stmt)
     rows = result.scalars().all()
-    return [_row_to_dict(r) for r in rows]
+    return [_row_to_dict(r) for r in rows if _can_view_profile(r, current_user)]
 
 
 @router.get("/{profile_id}", response_model=ProviderProfileResponse)
 async def get_profile(
     profile_id: str,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
     row = await session.get(ManagedAgentProviderProfile, profile_id)
     if not row:
         raise HTTPException(status_code=404, detail="Profile not found")
+    if not _can_view_profile(row, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to view this provider profile.",
+        )
     return _row_to_dict(row)
 
 
@@ -230,6 +240,7 @@ async def get_profile(
 async def create_profile(
     body: ProviderProfileCreate,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
     existing = await session.get(ManagedAgentProviderProfile, body.profile_id)
     if existing:
@@ -255,6 +266,7 @@ async def create_profile(
         file_templates=body.file_templates,
         home_path_overrides=body.home_path_overrides,
         command_behavior=body.command_behavior,
+        owner_user_id=getattr(current_user, "id", None),
         max_parallel_runs=body.max_parallel_runs,
         cooldown_after_429_seconds=body.cooldown_after_429_seconds,
         rate_limit_policy=ManagedAgentRateLimitPolicy(body.rate_limit_policy),
@@ -282,10 +294,12 @@ async def update_profile(
     profile_id: str,
     body: ProviderProfileUpdate,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    _require_profile_management(profile, current_user)
 
     update_data = body.model_dump(exclude_unset=True)
     requested_is_default = update_data.pop("is_default", None)
@@ -317,10 +331,12 @@ async def update_profile(
 async def delete_profile(
     profile_id: str,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
 ) -> None:
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    _require_profile_management(profile, current_user)
     runtime_id = profile.runtime_id
     await session.delete(profile)
     await session.flush()
@@ -334,8 +350,35 @@ async def delete_profile(
 # ---------------------------------------------------------------------------
 
 
+def _user_id(user: Any) -> str | None:
+    raw = getattr(user, "id", None)
+    if raw is None:
+        return None
+    return str(raw)
+
+
+def _can_view_profile(row: ManagedAgentProviderProfile, user: Any) -> bool:
+    user_id = _user_id(user)
+    if user_id is None or bool(getattr(user, "is_superuser", False)):
+        return True
+    owner_id = row.owner_user_id
+    return owner_id is None or str(owner_id) == user_id
+
+
+def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> None:
+    user_id = _user_id(user)
+    if user_id is None or bool(getattr(user, "is_superuser", False)):
+        return
+    if row.owner_user_id is not None and str(row.owner_user_id) == user_id:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Not authorized to manage this provider profile.",
+    )
+
+
 def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
-    return {
+    payload = {
         "profile_id": row.profile_id,
         "runtime_id": row.runtime_id,
         "provider_id": row.provider_id,
@@ -366,6 +409,7 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
+    return redact_sensitive_payload(payload)
 
 
 from api_service.services.provider_profile_service import (

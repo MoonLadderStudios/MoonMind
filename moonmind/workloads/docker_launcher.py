@@ -18,6 +18,7 @@ from moonmind.schemas.workload_models import (
     WorkloadResourceOverrides,
     WorkloadResult,
 )
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 
 _MAX_CAPTURED_STREAM_CHARS = 64_000
@@ -353,9 +354,19 @@ def _publish_workload_artifacts(
             errors[class_name] = str(exc)
             return None
 
-    stdout_ref = _write("runtime.stdout", workload_root / "runtime.stdout.log", stdout)
-    stderr_ref = _write("runtime.stderr", workload_root / "runtime.stderr.log", stderr)
-    diagnostics_payload = dict(diagnostics)
+    sanitized_stdout = redact_sensitive_text(stdout)
+    sanitized_stderr = redact_sensitive_text(stderr)
+    stdout_ref = _write(
+        "runtime.stdout",
+        workload_root / "runtime.stdout.log",
+        sanitized_stdout,
+    )
+    stderr_ref = _write(
+        "runtime.stderr",
+        workload_root / "runtime.stderr.log",
+        sanitized_stderr,
+    )
+    diagnostics_payload = dict(redact_sensitive_payload(dict(diagnostics)))
     diagnostics_payload["artifactPublication"] = (
         {
             "status": "failed",
@@ -709,8 +720,8 @@ class DockerWorkloadLauncher:
 
         completed_at = datetime.now(UTC)
         duration_seconds = (completed_at - started_at).total_seconds()
-        stdout = _decode_stream(bytes(stdout_buffer))
-        stderr = _decode_stream(bytes(stderr_buffer))
+        stdout = redact_sensitive_text(_decode_stream(bytes(stdout_buffer)))
+        stderr = redact_sensitive_text(_decode_stream(bytes(stderr_buffer)))
         workload_metadata = _workload_metadata(
             request,
             status=status,
@@ -748,7 +759,7 @@ class DockerWorkloadLauncher:
             )
         )
         workload_metadata["artifactPublication"] = artifact_publication
-        metadata = {
+        metadata = redact_sensitive_payload({
             "containerName": request.container_name,
             "image": request.profile.image,
             "imageRef": request.profile.image,
@@ -758,7 +769,7 @@ class DockerWorkloadLauncher:
             "stderr": stderr,
             "workload": workload_metadata,
             "artifactPublication": artifact_publication,
-        }
+        })
         return WorkloadResult(
             requestId=request.container_name,
             profileId=request.profile.id,
