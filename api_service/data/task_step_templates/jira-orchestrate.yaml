@@ -134,6 +134,8 @@ steps:
     instructions: |-
       Create a pull request for the completed work for Jira issue {{ inputs.jira_issue_key }}.
 
+      This preset owns pull request creation before the Jira Code Review transition. It must be run with task.publish.mode=none so the pull request is created in this step, not by a later MoonMind publish stage. If the runtime instructions, task parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Code Review and report the exact blocker.
+
       First confirm the working tree contains only intentional changes for this issue and no raw credentials. Commit the work with a concise message that includes {{ inputs.jira_issue_key }}. Push the current non-protected work branch and create a pull request with the available authenticated GitHub tooling.
 
       The pull request title must include {{ inputs.jira_issue_key }}. The pull request body must include:
@@ -143,7 +145,7 @@ steps:
       - tests run
       - remaining risks
 
-      If authentication, remote configuration, branch protection, or repository permissions prevent PR creation, stop before changing Jira to Code Review and report the exact blocker.
+      After creation, record the confirmed pull request URL in the step result and in a local handoff artifact at artifacts/jira-orchestrate-pr.json with keys jira_issue_key and pull_request_url. Do not continue unless the pull_request_url is a GitHub pull request URL for the current work branch.
     skill:
       id: auto
       args: {}
@@ -152,6 +154,8 @@ steps:
   - title: Move Jira issue to Code Review
     instructions: |-
       Change Jira issue {{ inputs.jira_issue_key }} to status Code Review only after the pull request exists.
+
+      Before using any Jira transition tool, read the previous pull request creation result or artifacts/jira-orchestrate-pr.json and verify it contains a non-empty pull_request_url for {{ inputs.jira_issue_key }}. If no confirmed pull request URL is available, stop without changing Jira and report that Code Review is blocked until PR creation succeeds.
 
       Use the trusted Jira issue updater workflow and Jira transition tools. Match Code Review against the issue's available transitions or target statuses; do not guess transition IDs. Add or preserve a Jira-visible reference to the pull request when supported by the trusted tools. Re-fetch the issue when possible and report the confirmed status.
     skill:

@@ -26,11 +26,13 @@ As an operator, I can select a Jira Orchestrate preset, enter a Jira issue key, 
 - **FR-004**: The preset MUST instruct the runtime to use the issue's Jira preset brief as the canonical MoonSpec orchestration input.
 - **FR-005**: The preset MUST include the MoonSpec Orchestrate lifecycle stages: classify/resume, specify, optional breakdown, plan, tasks, align, implement, and verify.
 - **FR-006**: The preset MUST include a pull request creation stage after successful verification.
-- **FR-007**: The preset MUST transition the Jira issue to Code Review only after the pull request exists.
-- **FR-008**: Automated tests MUST validate seed synchronization and expansion behavior for the new preset.
+- **FR-007**: The preset MUST transition the Jira issue to Code Review only after the pull request exists and a confirmed pull request URL is available from the PR creation step.
+- **FR-008**: The preset MUST stop before the Code Review transition when PR creation is blocked or no confirmed pull request URL is available.
+- **FR-009**: Automated tests MUST validate seed synchronization and expansion behavior for the new preset.
 
 ## Success Criteria
 
 - **SC-001**: Startup seed synchronization creates the `jira-orchestrate` preset.
 - **SC-002**: Expansion with `MM-328` produces the expected Jira, MoonSpec, PR, and report steps with the issue key rendered.
-- **SC-003**: Existing seeded presets continue to pass their catalog tests.
+- **SC-003**: Expansion with `MM-328` makes the PR creation step require `task.publish.mode=none` and makes the Code Review step verify a concrete PR URL handoff before changing Jira.
+- **SC-004**: Existing seeded presets continue to pass their catalog tests.

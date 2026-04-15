@@ -527,7 +527,15 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "pull request title must include MM-328" in expanded["steps"][10][
                 "instructions"
             ]
+            assert "task.publish.mode=none" in expanded["steps"][10]["instructions"]
+            assert "artifacts/jira-orchestrate-pr.json" in expanded["steps"][10][
+                "instructions"
+            ]
             assert expanded["steps"][11]["skill"]["id"] == "jira-issue-updater"
+            assert "pull_request_url" in expanded["steps"][11]["instructions"]
+            assert "stop without changing Jira" in expanded["steps"][11][
+                "instructions"
+            ]
             assert "Code Review" in expanded["steps"][11]["instructions"]
 
 

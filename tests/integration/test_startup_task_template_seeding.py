@@ -104,9 +104,12 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             if step["title"] == "Create pull request"
         )
         assert "pull request" in pr_step["instructions"]
+        assert "task.publish.mode=none" in pr_step["instructions"]
+        assert "artifacts/jira-orchestrate-pr.json" in pr_step["instructions"]
         code_review_step = next(
             step
             for step in jira_orchestrate_template.latest_version.steps
             if step["title"] == "Move Jira issue to Code Review"
         )
         assert "Code Review" in code_review_step["instructions"]
+        assert "pull_request_url" in code_review_step["instructions"]
