@@ -2771,6 +2771,110 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("defaults publish mode to none when selecting the Jira Breakdown preset", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-breakdown",
+                scope: "global",
+                title: "Jira Breakdown",
+                description: "Create Jira stories from a breakdown.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+              {
+                slug: "moonspec-orchestrate",
+                scope: "global",
+                title: "MoonSpec Orchestrate",
+                description: "Keep the default preset off Jira Breakdown.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Jira Breakdown (Global)",
+        ),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect((presetSelect as HTMLSelectElement).value).toBe(
+        "global::::moonspec-orchestrate",
+      );
+    });
+
+    const publishSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    expect(publishSelect.value).toBe("pr");
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-breakdown" },
+    });
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("none");
+    });
+  });
+
+  it("preserves draft publish mode in edit mode when Jira Breakdown is the selected preset", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-breakdown",
+                scope: "global",
+                title: "Jira Breakdown",
+                description: "Create Jira stories from a breakdown.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderForEdit("mm:edit-123");
+
+    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect((presetSelect as HTMLSelectElement).value).toBe(
+        "global::::jira-breakdown",
+      );
+    });
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("branch");
+    });
+  });
+
   it("submits publish mode none when the selected primary skill is pr-resolver", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
