@@ -23,7 +23,7 @@
 
 ## Source Traceability Summary
 
-- **Original Jira input**: T001, T020
+- **Original Jira input**: T001, T020, T025
 - **FR-001**: T004, T007, T010, T011, T018
 - **FR-002**: T004, T010, T012, T018
 - **FR-003**: T004, T010, T018
@@ -32,12 +32,12 @@
 - **FR-006**: T005, T007, T012, T013, T018
 - **FR-007**: T006, T011, T014, T018
 - **FR-008**: T004, T005, T006, T010, T014, T018
-- **Acceptance Scenarios 1-5**: T007, T009, T018
+- **Acceptance Scenarios 1-5**: T007, T009, T018, T025
 - **SC-001**: T004, T007, T010, T018
 - **SC-002**: T005, T007, T012, T013, T018
 - **SC-003**: T006, T014, T018
 - **SC-004**: T004, T007, T010, T018
-- **SC-005**: T001, T020
+- **SC-005**: T001, T020, T025
 - **DESIGN-REQ-005**: T004, T010, T011, T018
 - **DESIGN-REQ-018**: T007, T008, T009, T018, T019
 - **DESIGN-REQ-019**: T006, T014, T018
@@ -88,7 +88,7 @@ No separate foundational code task is required before the story phase. Existing 
 
 ### Integration Tests (write first)
 
-- [ ] T007 Add failing integration or workflow-boundary tests for acceptance scenarios 1-5 in `tests/integration/temporal/test_temporal_type_safety_gates.py`. [FR-001, FR-004, FR-006, SC-001, SC-002, SC-004, DESIGN-REQ-018]
+- [ ] T007 Add failing integration or workflow-boundary tests for acceptance scenarios 1-5 with `integration` and `integration_ci` markers in `tests/integration/temporal/test_temporal_type_safety_gates.py`. [FR-001, FR-004, FR-006, SC-001, SC-002, SC-004, DESIGN-REQ-018]
 
 ### Red-First Confirmation
 

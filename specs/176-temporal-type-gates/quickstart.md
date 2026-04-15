@@ -20,10 +20,10 @@ pytest tests/unit/schemas/test_temporal_payload_policy.py \
 Add workflow-boundary or replay-style coverage for compatibility-sensitive cases:
 
 ```bash
-pytest tests/unit/workflows/temporal/workflows/test_agent_session.py \
-  tests/unit/workflows/temporal/test_typed_activity_boundaries.py \
-  tests/unit/workflows/temporal/test_activity_catalog.py -q
+pytest tests/integration/temporal/test_temporal_type_safety_gates.py -q
 ```
+
+The integration test module should use the repo's hermetic integration markers, including `integration` and `integration_ci`, unless implementation discovers a concrete reason the fixture cannot run in required CI.
 
 ## Full Unit Verification
 

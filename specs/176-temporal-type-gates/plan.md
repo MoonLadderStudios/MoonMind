@@ -76,18 +76,21 @@ tools/
 └── validate_temporal_type_safety.py
 
 tests/
-└── unit/
-    ├── schemas/
-    │   ├── test_temporal_activity_models.py
-    │   ├── test_temporal_payload_policy.py
-    │   ├── test_temporal_signal_contracts.py
-    │   └── test_managed_session_models.py
-    └── workflows/
-        └── temporal/
-            ├── test_activity_catalog.py
-            ├── test_typed_activity_boundaries.py
-            └── workflows/
-                └── test_agent_session.py
+├── unit/
+│   ├── schemas/
+│   │   ├── test_temporal_activity_models.py
+│   │   ├── test_temporal_payload_policy.py
+│   │   ├── test_temporal_signal_contracts.py
+│   │   └── test_managed_session_models.py
+│   └── workflows/
+│       └── temporal/
+│           ├── test_activity_catalog.py
+│           ├── test_temporal_type_safety_gates.py
+│           └── workflows/
+│               └── test_agent_session.py
+└── integration/
+    └── temporal/
+        └── test_temporal_type_safety_gates.py
 ```
 
 **Structure Decision**: Use the existing Temporal schema, payload policy, activity catalog, typed execution, and workflow test layout. Add a narrowly scoped validation entry point only if implementation needs a reusable review gate outside normal pytest assertions.
