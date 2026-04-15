@@ -262,6 +262,40 @@ def test_codex_managed_session_turn_response_requires_remote_session_state() -> 
     assert response.session_state.active_turn_id == "turn-1"
 
 
+def test_codex_managed_session_turn_response_clamps_large_assistant_text() -> None:
+    response = CodexManagedSessionTurnResponse(
+        sessionState={
+            "sessionId": "sess-123",
+            "sessionEpoch": 1,
+            "containerId": "ctr-123",
+            "threadId": "thread-1",
+        },
+        turnId="turn-1",
+        status="completed",
+        metadata={"assistantText": "x" * 12000},
+    )
+
+    assert response.metadata["assistantText"] == "x" * 8190
+    assert response.metadata["assistantTextTruncated"] is True
+    assert response.metadata["assistantTextOriginalChars"] == 12000
+
+
+def test_codex_managed_session_summary_clamps_large_last_assistant_text_bytes() -> None:
+    response = CodexManagedSessionSummary(
+        sessionState={
+            "sessionId": "sess-123",
+            "sessionEpoch": 1,
+            "containerId": "ctr-123",
+            "threadId": "thread-1",
+        },
+        metadata={"lastAssistantText": "☾" * 5000},
+    )
+
+    assert len(response.metadata["lastAssistantText"].encode("utf-8")) <= 8192
+    assert response.metadata["lastAssistantTextTruncated"] is True
+    assert response.metadata["lastAssistantTextOriginalChars"] == 5000
+
+
 def test_codex_managed_session_summary_and_publication_allow_artifact_refs() -> None:
     summary = CodexManagedSessionSummary(
         sessionState={

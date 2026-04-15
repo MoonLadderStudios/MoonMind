@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
 SUPPORTED_WORKFLOW_TYPES = ("MoonMind.Run", "MoonMind.ManifestIngest")
 SUPPORTED_FAILURE_POLICIES = (
@@ -218,6 +220,14 @@ class ConfigureIntegrationMonitoringRequest(BaseModel):
     )
     result_refs: list[str] = Field(default_factory=list, alias="resultRefs")
 
+    @field_validator("provider_summary", mode="after")
+    @classmethod
+    def _validate_provider_summary(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value,
+            field_name="providerSummary",
+        )
+
 
 class PollIntegrationRequest(BaseModel):
     """Request payload for polling updates while awaiting external completion."""
@@ -239,6 +249,14 @@ class PollIntegrationRequest(BaseModel):
     result_refs: list[str] = Field(default_factory=list, alias="resultRefs")
     completed_wait_cycles: int = Field(1, alias="completedWaitCycles", ge=0)
 
+    @field_validator("provider_summary", mode="after")
+    @classmethod
+    def _validate_provider_summary(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value,
+            field_name="providerSummary",
+        )
+
 
 class IntegrationCallbackRequest(BaseModel):
     """Generic provider callback payload resolved through correlation storage."""
@@ -259,6 +277,14 @@ class IntegrationCallbackRequest(BaseModel):
         default_factory=dict, alias="providerSummary"
     )
     payload_artifact_ref: Optional[str] = Field(None, alias="payloadArtifactRef")
+
+    @field_validator("provider_summary", mode="after")
+    @classmethod
+    def _validate_provider_summary(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value,
+            field_name="providerSummary",
+        )
 
 
 class IntegrationStateModel(BaseModel):
@@ -290,6 +316,14 @@ class IntegrationStateModel(BaseModel):
     provider_summary: dict[str, Any] = Field(
         default_factory=dict, alias="providerSummary"
     )
+
+    @field_validator("provider_summary", mode="after")
+    @classmethod
+    def _validate_provider_summary(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value,
+            field_name="providerSummary",
+        )
 
 
 class CancelExecutionRequest(BaseModel):

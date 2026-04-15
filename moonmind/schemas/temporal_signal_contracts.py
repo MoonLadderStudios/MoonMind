@@ -3,7 +3,9 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
 # ---------------------------------------------------------------------------
 # Public Execution Signals
@@ -28,6 +30,14 @@ class ExternalEventSignal(BaseModel):
         default_factory=dict,
         alias="providerSummary",
     )
+
+    @field_validator("provider_summary", mode="after")
+    @classmethod
+    def _validate_provider_summary(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value,
+            field_name="providerSummary",
+        )
 
 
 class RescheduleSignal(BaseModel):
