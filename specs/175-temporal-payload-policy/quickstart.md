@@ -12,4 +12,12 @@
    ./tools/test_unit.sh
    ```
 
-3. Confirm compact refs still serialize in managed-session and runtime models while raw bytes or large text in metadata/provider summaries fail validation.
+3. Integration strategy:
+
+   ```bash
+   ./tools/test_integration.sh
+   ```
+
+   This story does not require a new integration fixture when implementation remains limited to schema-boundary validation. Run the hermetic integration suite if changes expand into workflow/activity invocation wiring or other compose-backed Temporal boundaries.
+
+4. Confirm compact refs still serialize in managed-session and runtime models while raw bytes or large text in metadata/provider summaries fail validation.
