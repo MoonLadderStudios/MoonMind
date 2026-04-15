@@ -4463,8 +4463,12 @@ describe("Task Create Entrypoint", () => {
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing preset instructions.",
     );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
     fireEvent.click(
       screen.getByRole("button", {
         name: "Browse Jira issue for Step 1 instructions",
@@ -4483,6 +4487,11 @@ describe("Task Create Entrypoint", () => {
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing step instructions.",
     );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
   });
 
   it("imports selected Jira text by mode", async () => {
@@ -4512,6 +4521,11 @@ describe("Task Create Entrypoint", () => {
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Given a board, users can select a story preview.",
     );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
   });
 
   it("marks preset instructions as needing reapply after Jira import changes an applied preset", async () => {
@@ -4760,8 +4774,12 @@ describe("Task Create Entrypoint", () => {
         "Jira import provenance for Feature Request / Initial Instructions",
       ).textContent,
     ).toBe("Jira: ENG-202");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
     fireEvent.click(
       screen.getByRole("button", {
         name: "Browse Jira issue for Step 1 instructions",
@@ -4779,6 +4797,99 @@ describe("Task Create Entrypoint", () => {
     ).toBe("Jira: ENG-202");
   });
 
+  it("keeps a reopened Jira browser open after a slow image import finishes", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    const imageDownload: { resolve: (() => void) | null } = { resolve: null };
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            url: "https://jira.example.test/browse/ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "Let operators browse Jira stories.",
+            acceptanceCriteriaText:
+              "Given a board, users can select a story preview.",
+            recommendedImports: {
+              presetInstructions:
+                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+              stepInstructions:
+                "Complete Jira issue ENG-202: Build browser shell",
+            },
+            attachments: [
+              {
+                id: "img-1",
+                filename: "wireframe.png",
+                contentType: "image/png",
+                sizeBytes: 10,
+                downloadUrl: "/api/jira/attachments/wireframe.png",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/attachments/wireframe.png") {
+        return new Promise<Response>((resolve) => {
+          imageDownload.resolve = () => {
+            resolve({
+              ok: true,
+              blob: async () => new Blob(["fake image"], { type: "image/png" }),
+            } as Response);
+          };
+        });
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(
+      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira issue for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    expect(await screen.findByText("Let operators browse Jira stories."))
+      .toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace target text" }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
+    await waitFor(() => {
+      expect(imageDownload.resolve).not.toBeNull();
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for Step 1 instructions",
+      }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Browse Jira issue" }),
+    ).toBeTruthy();
+
+    if (!imageDownload.resolve) {
+      throw new Error("Expected Jira image download to be pending.");
+    }
+    imageDownload.resolve();
+    expect(await screen.findByText("wireframe.png (10 B)")).toBeTruthy();
+    expect(
+      screen.getByRole("dialog", { name: "Browse Jira issue" }),
+    ).toBeTruthy();
+  });
+
   it("reopens Jira from an imported field with the prior issue selected", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
@@ -4794,7 +4905,11 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Replace target text" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -4849,7 +4964,11 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Replace target text" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -4902,8 +5021,12 @@ describe("Task Create Entrypoint", () => {
         "Jira import provenance for Feature Request / Initial Instructions",
       ),
     ).toBeNull();
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
     fireEvent.click(
       screen.getByRole("button", {
         name: "Browse Jira issue for Step 1 instructions",
@@ -5016,7 +5139,11 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Replace target text" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Close Jira browser" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => {

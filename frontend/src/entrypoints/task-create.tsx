@@ -2759,13 +2759,16 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   async function importSelectedJiraIssue(writeMode: JiraWriteMode) {
-    if (!selectedJiraIssue || !jiraImportTarget) {
+    closeJiraBrowser();
+    const issue = selectedJiraIssue;
+    const importTarget = jiraImportTarget;
+    if (!issue || !importTarget) {
       return;
     }
     if (!selectedJiraImportText.trim()) {
       return;
     }
-    if (jiraImportTarget.kind === "preset") {
+    if (importTarget.kind === "preset") {
       const nextText = writeJiraImportedText(
         templateFeatureRequest,
         selectedJiraImportText,
@@ -2777,26 +2780,24 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setTemplateFeatureRequest(nextText);
       setPresetJiraProvenance(
         createJiraProvenance(
-          selectedJiraIssue,
+          issue,
           selectedJiraBoardId,
           jiraImportMode,
-          jiraImportTarget,
+          importTarget,
         ),
       );
       if (appliedTemplates.length > 0) {
         setPresetReapplyNeeded(true);
       }
-      await importSelectedJiraImages(selectedJiraIssue, steps[0]?.localId);
+      await importSelectedJiraImages(issue, steps[0]?.localId);
       return;
     }
 
-    const targetStep = steps.find(
-      (step) => step.localId === jiraImportTarget.localId,
-    );
+    const targetStep = steps.find((step) => step.localId === importTarget.localId);
     if (!targetStep) {
       return;
     }
-    updateStep(jiraImportTarget.localId, {
+    updateStep(importTarget.localId, {
       instructions: writeJiraImportedText(
         targetStep.instructions,
         selectedJiraImportText,
@@ -2804,25 +2805,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ),
     });
     const provenance = createJiraProvenance(
-      selectedJiraIssue,
+      issue,
       selectedJiraBoardId,
       jiraImportMode,
-      jiraImportTarget,
+      importTarget,
     );
     setStepJiraProvenance((current) => {
       if (provenance) {
         return {
           ...current,
-          [jiraImportTarget.localId]: provenance,
+          [importTarget.localId]: provenance,
         };
       }
-      if (!current[jiraImportTarget.localId]) {
+      if (!current[importTarget.localId]) {
         return current;
       }
-      const { [jiraImportTarget.localId]: _removed, ...rest } = current;
+      const { [importTarget.localId]: _removed, ...rest } = current;
       return rest;
     });
-    await importSelectedJiraImages(selectedJiraIssue, jiraImportTarget.localId);
+    await importSelectedJiraImages(issue, importTarget.localId);
   }
 
   function handleTemplateFeatureRequestChange(value: string) {
