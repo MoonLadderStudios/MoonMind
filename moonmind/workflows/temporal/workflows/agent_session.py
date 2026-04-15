@@ -11,9 +11,12 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.managed_session_models import (
         CODEX_MANAGED_SESSION_CONTROL_ACTIONS,
+        CodexManagedSessionAttachRuntimeHandlesSignal,
         CodexManagedSessionArtifactsPublication,
         CodexManagedSessionBinding,
+        CodexManagedSessionCancelUpdateRequest,
         CodexManagedSessionClearRequest,
+        CodexManagedSessionClearUpdateRequest,
         CodexManagedSessionHandle,
         CodexManagedSessionInterruptRequest,
         CodexManagedSessionLocator,
@@ -24,8 +27,8 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionState,
         CodexManagedSessionSteerRequest,
         CodexManagedSessionSummary,
+        CodexManagedSessionTerminateUpdateRequest,
         CodexManagedSessionTurnResponse,
-        CodexManagedSessionWorkflowControlRequest,
         CodexManagedSessionWorkflowInput,
         FetchCodexManagedSessionSummaryRequest,
         InterruptCodexManagedSessionTurnRequest,
@@ -399,7 +402,7 @@ class MoonMindAgentSessionWorkflow:
                 oldest_request_id = next(iter(self._request_tracking_state))
                 del self._request_tracking_state[oldest_request_id]
 
-    def _build_continue_as_new_input(self) -> dict[str, Any]:
+    def _build_continue_as_new_input(self) -> CodexManagedSessionWorkflowInput:
         binding = self._require_binding()
         payload: dict[str, Any] = {
             "taskRunId": binding.task_run_id,
@@ -428,7 +431,7 @@ class MoonMindAgentSessionWorkflow:
         payload.update(
             {key: value for key, value in optional_fields.items() if value is not None}
         )
-        return payload
+        return CodexManagedSessionWorkflowInput.model_validate(payload)
 
     def _should_continue_as_new(self) -> bool:
         if self._termination_requested:
@@ -469,40 +472,25 @@ class MoonMindAgentSessionWorkflow:
         return self.get_status()
 
     @workflow.signal(name="attach_runtime_handles")
-    def attach_runtime_handles(self, payload: dict[str, Any] | None = None) -> None:
-        payload = dict(payload or {})
-        container_id = payload.get("containerId") or payload.get("container_id")
-        thread_id = payload.get("threadId") or payload.get("thread_id")
-        active_turn_id = payload.get("activeTurnId") or payload.get("active_turn_id")
-        session_epoch = payload.get("sessionEpoch") or payload.get("session_epoch")
-        last_control_action = payload.get("lastControlAction") or payload.get(
-            "last_control_action"
-        )
-        last_control_reason = payload.get("lastControlReason") or payload.get(
-            "last_control_reason"
-        )
-
-        if container_id is not None:
-            self._container_id = str(container_id).strip() or None
-        if thread_id is not None:
-            self._thread_id = str(thread_id).strip() or None
-        if active_turn_id is not None:
-            normalized_turn_id = str(active_turn_id).strip()
-            self._active_turn_id = normalized_turn_id or None
-        if session_epoch is not None:
+    def attach_runtime_handles(
+        self,
+        payload: CodexManagedSessionAttachRuntimeHandlesSignal,
+    ) -> None:
+        payload = CodexManagedSessionAttachRuntimeHandlesSignal.model_validate(payload)
+        if payload.container_id is not None:
+            self._container_id = payload.container_id
+        if payload.thread_id is not None:
+            self._thread_id = payload.thread_id
+        if payload.active_turn_id is not None:
+            self._active_turn_id = payload.active_turn_id
+        if payload.session_epoch is not None:
             self._binding = self._binding.model_copy(
-                update={"session_epoch": int(session_epoch)}
+                update={"session_epoch": payload.session_epoch}
             )
-        if last_control_action is not None:
-            normalized_action = str(last_control_action).strip()
-            if normalized_action and normalized_action not in CODEX_MANAGED_SESSION_CONTROL_ACTIONS:
-                raise ValueError(
-                    f"Unsupported managed-session control action: {normalized_action}"
-                )
-            self._last_control_action = normalized_action or None
-        if last_control_reason is not None:
-            normalized_reason = str(last_control_reason).strip()
-            self._last_control_reason = normalized_reason or None
+        if payload.last_control_action is not None:
+            self._last_control_action = payload.last_control_action
+        if payload.last_control_reason is not None:
+            self._last_control_reason = payload.last_control_reason
         self._update_operator_visibility("session started")
 
     @workflow.signal(name="control_action")
@@ -597,8 +585,11 @@ class MoonMindAgentSessionWorkflow:
         return snapshot.model_dump(mode="json", by_alias=True)
 
     @workflow.update(name="SendFollowUp")
-    async def send_follow_up(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        request = CodexManagedSessionSendFollowUpRequest.model_validate(payload or {})
+    async def send_follow_up(
+        self,
+        payload: CodexManagedSessionSendFollowUpRequest,
+    ) -> dict[str, Any]:
+        request = CodexManagedSessionSendFollowUpRequest.model_validate(payload)
         await self._await_runtime_handles()
         async with self._mutation_lock:
             self._validate_mutation_allowed()
@@ -668,15 +659,19 @@ class MoonMindAgentSessionWorkflow:
                 raise
 
     @send_follow_up.validator
-    def validate_send_follow_up(self, payload: dict[str, Any] | None = None) -> None:
-        CodexManagedSessionSendFollowUpRequest.model_validate(payload or {})
+    def validate_send_follow_up(
+        self,
+        payload: CodexManagedSessionSendFollowUpRequest,
+    ) -> None:
+        CodexManagedSessionSendFollowUpRequest.model_validate(payload)
         self._validate_mutation_allowed()
 
     @workflow.update(name="InterruptTurn")
     async def interrupt_turn_update(
-        self, payload: dict[str, Any] | None = None
+        self,
+        payload: CodexManagedSessionInterruptRequest,
     ) -> dict[str, Any]:
-        request = CodexManagedSessionInterruptRequest.model_validate(payload or {})
+        request = CodexManagedSessionInterruptRequest.model_validate(payload)
         await self._await_runtime_handles()
         async with self._mutation_lock:
             self._validate_mutation_allowed()
@@ -747,8 +742,11 @@ class MoonMindAgentSessionWorkflow:
                 raise
 
     @interrupt_turn_update.validator
-    def validate_interrupt_turn(self, payload: dict[str, Any] | None = None) -> None:
-        request = CodexManagedSessionInterruptRequest.model_validate(payload or {})
+    def validate_interrupt_turn(
+        self,
+        payload: CodexManagedSessionInterruptRequest,
+    ) -> None:
+        request = CodexManagedSessionInterruptRequest.model_validate(payload)
         self._validate_mutation_allowed()
         self._validate_current_epoch(request.session_epoch)
         if self._runtime_handles_attached():
@@ -756,9 +754,10 @@ class MoonMindAgentSessionWorkflow:
 
     @workflow.update(name="SteerTurn")
     async def steer_turn_update(
-        self, payload: dict[str, Any] | None = None
+        self,
+        payload: CodexManagedSessionSteerRequest,
     ) -> dict[str, Any]:
-        request = CodexManagedSessionSteerRequest.model_validate(payload or {})
+        request = CodexManagedSessionSteerRequest.model_validate(payload)
         await self._await_runtime_handles()
         async with self._mutation_lock:
             self._validate_mutation_allowed()
@@ -832,8 +831,11 @@ class MoonMindAgentSessionWorkflow:
                 raise
 
     @steer_turn_update.validator
-    def validate_steer_turn(self, payload: dict[str, Any] | None = None) -> None:
-        request = CodexManagedSessionSteerRequest.model_validate(payload or {})
+    def validate_steer_turn(
+        self,
+        payload: CodexManagedSessionSteerRequest,
+    ) -> None:
+        request = CodexManagedSessionSteerRequest.model_validate(payload)
         self._validate_mutation_allowed()
         self._validate_current_epoch(request.session_epoch)
         if self._runtime_handles_attached():
@@ -841,9 +843,9 @@ class MoonMindAgentSessionWorkflow:
 
     @workflow.update(name="ClearSession")
     async def clear_session_update(
-        self, payload: dict[str, Any] | None = None
+        self, payload: CodexManagedSessionClearUpdateRequest
     ) -> dict[str, Any]:
-        request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        request = CodexManagedSessionClearUpdateRequest.model_validate(payload)
         await self._await_runtime_handles()
         async with self._mutation_lock:
             self._validate_mutation_allowed()
@@ -925,17 +927,20 @@ class MoonMindAgentSessionWorkflow:
                     self._update_operator_visibility(transition)
 
     @clear_session_update.validator
-    def validate_clear_session(self, payload: dict[str, Any] | None = None) -> None:
-        CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+    def validate_clear_session(
+        self,
+        payload: CodexManagedSessionClearUpdateRequest,
+    ) -> None:
+        CodexManagedSessionClearUpdateRequest.model_validate(payload)
         self._validate_mutation_allowed()
         if self._status == AGENT_SESSION_STATUS_CLEARING:
             raise ValueError("Managed session is already clearing")
 
     @workflow.update(name="CancelSession")
     async def cancel_session_update(
-        self, payload: dict[str, Any] | None = None
+        self, payload: CodexManagedSessionCancelUpdateRequest
     ) -> dict[str, Any]:
-        request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        request = CodexManagedSessionCancelUpdateRequest.model_validate(payload)
         async with self._mutation_lock:
             request_tracking_id = self._request_tracking_id(request.request_id)
             self._validate_request_not_completed(
@@ -995,15 +1000,18 @@ class MoonMindAgentSessionWorkflow:
                 raise
 
     @cancel_session_update.validator
-    def validate_cancel_session(self, payload: dict[str, Any] | None = None) -> None:
-        CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+    def validate_cancel_session(
+        self,
+        payload: CodexManagedSessionCancelUpdateRequest,
+    ) -> None:
+        CodexManagedSessionCancelUpdateRequest.model_validate(payload)
         self._validate_mutation_allowed()
 
     @workflow.update(name="TerminateSession")
     async def terminate_session_update(
-        self, payload: dict[str, Any] | None = None
+        self, payload: CodexManagedSessionTerminateUpdateRequest
     ) -> dict[str, Any]:
-        request = CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+        request = CodexManagedSessionTerminateUpdateRequest.model_validate(payload)
         async with self._mutation_lock:
             if self._termination_requested:
                 return self.get_status()
@@ -1064,8 +1072,11 @@ class MoonMindAgentSessionWorkflow:
                 raise
 
     @terminate_session_update.validator
-    def validate_terminate_session(self, payload: dict[str, Any] | None = None) -> None:
-        CodexManagedSessionWorkflowControlRequest.model_validate(payload or {})
+    def validate_terminate_session(
+        self,
+        payload: CodexManagedSessionTerminateUpdateRequest,
+    ) -> None:
+        CodexManagedSessionTerminateUpdateRequest.model_validate(payload)
         if (
             self._status == AGENT_SESSION_STATUS_TERMINATING
             and self._last_control_action == "terminate_session"
