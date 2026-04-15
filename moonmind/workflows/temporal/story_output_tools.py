@@ -19,7 +19,7 @@ from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 
-JIRA_STORY_TOOL_NAMES = frozenset({"jira-issue-creator", "story.create_jira_issues"})
+JIRA_STORY_TOOL_NAMES = frozenset({"story.create_jira_issues"})
 JIRA_DESCRIPTION_MAX_CHARS = 32767
 JIRA_DESCRIPTION_TRUNCATION_SUFFIX = "\n\n[Truncated by MoonMind before Jira export]"
 

@@ -39,19 +39,20 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 
 4. Create the issue.
 - Use the available Jira connector's `jira.create_issue` or `jira.create_subtask` operations when present.
-- In MoonMind workflow plans, prefer the first-party `jira-issue-creator`/`story.create_jira_issues` tool path. It reads `stories` directly or reads `storyBreakdownPath` from the breakdown handoff and creates one Jira issue per story.
+- In MoonMind workflow plans, `jira-issue-creator` is an agent skill, not a deterministic executable tool. Use the available Jira connector/API to inspect projects, issue types, and create fields, then create the requested issues.
+- When the task references a story breakdown directory, look for `stories.json` inside that directory unless an exact `storyBreakdownPath` is provided.
 - Otherwise call Jira REST `POST /rest/api/3/issue` for Jira Cloud or the deployment's documented equivalent.
 - Send only the fields needed for the requested issue.
 - Treat retries carefully: before retrying after an uncertain network failure, use `jira.search_issues` to search by a stable summary/project/reporter marker to avoid duplicate tickets.
 
 ## Breakdown Handoff Behavior
 
-When invoked after `moonspec-breakdown`:
+When invoked after `moonspec-breakdown` or when the request references a story breakdown handoff:
 
 - Read story candidates from the provided JSON breakdown, not from `spec.md`.
 - Do not create or rename `spec.md`.
 - If Jira issue creation succeeds, return Jira keys/URLs and do not request another output format.
-- If Jira is not configured, missing required Jira fields, or issue creation fails, return fallback metadata pointing at the existing `docs/tmp/story-breakdowns/...` handoff instead of fabricating Jira success.
+- If Jira is not configured, required Jira fields are missing, or issue creation fails, report the exact blocker and the existing `docs/tmp/story-breakdowns/...` handoff instead of fabricating Jira success.
 - The fallback file must not be named `spec.md`.
 
 5. Return the result.

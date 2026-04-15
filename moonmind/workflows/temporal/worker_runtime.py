@@ -230,9 +230,8 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
     return normalized
 
 
-_JIRA_STORY_OUTPUT_TOOLS = frozenset(
-    {"jira-issue-creator", "story.create_jira_issues"}
-)
+_JIRA_AGENT_SKILLS = frozenset({"jira-issue-creator"})
+_JIRA_STORY_OUTPUT_TOOLS = frozenset({"story.create_jira_issues"})
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
 
 
@@ -281,6 +280,43 @@ def _selected_step_tool_type(tool_name: str) -> str:
     if tool_name.lower() in _JIRA_STORY_OUTPUT_TOOLS:
         return "skill"
     return "agent_runtime"
+
+
+def _jira_agent_skill_selected(tool_name: str) -> bool:
+    return tool_name.lower() in _JIRA_AGENT_SKILLS
+
+
+def _task_uses_only_jira_agent_skill(
+    *, selected_skill_name: str, raw_steps: Any
+) -> bool:
+    if isinstance(raw_steps, list) and len(raw_steps) > 1:
+        if not all(isinstance(step, Mapping) for step in raw_steps):
+            return False
+        effective_step_tool_names = [
+            (_selected_step_tool_name(step) or selected_skill_name).lower()
+            for step in raw_steps
+        ]
+        return bool(effective_step_tool_names) and all(
+            _jira_agent_skill_selected(name) for name in effective_step_tool_names
+        )
+    return _jira_agent_skill_selected(selected_skill_name)
+
+
+def _append_agent_skill_instructions(instructions: str, *, selected_skill: str) -> str:
+    selected = selected_skill.strip()
+    if not _jira_agent_skill_selected(selected):
+        return instructions
+    marker = f"${selected}"
+    if marker in instructions:
+        return instructions
+    return f"Use {marker}.\n\n{instructions.strip()}"
+
+
+def _plan_node_selected_skill(node: Mapping[str, Any]) -> str:
+    inputs = node.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return ""
+    return str(inputs.get("selectedSkill") or "").strip()
 
 
 def _append_story_breakdown_instructions(
@@ -479,6 +515,14 @@ def _build_runtime_planner():
         if selected_skill_name:
             node_inputs["selectedSkill"] = selected_skill_name
 
+        raw_steps = task_payload.get("steps")
+        publish_uses_git = not _task_uses_only_jira_agent_skill(
+            selected_skill_name=selected_skill_name,
+            raw_steps=raw_steps,
+        )
+        node_publish_mode = str(node_inputs.get("publishMode") or "").lower()
+        if not publish_uses_git and node_publish_mode in {"pr", "branch"}:
+            node_inputs["publishMode"] = "none"
         for git_key in ("startingBranch", "targetBranch", "branch"):
             git_val = (
                 git_payload.get(git_key)
@@ -490,7 +534,11 @@ def _build_runtime_planner():
             if isinstance(git_val, str) and git_val.strip():
                 node_inputs[git_key] = git_val.strip()
 
-        if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
+        if (
+            publish_uses_git
+            and isinstance(publish_mode, str)
+            and publish_mode.strip().lower() == "pr"
+        ):
             if not node_inputs.get("targetBranch") and not node_inputs.get("branch"):
                 prefix = _derive_pr_branch_prefix(
                     task_payload=task_payload,
@@ -546,7 +594,6 @@ def _build_runtime_planner():
         should_prepare_story_breakdown = bool(story_output_payload)
 
         # --- Expand task.steps[] or stepCount into multiple plan nodes ---
-        raw_steps = task_payload.get("steps")
         has_multi_steps = (
             isinstance(raw_steps, list)
             and len(raw_steps) > 1
@@ -625,9 +672,17 @@ def _build_runtime_planner():
                 step_tool_name = _selected_step_tool_name(step_entry)
                 step_runtime = runtime_mode
                 tool_type = _selected_step_tool_type(step_tool_name)
+                effective_step_skill_name = step_tool_name or selected_skill_name
                 if step_tool_name:
                     step_runtime = step_tool_name
                     step_node_inputs["selectedSkill"] = step_tool_name
+                    if _jira_agent_skill_selected(step_tool_name):
+                        step_node_inputs["publishMode"] = "none"
+                if effective_step_skill_name:
+                    step_node_inputs["instructions"] = _append_agent_skill_instructions(
+                        step_node_inputs["instructions"],
+                        selected_skill=effective_step_skill_name,
+                    )
                 if step_tool_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
                     if story_output_mode == "jira" and not step_node_inputs.get(
                         "publishMode"
@@ -683,6 +738,12 @@ def _build_runtime_planner():
                             story_output_mode=story_output_mode,
                         )
                     )
+                expanded_inputs["instructions"] = _append_agent_skill_instructions(
+                    str(expanded_inputs.get("instructions") or ""),
+                    selected_skill=selected_skill_name,
+                )
+                if _jira_agent_skill_selected(selected_skill_name):
+                    expanded_inputs["publishMode"] = "none"
                 step_id = f"node-{idx + 1}"
                 nodes.append({
                     "id": step_id,
@@ -711,6 +772,10 @@ def _build_runtime_planner():
                     ),
                     story_output_mode=story_output_mode,
                 )
+            node_inputs["instructions"] = _append_agent_skill_instructions(
+                str(node_inputs.get("instructions") or ""),
+                selected_skill=selected_skill_name,
+            )
             node_tool_type = (
                 "skill"
                 if selected_skill_name.lower() in _JIRA_STORY_OUTPUT_TOOLS
@@ -737,6 +802,7 @@ def _build_runtime_planner():
         publish_requested = (
             isinstance(publish_mode, str)
             and publish_mode.strip().lower() in ("pr", "branch")
+            and publish_uses_git
         )
         if publish_requested or story_output_mode == "jira":
             publish_node = next(
@@ -745,13 +811,18 @@ def _build_runtime_planner():
                     for node in reversed(nodes)
                     if str(node.get("tool", {}).get("type") or "").strip().lower()
                     == "agent_runtime"
+                    and not _jira_agent_skill_selected(_plan_node_selected_skill(node))
                 ),
                 nodes[-1],
             )
             publish_tool = str(
                 publish_node.get("tool", {}).get("name") or ""
             ).strip().lower()
-            if publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
+            publish_selected_skill = _plan_node_selected_skill(publish_node)
+            if (
+                publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION
+                and not _jira_agent_skill_selected(publish_selected_skill)
+            ):
                 publish_inputs = publish_node["inputs"]
                 if story_output_mode == "jira" and not publish_inputs.get(
                     "publishMode"
