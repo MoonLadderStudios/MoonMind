@@ -28,5 +28,5 @@
 ## Final Phase: Verification
 
 - [X] T012 Run the full required unit suite with `./tools/test_unit.sh` (SC-004).
-- [X] T013 Confirm integration coverage remains not required for this schema-only story, or run `./tools/test_integration.sh` if workflow/activity invocation wiring changed, and record the result in `specs/175-temporal-payload-policy/quickstart.md` (DESIGN-REQ-017, DESIGN-REQ-019).
+- [X] T013 Confirm integration coverage remains not required for this schema-only story as documented in `specs/175-temporal-payload-policy/quickstart.md`, or run `./tools/test_integration.sh` if workflow/activity invocation wiring changed (DESIGN-REQ-017, DESIGN-REQ-019).
 - [X] T014 Run final `/moonspec-verify` artifact/code alignment against `specs/175-temporal-payload-policy/spec.md` after implementation and tests pass (MM-330, FR-001, FR-002, FR-003, FR-004, FR-005).
