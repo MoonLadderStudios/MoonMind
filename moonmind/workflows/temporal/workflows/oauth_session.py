@@ -78,6 +78,8 @@ class MoonMindOAuthSessionWorkflow:
         self._session_id: str = ""
         self._finalize_requested: bool = False
         self._cancel_requested: bool = False
+        self._failure_requested: bool = False
+        self._failure_reason: str = ""
         self._container_name: str = ""
         self._terminal_connected: bool = False
 
@@ -92,6 +94,12 @@ class MoonMindOAuthSessionWorkflow:
     def cancel(self) -> None:
         """Cancel the session."""
         self._cancel_requested = True
+
+    @workflow.signal
+    def fail(self, reason: str) -> None:
+        """Externally observed terminal failure."""
+        self._failure_requested = True
+        self._failure_reason = reason or "OAuth terminal session failed"
 
     @workflow.signal
     def terminal_connected(self) -> None:
@@ -111,6 +119,8 @@ class MoonMindOAuthSessionWorkflow:
             "session_id": self._session_id,
             "finalize_requested": self._finalize_requested,
             "cancel_requested": self._cancel_requested,
+            "failure_requested": self._failure_requested,
+            "failure_reason": self._failure_reason,
             # Mirrors cancel_requested for consistency with run workflows
             "canceling": self._cancel_requested,
             "container_name": self._container_name,
@@ -208,7 +218,9 @@ class MoonMindOAuthSessionWorkflow:
         # Step 5: Wait for finalize, cancel, or session timeout
         try:
             await workflow.wait_condition(
-                lambda: self._finalize_requested or self._cancel_requested,
+                lambda: self._finalize_requested
+                or self._cancel_requested
+                or self._failure_requested,
                 timeout=timedelta(seconds=session_ttl),
             )
         except TimeoutError:
@@ -227,6 +239,15 @@ class MoonMindOAuthSessionWorkflow:
                 session_id=self._session_id,
                 status="cancelled",
                 failure_reason=None,
+            )
+
+        if self._failure_requested:
+            await self._stop_auth_runner()
+            await self._mark_failed(self._failure_reason)
+            return OAuthSessionOutput(
+                session_id=self._session_id,
+                status="failed",
+                failure_reason=self._failure_reason,
             )
 
         # Step 6: Finalize — verify and register

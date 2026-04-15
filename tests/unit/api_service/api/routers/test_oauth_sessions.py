@@ -145,6 +145,35 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
 
 
 @pytest.mark.asyncio
+async def test_create_oauth_session_returns_terminal_transport_refs(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-terminal-refs"
+
+    async def _capture_start(session_model):
+        session_model.terminal_session_id = f"term_{session_model.session_id}"
+        session_model.terminal_bridge_id = f"br_{session_model.session_id}"
+        session_model.session_transport = "moonmind_pty_ws"
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json=_oauth_payload(profile_id),
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["terminal_session_id"] == f"term_{body['session_id']}"
+    assert body["terminal_bridge_id"] == f"br_{body['session_id']}"
+    assert body["session_transport"] == "moonmind_pty_ws"
+
+
+@pytest.mark.asyncio
 async def test_create_codex_oauth_session_uses_configured_volume_defaults(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -309,13 +338,38 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
         )
         await session.commit()
 
+    stopped = {}
+    failed_signal = {}
+
     async def _failed_verify(**_kwargs):
         return {"verified": False, "reason": "no_credentials_found"}
+
+    async def _capture_stop(session_obj):
+        stopped["session_id"] = session_obj.session_id
+        stopped["container_name"] = session_obj.container_name
+
+    async def _capture_fail_signal(session_id, reason):
+        failed_signal["session_id"] = session_id
+        failed_signal["reason"] = reason
 
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
         _failed_verify,
     )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _capture_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._fail_oauth_session_workflow",
+        _capture_fail_signal,
+    )
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        row.container_name = "moonmind_auth_oas_verifyfailed1"
+        await session.commit()
 
     async with client_app as client:
         response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
@@ -328,6 +382,14 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
         assert row is not None
         assert row.status == OAuthSessionStatus.FAILED
         assert row.failure_reason == "Volume verification failed: no_credentials_found"
+    assert stopped == {
+        "session_id": session_id,
+        "container_name": "moonmind_auth_oas_verifyfailed1",
+    }
+    assert failed_signal == {
+        "session_id": session_id,
+        "reason": "Volume verification failed: no_credentials_found",
+    }
 
 
 @pytest.mark.asyncio
@@ -359,6 +421,9 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         )
         await session.commit()
 
+    stopped = {}
+    finalized_signal = {}
+
     async def _successful_verify(**kwargs):
         assert kwargs["runtime_id"] == "codex_cli"
         assert kwargs["volume_ref"] == "codex_auth_volume"
@@ -368,6 +433,13 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
     async def _noop_sync(**_kwargs):
         return None
 
+    async def _capture_stop(session_obj):
+        stopped["session_id"] = session_obj.session_id
+        stopped["container_name"] = session_obj.container_name
+
+    async def _capture_finalize_signal(signal_session_id):
+        finalized_signal["session_id"] = signal_session_id
+
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
         _successful_verify,
@@ -376,6 +448,20 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         "api_service.api.routers.oauth_sessions.sync_provider_profile_manager",
         _noop_sync,
     )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _capture_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._finalize_oauth_session_workflow",
+        _capture_finalize_signal,
+    )
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        row.container_name = "moonmind_auth_oas_registercodex1"
+        await session.commit()
 
     async with client_app as client:
         response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
@@ -396,3 +482,8 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         assert profile.volume_ref == "codex_auth_volume"
         assert profile.volume_mount_path == "/home/app/.codex"
         assert profile.max_parallel_runs == 2
+    assert stopped == {
+        "session_id": session_id,
+        "container_name": "moonmind_auth_oas_registercodex1",
+    }
+    assert finalized_signal == {"session_id": session_id}

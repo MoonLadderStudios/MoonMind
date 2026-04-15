@@ -4234,6 +4234,12 @@ export interface components {
             status: components["schemas"]["OAuthSessionStatus"];
             /** Expires At */
             expires_at?: string | null;
+            /** Terminal Session Id */
+            terminal_session_id?: string | null;
+            /** Terminal Bridge Id */
+            terminal_bridge_id?: string | null;
+            /** Session Transport */
+            session_transport?: string | null;
             /** Failure Reason */
             failure_reason?: string | null;
             /** Created At */

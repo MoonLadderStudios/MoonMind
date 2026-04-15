@@ -25,5 +25,8 @@ class OAuthSessionResponse(BaseModel):
     profile_id: str
     status: OAuthSessionStatus
     expires_at: Optional[datetime] = None
+    terminal_session_id: Optional[str] = None
+    terminal_bridge_id: Optional[str] = None
+    session_transport: Optional[str] = None
     failure_reason: Optional[str] = None
     created_at: Optional[datetime] = None

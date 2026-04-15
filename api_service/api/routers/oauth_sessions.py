@@ -41,6 +41,21 @@ def _oauth_default(runtime_id: str, key: str) -> str | None:
     return get_provider_default(runtime_id, key)
 
 
+def _oauth_session_response(session: ManagedAgentOAuthSession) -> OAuthSessionResponse:
+    return OAuthSessionResponse(
+        session_id=session.session_id,
+        runtime_id=session.runtime_id,
+        profile_id=session.profile_id,
+        status=session.status,
+        expires_at=session.expires_at,
+        terminal_session_id=session.terminal_session_id,
+        terminal_bridge_id=session.terminal_bridge_id,
+        session_transport=session.session_transport,
+        failure_reason=session.failure_reason,
+        created_at=session.created_at,
+    )
+
+
 async def _expire_stale_active_sessions(
     db: AsyncSession, *, profile_id: str
 ) -> None:
@@ -162,12 +177,7 @@ async def create_oauth_session(
             detail="Failed to start OAuth session workflow. Please retry.",
         ) from exc
 
-    return OAuthSessionResponse(
-        session_id=new_session.session_id,
-        runtime_id=new_session.runtime_id,
-        profile_id=new_session.profile_id,
-        status=new_session.status,
-    )
+    return _oauth_session_response(new_session)
 
 @router.get("/{session_id}", response_model=OAuthSessionResponse)
 async def get_oauth_session(
@@ -185,14 +195,7 @@ async def get_oauth_session(
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
         
-    return OAuthSessionResponse(
-        session_id=session.session_id,
-        runtime_id=session.runtime_id,
-        profile_id=session.profile_id,
-        status=session.status,
-        expires_at=session.expires_at,
-        failure_reason=session.failure_reason,
-    )
+    return _oauth_session_response(session)
 
 @router.post("/{session_id}/cancel")
 async def cancel_oauth_session(
@@ -265,6 +268,10 @@ async def finalize_oauth_session(
                 f"{verification.get('reason', 'unknown')}"
             )
             await db.commit()
+            await _stop_oauth_auth_runner(session_obj)
+            await _fail_oauth_session_workflow(
+                session_obj.session_id, session_obj.failure_reason
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=session_obj.failure_reason,
@@ -281,6 +288,10 @@ async def finalize_oauth_session(
         session_obj.completed_at = datetime.now(timezone.utc)
         session_obj.failure_reason = "Volume verification unavailable"
         await db.commit()
+        await _stop_oauth_auth_runner(session_obj)
+        await _fail_oauth_session_workflow(
+            session_obj.session_id, session_obj.failure_reason
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=session_obj.failure_reason,
@@ -349,8 +360,44 @@ async def finalize_oauth_session(
     await db.commit()
     
     await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
+    await _stop_oauth_auth_runner(session_obj)
+    await _finalize_oauth_session_workflow(session_obj.session_id)
     
     return {"status": "succeeded"}
+
+
+async def _stop_oauth_auth_runner(session_obj: ManagedAgentOAuthSession) -> None:
+    if not session_obj.container_name:
+        return
+    try:
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_stop_auth_runner,
+        )
+
+        await oauth_session_stop_auth_runner(
+            {
+                "session_id": session_obj.session_id,
+                "container_name": session_obj.container_name,
+            }
+        )
+    except Exception:
+        logger.warning(
+            "Failed to stop OAuth auth runner for session %s",
+            session_obj.session_id,
+            exc_info=True,
+        )
+
+
+async def _finalize_oauth_session_workflow(session_id: str) -> None:
+    from api_service.services.oauth_session_service import finalize_oauth_session_workflow
+
+    await finalize_oauth_session_workflow(session_id)
+
+
+async def _fail_oauth_session_workflow(session_id: str, reason: str) -> None:
+    from api_service.services.oauth_session_service import fail_oauth_session_workflow
+
+    await fail_oauth_session_workflow(session_id, reason)
 
 
 @router.get("/history/{profile_id}")
@@ -444,11 +491,4 @@ async def reconnect_oauth_session(
             new_session_id,
         )
 
-    return OAuthSessionResponse(
-        session_id=new_session.session_id,
-        profile_id=new_session.profile_id,
-        runtime_id=new_session.runtime_id,
-        status=new_session.status.value,
-        created_at=new_session.created_at,
-        expires_at=new_session.expires_at,
-    )
+    return _oauth_session_response(new_session)

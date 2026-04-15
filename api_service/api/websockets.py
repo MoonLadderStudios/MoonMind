@@ -1,16 +1,25 @@
 import asyncio
+import json
 import logging
+import shlex
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.base import get_async_session
-from api_service.db.models import User, ManagedAgentOAuthSession
+from api_service.db.models import OAuthSessionStatus, User, ManagedAgentOAuthSession
 from api_service.auth import get_jwt_strategy, get_user_manager, UserManager
 import docker
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_ATTACHABLE_STATUSES = {
+    OAuthSessionStatus.BRIDGE_READY,
+    OAuthSessionStatus.AWAITING_USER,
+    OAuthSessionStatus.VERIFYING,
+}
 
 async def get_current_user_ws(
     token: str = Query(...),
@@ -21,6 +30,56 @@ async def get_current_user_ws(
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     return user
+
+
+def _session_is_expired(session: ManagedAgentOAuthSession) -> bool:
+    if not session.expires_at:
+        return False
+    expires_at = session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= datetime.now(timezone.utc)
+
+
+def _terminal_close_reason(session: ManagedAgentOAuthSession) -> str | None:
+    if session.status not in _ATTACHABLE_STATUSES:
+        return f"Session is not attachable in {session.status.value} state"
+    if _session_is_expired(session):
+        return "Session has expired"
+    if not session.container_name:
+        return "Session terminal is not ready"
+    return None
+
+
+def _provider_bootstrap_command(runtime_id: str) -> list[str]:
+    from moonmind.workflows.temporal.runtime.providers.registry import get_provider
+
+    provider = get_provider(runtime_id)
+    if provider is None:
+        raise ValueError(f"Unsupported OAuth runtime: {runtime_id}")
+    command = provider.get("bootstrap_command") or []
+    if not command:
+        raise ValueError(f"OAuth runtime {runtime_id} has no bootstrap command")
+    return list(command)
+
+
+def _command_for_docker_exec(runtime_id: str) -> str:
+    command = _provider_bootstrap_command(runtime_id)
+    return " ".join(shlex.quote(part) for part in command)
+
+
+async def _mark_terminal_connection(
+    db: AsyncSession,
+    session: ManagedAgentOAuthSession,
+    *,
+    connected: bool,
+) -> None:
+    now = datetime.now(timezone.utc)
+    if connected:
+        session.connected_at = now
+    else:
+        session.disconnected_at = now
+    await db.commit()
 
 @router.websocket("/terminal/{session_id}")
 async def terminal_websocket(
@@ -38,7 +97,6 @@ async def terminal_websocket(
         
     await websocket.accept()
 
-    # Validate session_id belongs to user
     from sqlalchemy import select
     stmt = select(ManagedAgentOAuthSession).where(
         ManagedAgentOAuthSession.session_id == session_id,
@@ -50,13 +108,24 @@ async def terminal_websocket(
     if not session:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Session not found or forbidden")
         return
-        
-    container_name = f"moonmind_auth_{session_id}"
+
+    close_reason = _terminal_close_reason(session)
+    if close_reason:
+        await websocket.send_text(close_reason + "\r\n")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=close_reason)
+        return
+
+    container_name = session.container_name
+    try:
+        exec_command = _command_for_docker_exec(session.runtime_id)
+    except ValueError as exc:
+        await websocket.send_text(str(exc) + "\r\n")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=str(exc))
+        return
+    await _mark_terminal_connection(db, session, connected=True)
     
-    # Proxy implementation bridging WebSocket to Docker exec PTY
     try:
         client = docker.from_env()
-        # Ensure container exists
         try:
             container = client.containers.get(container_name)
         except docker.errors.NotFound:
@@ -67,7 +136,7 @@ async def terminal_websocket(
         # Start a sh process attached to PTY
         exec_instance = client.api.exec_create(
             container=container.id,
-            cmd="/bin/sh",
+            cmd=["/bin/sh", "-lc", exec_command],
             tty=True,
             stdin=True,
             stdout=True,
@@ -102,7 +171,27 @@ async def terminal_websocket(
                 if "bytes" in message:
                     await loop.sock_sendall(raw_sock, message["bytes"])
                 elif "text" in message:
-                    await loop.sock_sendall(raw_sock, message["text"].encode("utf-8"))
+                    text = message["text"]
+                    try:
+                        frame = json.loads(text)
+                    except json.JSONDecodeError:
+                        await loop.sock_sendall(raw_sock, text.encode("utf-8"))
+                        continue
+
+                    frame_type = frame.get("type")
+                    if frame_type == "heartbeat":
+                        await websocket.send_text(json.dumps({"type": "heartbeat_ack"}))
+                    elif frame_type == "resize":
+                        cols = int(frame.get("cols", 80))
+                        rows = int(frame.get("rows", 24))
+                        client.api.exec_resize(exec_instance["Id"], height=rows, width=cols)
+                    elif frame_type == "input":
+                        await loop.sock_sendall(
+                            raw_sock, str(frame.get("data", "")).encode("utf-8")
+                        )
+                    else:
+                        await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
+                        break
 
         done, pending = await asyncio.wait(
             [asyncio.create_task(_read_from_docker()), asyncio.create_task(_read_from_ws())],
@@ -116,6 +205,10 @@ async def terminal_websocket(
     except Exception as e:
         logger.error(f"WebSocket error: {e}", exc_info=True)
     finally:
+        try:
+            await _mark_terminal_connection(db, session, connected=False)
+        except Exception:
+            logger.debug("Terminal disconnect metadata update failed", exc_info=True)
         try:
             if 'raw_sock' in locals():
                 raw_sock.close()

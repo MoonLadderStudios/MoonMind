@@ -102,6 +102,11 @@ async def oauth_session_start_auth_runner(
         volume_mount_path=volume_mount_path,
         session_ttl=session_ttl,
     )
+    bridge_info.setdefault(
+        "expires_at",
+        (datetime.now(timezone.utc) + timedelta(seconds=session_ttl)).isoformat(),
+    )
+    bridge_info.setdefault("session_transport", "moonmind_pty_ws")
     
     return bridge_info
 
@@ -114,6 +119,9 @@ async def oauth_session_update_terminal_session(
     session_id = request.get("session_id", "")
     terminal_session_id = request.get("terminal_session_id", "")
     terminal_bridge_id = request.get("terminal_bridge_id", "")
+    container_name = request.get("container_name", "")
+    session_transport = request.get("session_transport", "moonmind_pty_ws")
+    expires_at_raw = request.get("expires_at")
 
     if not session_id:
         raise ValueError("session_id is required")
@@ -134,6 +142,17 @@ async def oauth_session_update_terminal_session(
             session_obj.terminal_session_id = terminal_session_id
         if terminal_bridge_id:
             session_obj.terminal_bridge_id = terminal_bridge_id
+        if container_name:
+            session_obj.container_name = container_name
+        if session_transport:
+            session_obj.session_transport = session_transport
+        if expires_at_raw:
+            if isinstance(expires_at_raw, datetime):
+                session_obj.expires_at = expires_at_raw
+            else:
+                session_obj.expires_at = datetime.fromisoformat(
+                    str(expires_at_raw).replace("Z", "+00:00")
+                )
 
         await db.commit()
 
@@ -142,6 +161,8 @@ async def oauth_session_update_terminal_session(
         "session_id": session_id,
         "terminal_session_id": terminal_session_id,
         "terminal_bridge_id": terminal_bridge_id,
+        "container_name": container_name,
+        "session_transport": session_transport,
     }
 
 

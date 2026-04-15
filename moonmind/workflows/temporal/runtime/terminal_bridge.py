@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -22,14 +23,16 @@ async def start_terminal_bridge_container(
     container_name = f"moonmind_auth_{session_id}"
     logger.info("Starting auth runner container %s for %s", container_name, session_id)
     
-    # We create a dummy/sleeping container that maps the volume
-    # Actual PTY websocket proxying would attach to this container's PID
+    runner_image = os.environ.get("MOONMIND_OAUTH_RUNNER_IMAGE", "alpine:3.19")
     try:
         proc = await asyncio.create_subprocess_exec(
             "docker", "run", "-d", "--rm",
             "--name", container_name,
+            "--label", "moonmind.oauth_session=true",
+            "--label", f"moonmind.oauth_session_id={session_id}",
+            "--label", f"moonmind.runtime_id={runtime_id}",
             "-v", f"{volume_ref}:{volume_mount_path}",
-            "alpine:3.19", "sleep", str(session_ttl),
+            runner_image, "sleep", str(session_ttl),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -60,4 +63,5 @@ async def start_terminal_bridge_container(
         "container_name": container_name,
         "terminal_session_id": f"term_{session_id}",
         "terminal_bridge_id": f"br_{session_id}",
+        "session_transport": "moonmind_pty_ws",
     }

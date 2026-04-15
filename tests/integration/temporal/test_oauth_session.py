@@ -131,3 +131,49 @@ async def test_oauth_session_workflow_cancel() -> None:
             assert result["session_id"] == "sess_default"
             assert result["status"] == "cancelled"
 
+
+async def test_oauth_session_workflow_external_failure() -> None:
+    """Test externally observed terminal failure closes as failed."""
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                mock_ensure_volume,
+                mock_start_auth_runner,
+                mock_update_terminal_session,
+                mock_update_status,
+                mock_verify_cli_fingerprint,
+                mock_register_profile,
+                mock_stop_auth_runner,
+            ],
+        ), Worker(
+            env.client,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            workflows=[MoonMindOAuthSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOAuthSessionWorkflow.run,
+                {
+                    "session_id": "sess_external_failure",
+                    "runtime_id": "codex_cli",
+                    "volume_ref": "vol_123",
+                    "volume_mount_path": "/mnt/auth",
+                },
+                id="oauth-session:sess_external_failure",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+
+            await handle.signal(
+                MoonMindOAuthSessionWorkflow.fail,
+                "Volume verification failed: no_credentials_found",
+            )
+
+            result = await handle.result()
+
+            assert result["session_id"] == "sess_external_failure"
+            assert result["status"] == "failed"
+            assert result["failure_reason"] == (
+                "Volume verification failed: no_credentials_found"
+            )
