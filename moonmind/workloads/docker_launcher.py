@@ -366,7 +366,7 @@ def _publish_workload_artifacts(
         workload_root / "runtime.stderr.log",
         sanitized_stderr,
     )
-    diagnostics_payload = dict(redact_sensitive_payload(dict(diagnostics)))
+    diagnostics_payload = redact_sensitive_payload(diagnostics)
     diagnostics_payload["artifactPublication"] = (
         {
             "status": "failed",

@@ -369,7 +369,8 @@ def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> 
     user_id = _user_id(user)
     if user_id is None or bool(getattr(user, "is_superuser", False)):
         return
-    if row.owner_user_id is not None and str(row.owner_user_id) == user_id:
+    owner_id = row.owner_user_id
+    if owner_id is None or str(owner_id) == user_id:
         return
     raise HTTPException(
         status_code=403,
@@ -409,7 +410,9 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
-    return redact_sensitive_payload(payload)
+    for key in ("env_template", "file_templates", "command_behavior"):
+        payload[key] = redact_sensitive_payload(payload[key])
+    return payload
 
 
 from api_service.services.provider_profile_service import (

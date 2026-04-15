@@ -112,6 +112,8 @@ async def test_provider_profile_response_redacts_secret_like_runtime_fields(
                     provider_id="openai",
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode="api_key_env",
+                    volume_ref="codex_auth_volume",
+                    volume_mount_path="/home/app/.codex",
                     env_template={"OPENAI_API_KEY": raw_secret},
                     command_behavior={"authorization": f"Bearer {raw_secret}"},
                     secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
@@ -127,6 +129,8 @@ async def test_provider_profile_response_redacts_secret_like_runtime_fields(
     response_text = response.text
     assert raw_secret not in response_text
     assert "Bearer" not in response_text
+    assert response.json()["volume_ref"] == "codex_auth_volume"
+    assert response.json()["volume_mount_path"] == "/home/app/.codex"
     assert response.json()["env_template"]["OPENAI_API_KEY"] == "[REDACTED]"
     assert response.json()["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
 
@@ -169,6 +173,46 @@ async def test_provider_profile_update_rejects_non_owner(
     assert str(other_user.id) != str(owner_id)
     assert response.status_code == 403
     assert response.json()["detail"] == "Not authorized to manage this provider profile."
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_update_allows_ownerless_shared_profile(
+    client_app: AsyncClient, _module_db
+) -> None:
+    profile_id = "ownerless_shared_profile"
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="shared_runtime",
+                    provider_id="openai",
+                    owner_user_id=None,
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode="oauth_home",
+                    volume_ref="codex_auth_volume",
+                    volume_mount_path="/home/app/.codex",
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    _override_current_user(user_id=uuid4(), is_superuser=False)
+    try:
+        async with client_app as client:
+            response = await client.patch(
+                f"/api/v1/provider-profiles/{profile_id}",
+                json={"enabled": False},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is False
+    assert data["volume_mount_path"] == "/home/app/.codex"
 
 
 @pytest.mark.asyncio
