@@ -2480,10 +2480,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     templateItems.find((item) => item.key === selectedPresetKey) || null;
 
   useEffect(() => {
-    if (selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG) {
+    if (
+      pageMode.mode === "create" &&
+      selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG
+    ) {
       setPublishMode("none");
     }
-  }, [selectedPreset?.slug]);
+  }, [pageMode.mode, selectedPreset?.slug]);
 
   const availableDependencyOptions = useMemo(
     () =>
