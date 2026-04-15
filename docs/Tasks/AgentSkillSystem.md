@@ -111,6 +111,26 @@ Examples:
 ### ResolvedSkillSet
 The immutable, exact set of agent skills selected for a specific run or step after all precedence and override rules have been applied.
 
+### RuntimeCommandSelection
+
+A `RuntimeCommandSelection` is a MoonMind-native request to invoke a
+runtime-provided command inside an `agent_runtime` step.
+
+Examples include:
+
+- `review`
+
+A runtime command is not:
+
+- an `AgentSkillDefinition`
+- a `SkillSet`
+- a `ResolvedSkillSet` entry
+- a `.agents/skills` bundle
+
+UI surfaces may co-present runtime commands beside agent skills for convenience,
+but the backend contract must keep them typed and separate. Runtime commands
+belong to the agent-runtime execution contract, not to the Agent Skill System.
+
 ### Materialization
 The runtime-facing rendering of a `ResolvedSkillSet` into one or more of:
 
@@ -157,6 +177,9 @@ The Agent Skill System does not aim to:
 4. conflate agent skills with executable tool contracts
 5. allow silent, unaudited skill drift within a run
 6. force a repo to adopt any specific checked-in skill layout beyond the documented conventions
+
+Additional non-goal: modeling runtime-native commands as agent skills or as
+members of a `ResolvedSkillSet`.
 
 ---
 
