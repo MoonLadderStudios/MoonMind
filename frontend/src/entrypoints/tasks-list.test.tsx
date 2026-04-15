@@ -36,10 +36,10 @@ describe('Tasks List Entrypoint', () => {
   it('announces the current sort state on table headers', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
-    const createdHeaderButton = await screen.findByRole('button', {
-      name: /Created\. Sorted descending\. Activate to sort ascending\./i,
+    const scheduledHeaderButton = await screen.findByRole('button', {
+      name: /Scheduled\. Sorted ascending\. Activate to sort descending\./i,
     });
-    expect(createdHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
+    expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
 
     const runtimeHeaderButton = screen.getByRole('button', {
       name: /Runtime\. Not sorted\. Activate to sort ascending\./i,
@@ -54,6 +54,47 @@ describe('Tasks List Entrypoint', () => {
         'Runtime. Sorted ascending. Activate to sort descending.',
       );
     });
+  });
+
+  it('orders scheduled rows by scheduled time before created time by default', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-late',
+            source: 'temporal',
+            title: 'Late scheduled task',
+            status: 'queued',
+            state: 'scheduled',
+            rawState: 'scheduled',
+            scheduledFor: '2026-04-15T18:00:00Z',
+            startedAt: null,
+            createdAt: '2026-04-15T01:00:00Z',
+          },
+          {
+            taskId: 'task-early',
+            source: 'temporal',
+            title: 'Early scheduled task',
+            status: 'queued',
+            state: 'scheduled',
+            rawState: 'scheduled',
+            scheduledFor: '2026-04-15T09:00:00Z',
+            startedAt: null,
+            createdAt: '2026-04-15T02:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    const earlyLink = await screen.findByRole('link', { name: 'Early scheduled task' });
+    const lateLink = await screen.findByRole('link', { name: 'Late scheduled task' });
+    expect(
+      earlyLink.compareDocumentPosition(lateLink) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect((await screen.findAllByText('—')).length).toBeGreaterThan(0);
   });
 
   it('reuses the trimmed filters for both the request and the query key', async () => {

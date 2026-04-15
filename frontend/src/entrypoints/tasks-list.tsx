@@ -40,6 +40,7 @@ const TABLE_COLUMNS = [
   ['repository', 'Repository'],
   ['status', 'Status'],
   ['title', 'Title'],
+  ['scheduledFor', 'Scheduled'],
   ['createdAt', 'Created'],
   ['startedAt', 'Started'],
   ['closedAt', 'Finished'],
@@ -87,7 +88,7 @@ function readListDashboardConfig(payload: BootPayload): ListDashboardConfig | un
 
 function normalizeTableSortField(raw: string | null): string {
   const candidate = (raw || '').trim();
-  return VALID_TABLE_SORT_FIELDS.has(candidate) ? candidate : 'createdAt';
+  return VALID_TABLE_SORT_FIELDS.has(candidate) ? candidate : 'scheduledFor';
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -175,9 +176,11 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   const [liveUpdates, setLiveUpdates] = useState(true);
   const [sortField, setSortField] = useState<string>(() => normalizeTableSortField(initial.get('sort')));
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(
-    () => (initial.get('sortDir') === 'asc' ? 'asc' : 'desc'),
-  );
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(() => {
+    const initialSortDir = initial.get('sortDir');
+    if (initialSortDir === 'asc' || initialSortDir === 'desc') return initialSortDir;
+    return sortField === 'scheduledFor' ? 'asc' : 'desc';
+  });
   const normalizedRepository = repository.trim();
 
   const syncUrl = useCallback(() => {
@@ -188,7 +191,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     if (normalizedRepository) params.set('repo', normalizedRepository);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
-    if (sortField !== 'createdAt' || sortDir !== 'desc') {
+    if (sortField !== 'scheduledFor' || sortDir !== 'asc') {
       params.set('sort', sortField);
       params.set('sortDir', sortDir);
     }
@@ -504,6 +507,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                             <div className="small">{depsSummary}</div>
                           ) : null}
                         </td>
+                        <td>{formatWhen(row.scheduledFor)}</td>
                         <td>{formatWhen(row.createdAt)}</td>
                         <td>{formatWhen(row.startedAt)}</td>
                         <td>{formatWhen(row.closedAt)}</td>
@@ -559,6 +563,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       <div>
                         <dt>Repository</dt>
                         <dd>{row.repository || '—'}</dd>
+                      </div>
+                      <div>
+                        <dt>Scheduled</dt>
+                        <dd>{formatWhen(row.scheduledFor)}</dd>
                       </div>
                       <div>
                         <dt>Created</dt>
