@@ -9,7 +9,7 @@
 
 - Unit tests: `pytest tests/unit/schemas/test_managed_session_models.py tests/unit/workflows/temporal/workflows/test_agent_session.py -q`
 - Integration tests: `pytest tests/integration/services/temporal/workflows/test_agent_session_lifecycle.py -q`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -43,7 +43,7 @@
 - [X] T011 Run focused unit tests for managed-session schemas and workflow behavior (SC-001, SC-002, SC-003)
 - [X] T012 Run lifecycle integration test for managed-session signal/update/query behavior (SC-004)
 - [X] T013 Run full `./tools/test_unit.sh` suite
-- [X] T014 Run `/speckit.verify` final verification
+- [X] T014 Run `/moonspec-verify` final verification
 
 ## Dependencies & Execution Order
 
