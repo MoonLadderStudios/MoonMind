@@ -374,6 +374,103 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert control_calls[-1]["threadId"] == "thread-1"
 
 
+async def test_start_passes_oauth_profile_auth_target_to_launch_session(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    launch_calls: list[Any] = []
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(request: Any) -> CodexManagedSessionHandle:
+        launch_calls.append(request)
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [
+                {
+                    "profile_id": "codex-oauth",
+                    "runtime_id": "codex_cli",
+                    "provider_id": "openai",
+                    "credential_source": "oauth_volume",
+                    "runtime_materialization_mode": "oauth_home",
+                    "volume_ref": "codex_auth_volume",
+                    "volume_mount_path": "/home/app/.codex-auth",
+                }
+            ]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed-runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=AsyncMock(
+            return_value=_turn_response(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(
+            return_value=_summary(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        publish_remote_artifacts=AsyncMock(
+            return_value=_publication(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    await adapter.start(
+        _request(binding).model_copy(update={"execution_profile_ref": "codex-oauth"})
+    )
+
+    assert len(launch_calls) == 1
+    launch_payload = launch_calls[0]
+    launch_request = launch_payload["request"]
+    assert launch_request["environment"]["MANAGED_AUTH_VOLUME_PATH"] == (
+        "/home/app/.codex-auth"
+    )
+    assert launch_request["environment"]["MOONMIND_EXECUTION_PROFILE_REF"] == (
+        "codex-oauth"
+    )
+    assert launch_request["codexHomePath"].endswith(
+        f"{binding.task_run_id}/.moonmind/codex-home"
+    )
+    assert launch_request["codexHomePath"] != (
+        launch_request["environment"]["MANAGED_AUTH_VOLUME_PATH"]
+    )
+    assert launch_payload["profile"]["credentialSource"] == "oauth_volume"
+
+
 async def test_start_persists_running_live_capable_record_before_send_turn_completes(
     tmp_path: Path,
 ) -> None:
