@@ -159,16 +159,18 @@ class JiraToolService:
         jql = request.jql
         if project_key:
             jql = self._scope_jql_to_project(jql, project_key)
+        body: dict[str, Any] = {
+            "jql": jql,
+            "fields": request.fields,
+            "maxResults": request.max_results,
+        }
+        if request.next_page_token:
+            body["nextPageToken"] = request.next_page_token
         return await self._request_json(
             method="POST",
-            path="/search",
+            path="/search/jql",
             action="search_issues",
-            json_body={
-                "jql": jql,
-                "fields": request.fields,
-                "startAt": request.start_at,
-                "maxResults": request.max_results,
-            },
+            json_body=body,
             context={"projectKey": project_key or ""},
         )
 

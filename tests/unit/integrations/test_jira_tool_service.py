@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from moonmind.config.settings import AtlassianSettings, JiraSettings
 from moonmind.integrations.jira.errors import JiraToolError
@@ -252,10 +253,45 @@ async def test_search_issues_preserves_order_by_after_project_scoping() -> None:
         )
     )
 
+    assert service.calls[0]["method"] == "POST"
+    assert service.calls[0]["path"] == "/search/jql"
     assert (
         service.calls[0]["json_body"]["jql"]
         == "project = ENG AND (status = 'Todo') ORDER BY created DESC"
     )
+    assert "startAt" not in service.calls[0]["json_body"]
+
+
+async def test_search_issues_sends_next_page_token() -> None:
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(),
+        responses=[{"issues": [], "isLast": True}],
+    )
+
+    await service.search_issues(
+        SearchIssuesRequest(
+            projectKey="ENG",
+            jql="status = 'Todo'",
+            nextPageToken="opaque-token",
+            maxResults=25,
+        )
+    )
+
+    assert service.calls[0]["path"] == "/search/jql"
+    assert service.calls[0]["json_body"] == {
+        "jql": "project = ENG AND (status = 'Todo')",
+        "fields": [],
+        "maxResults": 25,
+        "nextPageToken": "opaque-token",
+    }
+
+
+async def test_search_issues_rejects_removed_start_at_contract() -> None:
+    with pytest.raises(ValidationError):
+        SearchIssuesRequest.model_validate(
+            {"projectKey": "ENG", "jql": "status = 'Todo'", "startAt": 50}
+        )
+
 
 
 async def test_verify_connection_returns_project_result() -> None:

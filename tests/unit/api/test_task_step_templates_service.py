@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -415,6 +416,52 @@ async def test_import_seed_templates_skips_existing(tmp_path):
                 seed_dir=seed_dir
             )
             assert created_count_second == 0
+
+
+async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="jira-breakdown",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.title == "Jira Breakdown"
+            assert template.latest_version is not None
+            assert [step["skill"]["id"] for step in template.latest_version.steps] == [
+                "moonspec-breakdown",
+                "jira-issue-creator",
+            ]
+
+            expanded = await service.expand_template(
+                slug="jira-breakdown",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_project_key": "TOOL",
+                    "jira_issue_type": "Story",
+                },
+                context={},
+            )
+
+            assert len(expanded["steps"]) == 2
+            assert expanded["steps"][0]["skill"]["id"] == "moonspec-breakdown"
+            assert "docs/Designs/RuntimeTypes.md" in expanded["steps"][0]["instructions"]
+            assert expanded["steps"][1]["skill"]["id"] == "jira-issue-creator"
+            assert "Jira Story issue in project TOOL" in expanded["steps"][1]["instructions"]
+            assert "Source Document path" in expanded["steps"][1]["instructions"]
 
 
 async def test_sync_seed_templates_creates_missing_seed(tmp_path):

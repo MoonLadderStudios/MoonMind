@@ -3083,13 +3083,67 @@ class TemporalAgentRuntimeActivities:
             )
             instruction_ref = str(request.instruction_ref or "").strip()
             if instruction_ref:
-                return append_managed_codex_runtime_note(instruction_ref)
+                return self._prepare_managed_codex_turn_text(
+                    instruction_ref,
+                    parameters=request.parameters,
+                )
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         instructions = str(parameters.get("instructions") or "").strip()
         if instructions:
-            return append_managed_codex_runtime_note(instructions)
+            return self._prepare_managed_codex_turn_text(
+                instructions,
+                parameters=parameters,
+            )
         raise TemporalActivityRuntimeError(
             "request.instructionRef or request.parameters.instructions is required"
+        )
+
+    @classmethod
+    def _prepare_managed_codex_turn_text(
+        cls,
+        instructions: str,
+        *,
+        parameters: Mapping[str, Any] | None,
+    ) -> str:
+        prepared = cls._append_jira_issue_creator_tool_hint(
+            instructions,
+            parameters=parameters,
+        )
+        return append_managed_codex_runtime_note(prepared)
+
+    @staticmethod
+    def _append_jira_issue_creator_tool_hint(
+        instructions: str,
+        *,
+        parameters: Mapping[str, Any] | None,
+    ) -> str:
+        params = parameters if isinstance(parameters, Mapping) else {}
+        selected_skill = str(params.get("selectedSkill") or "").strip().lower()
+        if selected_skill != "jira-issue-creator":
+            return instructions
+        if "MoonMind trusted Jira tools" in instructions:
+            return instructions
+        story_breakdown_path = str(params.get("storyBreakdownPath") or "").strip()
+        story_breakdown_hint = (
+            f"- Read MoonSpec story candidates from `{story_breakdown_path}`.\n"
+            if story_breakdown_path
+            else ""
+        )
+        return (
+            instructions.rstrip()
+            + "\n\nMoonMind trusted Jira tools:\n"
+            + story_breakdown_hint
+            + "- Use the internal MoonMind API from the managed session via "
+            + "`$MOONMIND_URL` for Jira operations; do not look for raw Jira "
+            + "credentials in the shell.\n"
+            + "- List available tools with `GET $MOONMIND_URL/mcp/tools`.\n"
+            + "- Invoke Jira tools with `POST $MOONMIND_URL/mcp/tools/call` and "
+            + "JSON like `{\"tool\":\"jira.list_create_issue_types\","
+            + "\"arguments\":{\"projectKey\":\"TOOL\"}}`.\n"
+            + "- Resolve the Story issue type through `jira.list_create_issue_types` "
+            + "and create issues through `jira.create_issue`.\n"
+            + "- Treat the task as blocked if Jira tool calls are unavailable or no "
+            + "Jira issue key is returned."
         )
 
     async def agent_runtime_send_turn(
