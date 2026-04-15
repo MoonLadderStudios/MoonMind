@@ -131,8 +131,8 @@ class SearchIssuesRequest(JiraBaseModel):
     jql: str = Field(..., min_length=1, alias="jql")
     project_key: str | None = Field(None, alias="projectKey")
     fields: list[str] = Field(default_factory=list, alias="fields")
-    start_at: int = Field(0, ge=0, alias="startAt")
     max_results: int = Field(50, ge=1, le=200, alias="maxResults")
+    next_page_token: str | None = Field(None, alias="nextPageToken")
 
     @field_validator("project_key", mode="before")
     @classmethod
@@ -143,6 +143,13 @@ class SearchIssuesRequest(JiraBaseModel):
         if not _JIRA_PROJECT_KEY_RE.fullmatch(normalized):
             raise ValueError("projectKey must match a Jira project-key pattern")
         return normalized
+
+    @field_validator("next_page_token", mode="before")
+    @classmethod
+    def _normalize_next_page_token(cls, value: object) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value).strip()
 
 
 class GetTransitionsRequest(JiraIssueScopedRequest):
@@ -199,4 +206,3 @@ class VerifyConnectionRequest(JiraBaseModel):
         if not _JIRA_PROJECT_KEY_RE.fullmatch(normalized):
             raise ValueError("projectKey must match a Jira project-key pattern")
         return normalized
-

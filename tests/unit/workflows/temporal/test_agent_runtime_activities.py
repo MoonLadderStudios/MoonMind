@@ -1671,6 +1671,33 @@ async def test_agent_runtime_prepare_turn_instructions_injects_context(
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {
+                    "instructions": "Create Jira stories from the breakdown.",
+                    "selectedSkill": "jira-issue-creator",
+                    "publishMode": "none",
+                },
+            },
+        }
+    )
+
+    assert "MoonMind trusted Jira tools:" in result
+    assert "`$MOONMIND_URL`" in result
+    assert "POST $MOONMIND_URL/mcp/tools/call" in result
+    assert "jira.create_issue" in result
+    assert "Managed Codex CLI note:" in result
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_requires_workspace_for_instruction_ref() -> None:
     activities = TemporalAgentRuntimeActivities()
 

@@ -106,6 +106,39 @@ def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
     return truncated or normalized[:_MAX_AGENT_RUN_RESULT_SUMMARY_CHARS]
 
 
+def _selected_agent_skill(parameters: Mapping[str, Any] | None) -> str:
+    if not isinstance(parameters, Mapping):
+        return ""
+    return str(parameters.get("selectedSkill") or "").strip().lower()
+
+
+def _jira_issue_creator_blocker_summary(
+    *,
+    parameters: Mapping[str, Any] | None,
+    assistant_text: str,
+) -> str | None:
+    if _selected_agent_skill(parameters) != "jira-issue-creator":
+        return None
+    normalized = " ".join(str(assistant_text or "").lower().split())
+    if not normalized:
+        return None
+    blocker_markers = (
+        "no jira issues were created",
+        "could not create the jira",
+        "could not create jira",
+        "jira access is not configured",
+        "jira tools are not enabled",
+        "jira tool calls are unavailable",
+        "no jira mcp connector/tool is available",
+    )
+    if any(marker in normalized for marker in blocker_markers):
+        return _clamp_agent_run_result_summary(
+            assistant_text,
+            default="Jira issue creation was blocked.",
+        )
+    return None
+
+
 class CodexSessionRunFailedError(RuntimeError):
     """Raised when a Codex session run persisted a structured failed result."""
 
@@ -380,6 +413,17 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         "turnId": turn_id,
                     },
                 )
+                jira_blocker_summary = _jira_issue_creator_blocker_summary(
+                    parameters=request.parameters,
+                    assistant_text=assistant_text,
+                )
+                if jira_blocker_summary is not None:
+                    result = result.model_copy(
+                        update={
+                            "summary": jira_blocker_summary,
+                            "failure_class": "execution_error",
+                        }
+                    )
             except Exception as exc:
                 failure_result = self._persist_failed_run_state(
                     run_id=run_id,
@@ -409,6 +453,24 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 )
                 failed_state_persisted = True
                 raise CodexSessionRunFailedError(str(exc), result=failure_result) from exc
+
+            if result.failure_class is not None:
+                self._save_run_state(
+                    run_id=run_id,
+                    agent_id=request.agent_id,
+                    managed_run_id=binding.task_run_id,
+                    binding=binding,
+                    workspace_path=workspace_path,
+                    locator=current_locator.model_dump(mode="json", by_alias=True),
+                    active_turn_id=None,
+                    result=result.model_dump(mode="json", by_alias=True),
+                    status="failed",
+                    started_at=started_at,
+                    finished_at=_current_time(),
+                    profile_id=launch_context.profile_id or None,
+                )
+                failed_state_persisted = True
+                raise CodexSessionRunFailedError(result.summary, result=result)
 
             self._save_run_state(
                 run_id=run_id,
