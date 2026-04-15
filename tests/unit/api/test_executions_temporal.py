@@ -199,7 +199,7 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
         assert item["targetSkill"] == "fix-ci"
 
 
-def test_list_executions_source_temporal_orders_scheduled_runs_by_scheduled_time(
+def test_list_executions_source_temporal_orders_scheduled_runs_by_latest_scheduled_time(
     client,
 ) -> None:
     from datetime import UTC, datetime
@@ -275,10 +275,10 @@ def test_list_executions_source_temporal_orders_scheduled_runs_by_scheduled_time
 
     assert response.status_code == 200
     items = response.json()["items"]
-    assert [item["workflowId"] for item in items] == ["mm:wf-early", "mm:wf-late"]
+    assert [item["workflowId"] for item in items] == ["mm:wf-late", "mm:wf-early"]
     assert (
         datetime.fromisoformat(items[0]["scheduledFor"].replace("Z", "+00:00"))
-        == early_schedule
+        == late_schedule
     )
     assert items[0]["startedAt"] is None
     assert items[1]["startedAt"] is None

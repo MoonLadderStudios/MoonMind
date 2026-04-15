@@ -37,9 +37,9 @@ describe('Tasks List Entrypoint', () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
     const scheduledHeaderButton = await screen.findByRole('button', {
-      name: /Scheduled\. Sorted ascending\. Activate to sort descending\./i,
+      name: /Scheduled\. Sorted descending\. Activate to sort ascending\./i,
     });
-    expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
+    expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
 
     const runtimeHeaderButton = screen.getByRole('button', {
       name: /Runtime\. Not sorted\. Activate to sort ascending\./i,
@@ -56,7 +56,7 @@ describe('Tasks List Entrypoint', () => {
     });
   });
 
-  it('orders scheduled rows by scheduled time before created time by default', async () => {
+  it('orders scheduled rows by latest scheduled time before created time by default', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -92,7 +92,7 @@ describe('Tasks List Entrypoint', () => {
     const earlyLink = await screen.findByRole('link', { name: 'Early scheduled task' });
     const lateLink = await screen.findByRole('link', { name: 'Late scheduled task' });
     expect(
-      earlyLink.compareDocumentPosition(lateLink) & Node.DOCUMENT_POSITION_FOLLOWING,
+      lateLink.compareDocumentPosition(earlyLink) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect((await screen.findAllByText('—')).length).toBeGreaterThan(0);
   });

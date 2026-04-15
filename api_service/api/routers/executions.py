@@ -2351,9 +2351,10 @@ async def list_executions(
                             else 1
                         ),
                         (
-                            item.scheduled_for
+                            -item.scheduled_for.timestamp()
                             if item.state == MoonMindWorkflowState.SCHEDULED.value
-                            else datetime.max.replace(tzinfo=UTC)
+                            and item.scheduled_for is not None
+                            else float("inf")
                         ),
                         -(item.updated_at.timestamp() if item.updated_at else 0),
                         item.workflow_id,
