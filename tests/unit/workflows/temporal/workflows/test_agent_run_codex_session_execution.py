@@ -13,6 +13,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
     _MAX_SUMMARY_CHARS,
 )
+from moonmind.schemas.temporal_activity_models import AgentRuntimeFetchResultInput
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
@@ -92,8 +93,9 @@ async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_he
 
     activity_input = run._build_managed_fetch_result_activity_input(request)
 
-    assert activity_input["target_branch"] == "main"
-    assert "head_branch" not in activity_input
+    assert isinstance(activity_input, AgentRuntimeFetchResultInput)
+    assert activity_input.target_branch == "main"
+    assert activity_input.head_branch is None
 
 
 async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
@@ -276,10 +278,9 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     assert routed_calls[0][1]["workflowId"] == "wf-task-1:session:override"
     assert routed_calls[0][1]["taskRunId"] == "wf-task-1"
     assert routed_calls[1][1]["workspacePath"] == "/work/task/repo"
-    assert routed_calls[2][1] == {
-        "run_id": "wf-task-1",
-        "agent_id": "codex",
-    }
+    assert isinstance(routed_calls[2][1], AgentRuntimeFetchResultInput)
+    assert routed_calls[2][1].run_id == "wf-task-1"
+    assert routed_calls[2][1].agent_id == "codex"
 
 
 async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(
@@ -514,9 +515,10 @@ async def test_agent_run_managed_session_passes_publish_branch_context_to_fetch_
     fetch_payload = next(
         payload for name, payload in routed_calls if name == "agent_runtime.fetch_result"
     )
-    assert fetch_payload["publish_mode"] == "pr"
-    assert fetch_payload["target_branch"] == "main"
-    assert fetch_payload["head_branch"] == "feature/recover-detached-head"
+    assert isinstance(fetch_payload, AgentRuntimeFetchResultInput)
+    assert fetch_payload.publish_mode == "pr"
+    assert fetch_payload.target_branch == "main"
+    assert fetch_payload.head_branch == "feature/recover-detached-head"
 
 
 async def test_agent_run_managed_session_start_runtime_error_returns_failed_result(

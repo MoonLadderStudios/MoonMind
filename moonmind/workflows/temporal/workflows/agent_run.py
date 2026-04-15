@@ -17,6 +17,12 @@ with workflow.unsafe.imports_passed_through():
         AgentRunStatus as AgentRunStatusModel,
         _MAX_SUMMARY_CHARS,
     )
+    from moonmind.schemas.temporal_activity_models import (
+        AgentRuntimeCancelInput,
+        AgentRuntimeFetchResultInput,
+        AgentRuntimeStatusInput,
+        ExternalAgentRunInput,
+    )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import (
         ManagedAgentAdapter,
@@ -40,6 +46,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
+    from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.provider_failures import (
         classify_provider_failure,
         provider_error_requires_cooldown,
@@ -311,7 +318,7 @@ class MoonMindAgentRun:
                 "agent_runtime.session_status": "Fetch managed Codex session status",
             }.get(activity_name, activity_name),
         )
-        return await workflow.execute_activity(
+        return await execute_typed_activity(
             activity_name,
             args,
             **kwargs,
@@ -485,7 +492,7 @@ class MoonMindAgentRun:
     def _build_managed_fetch_result_activity_input(
         self,
         request: AgentExecutionRequest,
-    ) -> dict[str, Any]:
+    ) -> AgentRuntimeFetchResultInput:
         params = request.parameters if isinstance(request.parameters, Mapping) else {}
         raw_publish_mode = params.get("publishMode")
         publish_mode = (
@@ -499,15 +506,15 @@ class MoonMindAgentRun:
             run_id = str(request.managed_session.task_run_id).strip()
 
         activity_input: dict[str, Any] = {
-            "run_id": run_id,
-            "agent_id": request.agent_id,
+            "runId": run_id,
+            "agentId": request.agent_id,
         }
         if publish_mode != "none":
-            activity_input["publish_mode"] = publish_mode
+            activity_input["publishMode"] = publish_mode
 
         raw_commit_message = params.get("commitMessage")
         if isinstance(raw_commit_message, str) and raw_commit_message.strip():
-            activity_input["commit_message"] = raw_commit_message.strip()
+            activity_input["commitMessage"] = raw_commit_message.strip()
 
         target_branch = str(
             params.get("publishBaseBranch")
@@ -515,7 +522,7 @@ class MoonMindAgentRun:
             or ""
         ).strip()
         if target_branch:
-            activity_input["target_branch"] = target_branch
+            activity_input["targetBranch"] = target_branch
 
         head_branch = str(
             params.get("targetBranch")
@@ -523,11 +530,11 @@ class MoonMindAgentRun:
             or ""
         ).strip()
         if head_branch:
-            activity_input["head_branch"] = head_branch
+            activity_input["headBranch"] = head_branch
 
         if _request_selected_skill(request) == "pr-resolver":
-            activity_input["pr_resolver_expected"] = True
-        return activity_input
+            activity_input["prResolverExpected"] = True
+        return AgentRuntimeFetchResultInput.model_validate(activity_input)
 
     async def _fetch_managed_result(
         self,
@@ -1531,7 +1538,7 @@ class MoonMindAgentRun:
                                 act_name = f"integration.{self._external_agent_id}.status"
                                 status_dict = await self._execute_routed_activity(
                                     act_name,
-                                    {"external_id": self.run_id},
+                                    ExternalAgentRunInput(runId=str(self.run_id or "")),
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
 
                                 )
@@ -1545,10 +1552,10 @@ class MoonMindAgentRun:
                                 elif use_managed_status_activity:
                                     status_payload = await self._execute_routed_activity(
                                         "agent_runtime.status",
-                                        {
-                                            "run_id": self.run_id,
-                                            "agent_id": request.agent_id,
-                                        },
+                                        AgentRuntimeStatusInput(
+                                            runId=str(self.run_id or ""),
+                                            agentId=request.agent_id,
+                                        ),
                                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
 
                                     )
@@ -1661,7 +1668,7 @@ class MoonMindAgentRun:
                         act_name = f"integration.{self._external_agent_id}.fetch_result"
                         result_dict = await self._execute_routed_activity(
                             act_name,
-                            {"external_id": self.run_id},
+                            ExternalAgentRunInput(runId=str(self.run_id or "")),
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
 
                         )
@@ -1833,7 +1840,7 @@ class MoonMindAgentRun:
                 # Post-run artifact publishing via the agent_runtime activity fleet.
                 enriched_result = await self._execute_routed_activity(
                     "agent_runtime.publish_artifacts",
-                    self.final_result.model_dump(mode="json", by_alias=True) if hasattr(self.final_result, "model_dump") else self.final_result,
+                    self.final_result,
                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
 
                 )
@@ -1887,14 +1894,17 @@ class MoonMindAgentRun:
                             act_name = f"integration.{self._external_agent_id}.cancel"
                             await self._execute_routed_activity(
                                 act_name,
-                                {"external_id": self.run_id},
+                                ExternalAgentRunInput(runId=str(self.run_id or "")),
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
 
                             )
                         else:
                             await self._execute_routed_activity(
                                 "agent_runtime.cancel",
-                                {"agent_kind": self.agent_kind, "run_id": self.run_id},
+                                AgentRuntimeCancelInput(
+                                    agentKind=self.agent_kind,
+                                    runId=str(self.run_id or ""),
+                                ),
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
 
                             )

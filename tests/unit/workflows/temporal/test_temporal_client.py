@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal import client as temporal_client_module
+from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -23,6 +25,22 @@ class _FakeWorkflowExecution:
 def adapter() -> TemporalClientAdapter:
     mock_client = AsyncMock()
     return TemporalClientAdapter(client=mock_client)
+
+
+async def test_temporal_client_uses_shared_pydantic_data_converter(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_connect(address, *, namespace, data_converter):
+        captured["address"] = address
+        captured["namespace"] = namespace
+        captured["data_converter"] = data_converter
+        return AsyncMock()
+
+    monkeypatch.setattr(temporal_client_module.Client, "connect", fake_connect)
+
+    await temporal_client_module.get_temporal_client("temporal:7233", "default")
+
+    assert captured["data_converter"] is MOONMIND_TEMPORAL_DATA_CONVERTER
 
 
 # ---- get_drain_metrics ----

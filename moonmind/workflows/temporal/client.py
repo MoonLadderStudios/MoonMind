@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
 from temporalio.client import Client, WorkflowExecutionDescription
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.common import SearchAttributeKey, SearchAttributePair, TypedSearchAttributes
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
@@ -22,6 +21,7 @@ from moonmind.workflows.temporal.workers import (
     TemporalWorkerTopology,
     describe_configured_worker,
 )
+from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 
 if TYPE_CHECKING:
     from moonmind.workflows.temporal.service import TemporalExecutionService
@@ -124,7 +124,7 @@ async def get_temporal_client(address: str, namespace: str) -> Client:
     return await Client.connect(
         address,
         namespace=namespace,
-        data_converter=pydantic_data_converter,
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
     )
 
 
@@ -169,7 +169,7 @@ class TemporalClientAdapter:
                 self._client = await Client.connect(
                     settings.temporal.address,
                     namespace=settings.temporal.namespace,
-                    data_converter=pydantic_data_converter,
+                    data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
                 )
             return self._client
 
