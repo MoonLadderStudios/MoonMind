@@ -1,0 +1,841 @@
+{
+  "source": {
+    "title": "Claude Code Managed Sessions",
+    "path": "docs/ManagedAgents/ClaudeCodeManagedSessions.md",
+    "originalDesignText": "# Claude Code Managed Sessions\n\n**Status:** Draft\n**Audience:** Managed Agents platform, runtime integration, client surfaces, security, and enterprise administration\n**Related:** `docs/ManagedAgents/CodexCliManagedSessions.md`\n\n## 1. Executive summary\n\n`Claude Code Managed Sessions` is the Claude Code binding of the shared Managed Session Plane abstraction. It should preserve the same core control-plane model used by the Codex design wherever possible:\n\n- a canonical session record\n- append-only event history\n- normalized turn lifecycle\n- normalized approval / decision points\n- runtime adapters\n- policy envelopes\n- resumability and archiving\n- usage and telemetry export\n\nThe Claude Code variant diverges from Codex in a few important ways that must be first-class in the design rather than treated as edge cases:\n\n1. **Execution owner and UI surface are decoupled.** A Claude session may run locally while being projected into web or mobile through Remote Control, or it may run in an Anthropic-managed cloud VM for Claude Code on the web.\n2. **Managed policy is JSON-first and highest-precedence.** Claude Code has managed settings, server-managed settings, endpoint-managed settings, managed-only flags, and user approval dialogs for certain risky managed controls.\n3. **Permissioning is not just “request approval.”** Claude Code combines permission modes, allow/ask/deny rules, protected paths, sandboxing, hooks, and, in auto mode, a classifier.\n4. **Context is a structured runtime asset.** `CLAUDE.md`, `CLAUDE.local.md`, managed `CLAUDE.md`, auto memory, rules, skills, output styles, hook-injected context, and compaction all materially affect the session.\n5. **Checkpointing is first-class.** Claude automatically creates rewindable checkpoints around edits and user prompts. That belongs in the plane, not as an afterthought.\n6. **Child work comes in two shapes.** Claude subagents are child contexts inside one session; agent teams are multiple sessions with direct peer communication.\n\nThis design therefore keeps the shared Managed Session Plane concepts intact, but changes the runtime adapter, policy compiler, context model, and child-session model to fit Claude Code.\n\n---\n\n## 2. Design principles\n\n### 2.1 Preserve shared abstractions\n\nThe Claude design should keep the same top-level nouns as the Codex design unless Claude’s runtime makes them incorrect. The shared nouns are:\n\n- **SessionPlane**\n- **ManagedSession**\n- **Turn**\n- **WorkItem**\n- **DecisionPoint**\n- **PolicyEnvelope**\n- **RuntimeAdapter**\n- **ArtifactStore**\n- **UsageLedger**\n\nWhere Codex uses `thread`, the Claude plane should still normalize to the same shared `ManagedSession` abstraction, even if the Claude runtime itself exposes the notion as a “session”.\n\n### 2.2 Separate execution from presentation\n\nClaude Code surfaces do not always imply where code actually runs. The plane must never infer execution semantics from UI alone.\n\n- `terminal`, `vscode`, `jetbrains`, and `desktop` usually mean **local execution**.\n- `web` may mean **cloud execution** or merely a **projection of a local session** through Remote Control.\n- `mobile` may also mean **cloud execution** or **Remote Control projection**.\n\nThe plane therefore models:\n\n- **execution owner**\n- **surface bindings**\n- **projection mode**\n\nas separate fields.\n\n### 2.3 Treat policy as compiled runtime state\n\nClaude Code policy is not a single knob. The runtime behavior depends on:\n\n- managed settings source resolution\n- permission mode\n- allow / ask / deny rules\n- protected path policy\n- hook registry\n- sandbox configuration\n- provider and surface constraints\n- optional auto-mode classifier behavior\n\nThe plane should compile these into one effective `PolicyEnvelope` that is attached to the session and versioned over time.\n\n### 2.4 Model deterministic and non-deterministic safety controls explicitly\n\nCodex’s public app-server contract centers approvals. Claude requires a richer decision pipeline:\n\n- deterministic deny / ask / allow rules\n- deterministic hook-side mutation / deny\n- deterministic protected-path handling\n- sandbox boundary checks\n- classifier-based auto-mode checks\n- interactive approval prompts\n\nThe plane should normalize all of these into one `DecisionPoint` record with provenance.\n\n### 2.5 Make context lifecycle inspectable\n\nFor Claude, session quality depends heavily on what entered context, why, and whether it survives compaction. The plane must record context sources and reinjection rules rather than treating prompt state as opaque.\n\n### 2.6 Keep runtime-specific complexity inside adapters\n\nThe plane should not expose Claude-only wire assumptions. Unlike Codex, Claude does not expose one universal public app-server style transport for all local surfaces. The shared plane should define normalized APIs and events; the Claude adapter is responsible for producing them.\n\n---\n\n## 3. Goals\n\n## 3.1 Functional goals\n\nThe plane must:\n\n1. Represent every Claude Code run as a canonical `ManagedSession`.\n2. Support local, cloud, Remote Control, scheduled, and SDK-hosted session origins.\n3. Normalize the turn / tool / approval / hook / compaction / checkpoint lifecycle.\n4. Resolve managed policy and settings precedence correctly.\n5. Preserve resumability, forkability, rewindability, and archiving.\n6. Distinguish subagent child contexts from agent-team sibling sessions.\n7. Export enough telemetry for enterprise governance without requiring central storage of source code.\n8. Remain structurally compatible with the Codex Managed Session Plane.\n\n## 3.2 Operational goals\n\nThe plane should:\n\n- survive client reconnects\n- survive multi-surface attachment and detachment\n- tolerate best-effort policy fetch with optional fail-closed startup\n- support background and headless flows\n- handle compaction without losing policy-critical context\n- preserve auditable provenance for sensitive decisions\n\n---\n\n## 4. Non-goals\n\nThis design does **not** attempt to:\n\n- reimplement Anthropic’s proprietary local protocol\n- replace git history with session checkpoints\n- centrally store every transcript or file diff by default\n- make cloud and local execution indistinguishable when they are not\n- simulate Claude features that do not exist natively, such as a true admin-managed default layer that users can later override\n- unify all collaboration products into one session type when the runtime semantics differ\n\n---\n\n## 5. Shared abstractions retained from the Codex design\n\nThis document intentionally preserves the following control-plane seams from the Codex design.\n\n## 5.1 SessionPlane\n\nThe authoritative control-plane service for session truth. Responsibilities:\n\n- session registry\n- lifecycle transitions\n- append-only event log\n- policy attachment\n- approval / decision orchestration\n- runtime binding\n- usage aggregation\n- artifact references\n- archival and resumption metadata\n\n## 5.2 ManagedSession\n\nThe canonical unit of resumable work. A `ManagedSession` is the cross-runtime record that survives across surfaces and reconnects.\n\n## 5.3 Turn\n\nA bounded unit of user or scheduler input processed by the runtime, including context gathering, tool use, verification, interruptions, and completion.\n\n## 5.4 WorkItem\n\nA normalized event-bearing work unit emitted during a turn. In Codex these often map to streamed `item/*` entities. In Claude they may map to:\n\n- tool calls\n- hook invocations\n- checkpoint creation\n- compaction\n- subagent execution\n- team messaging\n- user-input requests\n- permission prompts\n\n## 5.5 DecisionPoint\n\nA normalized approval or denial gate. This preserves the Codex abstraction but broadens it for Claude. A `DecisionPoint` may be resolved by:\n\n- policy\n- hook\n- sandbox\n- classifier\n- user interaction\n- runtime cancellation\n\n## 5.6 PolicyEnvelope\n\nThe compiled, versioned session policy that results from all relevant settings sources and runtime constraints.\n\n## 5.7 RuntimeAdapter\n\nThe runtime-specific binder that translates between plane events and runtime operations.\n\n## 5.8 ArtifactStore\n\nA store of references to runtime-local artifacts such as summaries, checkpoint references, audit trails, and exported diffs. The design assumes metadata-first storage and pointer-based retrieval.\n\n## 5.9 UsageLedger\n\nA normalized usage and telemetry view across sessions, subagents, teams, and schedules.\n\n---\n\n## 6. Claude-specific deltas from the Codex session plane\n\n| Area | Codex binding | Claude Code binding | Plane decision |\n|---|---|---|---|\n| Managed policy | `requirements.toml` plus `managed_config.toml` | managed settings JSON, server-managed settings, endpoint-managed settings, managed-only flags | keep shared `PolicyEnvelope`, add `managed_source_kind` and `policy_fetch_state` |\n| Managed defaults | native concept | no equivalent native admin “default but user-overridable” tier | preserve abstraction but mark admin-managed defaults unsupported; emulate only via bootstrap templates |\n| Transport | public app-server JSON-RPC with approvals and streamed events | no single public universal local control protocol across all local surfaces | keep normalized session APIs; implement Claude adapter per runtime/surface |\n| Approval model | command/file approval requests | permission modes, rules, protected paths, hooks, sandboxing, classifier, dialogs | broaden shared `DecisionPoint` model |\n| Context model | transcript, config, skills, compaction | `CLAUDE.md`, auto memory, rules, skill descriptions, invoked skill bodies, output styles, hook-injected context, compaction | make `ContextSnapshot` typed and reload-aware |\n| Child work | subagents inherited from current policy; explicit workflows | subagents with own context window and independent permissions; agent teams as separate sessions | distinguish `ChildContext` from `SessionGroup` |\n| Resume / fork | thread resume and fork | session resume, rewind, summarize-from-here, cloud handoff, Remote Control projection | keep session lineage graph |\n| Surface model | local TUI can attach to remote app-server | local terminal/IDE/Desktop, Remote Control projections, cloud web/mobile | split `execution_owner` from `surface_bindings` |\n| Checkpointing | not a first-class public session-plane primitive | automatic checkpoint capture and rewind | add `CheckpointLog` as shared plane extension |\n| Telemetry | streamed events and app-server metrics | OpenTelemetry metrics, logs/events, optional traces | normalize to common telemetry envelopes |\n\n---\n\n## 7. Runtime model\n\n## 7.1 Canonical runtime axes\n\nEvery Claude session is defined by three orthogonal axes:\n\n```yaml\nexecution_owner:\n  - local_process\n  - anthropic_cloud_vm\n  - sdk_host\n\nsurface_kind:\n  - terminal\n  - vscode\n  - jetbrains\n  - desktop\n  - web\n  - mobile\n  - scheduler\n  - channel\n  - sdk\n\nprojection_mode:\n  - primary\n  - remote_projection\n  - handoff\n```\n\nInterpretation:\n\n- **execution owner** tells us where tools, filesystem access, and command execution actually happen.\n- **surface kind** tells us where the human or automation is interacting.\n- **projection mode** tells us whether the surface is the primary host, a live window into another host, or a new session derived from another one.\n\n## 7.2 Supported session shapes\n\n| Session shape | execution owner | primary surfaces | Notes |\n|---|---|---|---|\n| Local interactive | `local_process` | terminal, vscode, jetbrains, desktop | Full local filesystem/tools/MCP semantics |\n| Local + Remote Control | `local_process` | web, mobile, terminal, desktop | Same session; web/mobile are projections only |\n| Cloud interactive | `anthropic_cloud_vm` | web, mobile, desktop | Separate session running in Anthropic-managed infrastructure |\n| Cloud scheduled | `anthropic_cloud_vm` | scheduler, web, desktop | Session instantiated from a schedule template |\n| Desktop scheduled | `local_process` | scheduler, desktop | New local session launched on the user’s machine |\n| SDK embedded | `sdk_host` | sdk | Same Claude agent loop and tools, but owned by host process |\n| Subagent child context | inherits parent execution owner | hidden or runtime-internal | Same session tree, separate context window |\n| Agent-team lead | any of the above except subagent | terminal, desktop, web | Own session id, group leader |\n| Agent-team teammate | same owner class as created runtime | terminal, desktop, web | Separate session id, grouped under team |\n\n## 7.3 Critical execution distinctions\n\n### Remote Control is not cloud execution\n\nRemote Control attaches a web/mobile surface to a session that continues to run on the user’s own machine. It must not mint a new execution owner. The plane models this as a new `SurfaceBinding` on the existing `ManagedSession`.\n\n### Cloud handoff is not Remote Control\n\nA local-to-cloud handoff should create a **new** session with a new `session_id`, `execution_owner = anthropic_cloud_vm`, and a lineage edge back to the source session. It is a fork / transfer, not a projection.\n\n### Subagents are not separate user-visible sessions\n\nA subagent is a child context that reports back to its caller. It inherits lineage from the parent turn and should be modeled as `ChildContext`, not as a top-level peer session unless runtime behavior requires promotion.\n\n### Agent teams are separate sessions\n\nAgent teammates can communicate directly and have independent state. They should be modeled as sibling `ManagedSession` records under a `SessionGroup`.\n\n---\n\n## 8. High-level architecture\n\n```text\n+-------------------------+     +------------------------------+\n| Client / Surface Layer  |     | Enterprise Admin Plane       |\n|-------------------------|     |------------------------------|\n| Terminal                |     | Server-managed settings      |\n| VS Code                 |     | Endpoint-managed settings    |\n| JetBrains               |     | Policy templates             |\n| Desktop                 |     | Audit / compliance           |\n| Web / Mobile            |     +---------------+--------------+\n| Schedulers / Channels   |                     |\n| SDK Hosts               |                     v\n+------------+------------+     +------------------------------+\n             |                  | ClaudeCodeManagedSessionPlane |\n             |                  |------------------------------|\n             +----------------->| Session Registry             |\n                                | Policy Resolver              |\n                                | Decision Engine              |\n                                | Hook Dispatcher              |\n                                | Context Resolver             |\n                                | Checkpoint Service           |\n                                | Child Context Coordinator    |\n                                | Session Group Coordinator    |\n                                | Artifact Index               |\n                                | Usage / Telemetry            |\n                                +---------------+--------------+\n                                                |\n                                                v\n                                +------------------------------+\n                                | Claude Runtime Adapters      |\n                                |------------------------------|\n                                | Local CLI / IDE adapter      |\n                                | Remote Control adapter       |\n                                | Cloud session adapter        |\n                                | Agent SDK adapter            |\n                                +---------------+--------------+\n                                                |\n                                                v\n                                +------------------------------+\n                                | Runtime-Owned Data           |\n                                |------------------------------|\n                                | Local transcripts / caches   |\n                                | Managed settings cache       |\n                                | Checkpoints                  |\n                                | Cloud VM session state       |\n                                | OTel export stream           |\n                                +------------------------------+\n```\n\n---\n\n## 9. Canonical domain model\n\n## 9.1 ManagedSession\n\n```yaml\nManagedSession:\n  session_id: string\n  runtime_family: \"claude_code\"\n  execution_owner: local_process | anthropic_cloud_vm | sdk_host\n  state: creating | starting | active | waiting | compacting | rewinding | archiving | ended | failed\n  primary_surface: terminal | vscode | jetbrains | desktop | web | mobile | scheduler | channel | sdk\n  surface_bindings:\n    - surface_id: string\n      surface_kind: enum\n      projection_mode: primary | remote_projection\n      connection_state: connected | disconnected | reconnecting\n      interactive: boolean\n  cwd: string?\n  repo_ref:\n    local_path: string?\n    remote_repo: string?\n    branch: string?\n  permission_mode: default | acceptEdits | plan | auto | dontAsk | bypassPermissions\n  policy_envelope_id: string\n  context_snapshot_id: string\n  active_turn_id: string?\n  latest_checkpoint_id: string?\n  session_group_id: string?\n  parent_session_id: string?\n  fork_of_session_id: string?\n  handoff_from_session_id: string?\n  created_by: user | schedule | channel | sdk | team_lead\n  created_at: timestamp\n  updated_at: timestamp\n  ended_at: timestamp?\n```\n\n## 9.2 Turn\n\n```yaml\nTurn:\n  turn_id: string\n  session_id: string\n  input_origin: human | schedule | channel | sdk | team_message\n  input_payload:\n    type: text | structured\n    prompt: string\n    attachments: []\n  state: submitted | gathering_context | pending_decision | executing | verifying | interrupted | completed | failed\n  summary: string?\n  started_at: timestamp\n  completed_at: timestamp?\n```\n\n## 9.3 WorkItem\n\n```yaml\nWorkItem:\n  item_id: string\n  turn_id: string\n  session_id: string\n  kind:\n    - context_read\n    - context_injection\n    - tool_call\n    - hook_call\n    - approval_request\n    - checkpoint\n    - compaction\n    - rewind\n    - subagent\n    - team_message\n    - summary\n    - telemetry_flush\n  status: queued | in_progress | completed | failed | declined | canceled\n  payload: object\n  started_at: timestamp\n  ended_at: timestamp?\n```\n\n## 9.4 DecisionPoint\n\n```yaml\nDecisionPoint:\n  decision_id: string\n  session_id: string\n  turn_id: string?\n  target_kind: tool | file_change | network | managed_settings | mcp | hook | user_question\n  target_ref: string?\n  proposed_action: object\n  origin_stage: pretool_hook | permission_rule | protected_path | sandbox | classifier | interactive_prompt\n  resolution: allow | ask | deny | defer | cancel\n  resolved_by: hook | policy | classifier | user | runtime\n  reason: string?\n  requested_at: timestamp\n  resolved_at: timestamp?\n```\n\n## 9.5 PolicyEnvelope\n\n```yaml\nPolicyEnvelope:\n  policy_envelope_id: string\n  session_id: string\n  provider_mode: anthropic_api | bedrock | vertex | foundry | custom_gateway\n  managed_source_kind: none | server_managed | endpoint_managed\n  policy_fetch_state: not_applicable | cache_hit | fetched | fetch_failed | fail_closed\n  managed_source_version: string?\n  permissions:\n    mode: default | acceptEdits | plan | auto | dontAsk | bypassPermissions\n    allow: []\n    ask: []\n    deny: []\n    protected_paths: []\n    auto_mode_enabled: boolean\n    bypass_disabled: boolean\n    auto_disabled: boolean\n  sandbox:\n    enabled: boolean\n    filesystem_scope: object\n    network_scope: object\n  hooks:\n    allow_managed_only: boolean\n    registry_hash: string\n  mcp:\n    allowed_servers: []\n    denied_servers: []\n    allow_managed_only: boolean\n  memory:\n    include_auto_memory: boolean\n    managed_claude_md_enabled: boolean\n    excludes: []\n  security_dialog_required: boolean\n  version: integer\n```\n\n## 9.6 ContextSnapshot\n\n```yaml\nContextSnapshot:\n  context_snapshot_id: string\n  session_id: string\n  compaction_epoch: integer\n  segments:\n    - segment_id: string\n      kind:\n        - system_prompt\n        - output_style\n        - managed_claude_md\n        - project_claude_md\n        - local_claude_md\n        - auto_memory\n        - path_rule\n        - nested_claude_md\n        - skill_description\n        - invoked_skill_body\n        - mcp_tool_manifest\n        - hook_injected_context\n        - transcript_summary\n        - file_read\n      source_ref: string\n      loaded_at: startup | on_demand | post_compaction\n      reinjection_policy: always | on_demand | budgeted | never\n      token_budget_hint: integer?\n```\n\n## 9.7 Checkpoint\n\n```yaml\nCheckpoint:\n  checkpoint_id: string\n  session_id: string\n  turn_id: string\n  trigger: user_prompt | pre_edit | manual\n  captures:\n    code_state: boolean\n    conversation_state: boolean\n  storage_ref: string\n  restorable_modes:\n    - code\n    - conversation\n    - both\n    - summarize_from_here\n  expires_at: timestamp?\n```\n\n## 9.8 ChildContext\n\n```yaml\nChildContext:\n  child_context_id: string\n  parent_session_id: string\n  parent_turn_id: string\n  kind: subagent\n  runtime_binding: same_execution_owner\n  context_isolated: true\n  returns: summary_only | summary_plus_metadata\n  tool_profile: string\n  permission_profile: string\n  status: starting | active | returning | completed | failed\n```\n\n## 9.9 SessionGroup\n\n```yaml\nSessionGroup:\n  session_group_id: string\n  leader_session_id: string\n  member_session_ids: []\n  coordination_mode: shared_task_list\n  status: active | draining | completed | failed\n```\n\n---\n\n## 10. Lifecycle state machines\n\n## 10.1 Session lifecycle\n\n```text\ncreating\n  -> starting\n  -> active\n  -> waiting        (idle, pending user input, or detached but resumable)\n  -> compacting     (context reduction)\n  -> rewinding      (checkpoint restore or summarize-from-here)\n  -> archiving\n  -> ended\n\nAny non-terminal state\n  -> failed\n```\n\n### State semantics\n\n- **creating**: session record minted, runtime not yet bound.\n- **starting**: policy resolution, runtime bootstrap, context bootstrap.\n- **active**: session can accept input and/or is executing work.\n- **waiting**: no active turn, may be detached from one or more surfaces.\n- **compacting**: runtime is replacing transcript history with summary while preserving session identity.\n- **rewinding**: runtime is restoring or summarizing from a checkpoint boundary.\n- **archiving**: session is being moved out of hot storage / active list.\n- **ended**: terminal state with successful shutdown.\n- **failed**: terminal or recoverable failure, depending on error class.\n\n## 10.2 Turn lifecycle\n\n```text\nsubmitted\n  -> gathering_context\n  -> pending_decision   (optional, repeatable)\n  -> executing\n  -> verifying\n  -> completed\n\nsubmitted | gathering_context | executing | verifying\n  -> interrupted\n\nany state\n  -> failed\n```\n\n## 10.3 Decision lifecycle\n\n```text\nproposed\n  -> mutated_by_hook   (optional)\n  -> denied_by_hook    (optional terminal)\n  -> resolved_by_rule  (allow / ask / deny)\n  -> resolved_by_protected_path\n  -> resolved_by_classifier\n  -> awaiting_user\n  -> executed | declined | canceled | deferred\n```\n\n## 10.4 Checkpoint lifecycle\n\n```text\nscheduled\n  -> captured\n  -> indexed\n  -> restorable\n  -> restored | summarized | expired\n```\n\n## 10.5 Surface binding lifecycle\n\n```text\nattaching\n  -> connected\n  -> disconnected\n  -> reconnecting\n  -> connected\n  -> detached\n```\n\nRemote Control uses this lifecycle heavily. A disconnect should not imply session failure.\n\n---\n\n## 11. Policy model\n\n## 11.1 Shared abstraction\n\nTo stay compatible with the Codex plane, policy is represented in two conceptual layers:\n\n```yaml\nRequiredPolicy:\n  hard_constraints: []\n\nBootstrapPreferences:\n  startup_defaults: []\n```\n\n## 11.2 Claude mapping\n\n### RequiredPolicy\n\nClaude has a strong native fit for `RequiredPolicy`:\n\n- managed settings\n- managed-only settings\n- managed permission rules\n- managed hook policy\n- managed MCP policy\n- managed environment variables\n- auto-mode availability controls\n- bypass-permissions availability controls\n\n### BootstrapPreferences\n\nClaude does **not** have an exact native equivalent to Codex’s “managed defaults that users can still change during a session” model.\n\nDesign rule:\n\n- preserve `BootstrapPreferences` in the shared plane\n- implement it for Claude only as a **session bootstrap template**\n- do **not** claim it is equivalent to a native admin-managed tier\n- do **not** attempt to force admin defaults into the managed settings tier because Claude managed settings are non-overridable\n\nThis is the largest semantic mismatch with the Codex plane.\n\n## 11.3 Managed settings source resolution\n\nClaude-specific policy resolution should follow this order:\n\n```yaml\nmanaged_source_resolution:\n  1_server_managed: first\n  2_endpoint_managed: second\n  source_merge: first_non_empty_source_wins\n  local_override: disallowed\n```\n\nInterpretation:\n\n- If server-managed settings deliver any non-empty configuration, endpoint-managed settings are ignored.\n- If server-managed settings deliver nothing, endpoint-managed settings apply.\n- Within endpoint-managed settings, file-based fragments may deep-merge according to Claude’s endpoint rules.\n- No lower-priority layer can override managed settings, including CLI arguments.\n\n## 11.4 Effective policy assembly algorithm\n\n```text\n1. Identify provider mode and execution owner.\n2. Resolve managed source:\n   a. attempt server-managed settings if supported\n   b. otherwise fall back to endpoint-managed settings\n3. Record fetch state:\n   - cache_hit\n   - fetched\n   - fetch_failed\n   - fail_closed\n4. Load lower scopes for observability only:\n   - CLI args\n   - local project settings\n   - shared project settings\n   - user settings\n5. Compile effective policy:\n   - managed tier first\n   - then lower scopes where allowed\n6. Expand permission rules into ordered deny / ask / allow matchers.\n7. Bind hook registry and MCP policy.\n8. Derive startup context policy and compaction policy.\n9. Freeze into versioned PolicyEnvelope.\n```\n\n## 11.5 Policy handshake state\n\nClaude introduces a startup handshake not present in the same way in Codex.\n\n```yaml\nPolicyHandshake:\n  states:\n    - not_required\n    - awaiting_fetch\n    - awaiting_user_security_dialog\n    - accepted\n    - rejected\n    - fail_closed\n```\n\nRules:\n\n- risky managed hooks and custom environment variables may require a security dialog\n- in interactive runs, a rejection exits startup\n- in non-interactive runs, settings apply without the dialog\n- if `forceRemoteSettingsRefresh` is enabled and refresh fails, startup fails closed\n\n---\n\n## 12. Decision pipeline\n\nThe Claude plane must normalize the actual runtime decision order rather than pretending everything is a simple approval prompt.\n\n## 12.1 Declarative decision flow\n\n```yaml\nDecisionPipeline:\n  - stage: session_state_guard\n  - stage: pretool_hooks\n  - stage: permission_rules\n  - stage: protected_path_guard\n  - stage: permission_mode_baseline\n  - stage: sandbox_substitution\n  - stage: auto_mode_classifier\n  - stage: interactive_prompt_or_headless_resolution\n  - stage: runtime_execution\n  - stage: posttool_hooks\n  - stage: checkpoint_capture\n```\n\n## 12.2 Detailed semantics by stage\n\n### session_state_guard\n\nReject actions invalid for the current state, such as:\n\n- tool use while rewinding\n- edits while the session is read-only because of mode or runtime surface\n- writes when runtime is detached from required workspace context\n\n### pretool_hooks\n\nA `PreToolUse` hook may:\n\n- mutate input\n- return `allow`\n- return `ask`\n- return `deny`\n- return `defer` in headless flows\n\nImportant rule: a hook can tighten restrictions but cannot override matching deny or ask rules from policy.\n\n### permission_rules\n\nCompile and evaluate rules in strict order:\n\n```yaml\nrule_precedence:\n  - deny\n  - ask\n  - allow\n```\n\nThe first matching rule wins.\n\n### protected_path_guard\n\nProtected paths are never auto-approved. The plane should normalize these as a specific `origin_stage = protected_path`.\n\n### permission_mode_baseline\n\nMap Claude modes into shared behavior:\n\n| Mode | Plane behavior |\n|---|---|\n| `default` | reads auto; edits/commands/network usually ask |\n| `acceptEdits` | working-directory edits and common FS commands auto |\n| `plan` | reads only; no mutation or command execution |\n| `auto` | baseline auto-approve path plus classifier checks |\n| `dontAsk` | everything not pre-approved is denied |\n| `bypassPermissions` | skip permission prompts and safety checks except protected-path handling |\n\n### sandbox_substitution\n\nFor Bash, a sandbox may replace the need for per-command approval depending on effective settings. This is not the same thing as an allow rule; it is runtime-technical containment.\n\n### auto_mode_classifier\n\nIn `auto`, unsafe or ambiguous actions are checked by a classifier path. The plane should record classifier decisions as distinct from user approvals.\n\n### interactive_prompt_or_headless_resolution\n\nIf the decision remains unresolved and the session is interactive, prompt the user. In headless mode, either deny or defer according to policy and hook output.\n\n### runtime_execution\n\nTool call enters the runtime adapter. The plane records final runtime status and any post-resolution errors separately from policy outcome.\n\n### posttool_hooks\n\nPost-execution hooks are emitted as work items. They may create additional artifacts, notifications, or blocks for subsequent flow.\n\n### checkpoint_capture\n\nIf the action is a tracked file edit, a checkpoint edge is recorded.\n\n---\n\n## 13. Context and memory model\n\nClaude Code requires the plane to explicitly understand context composition.\n\n## 13.1 Startup context sources\n\nAt session bootstrap, the plane should treat the following as startup context sources:\n\n| Source | Kind | Load timing |\n|---|---|---|\n| system prompt | `system_prompt` | startup |\n| output style | `output_style` | startup |\n| managed `CLAUDE.md` | `managed_claude_md` | startup |\n| project-root `CLAUDE.md` / `.claude/CLAUDE.md` | `project_claude_md` | startup |\n| `CLAUDE.local.md` | `local_claude_md` | startup |\n| auto memory | `auto_memory` | startup |\n| MCP tool names / manifests | `mcp_tool_manifest` | startup |\n| skill descriptions | `skill_description` | startup |\n| startup hook injected text | `hook_injected_context` | startup |\n\n## 13.2 On-demand context sources\n\nThese are not always present at startup:\n\n| Source | Kind | Load timing |\n|---|---|---|\n| file reads | `file_read` | on demand |\n| nested `CLAUDE.md` in subdirectories | `nested_claude_md` | on demand |\n| path-scoped rules | `path_rule` | on demand |\n| invoked skill bodies | `invoked_skill_body` | on invocation |\n| subagent return summaries | `summary` | on child completion |\n\n## 13.3 Compaction-aware context model\n\nThe plane should attach a `reinjection_policy` to each context segment.\n\nRecommended policies:\n\n```yaml\nreinjection_policy:\n  system_prompt: always\n  output_style: always\n  managed_claude_md: always\n  project_claude_md: always\n  local_claude_md: always\n  auto_memory: always\n  path_rule: on_demand\n  nested_claude_md: on_demand\n  skill_description: startup_refresh\n  invoked_skill_body: budgeted\n  file_read: never\n  transcript_summary: always\n  hook_injected_context: configurable\n```\n\n## 13.4 Compaction behavior\n\nWhen compaction occurs, the plane should produce a new `ContextSnapshot` epoch rather than mutating the old one in place.\n\nExpected effect:\n\n1. conversation history is summarized\n2. startup-critical context is reloaded\n3. on-demand context is reintroduced only if its trigger recurs\n4. invoked skills are reattached subject to budget\n5. an explicit `compaction` WorkItem is emitted\n\n## 13.5 Managed memory guidance vs enforcement\n\nA key distinction must be preserved:\n\n- `CLAUDE.md`, auto memory, and rules are **guidance**\n- managed settings and permission rules are **enforcement**\n\nThe plane must never confuse the two or treat a memory artifact as a hard policy source.\n\n---\n\n## 14. Checkpointing and rewind\n\nCheckpointing is a first-class Claude extension to the shared plane.\n\n## 14.1 Why it belongs in the plane\n\nCheckpointing changes session truth, not just UI:\n\n- every user prompt creates a rewind point\n- file edits create restorable code states\n- checkpoints persist across resumed sessions\n- rewind can mutate both conversation state and code state\n- summarize-from-here changes the context history without changing disk state\n\nThese are session-plane operations.\n\n## 14.2 Checkpoint capture rules\n\n```yaml\nCheckpointCapture:\n  on_user_prompt: true\n  on_file_edit_tools: true\n  on_bash_side_effects: false\n  on_external_manual_edits: best_effort_only\n```\n\n## 14.3 Supported rewind operations\n\nThe plane should expose four normalized rewind actions:\n\n```yaml\nRewindOperation:\n  - restore_code_and_conversation\n  - restore_conversation_only\n  - restore_code_only\n  - summarize_from_here\n```\n\n## 14.4 Lineage implications\n\nA rewind should not destroy provenance. The plane should:\n\n- preserve the pre-rewind event log\n- mark a new checkpoint cursor as active\n- add `rewound_from_checkpoint_id`\n- keep old checkpoints addressable until expiry or GC\n\nThis mirrors source-control safety expectations while remaining session-native.\n\n---\n\n## 15. Child work model: subagents and teams\n\n## 15.1 Subagents\n\nSubagents should be modeled as child contexts with the following semantics:\n\n```yaml\nSubagentModel:\n  parent_scope: single_session\n  context_window: isolated\n  return_shape: summary_only\n  communication: caller_only\n  lifecycle_owner: parent_turn\n  token_accounting: child_usage rolls up to parent session\n```\n\nPlane rules:\n\n- child context gets a `child_context_id`, not a top-level peer session id by default\n- permissions may be limited per subagent profile\n- child context output should be summarized back into the parent turn\n- child work may run in foreground or background but remains parent-owned\n\n## 15.2 Agent teams\n\nAgent teams should be modeled as grouped sibling sessions:\n\n```yaml\nAgentTeamModel:\n  parent_scope: session_group\n  context_window: one per teammate\n  return_shape: peer_to_peer plus leader synthesis\n  communication: direct peer messaging\n  lifecycle_owner: session_group\n  token_accounting: per-session plus rolled-up group usage\n```\n\nPlane rules:\n\n- each teammate is a `ManagedSession`\n- the lead is another `ManagedSession`\n- all members share a `session_group_id`\n- teardown is group-aware\n- team lineage is distinct from subagent lineage\n\n## 15.3 Why the split matters\n\nIf the plane collapses subagents and teammates into one abstraction, it will lose:\n\n- direct peer communication semantics\n- shared-task-list coordination\n- separate resume / archive behavior\n- proper usage accounting\n- correct surface attachment rules\n\n---\n\n## 16. Multi-surface behavior\n\n## 16.1 SurfaceBinding\n\nA `SurfaceBinding` is the durable representation of a client attachment.\n\n```yaml\nSurfaceBinding:\n  surface_id: string\n  session_id: string\n  surface_kind: enum\n  projection_mode: primary | remote_projection\n  capabilities:\n    approvals: boolean\n    diff_review: boolean\n    notifications: boolean\n    qr_connect: boolean\n    keyboard_control: boolean\n  last_seen_at: timestamp\n```\n\n## 16.2 Rules for surface attachment\n\n1. A session may have one primary surface and multiple projections.\n2. Remote Control adds projections but does not change `execution_owner`.\n3. Surface disconnects must not kill a session unless the runtime itself exits.\n4. Cloud handoff creates a new session rather than mutating `execution_owner`.\n5. A session may be resumed on a different surface without changing its canonical identity if the execution owner remains the same.\n\n## 16.3 Handoff semantics\n\nRecommended lineage fields:\n\n```yaml\nHandoffLineage:\n  handoff_from_session_id: string\n  handoff_type: local_to_cloud | desktop_to_ide | desktop_to_web_cloud\n  seed_artifacts:\n    - summary_ref\n    - branch_ref\n    - diff_ref\n```\n\nRemote Control should not use `handoff_type`; it is live projection, not transfer.\n\n---\n\n## 17. API surface of the plane\n\nThe plane should keep the same high-level verbs as the Codex plane, with Claude-specific extensions.\n\n## 17.1 Session APIs\n\n```yaml\nCreateSession(request)\nResumeSession(session_id)\nForkSession(session_id)\nArchiveSession(session_id)\nEndSession(session_id)\nAttachSurface(session_id, surface)\nDetachSurface(session_id, surface_id)\nCreateSessionGroup(request)\n```\n\n## 17.2 Turn APIs\n\n```yaml\nSubmitTurn(session_id, input)\nInterruptTurn(session_id, turn_id)\nCompactSession(session_id)\nRenameSession(session_id, name)\n```\n\n## 17.3 Policy APIs\n\n```yaml\nResolveManagedPolicy(request)\nAcknowledgeManagedPolicyDialog(session_id, accept | reject)\nSwitchPermissionMode(session_id, mode)\nGetEffectivePolicy(session_id)\n```\n\n## 17.4 Decision APIs\n\n```yaml\nResolveDecision(decision_id, resolution)\nListPendingDecisions(session_id)\n```\n\n## 17.5 Checkpoint APIs\n\n```yaml\nListCheckpoints(session_id)\nRestoreCheckpoint(session_id, checkpoint_id, mode)\nSummarizeFromCheckpoint(session_id, checkpoint_id, instructions?)\n```\n\n## 17.6 Child-work APIs\n\n```yaml\nSpawnSubagent(session_id, turn_id, profile, prompt)\nCreateTeamTeammate(session_group_id, config)\nSendTeamMessage(session_id, peer_session_id, payload)\n```\n\n## 17.7 Event subscription\n\n```yaml\nSubscribeSessionEvents(session_id)\nSubscribeGroupEvents(session_group_id)\nSubscribeOrgPolicyEvents(scope)\n```\n\n---\n\n## 18. Event model\n\nTo stay close to the Codex plane, Claude should emit an append-only event stream with normalized names.\n\n## 18.1 Session events\n\n```yaml\nsession.created\nsession.started\nsession.active\nsession.waiting\nsession.compacting\nsession.rewinding\nsession.archived\nsession.ended\nsession.failed\n```\n\n## 18.2 Surface events\n\n```yaml\nsurface.attached\nsurface.connected\nsurface.disconnected\nsurface.reconnecting\nsurface.detached\n```\n\n## 18.3 Policy events\n\n```yaml\npolicy.fetch.started\npolicy.fetch.succeeded\npolicy.fetch.failed\npolicy.dialog.required\npolicy.dialog.accepted\npolicy.dialog.rejected\npolicy.compiled\npolicy.version.changed\n```\n\n## 18.4 Turn events\n\n```yaml\nturn.submitted\nturn.gathering_context\nturn.pending_decision\nturn.executing\nturn.verifying\nturn.interrupted\nturn.completed\nturn.failed\n```\n\n## 18.5 Work events\n\n```yaml\nwork.context.loaded\nwork.tool.requested\nwork.tool.executed\nwork.tool.failed\nwork.hook.started\nwork.hook.completed\nwork.hook.blocked\nwork.checkpoint.created\nwork.compaction.started\nwork.compaction.completed\nwork.rewind.started\nwork.rewind.completed\n```\n\n## 18.6 Decision events\n\n```yaml\ndecision.proposed\ndecision.mutated\ndecision.allowed\ndecision.asked\ndecision.denied\ndecision.deferred\ndecision.canceled\ndecision.resolved\n```\n\n## 18.7 Child-work events\n\n```yaml\nchild.subagent.started\nchild.subagent.completed\nteam.group.created\nteam.member.started\nteam.message.sent\nteam.member.completed\nteam.group.completed\n```\n\n---\n\n## 19. Storage model\n\n## 19.1 Storage principle\n\nThe plane is control-plane authoritative but payload-light by default.\n\nRecommended split:\n\n- **central plane store**: ids, state, event envelopes, policy versions, usage counters, artifact pointers\n- **runtime-local store**: transcripts, full file reads, checkpoint payloads, local caches\n- **optional export sinks**: audit logs, OTel backends, compliance archives\n\nThis preserves local-code residency expectations for local Claude sessions.\n\n## 19.2 Core stores\n\n### SessionRegistry\n\nStores canonical session rows and lineage.\n\n### EventLog\n\nAppend-only normalized events keyed by `session_id` and optionally `session_group_id`.\n\n### PolicyStore\n\nStores compiled `PolicyEnvelope` versions and fetch metadata.\n\n### ContextIndex\n\nStores `ContextSnapshot` metadata and segment pointers.\n\n### CheckpointIndex\n\nStores checkpoint metadata and restore references.\n\n### ArtifactIndex\n\nStores references to diffs, summaries, reports, audit records, and exported telemetry.\n\n### UsageStore\n\nStores usage rollups by session, group, user, workspace, runtime kind, and provider.\n\n## 19.3 Suggested retention classes\n\n```yaml\nRetentionClasses:\n  hot_session_metadata: 30d\n  hot_event_log: 30d\n  usage_rollups: 90d\n  audit_event_metadata: org_policy\n  checkpoint_payloads: runtime_local_default\n```\n\nRetention should be policy-driven rather than hard-coded, because cloud and local expectations differ.\n\n---\n\n## 20. Observability\n\n## 20.1 Shared observability contract\n\nThe plane should normalize runtime observations into:\n\n- metrics\n- logs / events\n- optional traces\n\n## 20.2 Claude-specific adapter behavior\n\nClaude exposes telemetry through OpenTelemetry. The plane should map Claude telemetry into the shared schema instead of inventing a parallel export pipeline.\n\n## 20.3 Recommended normalized metrics\n\n| Metric | Dimension examples |\n|---|---|\n| `managed_sessions_active` | runtime kind, execution owner, surface kind |\n| `managed_turn_duration_ms` | model, provider, session kind |\n| `managed_decisions_total` | origin stage, resolution |\n| `managed_hooks_total` | hook type, outcome |\n| `managed_checkpoints_total` | trigger, restore mode |\n| `managed_compactions_total` | session kind |\n| `managed_subagent_total` | profile, outcome |\n| `managed_team_sessions_total` | group size, outcome |\n| `managed_policy_fetch_failures_total` | source kind, provider |\n| `managed_surface_reconnects_total` | surface kind |\n| `managed_usage_tokens` | input/output, model, provider |\n\n## 20.4 Trace boundaries\n\nRecommended spans:\n\n```yaml\nTraceSpans:\n  session.bootstrap\n  policy.resolve\n  turn.process\n  decision.resolve\n  hook.execute\n  tool.execute\n  checkpoint.capture\n  session.compact\n  checkpoint.restore\n  subagent.run\n  team.session.run\n```\n\n---\n\n## 21. Security and governance\n\n## 21.1 Control layers\n\nThe plane must model Claude’s layered control stack explicitly:\n\n1. managed settings source resolution\n2. permission rules\n3. permission mode\n4. protected paths\n5. sandboxing\n6. hooks\n7. classifier-based auto mode\n8. interactive user dialogs\n9. runtime-owned cloud or local isolation\n\n## 21.2 Managed settings risk model\n\nClaude server-managed settings are powerful but not equivalent to OS-level immutable enforcement on unmanaged devices. The plane should carry a field such as:\n\n```yaml\nPolicyTrustLevel:\n  - endpoint_enforced\n  - server_managed_best_effort\n  - unmanaged\n```\n\nThis enables downstream governance to distinguish:\n\n- MDM / registry / file-based endpoint policy\n- server-delivered policy on unmanaged endpoints\n- fully unmanaged user settings\n\n## 21.3 Provider caveats\n\nProvider mode materially changes governance. Some controls are not available in every provider configuration. The plane must record `provider_mode` on every session and policy envelope so downstream policy reporting does not make false assumptions.\n\n## 21.4 Protected-path policy\n\nProtected paths should be normalized into a dedicated policy section rather than left implicit in runtime behavior. This avoids false audit conclusions when a user says “bypass permissions was enabled” but writes still triggered prompts or denials.\n\n## 21.5 Hook governance\n\nHooks need first-class provenance because they can:\n\n- deny tool execution\n- mutate tool arguments\n- inject context\n- run shell commands\n- audit config changes\n- alter runtime behavior without model involvement\n\nEvery hook execution should therefore emit:\n\n```yaml\nHookAudit:\n  hook_name: string\n  source_scope: managed | user | project | plugin | sdk\n  event_type: string\n  matcher: string\n  outcome: allow | deny | ask | mutate | error | noop\n```\n\n## 21.6 Cloud vs local security\n\nThe plane must not collapse these modes:\n\n- local execution: code and tools stay on the user’s machine\n- Remote Control: still local execution, remote UI only\n- cloud execution: code cloned into Anthropic-managed VM with cloud-specific controls\n\nThis distinction affects approval semantics, telemetry, incident response, and compliance reporting.\n\n---\n\n## 22. Compatibility strategy with the Codex plane\n\n## 22.1 What remains identical\n\nThe following shared interfaces should remain unchanged:\n\n```yaml\nISessionPlane\nISessionRecord\nITurnRecord\nIDecisionPoint\nIPolicyEnvelope\nIRuntimeAdapter\nIArtifactStore\nIUsageSink\n```\n\n## 22.2 What becomes Claude-specific extensions\n\n```yaml\nClaudeExtensions:\n  execution_owner\n  surface_bindings\n  policy_fetch_state\n  managed_source_kind\n  checkpoint_cursor\n  context_snapshot\n  child_contexts\n  session_group_id\n  handoff_from_session_id\n  provider_mode\n```\n\n## 22.3 Shared event compatibility\n\nWhere the Codex plane uses thread / turn / item language, the Claude plane should preserve semantic compatibility by mapping:\n\n| Shared plane | Codex public concept | Claude concept |\n|---|---|---|\n| `ManagedSession` | thread | session |\n| `Turn` | turn | turn |\n| `WorkItem` | item | tool/hook/checkpoint/subagent/etc. |\n| `DecisionPoint` | approval request | permission / hook / classifier / dialog |\n| `SessionGroup` | parallel threads or multi-agent workflows | agent team |\n\n## 22.4 Shared-plane naming\n\nShared-plane records use the unified `session_id` naming convention. Legacy Codex `thread_id` and `child_thread` naming must be removed from internal Claude managed-session contracts rather than preserved as aliases.\n\n## 22.5 Known semantic mismatch\n\nThe Codex abstraction of “managed defaults that can be changed during a session and re-applied next launch” does not map directly to native Claude managed settings. This is the one major place where the shared abstraction should remain, but the Claude implementation must declare limited support.\n\n---\n\n## 23. Rollout plan\n\n## 23.1 Phase 1: metadata-only session registry\n\nDeliver:\n\n- session registry\n- runtime kind and surface binding\n- turn lifecycle\n- basic event log\n- resume/fork/archive lineage\n\nExclude:\n\n- checkpoints\n- teams\n- full policy handshake\n\n## 23.2 Phase 2: policy and decisions\n\nDeliver:\n\n- managed settings resolution\n- permission mode normalization\n- rule compilation\n- decision-point eventing\n- policy fetch state\n- security-dialog state\n\n## 23.3 Phase 3: context and checkpoints\n\nDeliver:\n\n- typed `ContextSnapshot`\n- compaction epochs\n- checkpoint index\n- rewind APIs\n- artifact pointers for summaries\n\n## 23.4 Phase 4: subagents and teams\n\nDeliver:\n\n- `ChildContext`\n- `SessionGroup`\n- child usage rollup\n- peer message eventing\n- background child execution states\n\n## 23.5 Phase 5: remote projection and cloud handoff\n\nDeliver:\n\n- multi-surface bindings\n- Remote Control projection semantics\n- local-to-cloud handoff lineage\n- reconnect handling\n- disconnection-resilient waiting state\n\n## 23.6 Phase 6: enterprise telemetry and audits\n\nDeliver:\n\n- OTel normalization\n- hook audit stream\n- policy trust level\n- compliance export views\n- provider-mode-aware dashboards\n\n---\n\n## 24. Open questions\n\n1. **Should checkpoint payloads ever leave the runtime host?**\n   The default should likely remain “no”, with only metadata in the plane.\n\n2. **How much of server-managed settings fetch state should be user-visible?**\n   Security teams want precision; end users usually want minimal noise.\n\n3. **Should a long-running background subagent ever promote to a sibling session?**\n   This could simplify resumability but would blur the session model.\n\n4. **Do we need a first-class `ScheduleTemplate` object now, or can schedules remain session progenitors outside the plane?**\n   Start outside the plane unless session-group and audit requirements force promotion.\n\n5. **How should cloud handoff summaries be versioned and audited?**\n   They are derived artifacts that influence a new session’s behavior and therefore deserve lineage.\n\n6. **Can we safely emulate Codex-style managed defaults for Claude without misleading administrators?**\n   Probably only as a clearly labeled bootstrap template, never as an enforced admin tier.\n\n---\n\n## 25. Recommended implementation stance\n\nBuild `ClaudeCodeManagedSessionPlane` as a **thin specialization** of the shared Managed Session Plane, not as a fork.\n\nThat means:\n\n- keep the shared top-level schema\n- isolate runtime differences inside `ClaudeRuntimeAdapter`\n- make `DecisionPoint`, `ContextSnapshot`, and `Checkpoint` first-class\n- model Remote Control as a surface projection\n- model cloud web runs as distinct execution owners\n- treat subagents and teams as separate primitives\n- preserve cross-runtime compatibility, but do not hide the places where Claude’s semantics genuinely differ from Codex\n\nThis produces a plane that is structurally reusable, operationally accurate, and honest about Claude Code’s runtime model.\n"
+  },
+  "extractedAt": "2026-04-14T23:03:07Z",
+  "designSummary": "Claude Code Managed Sessions is a Claude-specific binding of the shared Managed Session Plane. It preserves canonical session, turn, work item, decision, policy, artifact, and usage abstractions while adding first-class modeling for execution owner, UI projection, managed settings precedence, richer permission decisions, typed context, checkpoints, subagents, teams, multi-surface behavior, storage, observability, governance, and Codex-plane compatibility. The design is intentionally metadata-first and adapter-oriented: the control plane owns normalized state, lineage, events, policy versions, and artifact pointers while runtime-local systems retain heavyweight transcripts, file reads, checkpoint payloads, and provider-specific details.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Preserve shared Managed Session Plane nouns",
+      "type": "requirement",
+      "source_section": "1 Executive summary; 2.1 Preserve shared abstractions; 5 Shared abstractions",
+      "explanation": "Claude Code must map into SessionPlane, ManagedSession, Turn, WorkItem, DecisionPoint, PolicyEnvelope, RuntimeAdapter, ArtifactStore, and UsageLedger rather than forking the control-plane model."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Separate execution owner from presentation surface",
+      "type": "state-model",
+      "source_section": "2.2 Separate execution from presentation; 7 Runtime model",
+      "explanation": "Local, cloud, SDK-hosted execution, primary surfaces, projections, and handoffs are independent axes and must not be inferred from UI alone."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Model Claude supported session shapes",
+      "type": "requirement",
+      "source_section": "7.2 Supported session shapes",
+      "explanation": "The plane must represent local interactive, local Remote Control, cloud interactive, scheduled, desktop scheduled, SDK embedded, subagent, and agent-team session shapes."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Keep Remote Control distinct from cloud handoff",
+      "type": "constraint",
+      "source_section": "7.3 Critical execution distinctions; 16 Multi-surface behavior",
+      "explanation": "Remote Control adds surface projections to the same session; cloud handoff creates a new session with lineage and a cloud execution owner."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Provide canonical Claude domain records",
+      "type": "state-model",
+      "source_section": "9 Canonical domain model",
+      "explanation": "ManagedSession, Turn, WorkItem, DecisionPoint, PolicyEnvelope, ContextSnapshot, Checkpoint, ChildContext, and SessionGroup fields must be normalized and persisted as control-plane records."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Implement session, turn, decision, checkpoint, and surface lifecycles",
+      "type": "state-model",
+      "source_section": "10 Lifecycle state machines",
+      "explanation": "The design defines explicit legal lifecycle transitions for sessions, turns, decisions, checkpoints, and surface bindings."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Compile Claude policy into versioned PolicyEnvelope",
+      "type": "security",
+      "source_section": "2.3 Treat policy as compiled runtime state; 11 Policy model",
+      "explanation": "Managed settings, permission mode, rules, protected paths, hooks, sandboxing, provider and surface constraints, MCP controls, memory controls, and auto-mode constraints must compile into an effective versioned envelope."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Respect managed settings precedence and fetch states",
+      "type": "security",
+      "source_section": "11.3 Managed settings source resolution; 11.4 Effective policy assembly algorithm; 11.5 Policy handshake state",
+      "explanation": "Server-managed settings win over endpoint-managed settings; local overrides are disallowed; fetch, cache, fail-closed, and security-dialog states are explicit."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Represent BootstrapPreferences honestly for Claude",
+      "type": "constraint",
+      "source_section": "11.2 Claude mapping; 22.5 Known semantic mismatch",
+      "explanation": "Claude has no native admin-managed default tier equivalent to Codex defaults, so bootstrap preferences can only be labeled session templates, not enforced managed settings."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Normalize the full Claude decision pipeline",
+      "type": "security",
+      "source_section": "2.4 Model deterministic and non-deterministic safety controls explicitly; 12 Decision pipeline",
+      "explanation": "Decisions must include session guards, hooks, permission rules, protected paths, permission-mode baseline, sandbox substitution, auto classifier, interactive or headless resolution, runtime execution, posttool hooks, and checkpoint capture."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Track DecisionPoint provenance and outcomes",
+      "type": "observability",
+      "source_section": "9.4 DecisionPoint; 18.6 Decision events",
+      "explanation": "Each decision records target, action, origin stage, resolution, resolver, reason, timestamps, and normalized events."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Make context lifecycle inspectable",
+      "type": "artifact",
+      "source_section": "2.5 Make context lifecycle inspectable; 13 Context and memory model",
+      "explanation": "Startup and on-demand context sources, source refs, load timing, reinjection policy, token hints, and compaction epochs must be visible."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Separate memory guidance from enforcement",
+      "type": "security",
+      "source_section": "13.5 Managed memory guidance vs enforcement",
+      "explanation": "CLAUDE.md, memory, and rules are guidance; managed settings and permission rules are enforcement and must not be conflated."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Model compaction as a new context epoch",
+      "type": "state-model",
+      "source_section": "13.3 Compaction-aware context model; 13.4 Compaction behavior",
+      "explanation": "Compaction creates a new ContextSnapshot epoch, reloads startup-critical context, selectively reinjects on-demand context, and emits a compaction WorkItem."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Make checkpointing and rewind first-class",
+      "type": "state-model",
+      "source_section": "14 Checkpointing and rewind",
+      "explanation": "Checkpoint capture, index, restore modes, summarize-from-here, active cursor, lineage, retention, and APIs are session-plane operations."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Distinguish subagents from agent teams",
+      "type": "state-model",
+      "source_section": "6 Claude-specific deltas; 15 Child work model",
+      "explanation": "Subagents are child contexts inside one session; agent teams are grouped sibling sessions with direct peer messaging and independent state."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Support child work APIs and events",
+      "type": "integration",
+      "source_section": "17.6 Child-work APIs; 18.7 Child-work events",
+      "explanation": "The plane must expose SpawnSubagent, CreateTeamTeammate, SendTeamMessage, and normalized child/team events."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Support multi-surface attachment and reconnect behavior",
+      "type": "integration",
+      "source_section": "16 Multi-surface behavior; 17.1 Session APIs",
+      "explanation": "SurfaceBinding records capabilities, connection state, projections, disconnect/reconnect, detach, and resume semantics without killing the underlying session."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Expose high-level session, turn, policy, decision, checkpoint, child-work, and subscription APIs",
+      "type": "integration",
+      "source_section": "17 API surface of the plane",
+      "explanation": "The Claude plane should keep Codex-like high-level verbs while adding Claude-specific policy, checkpoint, child-work, and event subscription capabilities."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Emit append-only normalized event streams",
+      "type": "observability",
+      "source_section": "5.1 SessionPlane; 18 Event model",
+      "explanation": "Session, surface, policy, turn, work, decision, and child-work events must be append-only and normalized for shared-plane consumers."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Keep the storage model payload-light",
+      "type": "constraint",
+      "source_section": "19 Storage model",
+      "explanation": "Central stores keep ids, state, events, policies, usage, and artifact pointers; runtime-local stores keep transcripts, full reads, checkpoint payloads, and caches."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Provide policy-driven retention classes",
+      "type": "migration",
+      "source_section": "19.3 Suggested retention classes",
+      "explanation": "Hot metadata, event logs, usage, audit metadata, and checkpoint payload retention should be policy-driven, not hard-coded."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Normalize Claude OTel telemetry into shared observability",
+      "type": "observability",
+      "source_section": "20 Observability",
+      "explanation": "Claude telemetry should map to shared metrics, logs/events, and optional traces with defined metrics and span boundaries."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Model layered security and governance explicitly",
+      "type": "security",
+      "source_section": "21 Security and governance",
+      "explanation": "Managed settings, rules, modes, protected paths, sandboxing, hooks, classifier, dialogs, runtime isolation, trust levels, provider caveats, and hook audits must be first-class."
+    },
+    {
+      "id": "DESIGN-REQ-025",
+      "title": "Preserve local-code residency expectations",
+      "type": "security",
+      "source_section": "19.1 Storage principle; 21.6 Cloud vs local security",
+      "explanation": "Local execution and Remote Control should not centrally store source code or checkpoint payloads by default, while cloud execution is explicitly identified."
+    },
+    {
+      "id": "DESIGN-REQ-026",
+      "title": "Maintain Codex plane compatibility without hiding semantic mismatches",
+      "type": "constraint",
+      "source_section": "22 Compatibility strategy with the Codex plane; 25 Recommended implementation stance",
+      "explanation": "Shared interfaces remain unchanged, Claude-specific extensions are isolated, unified `session_id` naming is used without legacy aliases, and mismatches such as managed defaults are declared."
+    },
+    {
+      "id": "DESIGN-REQ-027",
+      "title": "Keep runtime-specific wire complexity inside adapters",
+      "type": "integration",
+      "source_section": "2.6 Keep runtime-specific complexity inside adapters; 8 High-level architecture",
+      "explanation": "The shared plane defines normalized APIs and events; ClaudeRuntimeAdapter implementations translate local CLI, IDE, Remote Control, cloud, and SDK specifics."
+    },
+    {
+      "id": "DESIGN-REQ-028",
+      "title": "Follow phased rollout dependencies",
+      "type": "migration",
+      "source_section": "23 Rollout plan",
+      "explanation": "Rollout begins with metadata-only registry, then policy/decisions, context/checkpoints, child work, remote projection/handoff, and telemetry/audits."
+    },
+    {
+      "id": "DESIGN-REQ-029",
+      "title": "Respect explicit non-goals",
+      "type": "non-goal",
+      "source_section": "4 Non-goals",
+      "explanation": "The design must not reimplement Anthropic proprietary local protocol, replace git history, store all transcripts/diffs centrally, erase cloud/local distinctions, simulate non-native admin defaults, or collapse all collaboration products into one session type."
+    },
+    {
+      "id": "DESIGN-REQ-030",
+      "title": "Track open questions as downstream clarifications",
+      "type": "constraint",
+      "source_section": "24 Open questions",
+      "explanation": "Checkpoint payload location, policy fetch visibility, subagent promotion, schedule templates, handoff summary audit, and Claude default emulation remain unresolved."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Create metadata-only Claude managed session registry",
+      "shortName": "claude-session-registry",
+      "description": "As an operator, I can create, resume, fork, archive, and inspect Claude Code managed sessions using the same control-plane identity model as other managed runtimes while preserving Claude-specific execution-owner and surface metadata.",
+      "why": "This is the first vertical slice because every later policy, context, checkpoint, child-work, and telemetry feature needs canonical session, turn, event, and lineage records.",
+      "scope": [
+        "Canonical ManagedSession, Turn, and WorkItem records for Claude Code",
+        "execution_owner, primary_surface, surface_bindings, projection_mode, repo/cwd, lineage, and lifecycle fields",
+        "metadata-only session APIs and append-only session/turn/work events",
+        "resume, fork, archive, end, and basic lineage behavior"
+      ],
+      "outOfScope": [
+        "Full policy handshake",
+        "checkpoint restore payloads",
+        "subagents and agent teams",
+        "Remote Control reconnect implementation beyond storing bindings"
+      ],
+      "independentTest": "Create local, cloud, scheduled, SDK, and Remote Control-shaped Claude sessions through the plane API, submit a turn, resume/fork/archive the session, and verify persisted records, lifecycle transitions, lineage, and append-only events without requiring Claude runtime execution.",
+      "acceptanceCriteria": [
+        "Claude sessions are persisted as ManagedSession rows with runtime_family = claude_code and required runtime-axis fields.",
+        "CreateSession, ResumeSession, ForkSession, ArchiveSession, EndSession, SubmitTurn, InterruptTurn, CompactSession, and RenameSession expose Codex-compatible high-level verbs where applicable.",
+        "Remote Control-shaped input adds a projection SurfaceBinding without changing execution_owner.",
+        "Cloud handoff-shaped input creates a new session with handoff lineage rather than mutating the source session.",
+        "Session, turn, work, and surface lifecycle transitions reject illegal transitions and emit normalized append-only events."
+      ],
+      "requirements": [
+        "Represent every Claude Code run as a canonical ManagedSession.",
+        "Keep SessionPlane, ManagedSession, Turn, WorkItem, DecisionPoint, PolicyEnvelope, RuntimeAdapter, ArtifactStore, and UsageLedger as shared top-level nouns.",
+        "Model execution_owner, surface_kind, and projection_mode as separate fields.",
+        "Persist metadata and artifact pointers centrally while keeping heavyweight runtime payloads out of the session registry."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns preservation of shared nouns at the first session-plane slice.",
+        "DESIGN-REQ-002": "Owns execution owner, surface, and projection axes in canonical session records.",
+        "DESIGN-REQ-003": "Owns supported session shapes as creation/resume test fixtures.",
+        "DESIGN-REQ-004": "Owns Remote Control versus cloud handoff identity behavior.",
+        "DESIGN-REQ-005": "Owns initial ManagedSession, Turn, and WorkItem records.",
+        "DESIGN-REQ-006": "Owns metadata lifecycle transitions for sessions, turns, work items, and surfaces.",
+        "DESIGN-REQ-018": "Owns initial SurfaceBinding persistence.",
+        "DESIGN-REQ-019": "Owns metadata-only session and turn APIs.",
+        "DESIGN-REQ-020": "Owns append-only session, turn, work, and surface events.",
+        "DESIGN-REQ-021": "Owns the payload-light registry and event-log split.",
+        "DESIGN-REQ-027": "Owns the boundary where runtime adapters attach to normalized records.",
+        "DESIGN-REQ-028": "Owns rollout phase 1.",
+        "DESIGN-REQ-029": "Owns non-goals related to not reimplementing proprietary protocol or centralizing all transcripts."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "Existing shared managed-session infrastructure can be specialized for Claude Code without a separate forked registry."
+      ],
+      "needsClarification": [],
+      "handoff": "Build the metadata-only Claude Code managed session registry as the first one-story spec. Preserve the shared Managed Session Plane nouns, add Claude runtime-axis and lineage fields, expose metadata-level session and turn verbs, and verify lifecycle/event behavior without requiring live Claude execution."
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Compile Claude managed policy and startup handshake state",
+      "shortName": "claude-policy-envelope",
+      "description": "As an enterprise administrator, I can see the effective Claude Code policy for a session, including managed source precedence, fetch state, security-dialog state, provider mode, trust level, and unsupported managed-default semantics.",
+      "why": "Policy must be explicit before decisions can be evaluated safely, and Claude managed settings have precedence and semantics that differ materially from Codex.",
+      "scope": [
+        "PolicyEnvelope compilation for Claude",
+        "server-managed versus endpoint-managed source resolution",
+        "policy fetch and fail-closed states",
+        "PolicyHandshake states and security dialog acknowledgement",
+        "provider_mode, PolicyTrustLevel, managed_source_kind, and bootstrap-template handling"
+      ],
+      "outOfScope": [
+        "Per-action decision resolution",
+        "Hook execution implementation",
+        "Context compaction behavior",
+        "Provider-specific settings fetch protocol beyond adapter-bound inputs"
+      ],
+      "independentTest": "Given fixture policy sources for server-managed, endpoint-managed, empty, cache-hit, fetch-failed, and force-refresh-failed cases, resolve policy and assert precedence, fetch state, trust level, dialog state, compiled envelope versioning, and failure behavior.",
+      "acceptanceCriteria": [
+        "Server-managed non-empty settings win over endpoint-managed settings.",
+        "Endpoint-managed settings apply only when server-managed settings are empty or unsupported.",
+        "Local project/user settings are visible for observability but cannot override managed settings.",
+        "forceRemoteSettingsRefresh failure produces fail_closed startup behavior.",
+        "Risky managed hooks or custom environment variables can require an interactive security-dialog state.",
+        "BootstrapPreferences are represented only as session bootstrap templates and are not labeled as native Claude managed defaults.",
+        "provider_mode and PolicyTrustLevel are recorded on every PolicyEnvelope."
+      ],
+      "requirements": [
+        "Compile all relevant Claude settings, permission, hook, MCP, memory, sandbox, provider, and surface constraints into a versioned PolicyEnvelope.",
+        "Preserve RequiredPolicy and BootstrapPreferences as shared concepts while documenting Claude support limits.",
+        "Expose ResolveManagedPolicy, AcknowledgeManagedPolicyDialog, SwitchPermissionMode, and GetEffectivePolicy behavior."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Owns PolicyEnvelope record fields.",
+        "DESIGN-REQ-007": "Owns compiled effective policy state.",
+        "DESIGN-REQ-008": "Owns source precedence, fetch state, and handshake state.",
+        "DESIGN-REQ-009": "Owns the BootstrapPreferences semantic mismatch.",
+        "DESIGN-REQ-019": "Owns policy APIs.",
+        "DESIGN-REQ-020": "Owns policy.fetch.*, policy.dialog.*, and policy.compiled events.",
+        "DESIGN-REQ-024": "Owns policy trust level and provider caveats.",
+        "DESIGN-REQ-026": "Owns compatibility around Codex managed-default mismatch.",
+        "DESIGN-REQ-028": "Owns rollout phase 2 policy foundation.",
+        "DESIGN-REQ-030": "Owns open questions about policy fetch visibility and default emulation."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "A Claude adapter or fixture boundary can supply normalized managed-settings source data for tests."
+      ],
+      "needsClarification": [
+        "How much of server-managed settings fetch state should be user-visible outside admin views?"
+      ],
+      "handoff": "Build Claude managed policy compilation as a single story focused on effective PolicyEnvelope output and startup handshake state. Treat policy as control-plane state, not a CLI flag passthrough, and verify precedence and fail-closed behavior with fixture sources."
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Normalize Claude decisions across permissions, hooks, sandboxing, classifier, and prompts",
+      "shortName": "claude-decision-pipeline",
+      "description": "As an operator or auditor, I can inspect every Claude Code decision point with its origin stage, proposed action, policy/hook/classifier/user provenance, resolution, and resulting runtime outcome.",
+      "why": "Claude permissioning is not just approval prompts; the plane needs one auditable path for deterministic and classifier-based safety controls before tool execution is trustworthy.",
+      "scope": [
+        "DecisionPipeline ordering and resolution semantics",
+        "DecisionPoint creation, mutation, denial, defer, cancel, and resolution records",
+        "permission modes, allow/ask/deny rule precedence, protected paths, sandbox substitution, auto-mode classifier, headless resolution, and interactive prompts",
+        "pretool/posttool hook WorkItems and HookAudit metadata"
+      ],
+      "outOfScope": [
+        "Full hook shell execution sandbox",
+        "Policy source fetching",
+        "Checkpoint restore implementation beyond emitting capture edge after tracked edits"
+      ],
+      "independentTest": "Feed representative proposed actions through fixture policies and hooks covering deny, ask, allow, protected paths, sandbox substitution, classifier denial, interactive approval, headless defer/deny, and runtime failure; verify DecisionPoint provenance, events, and WorkItem outcomes.",
+      "acceptanceCriteria": [
+        "Decision stages execute in documented order.",
+        "deny rules take precedence over ask and allow rules.",
+        "Hooks can tighten restrictions but cannot override matching deny or ask policy.",
+        "Protected paths are represented with origin_stage = protected_path and are never auto-approved.",
+        "Sandbox substitution is recorded separately from an allow rule.",
+        "Auto-mode classifier decisions are distinguishable from user approvals.",
+        "Headless unresolved decisions deny or defer according to policy.",
+        "Hook executions emit auditable WorkItems including hook source scope, matcher, and outcome."
+      ],
+      "requirements": [
+        "Broaden DecisionPoint beyond Codex approval requests.",
+        "Record target kind, proposed action, origin stage, resolution, resolved_by, reason, and timestamps.",
+        "Emit normalized decision and work events.",
+        "Preserve cloud/local execution distinctions when interpreting decision outcomes."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-006": "Owns decision lifecycle transitions.",
+        "DESIGN-REQ-010": "Owns the full decision pipeline.",
+        "DESIGN-REQ-011": "Owns DecisionPoint provenance and decision events.",
+        "DESIGN-REQ-020": "Owns decision and hook work event emission.",
+        "DESIGN-REQ-024": "Owns layered control stack, protected path policy, classifier, dialogs, and hook governance.",
+        "DESIGN-REQ-025": "Owns security distinction between local, Remote Control, and cloud execution during decisions.",
+        "DESIGN-REQ-028": "Owns rollout phase 2 decision behavior.",
+        "DESIGN-REQ-029": "Owns non-goal of making cloud and local indistinguishable."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Classifier results can be provided through an adapter boundary in tests rather than invoking a live classifier."
+      ],
+      "needsClarification": [],
+      "handoff": "Build the Claude decision pipeline as a testable control-plane story. The acceptance path should exercise every decision origin stage and prove the resulting DecisionPoint and WorkItem event history is auditable and deterministic where the design says it must be."
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Index Claude context snapshots and compaction epochs",
+      "shortName": "claude-context-snapshots",
+      "description": "As an operator, I can inspect what context entered a Claude session, why it was loaded, whether it survives compaction, and which parts are guidance versus enforceable policy.",
+      "why": "Claude session quality and safety depend heavily on runtime context. The plane needs typed, reload-aware context metadata before checkpoint, rewind, and audit features can explain behavior.",
+      "scope": [
+        "ContextSnapshot and segment metadata",
+        "startup and on-demand context source kinds",
+        "source_ref, loaded_at, reinjection_policy, token_budget_hint, and compaction_epoch fields",
+        "compaction WorkItem and new snapshot epoch creation",
+        "clear separation of memory guidance from policy enforcement"
+      ],
+      "outOfScope": [
+        "Storing full file-read or transcript payloads centrally",
+        "Implementing memory authoring UX",
+        "Checkpoint restore APIs"
+      ],
+      "independentTest": "Bootstrap a session with fixture startup context, simulate on-demand file, nested CLAUDE.md, rule, skill, and hook context loads, run compaction, and verify a new ContextSnapshot epoch with expected reinjection policies and payload-light pointers.",
+      "acceptanceCriteria": [
+        "Startup context sources include system prompt, output style, managed/project/local CLAUDE.md, auto memory, MCP manifests, skill descriptions, and hook-injected context.",
+        "On-demand context sources include file reads, nested CLAUDE.md, path rules, and invoked skill bodies.",
+        "Compaction creates a new ContextSnapshot epoch instead of mutating the old one.",
+        "Startup-critical context is marked always or startup-refresh as appropriate; file reads default to never reinject.",
+        "Memory artifacts are never treated as hard policy sources.",
+        "ContextIndex stores metadata and pointers, not full source payloads by default."
+      ],
+      "requirements": [
+        "Make context lifecycle inspectable.",
+        "Attach reinjection policies to context segments.",
+        "Emit work.context.loaded and compaction events.",
+        "Preserve local-code residency expectations by avoiding central storage of heavyweight file content by default."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Owns ContextSnapshot record fields.",
+        "DESIGN-REQ-012": "Owns inspectable context lifecycle.",
+        "DESIGN-REQ-013": "Owns memory guidance versus enforcement.",
+        "DESIGN-REQ-014": "Owns compaction epochs and WorkItems.",
+        "DESIGN-REQ-020": "Owns work.context.loaded and compaction events.",
+        "DESIGN-REQ-021": "Owns ContextIndex metadata-pointer storage.",
+        "DESIGN-REQ-025": "Owns local-code residency for context payloads.",
+        "DESIGN-REQ-028": "Owns the context half of rollout phase 3."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Source refs can point at runtime-local artifacts or summaries without dereferencing full content in control-plane tests."
+      ],
+      "needsClarification": [],
+      "handoff": "Build ContextSnapshot indexing and compaction epochs as one story. Focus on typed metadata and reinjection semantics, keeping full runtime payloads out of the central store and explicitly separating guidance context from enforceable policy."
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Expose Claude checkpoints and rewind operations",
+      "shortName": "claude-checkpoint-rewind",
+      "description": "As an operator, I can list Claude session checkpoints and restore code, conversation, both, or summarize-from-here without losing checkpoint provenance or event history.",
+      "why": "Claude checkpointing changes session truth and must be represented in the plane rather than treated as a UI-only runtime feature.",
+      "scope": [
+        "Checkpoint record and CheckpointIndex metadata",
+        "checkpoint capture triggers for user prompts and file edits",
+        "ListCheckpoints, RestoreCheckpoint, and SummarizeFromCheckpoint APIs",
+        "rewind lifecycle, active checkpoint cursor, rewound_from_checkpoint_id lineage, artifact pointers, and retention metadata"
+      ],
+      "outOfScope": [
+        "Replacing git history",
+        "Centrally storing checkpoint payloads by default",
+        "Implementing provider-specific restore mechanics beyond adapter-bound request/response"
+      ],
+      "independentTest": "Simulate user-prompt and file-edit checkpoint captures, list checkpoints, restore each supported mode, summarize from a checkpoint, and verify event history is preserved, active cursor changes, lineage is recorded, and payloads remain runtime-local by default.",
+      "acceptanceCriteria": [
+        "Every user prompt and tracked file edit can create a checkpoint metadata record.",
+        "Bash side effects and external manual edits follow documented capture limits.",
+        "The four normalized rewind actions are exposed and validated.",
+        "Rewind preserves pre-rewind event history and records the new active checkpoint cursor.",
+        "Checkpoint metadata remains addressable until expiry or garbage collection.",
+        "Checkpoint payload storage defaults to runtime-local references."
+      ],
+      "requirements": [
+        "Treat checkpointing as a session-plane operation.",
+        "Emit work.checkpoint.*, work.rewind.*, and session.rewinding events.",
+        "Store checkpoint metadata and restore references in CheckpointIndex.",
+        "Make retention policy-driven."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Owns Checkpoint record fields.",
+        "DESIGN-REQ-006": "Owns checkpoint lifecycle and session rewinding transitions.",
+        "DESIGN-REQ-015": "Owns checkpointing and rewind as first-class operations.",
+        "DESIGN-REQ-019": "Owns checkpoint APIs.",
+        "DESIGN-REQ-020": "Owns checkpoint and rewind events.",
+        "DESIGN-REQ-021": "Owns CheckpointIndex and runtime-local payload references.",
+        "DESIGN-REQ-022": "Owns checkpoint retention class behavior.",
+        "DESIGN-REQ-025": "Owns default no-central-checkpoint-payload behavior.",
+        "DESIGN-REQ-028": "Owns the checkpoint half of rollout phase 3.",
+        "DESIGN-REQ-030": "Owns open questions about checkpoint payload export and handoff summary audit."
+      },
+      "dependencies": [
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Runtime adapters can return opaque checkpoint storage references for control-plane indexing."
+      ],
+      "needsClarification": [
+        "Should checkpoint payloads ever leave the runtime host by default, or only under explicit compliance export policy?"
+      ],
+      "handoff": "Build checkpoint and rewind support as a single story centered on metadata, APIs, lineage, and events. Preserve source-control safety expectations by keeping event history intact and checkpoint payloads pointer-based unless policy says otherwise."
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Model Claude subagents and agent teams as distinct child-work primitives",
+      "shortName": "claude-child-work",
+      "description": "As an operator, I can distinguish a Claude subagent child context from an agent-team teammate session, inspect child work status and usage, and follow peer messages without collapsing different runtime semantics.",
+      "why": "Subagents and teams have different identity, communication, lifecycle, permission, and usage-accounting semantics. Modeling them separately prevents bad resume, archive, billing, and audit behavior.",
+      "scope": [
+        "ChildContext records for subagents",
+        "SessionGroup records for agent teams",
+        "SpawnSubagent, CreateSessionGroup, CreateTeamTeammate, and SendTeamMessage APIs",
+        "subagent return summaries, child usage rollup, team usage rollup, peer message eventing, teardown state, and background child execution states"
+      ],
+      "outOfScope": [
+        "A general multi-agent collaboration product",
+        "Automatic promotion of long-running subagents to sessions",
+        "Provider-specific team communication transport internals"
+      ],
+      "independentTest": "Create a parent session, spawn a subagent child context, create a session group with lead and teammate sessions, send a peer message, complete and fail children, and verify identities, lineage, lifecycle ownership, usage rollups, and events remain distinct.",
+      "acceptanceCriteria": [
+        "Subagents receive child_context_id and do not become top-level peer sessions by default.",
+        "Subagent output returns to the parent turn as summary or summary_plus_metadata.",
+        "Subagent return summaries are represented as child-work outputs for parent-turn consumption, not as generic context-index inputs.",
+        "Agent-team members each have ManagedSession ids under a shared session_group_id.",
+        "Team peer messaging emits direct team.message.sent events.",
+        "Usage rolls up correctly for child contexts and session groups.",
+        "Teardown and archival behavior is group-aware for teams and parent-turn-owned for subagents."
+      ],
+      "requirements": [
+        "Distinguish ChildContext from SessionGroup.",
+        "Represent subagent and team lifecycle, permissions, communication, and accounting separately.",
+        "Expose child-work APIs and append-only events.",
+        "Keep collaboration products separate when runtime semantics differ."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Owns ChildContext and SessionGroup records.",
+        "DESIGN-REQ-016": "Owns distinction between subagents and teams.",
+        "DESIGN-REQ-017": "Owns child-work APIs and events.",
+        "DESIGN-REQ-019": "Owns child-work API surface.",
+        "DESIGN-REQ-020": "Owns child and team event streams.",
+        "DESIGN-REQ-023": "Owns managed_subagent_total and managed_team_sessions_total telemetry inputs.",
+        "DESIGN-REQ-026": "Owns SessionGroup compatibility mapping to shared plane.",
+        "DESIGN-REQ-028": "Owns rollout phase 4.",
+        "DESIGN-REQ-029": "Owns non-goal of unifying all collaboration products into one session type.",
+        "DESIGN-REQ-030": "Owns open question about long-running subagent promotion."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Initial implementation can use synthetic adapter events to validate identity and accounting before live Claude team integration."
+      ],
+      "needsClarification": [
+        "Should a long-running background subagent ever promote to a sibling session, or should it remain parent-owned?"
+      ],
+      "handoff": "Build subagents and agent teams as separate child-work primitives. The story should prove identity, lifecycle, communication, and usage semantics differ correctly instead of sharing one overloaded child-session abstraction."
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Implement Claude multi-surface projection and cloud handoff semantics",
+      "shortName": "claude-surface-handoff",
+      "description": "As a user, I can attach, detach, reconnect, and hand off Claude sessions across terminal, IDE, desktop, web, mobile, scheduler, and SDK surfaces without losing the distinction between local execution, Remote Control projection, and cloud execution.",
+      "why": "The design explicitly decouples execution owner from UI. This story delivers the user-visible surface behavior after the core registry is in place.",
+      "scope": [
+        "SurfaceBinding capabilities and connection state",
+        "AttachSurface and DetachSurface behavior",
+        "disconnect, reconnect, waiting, and resume semantics",
+        "Remote Control projection semantics",
+        "local-to-cloud and desktop-to-web cloud handoff lineage with seed artifact references"
+      ],
+      "outOfScope": [
+        "Cloud VM provisioning internals",
+        "Full mobile/web UI implementation",
+        "Checkpoint payload movement across handoff beyond seed artifact pointers"
+      ],
+      "independentTest": "Attach multiple surfaces to a local session, disconnect and reconnect a projection, resume on another surface, perform a cloud handoff, and assert execution_owner preservation or new-session creation according to the documented cases.",
+      "acceptanceCriteria": [
+        "A session has one primary surface and may have multiple projections.",
+        "Remote Control projection never changes execution_owner.",
+        "Surface disconnect does not fail the session unless the runtime exits.",
+        "Resume on a different surface preserves canonical identity when execution_owner remains the same.",
+        "Cloud handoff creates a new session with handoff_from_session_id and seed artifact refs.",
+        "Handoff lineage does not use Remote Control projection fields."
+      ],
+      "requirements": [
+        "Model SurfaceBinding as durable client attachment state.",
+        "Expose capabilities such as approvals, diff review, notifications, QR connect, and keyboard control.",
+        "Persist handoff lineage and seed artifact refs.",
+        "Keep local and cloud security semantics distinguishable."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-002": "Owns user-facing separation of execution and presentation.",
+        "DESIGN-REQ-003": "Owns local, Remote Control, cloud, scheduled, and SDK shapes at surface level.",
+        "DESIGN-REQ-004": "Owns Remote Control versus cloud handoff behavior.",
+        "DESIGN-REQ-006": "Owns surface binding lifecycle.",
+        "DESIGN-REQ-018": "Owns multi-surface attachment and reconnect behavior.",
+        "DESIGN-REQ-019": "Owns AttachSurface and DetachSurface APIs.",
+        "DESIGN-REQ-020": "Owns surface events.",
+        "DESIGN-REQ-025": "Owns cloud/local distinction for incident response and compliance.",
+        "DESIGN-REQ-028": "Owns rollout phase 5.",
+        "DESIGN-REQ-030": "Owns open question about handoff summary versioning and audit."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Session seed artifacts can initially be opaque summary, branch, and diff refs produced by existing artifact storage."
+      ],
+      "needsClarification": [
+        "How should cloud handoff summaries be versioned and audited when they seed a new session?"
+      ],
+      "handoff": "Build multi-surface projection and cloud handoff as one story once metadata sessions exist. The core test is that projection preserves session identity while cloud transfer creates lineage to a distinct session."
+    },
+    {
+      "id": "STORY-008",
+      "summary": "Export Claude session telemetry, audits, storage retention, and compatibility views",
+      "shortName": "claude-telemetry-audit",
+      "description": "As an administrator, I can query Claude managed-session metrics, logs, traces, hook audits, policy trust levels, provider caveats, retention classes, artifact pointers, usage rollups, and Codex-compatible compatibility views.",
+      "why": "The final rollout phase turns normalized session state into enterprise-visible governance and operations signals while preserving shared-plane compatibility.",
+      "scope": [
+        "OTel-to-shared telemetry normalization",
+        "recommended metrics and span boundaries",
+        "HookAudit stream, provider_mode-aware reporting, PolicyTrustLevel, and protected-path reporting",
+        "ArtifactIndex, UsageStore, retention class metadata, optional export sinks, and compliance archive pointers",
+        "shared interface compatibility using canonical `session_id` naming"
+      ],
+      "outOfScope": [
+        "Building a full dashboard UI beyond query/export surfaces",
+        "Changing core shared interfaces",
+        "Centralizing full transcripts or source diffs by default"
+      ],
+      "independentTest": "Feed fixture Claude OTel events, hook audit events, policy trust states, checkpoint/context artifact pointers, and usage records into the exporter and verify normalized metrics, spans, audit rows, retention classes, and shared-plane compatibility views use canonical `session_id` naming without full payload storage.",
+      "acceptanceCriteria": [
+        "Claude OTel input maps to shared metrics, logs/events, and optional traces.",
+        "Metrics include active sessions, turn duration, decisions, hooks, checkpoints, compactions, subagents, teams, policy fetch failures, reconnects, and token usage with documented dimensions.",
+        "Trace spans include session.bootstrap, policy.resolve, turn.process, decision.resolve, hook.execute, tool.execute, checkpoint.capture, session.compact, checkpoint.restore, subagent.run, and team.session.run.",
+        "HookAudit includes hook name, source scope, event type, matcher, and outcome.",
+        "Retention classes are policy-driven and represented for session metadata, event logs, usage, audit metadata, and checkpoint payloads.",
+        "Shared interfaces remain unchanged and follow the unified session_id naming convention; legacy thread_id references are removed entirely per Rule 156."
+      ],
+      "requirements": [
+        "Normalize Claude telemetry into the shared observability contract.",
+        "Provide governance reporting that understands provider mode, policy trust level, protected paths, and cloud versus local execution.",
+        "Store usage rollups by session, group, user, workspace, runtime kind, and provider.",
+        "Preserve shared-plane compatibility without hiding Claude semantic mismatches."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-020": "Owns complete append-only event export views.",
+        "DESIGN-REQ-021": "Owns ArtifactIndex and UsageStore reporting surfaces.",
+        "DESIGN-REQ-022": "Owns policy-driven retention classes.",
+        "DESIGN-REQ-023": "Owns OTel normalization, metrics, and spans.",
+        "DESIGN-REQ-024": "Owns hook audit, provider caveats, protected-path reporting, and governance layers.",
+        "DESIGN-REQ-025": "Owns reporting distinctions for local, Remote Control, and cloud execution.",
+        "DESIGN-REQ-026": "Owns shared interface compatibility with unified session_id naming and no legacy aliases.",
+        "DESIGN-REQ-027": "Owns adapter-specific telemetry translation.",
+        "DESIGN-REQ-028": "Owns rollout phase 6.",
+        "DESIGN-REQ-029": "Owns non-goal of central transcript/diff storage by default."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-003",
+        "STORY-004",
+        "STORY-005",
+        "STORY-006",
+        "STORY-007"
+      ],
+      "assumptions": [
+        "Initial export can target existing MoonMind metrics/log/event surfaces before a dedicated Claude dashboard exists."
+      ],
+      "needsClarification": [],
+      "handoff": "Build enterprise telemetry and audit export as the final story. It should consume the normalized records from earlier stories, produce shared observability outputs, keep payload storage pointer-based, and prove Codex-compatible views remain stable."
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-005",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-001",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-001",
+      "STORY-004",
+      "STORY-005",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-005",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-006",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-025": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-005",
+      "STORY-007",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-026": [
+      "STORY-002",
+      "STORY-006",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-027": [
+      "STORY-001",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-028": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-029": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-006",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-030": [
+      "STORY-002",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007"
+    ]
+  },
+  "outOfScopeItems": [
+    {
+      "item": "Do not reimplement Anthropic proprietary local protocol.",
+      "rationale": "Runtime-specific protocol details belong inside Claude adapters."
+    },
+    {
+      "item": "Do not replace git history with checkpoints.",
+      "rationale": "Checkpoints are session-native rewind points, not source-control replacement."
+    },
+    {
+      "item": "Do not centrally store every transcript or file diff by default.",
+      "rationale": "The storage model is metadata-first and pointer-based to preserve local-code residency."
+    },
+    {
+      "item": "Do not make cloud and local execution indistinguishable.",
+      "rationale": "Execution owner affects security, approvals, telemetry, incident response, and compliance."
+    },
+    {
+      "item": "Do not simulate unsupported native admin defaults.",
+      "rationale": "Claude bootstrap preferences must be labeled templates, not managed settings."
+    },
+    {
+      "item": "Do not collapse subagents and agent teams into one session type.",
+      "rationale": "They differ in identity, communication, lifecycle, permissions, and usage accounting."
+    }
+  ],
+  "downstreamGuidance": {
+    "recommendedFirstStory": "STORY-001",
+    "recommendedFirstStoryReason": "It establishes canonical Claude session identity, lifecycle, lineage, and event storage needed by every later story.",
+    "tddDefault": true,
+    "verifyAfterImplementation": true,
+    "noSpecFilesCreatedDuringBreakdown": true,
+    "noSpecsDirectoriesCreatedDuringBreakdown": true
+  }
+}
