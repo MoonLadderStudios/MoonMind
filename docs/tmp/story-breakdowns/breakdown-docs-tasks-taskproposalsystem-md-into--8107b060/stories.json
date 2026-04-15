@@ -1,0 +1,590 @@
+{
+  "source": {
+    "title": "Task Proposal System",
+    "path": "docs/Tasks/TaskProposalSystem.md",
+    "originalDesignText": "# Task Proposal System\n\nStatus: Active\nOwners: MoonMind Engineering\nLast Updated: 2026-04-14\nRelated: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Tasks/AgentSkillSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`\nImplementation tracking: `docs/tmp/015-TaskProposalSystemPlan.md`\n\n---\n\n## 1. Summary\n\nMoonMind proposals are the reviewable follow-up work items discovered during a\n`MoonMind.Run`. They exist to preserve useful next steps without automatically\nstarting new executions.\n\nEach proposal:\n\n1. Stores a canonical `taskCreateRequest` that is valid for later promotion.\n   - Proposal payloads may specifically carry runtime selection, publish behavior, executable tool selection, and agent skill selection or inherited skill intent.\n2. Remains a control-plane review object until a human explicitly promotes it.\n3. Promotes into a new `MoonMind.Run` execution through the same Temporal-backed\n   create path used by `/api/executions`.\n4. Preserves repository-aware deduplication, review priority, notification, and\n   origin metadata.\n\n*Note: Canonical agent-skill storage, precedence, and snapshot semantics live in `docs/Tasks/AgentSkillSystem.md`. This document only defines how proposals preserve and promote task-facing skill intent.*\n\nThe canonical architecture is Temporal-native:\n\n1. `MoonMind.Run` executes work.\n2. A dedicated `proposals` stage runs after execution and before finalization.\n3. Generator activities create candidate follow-up tasks from run artifacts and\n   normalized agent results.\n4. Submission activities validate and store proposals in the proposal queue.\n5. Promotion creates a new Temporal execution only after human approval.\n\n---\n\n## 2. Core Invariants\n\nThese rules are fixed:\n\n1. `taskCreateRequest` is the canonical promote-to-task payload.\n2. Proposal creation is not execution; promotion is the only action that starts\n   new work.\n3. Promotion creates a new `MoonMind.Run` execution, not a legacy queue job.\n4. `taskCreateRequest.payload.repository` is the canonical repository target for\n   deduplication and future execution.\n5. Human review is required before any proposal becomes durable running work.\n6. Proposal generation is best-effort and must never compromise the correctness\n   of the parent run result.\n7. Proposal payloads must conform to the canonical Temporal submit contract used\n   by `/api/executions`.\n8. Proposal origin metadata must identify the durable workflow that produced the\n   proposal.\n9. When a proposal depends on agent skill context, that context must be preserved explicitly in the stored `taskCreateRequest` or preserved through documented inheritance semantics.\n10. Proposal promotion must not silently drift to unrelated skill defaults when the original proposal logic depended on explicit skill selection.\n\n---\n\n## 3. `MoonMind.Run` Lifecycle Integration\n\n### 3.1 Submit-time contract\n\nTask-shaped submit requests may include:\n\n1. `task.proposeTasks`\n2. `task.proposalPolicy`\n3. `task.skills`\n4. `step.skills`\n\nThese values are part of the durable run contract and must be preserved in\n`initialParameters` for the run. These fields directly impact downstream proposal generation and promotion.\n\nThe canonical direction is:\n\n1. Preserve the raw `task.proposalPolicy` object in `initialParameters`.\n2. Resolve global defaults plus per-task overrides inside the proposal stage or\n   inside `proposal.submit`.\n3. Do not rely on a parallel flattened proposal-policy contract for new work.\n\n### 3.1.1 Canonical submission-path normalization\n\nAll new task submission paths must normalize proposal intent into the same\ncanonical nested task payload accepted by `/api/executions` before\n`MoonMind.Run` starts.\n\nCodex managed sessions do not define a parallel proposal contract. They are the\nhighest-risk producer because session containers may create additional MoonMind\ntasks through the internal API path, but the rule also applies to ordinary API\nsubmission, proposal promotion, schedules, and any future task-creation surface.\n\nRequired mapping:\n\n1. session-level or adapter-level proposal opt-in becomes\n   `initialParameters.task.proposeTasks`\n2. session-level or adapter-level proposal routing overrides become\n   `initialParameters.task.proposalPolicy`\n3. task/runtime/repository metadata continues to flow through the canonical task\n   payload instead of a Codex-only side channel\n\nNon-canonical locations such as root-level `initialParameters.proposeTasks`,\nturn metadata, session binding metadata, container environment, or adapter-local\nstate are not the durable write contract for new work.\n\nWorkflow code may temporarily read root-level `initialParameters.proposeTasks`\nor older policy shapes for replay and in-flight migration safety. New\nsubmission paths must still write the nested `task.*` fields so future behavior\ndoes not depend on compatibility fallbacks.\n\nFor Codex, this applies both when a user submits a task targeting a managed\nCodex runtime and when a Codex managed session creates additional MoonMind tasks\nthrough the internal API path.\n\n### 3.2 Run states\n\nFor proposal-capable runs, the relevant state vocabulary is:\n\n1. `scheduled`\n2. `initializing`\n3. `waiting_on_dependencies`\n4. `planning`\n5. `awaiting_slot`\n6. `executing`\n7. `awaiting_external`\n8. `proposals`\n9. `finalizing`\n10. `completed`\n11. `failed`\n12. `canceled`\n\nThe proposal system must use this lifecycle vocabulary consistently across:\n\n1. workflow state\n2. execution API responses\n3. Mission Control status mapping\n4. related documentation\n\n### 3.3 When the `proposals` stage runs\n\nThe `proposals` stage runs only when both conditions are true:\n\n1. global proposal generation is enabled by workflow settings\n2. the submitted task enables proposals through `task.proposeTasks`\n\nThis gives operators a real global off switch while still allowing task-level\nopt-in when the feature is enabled system-wide.\n\nFor Codex managed-session originated runs, the durable gate is the canonical\nnested value preserved in `initialParameters.task.proposeTasks`; session-local\nflags alone must not determine whether the workflow enters `proposals`.\n\n### 3.4 Proposal generation\n\nProposal generation happens in Temporal activities, never in workflow code.\n\nGenerators analyze:\n\n1. run artifacts\n2. plan-step outcomes\n3. normalized `AgentRunResult` data from managed and external agents\n4. finish-summary signals and execution diagnostics\n5. resolved skill snapshot metadata and skill-related execution context, specifically observing if a specific skill set or context contributed to the detected follow-up work (using artifact-backed skill metadata where needed rather than treating the runtime workspace as the sole source of truth)\n\nGenerators must:\n\n1. treat run inputs and logs as untrusted\n2. use artifact-backed references for large context\n3. avoid side effects such as commits, pushes, or task creation\n4. redact or exclude secrets and unsafe command output\n5. **Preserve Skill Selectors:** Only emit explicit skill selectors when they materially affect the correctness or expected behavior of the follow-up work. Generic project follow-up proposals do not need to redundantly stamp all inherited defaults if doing so adds noise without preserving important intent. When the originating task explicitly selected non-default skill sets, proposals should preserve that intent unless documented otherwise.\n\n### 3.5 Proposal submission\n\nProposal submission is a separate side-effecting activity that:\n\n1. validates candidate entries (including any `task.skills` or `step.skills` selectors)\n2. resolves proposal policy\n3. normalizes origin metadata\n4. enforces repository and run-quality routing rules\n5. preserves explicit skill-selection intent when present, rejecting or normalizing malformed skill-selection fields before storage\n6. creates proposal records through `/api/proposals`\n\nSubmission creates proposals only. It never promotes them.\n\n### 3.6 Finish summary integration\n\nThe run finish summary must record proposal outcomes in both the typed result and\n`reports/run_summary.json`.\n\nAt minimum it records:\n\n1. whether proposal generation was requested\n2. generated candidate count\n3. submitted proposal count\n4. redacted submission or validation errors\n\n---\n\n## 4. Proposal Policy\n\nProposal routing follows global defaults plus optional per-task overrides.\n\n*Note: `proposalPolicy` does **not** independently redefine agent skill precedence. Skill selection is strictly preserved from the candidate payload or inherited from canonical system semantics, not recomputed by the proposal policy itself.*\n\n### 4.1 Global controls\n\nThe canonical global controls are:\n\n1. workflow-level proposal enable switch\n2. default targets\n3. default per-target proposal caps\n4. default MoonMind severity floor\n5. MoonMind repository target\n\nOperator-facing configuration remains the source of truth for these defaults.\n\n### 4.2 Per-task policy contract\n\n`task.proposalPolicy` controls:\n\n1. `targets`\n2. `maxItems.project`\n3. `maxItems.moonmind`\n4. `minSeverityForMoonMind`\n5. `defaultRuntime`\n\n`defaultRuntime` is a real part of the desired-state contract. It supplies the\ndefault `task.runtime.mode` for generated proposals when the candidate does not\nalready specify one. It does not block operators from overriding runtime during\npromotion.\n\n### 4.3 Policy resolution\n\nPolicy resolution happens at proposal submission time.\n\nThe resolved policy must:\n\n1. merge global defaults with `task.proposalPolicy`\n2. preserve explicit candidate values over defaults\n3. enforce per-target capacity limits\n4. enforce MoonMind severity and tag gates\n5. stamp `defaultRuntime` only when the candidate omitted a runtime\n\n### 4.4 Project-targeted proposals\n\nProject-targeted proposals keep the triggering repository as\n`taskCreateRequest.payload.repository`.\n\nThey are used for follow-up feature work, cleanup, tests, or project-local\nquality work discovered during the run.\n\n### 4.5 MoonMind-targeted proposals\n\nMoonMind-targeted proposals are reserved for MoonMind run-quality improvements.\n\nWhen routed to MoonMind:\n\n1. the repository is rewritten to the configured MoonMind repository\n2. category is normalized to `run_quality`\n3. signal severity must meet the configured floor\n4. tags must match approved run-quality signal tags\n\nThis keeps generic project follow-ups out of MoonMind's internal run-quality\nbacklog.\n\n---\n\n## 5. Canonical Proposal Payload Contract\n\n### 5.1 Canonical direction\n\nStored proposals must use the same task-shaped contract accepted by Temporal\nsubmission through `/api/executions`.\n\nThat means:\n\n1. `taskCreateRequest` stores a normal task payload\n2. `task.runtime.mode` selects the runtime\n3. `task.tool` and `step.tool`, when present, use the canonical Temporal submit shape\n4. `task.tool.type` must be `skill` when a tool selector is provided (representing an executable tool, not an agent instruction bundle)\n5. proposal payloads do not use `tool.type = \"agent_runtime\"`\n6. `task.skills` and `step.skills` may be included and must follow the canonical Agent Skill System contract defined in `docs/Tasks/AgentSkillSystem.md`.\n\n### 5.2 Candidate example\n\n```json\n[\n  {\n    \"title\": \"Add regression coverage for retry loop detection\",\n    \"summary\": \"The run retried the same recoverable failure pattern without a targeted regression test.\",\n    \"category\": \"run_quality\",\n    \"tags\": [\"retry\", \"loop_detected\"],\n    \"signal\": {\n      \"severity\": \"high\"\n    },\n    \"taskCreateRequest\": {\n      \"type\": \"task\",\n      \"priority\": 0,\n      \"maxAttempts\": 3,\n      \"payload\": {\n        \"repository\": \"MoonLadderStudios/MoonMind\",\n        \"task\": {\n          \"instructions\": \"Add a regression test covering retry loop detection in the Temporal runtime.\",\n          \"tool\": {\n            \"type\": \"skill\",\n            \"name\": \"auto\",\n            \"version\": \"1.0\"\n          },\n          \"skills\": {\n            \"sets\": [\"deployment-default\", \"temporal-runtime-quality\"],\n            \"include\": [\n              { \"name\": \"moonmind-doc-writer\", \"version\": \"2.3.0\" }\n            ]\n          },\n          \"runtime\": {\n            \"mode\": \"codex\"\n          },\n          \"publish\": {\n            \"mode\": \"pr\"\n          }\n        }\n      }\n    }\n  }\n]\n```\n\n### 5.3 Payload rules\n\n1. `taskCreateRequest` must already validate against the canonical task contract.\n2. `taskCreateRequest.payload.repository` determines deduplication and future\n   execution target.\n3. `taskCreateRequest.payload.task.runtime.mode` uses current supported task\n   runtimes: `codex`, `gemini_cli`, `claude`, and optionally `jules`.\n4. Candidate payloads must not include secrets, raw credentials, or unsafe log\n   dumps.\n5. Promotion-time overrides must also validate against the same canonical task\n   contract before execution starts.\n6. If `task.skills` or `step.skills` are present, they must validate against the canonical agent-skill contract. Proposals must not embed full agent skill bodies inline when refs or selectors are the correct contract.\n7. Proposals should preserve execution intent, not raw runtime materialization state. Proposal payloads must **not** store mutable `.agents/skills` directory state, runtime-local materialization outputs, or ephemeral prompt bundles produced only for one adapter session.\n8. Proposal-capable work originating from a Codex managed session must already carry `task.proposeTasks` and any `task.proposalPolicy` in the canonical task payload. Proposal generation must not reconstruct this intent from session-local metadata.\n\n---\n\n## 6. Origin, Identity, and Naming\n\n### 6.1 Origin source\n\nTemporal-backed proposals use:\n\n1. `origin.source = \"workflow\"`\n2. `origin.id = workflow_id`\n\n`temporal` is not a canonical proposal origin value.\n\n### 6.2 Origin metadata\n\nOrigin metadata uses snake_case keys consistently across workflow payloads,\nstored proposal records, API responses, and docs.\n\nCanonical keys are:\n\n1. `workflow_id`\n2. `temporal_run_id`\n3. `trigger_repo`\n4. `starting_branch`\n5. `working_branch`\n\n### 6.3 Identity rules\n\n1. `workflow_id` is the durable source task identity for workflow-originated\n   proposals.\n2. `temporal_run_id` is diagnostic metadata, not the durable task handle.\n3. Task-oriented Temporal surfaces continue to use `taskId == workflowId`.\n4. Continue-as-new does not change the proposal origin identity; the durable\n   workflow remains the source.\n\n---\n\n## 7. Review, Promotion, and Execution\n\nProposal creation does not start work. Promotion does.\n\n### 7.1 Promotion flow\n\nPromotion must follow this algorithm:\n\n1. load the stored proposal\n2. verify the proposal is still `open`\n3. merge `taskCreateRequestOverride` into the stored `taskCreateRequest`\n4. apply shortcut `runtimeMode` only by constructing that override\n5. validate the merged payload against the canonical task contract, including verification of any agent-skill selectors\n6. preserve explicit skill-selection intent from the stored proposal unless the operator intentionally overrides it, ensuring promotion-time overrides do not silently drop or corrupt skill fields\n7. submit the merged task through the same Temporal-backed create path used by\n   `/api/executions`\n8. create a new `MoonMind.Run` through `TemporalExecutionService.create_execution()`\n9. store the promoted workflow or execution identifier on the proposal record\n10. return both the updated proposal and the new execution metadata\n\nPromotion is therefore a control-plane-to-Temporal bridge, not a proposal-local\nmutation only.\n\n### 7.2 Skill preservation and inheritance\n\nProposal promotion preserves agent skill intent from the original execution.\n\n* **Defaults vs Explicit:** When the original task relied only on deployment/default inheritance, proposal payloads may omit redundant explicit skill selectors. When the original task included explicit non-default skill selection that materially affects execution behavior, proposals should preserve that selection explicitly.\n* **Promotion Overrides:** Operators may override runtime at promotion time. Agent skill selectors are preserved by default. Changing the runtime does not automatically erase or rewrite agent skill intent.\n* **Incompatibilities:** If a selected skill set is incompatible with the chosen runtime, promotion must fail validation or require an explicit override path. Proposal promotion does not re-resolve skill-source precedence as an undocumented side effect.\n\n### 7.3 Runtime selection\n\nProposal promotion supports operator runtime selection.\n\nRules:\n\n1. the backend-served runtime list is the source of truth\n2. supported task-facing runtime values are `codex`, `gemini_cli`, `claude`, and\n   optionally `jules`\n3. runtime overrides apply to the promoted execution request, not to the stored\n   proposal payload\n4. disabled runtimes must fail validation before a workflow is created\n\n### 7.4 Response contract\n\nThe promote API response must include:\n\n1. the updated proposal record\n2. the created execution metadata for the new `MoonMind.Run`\n\n---\n\n## 8. Observability and UI Contract\n\n### 8.1 Status mapping\n\n`proposals` is a first-class workflow state and must be visible across API and UI\nsurfaces.\n\nFor dashboard compatibility mapping:\n\n1. `scheduled -> queued`\n2. `waiting_on_dependencies -> waiting`\n3. `awaiting_slot -> queued`\n4. `proposals -> running`\n5. `completed -> completed`\n\n### 8.2 Proposal-stage visibility\n\nThe system must surface:\n\n1. `mm_state = proposals` while proposal generation or submission is in progress\n2. proposal counts and errors in finish summary data\n3. links from execution detail to proposals filtered by\n   `originSource=workflow` and `originId=<workflow_id>`\n4. **Proposal-Review Visibility:** Proposal detail or promotion UI may need to present a compact summary of execution context showing whether the proposal carries explicit skill selectors or inherits deployment defaults, alongside runtime, repository, and publish settings.\n\n### 8.3 Failure handling\n\nProposal generation and submission are best-effort.\n\nRules:\n\n1. a successful run may still report proposal-stage errors\n2. malformed candidates are skipped, not promoted\n   - Specifically, malformed or incompatible skill selectors in generated candidates should be skipped with a visible validation error and not silently dropped in a way that changes execution meaning.\n3. submission retries must be bounded and idempotent\n4. partial success must be visible through generated and submitted counts\n\n---\n\n## 9. Worker-Boundary Architecture\n\nThe proposal system follows the same Temporal rule as the rest of MoonMind:\nworkflows orchestrate and activities perform side effects.\n\nQueue placement is:\n\n1. proposal generation on the LLM-capable activity fleet\n2. proposal submission and storage on a control-plane or integrations-capable\n   activity fleet\n\nGeneration and submission are intentionally separate concerns. LLM-facing work and\ncontrol-plane writes must not share an undifferentiated activity boundary.\n\n* **Constraint:** Proposal generation may inspect resolved skill snapshot metadata or related execution artifacts, while proposal submission strictly validates skill-selection payload fields but avoids materializing runtime skill context.\n\n---\n\n## 10. Current Implementation Snapshot\n\nThis feature is partially implemented. Phase tracking lives in\n`docs/tmp/015-TaskProposalSystemPlan.md`.\n\n### 10.1 Already implemented\n\n1. `MoonMind.Run` enters a real `proposals` stage after execution and before\n   finalization.\n2. `proposal.generate` and `proposal.submit` exist in the Temporal activity\n   catalog.\n3. The workflow records proposal counts and errors in the finish summary during\n   finalization.\n4. Proposal APIs and Mission Control review surfaces already exist.\n5. Promotion creates a new `MoonMind.Run` through the Temporal execution service.\n6. `TaskProposalPolicy.defaultRuntime` is modeled and `proposal.submit` stamps it\n   onto candidates that omit `task.runtime.mode`.\n7. The workflow proposal stage consumes nested `task.proposalPolicy` and ignores\n   flattened proposal-policy fields for new behavior.\n8. Core `/api/executions` task submission preserves nested `task.proposeTasks`,\n   `task.proposalPolicy`, `task.skills`, and `step.skills` into\n   `initialParameters.task`.\n\n### 10.2 Partially implemented\n\n1. Codex managed-session-created task paths still need end-to-end verification\n   that proposal intent is normalized into canonical `initialParameters.task.*`\n   fields before `MoonMind.Run` starts.\n2. migration-only read fallbacks may still exist for in-flight workflows, but new\n   managed-session work must not depend on root-level or session-local proposal\n   flags as the only durable source.\n3. the workflow has a `proposals` state, but related UI and execution mappings\n   are not yet fully aligned everywhere\n4. promotion returns the created execution identifier, but the proposal storage\n   model does not yet persist a promoted execution/workflow linkage field\n\n### 10.3 Still missing\n\n1. persisted promotion linkage from proposal to created execution\n2. fully standardized origin naming and metadata shape across workflow, storage,\n   API, and UI\n3. proposal payloads do not yet model `task.skills` / `step.skills` end-to-end\n   across every generator, storage, promotion, and UI surface\n4. proposal UI does not yet expose skill-related execution context clearly\n5. end-to-end preservation and validation of explicit agent-skill selection through proposal storage and promotion\n6. fully standardized Codex managed-session normalization for `task.proposeTasks`\n   and `task.proposalPolicy` before Temporal run creation\n"
+  },
+  "extractedAt": "2026-04-14T22:51:43Z",
+  "designSummary": "TaskProposalSystem.md defines proposals as reviewable follow-up items discovered during MoonMind.Run, stored as canonical taskCreateRequest payloads, and promoted only after human approval into new Temporal-backed runs. The remaining implementation work centers on canonical proposal intent at submit time, gated proposal-stage execution, payload and policy validation, origin identity and promotion linkage, skill preservation, Mission Control visibility, and worker-boundary tests.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Proposal purpose and lifecycle",
+      "type": "requirement",
+      "source_section": "1. Summary",
+      "explanation": "Proposals are reviewable follow-up work items discovered during MoonMind.Run and remain non-executing review objects until promoted."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Canonical taskCreateRequest payload",
+      "type": "contract",
+      "source_section": "1, 2, 5",
+      "explanation": "Stored proposals carry /api/executions-compatible taskCreateRequest payloads with repository, runtime, publish, tool, and optional skill selectors."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Human approval gate",
+      "type": "constraint",
+      "source_section": "2, 7",
+      "explanation": "Proposal creation is not execution; only explicit human promotion starts a new MoonMind.Run."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Canonical submit-time proposal intent",
+      "type": "contract",
+      "source_section": "3.1, 3.1.1",
+      "explanation": "Task creation paths preserve task.proposeTasks, task.proposalPolicy, task.skills, and step.skills under initialParameters.task."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Codex managed-session normalization",
+      "type": "integration",
+      "source_section": "3.1.1, 10",
+      "explanation": "Codex managed-session user submissions and internal task creation normalize proposal intent before MoonMind.Run starts."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Proposal lifecycle state vocabulary",
+      "type": "state-model",
+      "source_section": "3.2, 8.1",
+      "explanation": "The proposals state is consistent across workflow state, execution API, dashboard mapping, and docs."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Proposal-stage gating",
+      "type": "requirement",
+      "source_section": "3.3",
+      "explanation": "The proposals stage runs only when global generation is enabled and canonical task.proposeTasks is true."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Activity-based proposal generation",
+      "type": "architecture",
+      "source_section": "3.4, 9",
+      "explanation": "Generators run in Temporal activities, analyze artifacts/results, treat inputs as untrusted, avoid side effects, redact unsafe data, and use refs for large context."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Skill selector preservation",
+      "type": "contract",
+      "source_section": "3.4, 5.3, 7.2",
+      "explanation": "Explicit non-default skill intent is preserved when material and proposals do not embed skill bodies or mutable runtime skill directories."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Proposal submission validation",
+      "type": "requirement",
+      "source_section": "3.5, 8.3",
+      "explanation": "Submission validates candidates, policy, origin, routing, and skill fields before storage; malformed candidates are skipped with visible errors."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Finish-summary proposal outcomes",
+      "type": "artifact",
+      "source_section": "3.6, 8.2",
+      "explanation": "Typed results and reports/run_summary.json record requested/generated/submitted counts and redacted errors."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Global and per-task proposal policy",
+      "type": "state-model",
+      "source_section": "4",
+      "explanation": "Policy resolution merges global defaults and task.proposalPolicy, applies caps and MoonMind gates, and stamps defaultRuntime only when runtime is omitted."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Project and MoonMind routing",
+      "type": "integration",
+      "source_section": "4.4, 4.5",
+      "explanation": "Project proposals keep the triggering repository; MoonMind run-quality proposals rewrite to configured MoonMind repo only after category, severity, and tag gates."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Payload runtime and tool validation",
+      "type": "contract",
+      "source_section": "5",
+      "explanation": "Proposal payloads validate supported runtimes and canonical tool shapes, including tool.type = skill and no tool.type = agent_runtime."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Origin metadata standardization",
+      "type": "state-model",
+      "source_section": "6",
+      "explanation": "Workflow-originated proposals use origin.source = workflow, origin.id = workflow_id, snake_case metadata, and temporal_run_id only as diagnostic data."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Promotion flow and persisted linkage",
+      "type": "requirement",
+      "source_section": "7.1, 10",
+      "explanation": "Promotion validates open proposals, merges overrides, creates MoonMind.Run through TemporalExecutionService, stores promoted execution/workflow linkage, and returns both records."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Promotion runtime override semantics",
+      "type": "contract",
+      "source_section": "7.2, 7.3",
+      "explanation": "Runtime overrides apply to the promoted request, preserve skill selectors by default, and fail before workflow creation for disabled runtimes or incompatible skills."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "API and UI observability",
+      "type": "observability",
+      "source_section": "8",
+      "explanation": "APIs and Mission Control expose proposals state, counts/errors, origin-filtered links, and compact runtime/repository/publish/skill context."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Best-effort failure behavior",
+      "type": "resilience",
+      "source_section": "2, 8.3",
+      "explanation": "Proposal failures never compromise parent run correctness; retries are bounded/idempotent and partial success is visible."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Worker queue separation",
+      "type": "architecture",
+      "source_section": "9",
+      "explanation": "Generation runs on LLM-capable workers while submission/storage runs on control-plane or integrations-capable workers."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Documented gap closure",
+      "type": "migration",
+      "source_section": "10",
+      "explanation": "Stories close the current implementation gaps while keeping migration tracking under docs/tmp."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Normalize proposal intent for all task submissions",
+      "shortName": "proposal-intent-normalization",
+      "description": "As an operator, I want every task creation surface to persist proposal intent in the canonical nested task payload so proposal behavior is durable and independent of adapter-local state.",
+      "why": "Codex managed sessions and internal task creation are the highest-risk remaining sources of non-canonical proposal intent.",
+      "scope": [
+        "Normalize task.proposeTasks and task.proposalPolicy into initialParameters.task for API submissions, promotion, schedules, Codex managed-session user tasks, and Codex internal API-created tasks.",
+        "Preserve task.skills and step.skills in the same canonical payload when present.",
+        "Remove reliance on root-level or session-local proposal flags as the new write contract while retaining only documented Temporal replay compatibility reads where required."
+      ],
+      "outOfScope": [
+        "Proposal generation logic itself.",
+        "New runtime modes or new skill-source precedence."
+      ],
+      "independentTest": "Submit representative tasks through ordinary API, Codex managed-session, schedule/promotion, and Codex internal task paths; assert initialParameters.task contains proposal and skill fields and non-canonical locations are not the write contract.",
+      "acceptanceCriteria": [
+        "All new task creation surfaces write proposal opt-in to initialParameters.task.proposeTasks.",
+        "All new task creation surfaces write routing overrides to initialParameters.task.proposalPolicy.",
+        "Explicit task.skills and step.skills survive submission without embedding skill bodies.",
+        "Codex managed-session-created tasks do not depend on root-level, turn metadata, session binding metadata, container environment, or adapter-local state as durable proposal intent.",
+        "Workflow-boundary tests cover the real worker binding shape and one previous-payload compatibility case."
+      ],
+      "requirements": [
+        "Canonicalize proposal intent across submission surfaces.",
+        "Preserve skill selector fields through submission.",
+        "Prove Codex managed-session normalization before MoonMind.Run starts."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-004: canonical submit-time proposal intent.",
+        "DESIGN-REQ-005: Codex managed-session normalization.",
+        "DESIGN-REQ-009: task-facing skill selectors are preserved without materializing skill content.",
+        "DESIGN-REQ-021: closes a documented partially implemented gap."
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Replay compatibility reads may remain only where required for in-flight histories."
+      ],
+      "needsClarification": [],
+      "handoff": "Normalize proposal intent for all task submissions. Build this as a one-story Moon Spec slice with failing workflow/activity/API/UI tests before production code, preserve the original design input, and verify the owned design requirements explicitly."
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Enforce proposal-stage execution and finish-summary reporting",
+      "shortName": "proposal-stage-reporting",
+      "description": "As an operator, I want proposal-capable runs to enter a visible proposals stage only under the documented gates and to report proposal outcomes without changing parent-run correctness.",
+      "why": "The proposal stage is partially implemented, but the doc requires consistent gating, lifecycle state mapping, best-effort behavior, and finish-summary artifacts.",
+      "scope": [
+        "Gate proposals on global enablement plus canonical task.proposeTasks.",
+        "Expose mm_state = proposals while generation/submission is active and map proposals to running for dashboard compatibility.",
+        "Record requested/generated/submitted/error outcomes in typed results and reports/run_summary.json.",
+        "Keep proposal-stage failures bounded, redacted, and isolated from otherwise successful parent work."
+      ],
+      "outOfScope": [
+        "Changing proposal candidate schema.",
+        "Detailed proposal-review UX beyond state/count/error visibility."
+      ],
+      "independentTest": "Run proposal-enabled and proposal-disabled workflows through the Temporal boundary; assert only enabled runs enter proposals, mapping is consistent, summaries contain counts/errors, and injected stage failures are reported without failing successful parent execution.",
+      "acceptanceCriteria": [
+        "The workflow enters proposals only when global generation is enabled and initialParameters.task.proposeTasks is true.",
+        "Codex-originated runs use the canonical nested field for the gate.",
+        "Execution APIs and Mission Control mapping expose proposals consistently.",
+        "Typed result and run_summary.json include requested status, candidate count, submitted count, and redacted errors.",
+        "Malformed proposal-stage output is visible as partial/skipped work and does not compromise parent-run correctness."
+      ],
+      "requirements": [
+        "Implement durable proposal-stage gating.",
+        "Standardize proposal lifecycle state exposure.",
+        "Persist proposal outcome telemetry in finish summaries."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-001: proposals remain reviewable follow-up work until later promotion.",
+        "DESIGN-REQ-006: lifecycle vocabulary and status mapping.",
+        "DESIGN-REQ-007: proposal-stage gate.",
+        "DESIGN-REQ-011: finish-summary outcomes.",
+        "DESIGN-REQ-019: best-effort failure behavior."
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Global proposal generation settings already exist or can be read from workflow settings."
+      ],
+      "needsClarification": [],
+      "handoff": "Enforce proposal-stage execution and finish-summary reporting. Build this as a one-story Moon Spec slice with failing workflow/activity/API/UI tests before production code, preserve the original design input, and verify the owned design requirements explicitly."
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Validate proposal submission policy and payload contracts",
+      "shortName": "proposal-payload-policy",
+      "description": "As an operator, I want proposal candidates validated and routed through the documented policy contract so stored proposals are safe, canonical, deduplicable, and execution-ready for later review.",
+      "why": "Submission is the durable side-effect boundary for malformed candidates, unsafe payloads, invalid runtimes, and incorrect routing.",
+      "scope": [
+        "Validate taskCreateRequest against the canonical Temporal task submit contract.",
+        "Enforce supported runtimes and canonical tool shape, including tool.type = skill and rejection of tool.type = agent_runtime.",
+        "Resolve global defaults plus task.proposalPolicy at submission time, preserving explicit candidate values and stamping defaultRuntime only when missing.",
+        "Apply per-target caps, MoonMind severity/tag gates, and repository rewrite rules.",
+        "Validate task.skills and step.skills selectors without embedding skill bodies or mutable runtime state."
+      ],
+      "outOfScope": [
+        "Promotion-time override handling.",
+        "Proposal detail UI."
+      ],
+      "independentTest": "Feed proposal.submit candidates covering valid project and MoonMind routing, invalid runtime/tool shapes, malformed skill selectors, defaultRuntime stamping, explicit runtime preservation, capacity caps, and severity/tag rejection; assert stored records or skipped validation errors match contract.",
+      "acceptanceCriteria": [
+        "Stored proposals use /api/executions-compatible taskCreateRequest payloads.",
+        "taskCreateRequest.payload.repository determines deduplication and future execution target.",
+        "Unsupported runtimes and tool.type = agent_runtime fail before storage.",
+        "Explicit candidate runtime, publish, repository, tool, and skill selector values win over defaults.",
+        "defaultRuntime is stamped only when task.runtime.mode is omitted.",
+        "MoonMind proposals require run_quality category, configured severity floor, and approved tags before repository rewrite.",
+        "Malformed skill selectors are skipped with visible validation errors rather than silently dropped."
+      ],
+      "requirements": [
+        "Validate canonical proposal payloads.",
+        "Resolve proposal policy at submission time.",
+        "Enforce project vs MoonMind routing.",
+        "Preserve explicit skill-selection intent without runtime-local skill state."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-002: canonical stored taskCreateRequest contract.",
+        "DESIGN-REQ-008: submission consumes artifact-backed side-effect-free generation output.",
+        "DESIGN-REQ-009: skill selector preservation during storage.",
+        "DESIGN-REQ-010: submission validation.",
+        "DESIGN-REQ-012: policy resolution.",
+        "DESIGN-REQ-013: project/MoonMind routing.",
+        "DESIGN-REQ-014: runtime/tool validation.",
+        "DESIGN-REQ-019: malformed candidate skip semantics.",
+        "DESIGN-REQ-020: submission validates selectors without materializing skill context."
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "MoonMind repository, severity floor, tag allowlist, and caps are available through existing configuration."
+      ],
+      "needsClarification": [],
+      "handoff": "Validate proposal submission policy and payload contracts. Build this as a one-story Moon Spec slice with failing workflow/activity/API/UI tests before production code, preserve the original design input, and verify the owned design requirements explicitly."
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Persist proposal origin and promotion linkage",
+      "shortName": "proposal-promotion-linkage",
+      "description": "As an operator, I want each proposal to retain source workflow identity and record the execution created by promotion so review history and follow-up runs are traceable.",
+      "why": "The current snapshot says promotion creates MoonMind.Run but lacks persisted promoted execution linkage and fully standardized origin naming.",
+      "scope": [
+        "Standardize workflow-originated proposal records on origin.source = workflow and origin.id = workflow_id.",
+        "Normalize origin metadata keys to workflow_id, temporal_run_id, trigger_repo, starting_branch, and working_branch.",
+        "Keep workflow_id as durable identity and temporal_run_id as diagnostic metadata, including continue-as-new.",
+        "Implement promotion flow that validates open proposal, merges overrides, submits through TemporalExecutionService.create_execution(), persists promoted linkage, and returns both records."
+      ],
+      "outOfScope": [
+        "Dashboard layout changes beyond fields needed by existing surfaces.",
+        "Compatibility aliases for old origin names outside explicit Temporal cutover requirements."
+      ],
+      "independentTest": "Create workflow-originated proposals and promote one with/without overrides; assert standardized snake_case origin fields, continue-as-new identity stability, stored promoted workflow/execution linkage, and promote API response includes updated proposal plus created execution metadata.",
+      "acceptanceCriteria": [
+        "Workflow proposals use origin.source = workflow and origin.id = workflow_id, never temporal as canonical origin.",
+        "Origin metadata uses snake_case keys consistently across workflow payloads, storage, APIs, and docs.",
+        "temporal_run_id is diagnostic and does not replace workflow_id/taskId identity.",
+        "Promotion verifies the proposal is open before execution creation.",
+        "Promotion persists created workflow/execution identifier on the proposal record.",
+        "Promote API response includes updated proposal and created MoonMind.Run metadata.",
+        "Superseded origin references are updated or removed in the same change."
+      ],
+      "requirements": [
+        "Standardize proposal origin identity.",
+        "Persist promoted execution linkage.",
+        "Return promotion execution metadata.",
+        "Preserve the human approval gate before creating work."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-003: human promotion is the only action that starts a new run.",
+        "DESIGN-REQ-015: origin metadata standardization.",
+        "DESIGN-REQ-016: promotion flow and persisted linkage.",
+        "DESIGN-REQ-021: closes documented promotion linkage and origin shape gaps."
+      ],
+      "dependencies": [
+        "STORY-003"
+      ],
+      "assumptions": [
+        "MoonMind is pre-release, but Temporal-facing in-flight payload compatibility still needs an explicit cutover or compatibility test."
+      ],
+      "needsClarification": [],
+      "handoff": "Persist proposal origin and promotion linkage. Build this as a one-story Moon Spec slice with failing workflow/activity/API/UI tests before production code, preserve the original design input, and verify the owned design requirements explicitly."
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Preserve skill intent through proposal promotion",
+      "shortName": "promotion-skill-runtime",
+      "description": "As an operator, I want promotion-time runtime overrides to preserve explicit skill intent unless intentionally overridden so follow-up work does not silently drift.",
+      "why": "The doc calls out that proposal payloads do not yet model task.skills and step.skills end-to-end across generation, storage, promotion, and UI.",
+      "scope": [
+        "Merge taskCreateRequestOverride into stored taskCreateRequest without dropping task.skills or step.skills.",
+        "Apply runtimeMode only by constructing a task.runtime.mode override.",
+        "Validate merged payload and selected skill selectors before workflow creation.",
+        "Fail validation for disabled runtimes and incompatible selected skills unless an explicit override path exists.",
+        "Do not mutate the stored proposal payload when promotion-time runtime overrides are applied."
+      ],
+      "outOfScope": [
+        "New skill compatibility matrix unless none of the existing runtime capability data can validate.",
+        "Hidden re-resolution of skill-source precedence during promotion."
+      ],
+      "independentTest": "Promote stored proposals with explicit task.skills and step.skills using no override, runtimeMode override, taskCreateRequestOverride, and malformed/incompatible skill overrides; assert selectors persist by default, stored payload is unchanged, disabled runtimes fail before workflow creation, and incompatible skills fail or require explicit override.",
+      "acceptanceCriteria": [
+        "Promotion overrides preserve stored task.skills and step.skills unless explicitly changed.",
+        "runtimeMode shortcut produces only a task.runtime.mode override.",
+        "Changing runtime does not automatically erase or rewrite skill intent.",
+        "Merged payload validation runs before TemporalExecutionService.create_execution().",
+        "Disabled runtimes fail before workflow creation.",
+        "Incompatible selected skills fail validation or require documented explicit override.",
+        "Tests cover blank, unknown, or newly introduced runtime/status values where relevant."
+      ],
+      "requirements": [
+        "Preserve explicit agent skill intent through promotion.",
+        "Validate runtime overrides and skill selector compatibility.",
+        "Keep stored proposal payload immutable during promotion."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-002: canonical payload fields during promotion.",
+        "DESIGN-REQ-009: end-to-end skill intent preservation.",
+        "DESIGN-REQ-014: runtime validation.",
+        "DESIGN-REQ-016: merged-payload validation before workflow creation.",
+        "DESIGN-REQ-017: runtime override semantics.",
+        "DESIGN-REQ-021: closes skill preservation gap."
+      ],
+      "dependencies": [
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Existing runtime availability metadata can serve as backend source of truth."
+      ],
+      "needsClarification": [],
+      "handoff": "Preserve skill intent through proposal promotion. Build this as a one-story Moon Spec slice with failing workflow/activity/API/UI tests before production code, preserve the original design input, and verify the owned design requirements explicitly."
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Expose proposal review context in Mission Control",
+      "shortName": "proposal-review-context",
+      "description": "As an operator reviewing proposals, I want APIs and Mission Control to show proposal state, origin links, counts/errors, and compact execution context so I can decide whether to promote work.",
+      "why": "The design requires proposal-stage visibility and says the UI does not yet clearly expose skill-related execution context.",
+      "scope": [
+        "Link execution detail to proposals filtered by originSource=workflow and originId=<workflow_id>.",
+        "Expose proposal counts and redacted errors from finish summary data.",
+        "Return/render compact review context for runtime, repository, publish settings, and explicit vs inherited skill mode.",
+        "Align status mapping for scheduled, waiting_on_dependencies, awaiting_slot, proposals, and completed."
+      ],
+      "outOfScope": [
+        "Full proposal editor redesign.",
+        "Jira or external issue integration changes."
+      ],
+      "independentTest": "Use API contract tests and Mission Control UI tests to verify filtered proposal links, counts/errors, proposals -> running status mapping, and runtime/repository/publish/skill context with explicit and inherited skill cases.",
+      "acceptanceCriteria": [
+        "Execution detail links to proposals via originSource=workflow and originId=<workflow_id>.",
+        "Generated/submitted counts and redacted errors are visible where finish summaries are displayed.",
+        "Status compatibility maps scheduled -> queued, waiting_on_dependencies -> waiting, awaiting_slot -> queued, proposals -> running, completed -> completed.",
+        "Review context identifies runtime, repository, publish mode, and skill-selection mode without exposing raw skill bodies or runtime paths.",
+        "UI/API tests cover missing or inherited skill context without inventing explicit selectors."
+      ],
+      "requirements": [
+        "Expose proposal review links and status.",
+        "Surface proposal telemetry.",
+        "Show compact runtime/repository/publish/skill context safely."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-006: UI/API lifecycle mapping.",
+        "DESIGN-REQ-011: user-visible counts/errors.",
+        "DESIGN-REQ-018: API and UI observability.",
+        "DESIGN-REQ-019: partial-success visibility.",
+        "DESIGN-REQ-021: closes UI/context gaps."
+      ],
+      "dependencies": [
+        "STORY-002",
+        "STORY-004",
+        "STORY-005"
+      ],
+      "assumptions": [
+        "Existing proposal review surfaces can be extended rather than replaced."
+      ],
+      "needsClarification": [],
+      "handoff": "Expose proposal review context in Mission Control. Build this as a one-story Moon Spec slice with failing workflow/activity/API/UI tests before production code, preserve the original design input, and verify the owned design requirements explicitly."
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Separate proposal worker boundaries and regression coverage",
+      "shortName": "proposal-worker-boundaries",
+      "description": "As a maintainer, I want proposal generation and submission to execute on the correct activity families with boundary-level tests so side effects, LLM analysis, and validation stay isolated.",
+      "why": "The design depends on workflows orchestrating while activities perform side effects, with generation and submission separated across worker capabilities.",
+      "scope": [
+        "Route proposal.generate to the LLM-capable activity fleet and keep it side-effect free.",
+        "Route proposal.submit and storage to control-plane or integrations-capable activity workers.",
+        "Verify submission validates skill payloads without materializing runtime skill context.",
+        "Add boundary tests for activity routing, invocation shapes, idempotent bounded retries, and artifact-backed context refs."
+      ],
+      "outOfScope": [
+        "LLM prompt changes except those needed for no side effects or secret leakage.",
+        "Unrelated worker infrastructure changes."
+      ],
+      "independentTest": "Run worker-runtime and activity-boundary tests that inspect activity families for proposal.generate and proposal.submit, inject retries/duplicates, and assert generation uses artifact refs while submission performs durable writes idempotently.",
+      "acceptanceCriteria": [
+        "proposal.generate is scheduled on LLM-capable routing and does not commit, push, create tasks, or store proposals.",
+        "proposal.submit/storage is scheduled on control-plane or integrations-capable routing and is the only proposal creation side-effect boundary.",
+        "Large inputs, logs, and skill metadata use artifact-backed refs where needed instead of workflow history blobs.",
+        "Submission retries are bounded and idempotent.",
+        "Boundary tests cover real worker binding or Temporal activity wrapper invocation shapes.",
+        "Tests verify untrusted inputs are redacted or excluded from stored proposals and visible errors."
+      ],
+      "requirements": [
+        "Enforce worker queue separation.",
+        "Keep generation side-effect free.",
+        "Keep workflow histories compact with artifact refs.",
+        "Cover idempotent and redacted failure behavior at boundaries."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-008: activity-based generation safety.",
+        "DESIGN-REQ-010: side-effecting submission boundary.",
+        "DESIGN-REQ-019: bounded/idempotent failure behavior.",
+        "DESIGN-REQ-020: worker queue separation and skill validation boundary."
+      ],
+      "dependencies": [
+        "STORY-003"
+      ],
+      "assumptions": [
+        "proposal.generate and proposal.submit already exist in the activity catalog and can be verified or adjusted."
+      ],
+      "needsClarification": [],
+      "handoff": "Separate proposal worker boundaries and regression coverage. Build this as a one-story Moon Spec slice with failing workflow/activity/API/UI tests before production code, preserve the original design input, and verify the owned design requirements explicitly."
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-003",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-006",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-003",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-001",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006"
+    ]
+  },
+  "outOfScope": [
+    {
+      "item": "Creating or modifying spec.md files",
+      "rationale": "Breakdown output mode is docs_tmp; specify happens later."
+    },
+    {
+      "item": "Creating directories under specs/",
+      "rationale": "The task explicitly reserves specs/ creation for the specify phase."
+    },
+    {
+      "item": "Implementing TaskProposalSystem.md during breakdown",
+      "rationale": "This run creates story handoff artifacts and Jira-board stories only."
+    },
+    {
+      "item": "Moving migration checklists into canonical docs",
+      "rationale": "Constitution principle XII keeps volatile implementation tracking under docs/tmp."
+    }
+  ],
+  "recommendedFirstStory": "STORY-001"
+}
