@@ -12,7 +12,8 @@ Enforce typed Temporal payload conversion and typed activity calls for the high-
 **Language/Version**: Python 3.12
 **Primary Dependencies**: Temporal Python SDK, `temporalio.contrib.pydantic.pydantic_data_converter`, Pydantic v2, pytest, Temporal test worker utilities
 **Storage**: Temporal workflow histories carry compact typed payloads; no new persistence tables
-**Testing**: `./tools/test_unit.sh`; targeted `pytest` for `tests/unit/workflows/temporal/...`
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`; targeted `pytest` for `tests/unit/workflows/temporal/...` during iteration
+**Integration Testing**: Targeted Temporal test-worker unit coverage is required for this story because it proves typed request serialization through a real Temporal worker without Docker. Run `./tools/test_integration.sh` for the hermetic `integration_ci` suite when Docker is available; record Docker socket unavailability as the exact blocker when it is not.
 **Target Platform**: MoonMind Temporal client, worker fleet, and AgentRun workflow/activity runtime
 **Project Type**: Backend Python service and Temporal workflow runtime in a single repository
 **Performance Goals**: No additional network calls or polling; validation is constant-time for small activity payloads
@@ -91,7 +92,7 @@ Research is captured in [research.md](./research.md). Key decisions:
 2. Add Pydantic request models for managed runtime and external run activity inputs using `extra="forbid"`.
 3. Preserve legacy dict aliases only at public activity entry validation.
 4. Migrate AgentRun call sites to typed request models and typed execution without changing activity type strings.
-5. Prove typed serialization with unit and Temporal test-worker coverage.
+5. Prove typed serialization with unit and Temporal test-worker coverage, and run the compose-backed hermetic integration suite when Docker is available.
 
 ## Phase 1: Design Outputs
 
@@ -106,7 +107,7 @@ Research is captured in [research.md](./research.md). Key decisions:
 3. Extend `execute_typed_activity` overloads for migrated activity names and route AgentRun activity execution through that facade.
 4. Update AgentRun workflow call sites to pass typed request models for migrated external and managed runtime calls.
 5. Update activity runtime entry points to validate any retained dict payloads into the typed models before business logic.
-6. Add tests for converter identity, strict model validation, typed call-site payloads, and Temporal boundary round-trips.
+6. Add tests for converter identity, strict model validation, typed call-site payloads, and Temporal boundary round-trips. Treat `./tools/test_integration.sh` as the integration strategy for environments with Docker access.
 
 ## Post-Design Constitution Re-Check
 
