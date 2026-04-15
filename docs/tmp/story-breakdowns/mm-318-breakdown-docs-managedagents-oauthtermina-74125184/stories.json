@@ -1,0 +1,704 @@
+{
+  "source": {
+    "title": "OAuth Terminal and Managed Session Auth Volumes",
+    "path": "docs/ManagedAgents/OAuthTerminal.md",
+    "referencePath": "docs/ManagedAgents/OAuthTerminal.md",
+    "originalDesignText": "# OAuth Terminal and Managed Session Auth Volumes\n\n**Replaces:** `docs/ManagedAgents/TmateArchitecture.md`\n**Status:** Desired state, Codex-focused current target\n**Owners:** MoonMind Engineering\n**Last updated:** 2026-04-14\n\nRelated:\n- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)\n- [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)\n- [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)\n- [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)\n- [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)\n\n## 1. Purpose\n\nMoonMind needs a first-party way to enroll OAuth credentials for managed CLI\nruntimes and then target the resulting credential volume into managed runtime\ncontainers. This document defines the desired auth-terminal and volume-targeting\ncontract.\n\nThe current concrete managed-session target is **Codex only**. Claude Code and\nGemini CLI can still have auth volumes and provider profiles, but they are not\nyet the fully updated task-scoped managed-session plane described here.\n\nFor Codex, the important boundary is:\n\n- OAuth or manual auth writes durable credential material into a provider-profile\n  auth volume such as `codex_auth_volume`.\n- A task-scoped managed Codex session container receives that auth volume only\n  through an explicit auth-volume mount target.\n- The Codex App Server runs from a per-run `CODEX_HOME` under the shared task\n  workspace, not directly from the durable auth volume.\n- Logs, summaries, diagnostics, and continuity artifacts remain the durable\n  operator/audit truth. Runtime home directories and auth volumes are not\n  presentation artifacts.\n\n## 2. Scope\n\nThis document covers:\n\n- browser-initiated OAuth or terminal-auth enrollment\n- persistent runtime auth volumes\n- Provider Profile registration for OAuth-backed profiles\n- Codex managed-session volume targeting\n- the separation between auth volumes, task workspaces, and workload containers\n\nThis document does not define:\n\n- PTY attach for ordinary managed task runs\n- Live Logs transport for managed runs\n- a generic remote shell product\n- Claude/Gemini task-scoped managed-session parity\n- Docker-backed workload container auth inheritance\n\nOAuth can require an interactive terminal. Managed Codex task execution should\nnot. Codex managed sessions use the Codex App Server protocol, with operator\nobservability through artifacts and normalized session events.\n\n## 3. Current Codex Volume Model\n\n### 3.1 Durable auth volume\n\nThe durable Codex OAuth home is a Docker named volume:\n\n- default volume name: `codex_auth_volume`\n- configurable compose name: `CODEX_VOLUME_NAME`\n- conventional auth path for enrollment/verification: `/home/app/.codex`\n- provider profile field: `volume_ref`\n- provider profile materialization mode: `oauth_home`\n\nThis volume stores reusable auth material for a Codex provider profile. It is a\ncredential backing store, not a task workspace and not an audit artifact.\n\nThe default Codex OAuth provider profile shape is:\n\n```yaml\nruntime_id: codex_cli\nprovider_id: openai\ncredential_source: oauth_volume\nruntime_materialization_mode: oauth_home\nvolume_ref: codex_auth_volume\nvolume_mount_path: /home/app/.codex\n```\n\nThat shape describes the credential enrollment and verification home only. It\ndoes not set `CODEX_HOME` for managed sessions. The managed-session launcher\nmaps the durable auth volume through the managed-session volume rules below and\nkeeps the live session `CODEX_HOME` under the task workspace.\n\n### 3.2 Shared task workspace volume\n\nThe managed Codex session container receives the shared task workspace volume:\n\n- default volume name: `agent_workspaces`\n- configurable compose name: `MOONMIND_AGENT_WORKSPACES_VOLUME_NAME`\n- container mount root: `/work/agent_jobs`\n\nThe per-task layout under that root is:\n\n- `repo/` for the checked-out task repository\n- `session/` for session-local state\n- `artifacts/` for artifact spooling\n- `.moonmind/codex-home/` for the managed session's per-run Codex home\n\nThe per-run `codexHomePath` lives under the workspace volume. It is writable by\nthe managed-session container user and is the `CODEX_HOME` used by Codex App\nServer for that task-scoped session.\n\n### 3.3 Explicit auth-volume target\n\nA Codex managed-session container may receive the durable auth volume at an\nexplicit, separate target path through `MANAGED_AUTH_VOLUME_PATH`, for example:\n\n```text\nMANAGED_AUTH_VOLUME_PATH=/home/app/.codex-auth\n```\n\nWhen that environment value is present, the launcher mounts:\n\n```text\ntype=volume,src=codex_auth_volume,dst=/home/app/.codex-auth\n```\n\nThe target path must be an absolute path and must not equal `codexHomePath`.\nThis prevents the durable auth volume from becoming the live mutable Codex home\nfor a task session.\n\nAt session startup, the Codex session runtime copies eligible auth entries from\n`MANAGED_AUTH_VOLUME_PATH` into the per-run `codexHomePath`, then starts Codex\nApp Server with `CODEX_HOME` pointing at that per-run home.\n\n## 4. Volume Targeting Rules\n\n1. **Auth volumes are provider-profile credential stores.**\n   They are referenced by `volume_ref` and verified by OAuth/provider-profile\n   workflows. They are not task workspaces.\n\n2. **Managed-session containers always receive the shared task workspace.**\n   For Codex, the task workspace volume is the only required managed-session\n   mount.\n\n3. **Auth volume mounts are explicit.**\n   A managed-session container receives `codex_auth_volume` only when the\n   selected provider profile and launcher policy require it.\n\n4. **Auth volume target paths are separate from runtime homes.**\n   `MANAGED_AUTH_VOLUME_PATH` must not equal `codexHomePath`.\n\n5. **The per-run Codex home is materialized under the task workspace.**\n   Codex App Server uses the per-run `codexHomePath` as `CODEX_HOME`.\n\n6. **Credential copying is one-way for session startup.**\n   Eligible auth files may be seeded from the durable auth volume into the\n   per-run Codex home. Session-local runtime state must not be treated as the\n   source of truth for provider-profile credentials.\n\n7. **Workload containers do not inherit auth volumes by default.**\n   Docker-backed workload containers launched from a managed session receive\n   only their declared workspace and cache mounts. Any credential mount must be\n   explicitly declared and justified by the workload profile.\n\n8. **No raw credentials in workflow history, logs, or artifacts.**\n   Workflow payloads may carry compact refs such as `profile_id`, `volume_ref`,\n   and mount targets. They must not carry credential file contents.\n\n## 5. OAuth Terminal Contract\n\nMoonMind should use first-party browser terminal infrastructure for interactive\nOAuth flows instead of external terminal handoff services.\n\nThe desired OAuth terminal architecture is:\n\n```text\nMission Control UI\n  -> OAuth Session API\n  -> MoonMind.OAuthSession workflow\n  -> short-lived auth runner container\n  -> MoonMind PTY/WebSocket bridge\n  -> xterm.js terminal in Mission Control\n  -> provider login CLI\n  -> mounted auth volume\n  -> verification\n  -> Provider Profile registration\n```\n\nThe OAuth terminal is only for credential enrollment or repair. It does not\nbecome the runtime surface for managed Codex task execution.\n\n### 5.1 Auth runner container\n\nThe auth runner container is short-lived and scoped to one OAuth session.\n\nIt should:\n\n- mount the target auth volume at the provider's enrollment path\n- run the provider bootstrap command inside a PTY\n- expose terminal I/O only through MoonMind's authenticated bridge\n- stop after success, cancellation, expiry, or failure\n- leave credentials in the durable auth volume for later verification\n\nFor Codex, the auth runner targets `codex_auth_volume` at `/home/app/.codex`\nwhile enrollment is happening. This is separate from the later managed-session\ncontainer target path.\n\n### 5.2 Terminal bridge\n\nThe terminal bridge should:\n\n- allocate or attach to the auth runner PTY\n- proxy browser input/output over an authenticated WebSocket\n- handle resize and heartbeat frames\n- enforce session TTL and ownership\n- close on workflow completion, cancellation, or expiry\n- persist metadata about connections, disconnections, and close reasons\n\nThe bridge must not expose generic Docker exec access or ordinary task-run\nterminal attachment.\n\n### 5.3 Session transport state\n\nOAuth session state should be transport-neutral:\n\n- `pending`\n- `starting`\n- `bridge_ready`\n- `awaiting_user`\n- `verifying`\n- `registering_profile`\n- `succeeded`\n- `failed`\n- `cancelled`\n- `expired`\n\nRuntime provider registry entries may use `session_transport = \"none\"` while the\ninteractive PTY bridge is unavailable or intentionally disabled. When the bridge\nis enabled, the transport identifier should be a MoonMind-owned value such as\n`moonmind_pty_ws`; provider profile and workflow semantics should not depend on\nthe old `tmate` URL model.\n\n## 6. Provider Profile Registration\n\nAfter OAuth verification succeeds, MoonMind registers or updates a Provider\nProfile instead of inventing a parallel auth store.\n\nFor Codex OAuth, the resulting profile should preserve:\n\n- `runtime_id = \"codex_cli\"`\n- `provider_id = \"openai\"` or another concrete Codex-supported provider\n- `credential_source = \"oauth_volume\"`\n- `runtime_materialization_mode = \"oauth_home\"`\n- `volume_ref = \"codex_auth_volume\"` or the selected volume name\n- `volume_mount_path = \"/home/app/.codex\"` for auth enrollment/verification\n- provider-profile slot policy such as `max_parallel_runs`, cooldown, and lease\n  duration\n\nManaged-session launch then resolves the selected profile and applies the\nCodex-specific volume targeting rules in this document.\n\n## 7. Managed Codex Session Launch\n\nThe Codex managed-session launcher should build the container with these mount\nclasses:\n\n| Mount | Required | Target | Purpose |\n| --- | --- | --- | --- |\n| `agent_workspaces` | Yes | `/work/agent_jobs` | task repo, session state, artifact spool, per-run Codex home |\n| `codex_auth_volume` | Conditional | `MANAGED_AUTH_VOLUME_PATH`, for example `/home/app/.codex-auth` | source credential material for seeding |\n| workload/cache volumes | No | runner-profile-specific | specialized workload containers only |\n\nThe launcher must pass these reserved environment values into the session\ncontainer:\n\n- `MOONMIND_SESSION_WORKSPACE_PATH`\n- `MOONMIND_SESSION_WORKSPACE_STATE_PATH`\n- `MOONMIND_SESSION_ARTIFACT_SPOOL_PATH`\n- `MOONMIND_SESSION_CODEX_HOME_PATH`\n- `MOONMIND_SESSION_CONTROL_URL`\n\nThe session runtime then:\n\n1. validates that workspace paths exist under the workspace volume\n2. validates that the optional auth-volume path is separate from `codexHomePath`\n3. creates the per-run `codexHomePath`\n4. seeds eligible auth entries from `MANAGED_AUTH_VOLUME_PATH`\n5. starts Codex App Server with `CODEX_HOME = codexHomePath`\n6. publishes logs and summaries through MoonMind artifacts and session metadata\n\n## 8. Verification\n\nCredential verification should run at two boundaries:\n\n1. **OAuth/Profile boundary:** verify the durable auth volume before registering\n   or updating the Provider Profile.\n2. **Managed-session launch boundary:** verify the selected provider profile can\n   materialize into the task-scoped session container before marking the session\n   ready.\n\nVerification may inspect expected file presence or CLI fingerprint/status\nsignals, but it must not copy credential contents into workflow payloads,\nartifacts, logs, or UI responses.\n\n## 9. Security Model\n\nOnly authenticated users with provider-profile management permission can:\n\n- create OAuth sessions\n- attach to OAuth terminal WebSockets\n- cancel or finalize OAuth sessions\n- select or mutate provider profile auth volumes\n\nThe browser may see:\n\n- OAuth session status\n- terminal I/O generated by the provider login CLI\n- timestamps\n- failure reason\n- registered profile summary\n\nThe browser must not receive credential files, token values, environment dumps,\nor raw auth-volume listings.\n\n## 10. Operator Behavior\n\nFor Codex OAuth enrollment:\n\n1. The operator starts a Codex OAuth session from Mission Control or an operator\n   helper.\n2. MoonMind creates or reuses the selected `codex_auth_volume`.\n3. The auth runner writes credentials into that volume.\n4. Verification succeeds.\n5. MoonMind registers or updates the Codex Provider Profile.\n6. Later task-scoped Codex managed sessions target that profile and mount the\n   auth volume at `MANAGED_AUTH_VOLUME_PATH` when needed.\n7. The session runtime seeds the per-run `CODEX_HOME` under `agent_workspaces`\n   and starts Codex App Server.\n\nFor ordinary task execution, operators should inspect Live Logs, artifacts,\nsession summaries, diagnostics, and reset/control-boundary artifacts. They should\nnot inspect terminal scrollback or auth volumes as the execution record.\n\n## 11. Required Boundaries\n\n- OAuth terminal code owns interactive enrollment only.\n- Provider Profile code owns credential refs, slot policy, and profile metadata.\n- Managed-session controller code owns Codex session container mounts.\n- Codex session runtime code owns seeding the per-run Codex home and starting\n  Codex App Server.\n- Docker workload orchestration owns non-agent workload containers and must not\n  implicitly inherit managed-runtime auth volumes.\n\nThese boundaries keep auth, session continuity, and workload execution separate\nwhile still allowing the Codex managed-session plane to use durable OAuth\ncredentials safely.\n"
+  },
+  "extractedAt": "2026-04-15T07:13:42Z",
+  "designSummary": "OAuth Terminal and Managed Session Auth Volumes defines the desired-state contract for enrolling OAuth credentials into durable provider-profile auth volumes, verifying those credentials, and safely targeting them into task-scoped managed Codex sessions. The design separates short-lived interactive enrollment from ordinary managed task execution, keeps per-run CODEX_HOME under the shared task workspace, requires explicit auth-volume mounts and one-way credential seeding, and treats logs, artifacts, summaries, diagnostics, and provider-profile metadata as the operator-visible truth. It is Codex-focused today while preserving boundaries for future Claude and Gemini parity, workload containers, security, verification, and transport-neutral OAuth session state.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Provide first-party OAuth enrollment and auth-volume targeting",
+      "type": "requirement",
+      "source_section": "1. Purpose; 2. Scope",
+      "explanation": "MoonMind needs a first-party way to enroll OAuth credentials for managed CLI runtimes and target the resulting credential volume into managed runtime containers."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Keep Codex as the current managed-session target",
+      "type": "constraint",
+      "source_section": "1. Purpose; 2. Scope",
+      "explanation": "The fully updated task-scoped managed-session plane is Codex-only today; Claude Code and Gemini CLI may have auth volumes and provider profiles but are not yet parity targets."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Persist reusable credentials in provider-profile auth volumes",
+      "type": "state-model",
+      "source_section": "3.1 Durable auth volume",
+      "explanation": "Codex OAuth credentials live in a durable Docker auth volume such as codex_auth_volume with profile fields including volume_ref, volume_mount_path, credential_source, and runtime_materialization_mode."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Keep auth volumes separate from task workspaces and artifacts",
+      "type": "constraint",
+      "source_section": "1. Purpose; 3.1 Durable auth volume; 10. Operator Behavior",
+      "explanation": "The auth volume is a credential backing store, not a task workspace, presentation artifact, execution record, or audit artifact."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Place per-run Codex home under the shared task workspace",
+      "type": "state-model",
+      "source_section": "3.2 Shared task workspace volume",
+      "explanation": "Managed Codex sessions receive agent_workspaces at /work/agent_jobs, and the per-run codexHomePath lives under the workspace as the CODEX_HOME for Codex App Server."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Mount auth volumes only at explicit managed-session targets",
+      "type": "security",
+      "source_section": "3.3 Explicit auth-volume target; 4. Volume Targeting Rules",
+      "explanation": "A managed-session container receives the durable auth volume only through MANAGED_AUTH_VOLUME_PATH when policy requires it, and that target must be absolute and distinct from codexHomePath."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Seed credentials one way into per-run runtime homes",
+      "type": "security",
+      "source_section": "3.3 Explicit auth-volume target; 4. Volume Targeting Rules",
+      "explanation": "Eligible auth entries may be copied from MANAGED_AUTH_VOLUME_PATH into the per-run Codex home at startup, but session-local runtime state is not provider-profile source of truth."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Prevent workload containers from inheriting managed auth by default",
+      "type": "security",
+      "source_section": "4. Volume Targeting Rules; 11. Required Boundaries",
+      "explanation": "Docker-backed workload containers launched from managed sessions receive only declared workspace/cache mounts unless a credential mount is explicitly declared and justified."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Keep raw credentials out of workflow history and operator artifacts",
+      "type": "security",
+      "source_section": "4. Volume Targeting Rules; 8. Verification; 9. Security Model",
+      "explanation": "Workflow payloads may carry compact refs, but credential file contents, token values, environment dumps, and raw auth-volume listings must not appear in history, logs, artifacts, or UI responses."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Use MoonMind-owned OAuth terminal infrastructure",
+      "type": "integration",
+      "source_section": "5. OAuth Terminal Contract",
+      "explanation": "Interactive OAuth should flow through Mission Control, an OAuth Session API, a MoonMind.OAuthSession workflow, a short-lived auth runner, a MoonMind PTY/WebSocket bridge, xterm.js, verification, and Provider Profile registration."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Limit auth runner containers to short-lived enrollment",
+      "type": "state-model",
+      "source_section": "5.1 Auth runner container",
+      "explanation": "The auth runner mounts the target auth volume at the provider enrollment path, runs the provider bootstrap command in a PTY, exposes I/O only through MoonMind, stops on terminal outcomes, and leaves credentials in the durable auth volume."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Provide an authenticated PTY WebSocket bridge without generic Docker exec",
+      "type": "security",
+      "source_section": "5.2 Terminal bridge",
+      "explanation": "The terminal bridge allocates or attaches to the runner PTY, proxies authenticated browser I/O, handles resize and heartbeat, enforces ownership and TTL, records connection metadata, and does not expose generic Docker exec or task-run terminal attachment."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Model OAuth sessions with transport-neutral state",
+      "type": "state-model",
+      "source_section": "5.3 Session transport state",
+      "explanation": "OAuth sessions progress through explicit states from pending to succeeded, failed, cancelled, or expired, and provider semantics should not depend on the old tmate URL model."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Register OAuth success as Provider Profile state",
+      "type": "state-model",
+      "source_section": "6. Provider Profile Registration",
+      "explanation": "After verification, MoonMind registers or updates a Provider Profile preserving runtime/provider identifiers, oauth_volume source, oauth_home materialization, volume refs, enrollment mount path, and slot policy."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Launch managed Codex sessions with defined mounts and reserved env",
+      "type": "integration",
+      "source_section": "7. Managed Codex Session Launch",
+      "explanation": "The launcher builds containers with required workspace mounts, conditional auth volume mounts, optional workload/cache volumes, and reserved MOONMIND_SESSION_* environment values."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Validate session startup before marking sessions ready",
+      "type": "state-model",
+      "source_section": "7. Managed Codex Session Launch; 8. Verification",
+      "explanation": "Session runtime validates workspace paths, auth path separation, per-run home creation, credential seeding, Codex App Server startup, and selected provider profile materialization before readiness."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Verify credentials at OAuth/profile and launch boundaries",
+      "type": "security",
+      "source_section": "8. Verification",
+      "explanation": "Credential verification runs before profile registration/update and before managed-session readiness, using file presence or CLI fingerprint/status signals without copying credential contents."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Restrict OAuth management to authorized provider-profile operators",
+      "type": "security",
+      "source_section": "9. Security Model",
+      "explanation": "Only authenticated users with provider-profile management permission can create, attach to, cancel, finalize, select, or mutate OAuth sessions and auth volumes."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Expose only safe OAuth status and terminal information to browsers",
+      "type": "security",
+      "source_section": "9. Security Model",
+      "explanation": "Browsers may see session status, terminal I/O from the provider CLI, timestamps, failure reason, and registered profile summary, but not credential files, token values, environment dumps, or raw volume listings."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Make logs, artifacts, summaries, diagnostics, and metadata the execution record",
+      "type": "observability",
+      "source_section": "1. Purpose; 10. Operator Behavior",
+      "explanation": "Operators inspect Live Logs, artifacts, session summaries, diagnostics, and reset/control-boundary artifacts for ordinary task execution, not terminal scrollback, runtime homes, or auth volumes."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Preserve ownership boundaries across auth, profiles, sessions, runtime, and workloads",
+      "type": "constraint",
+      "source_section": "11. Required Boundaries",
+      "explanation": "OAuth terminal code owns enrollment; Provider Profile code owns credential refs and profile metadata; managed-session controller owns mounts; Codex runtime owns seeding and App Server startup; workload orchestration owns non-agent containers."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Respect explicit non-goals for terminals and auth inheritance",
+      "type": "non-goal",
+      "source_section": "2. Scope; 5. OAuth Terminal Contract",
+      "explanation": "The design does not define PTY attach for ordinary task runs, Live Logs transport, a generic remote shell product, Claude/Gemini managed-session parity, or Docker workload auth inheritance."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Register OAuth-backed Codex provider profiles",
+      "shortName": "codex-oauth-profile",
+      "description": "As an operator, I can enroll or repair Codex OAuth credentials into a durable auth volume and have MoonMind verify and register the resulting OAuth-backed Provider Profile without treating the auth volume as task state or an artifact.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/OAuthTerminal.md",
+        "title": "OAuth Terminal and Managed Session Auth Volumes",
+        "sections": [
+          "1. Purpose",
+          "3.1 Durable auth volume",
+          "4. Volume Targeting Rules",
+          "6. Provider Profile Registration",
+          "8. Verification"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "why": "Provider Profile state is the durable contract every later terminal and managed-session story depends on.",
+      "scope": [
+        "Codex OAuth provider profile shape and validation",
+        "Durable auth volume creation/reuse by volume_ref",
+        "oauth_volume credential_source and oauth_home runtime_materialization_mode",
+        "Profile slot policy fields such as max_parallel_runs, cooldown, and lease duration",
+        "Credential verification before profile registration or update"
+      ],
+      "outOfScope": [
+        "Interactive browser terminal transport",
+        "Managed Codex session container launch",
+        "Claude/Gemini task-scoped managed-session parity",
+        "Raw credential display or artifact export"
+      ],
+      "independentTest": "Run a provider-profile enrollment workflow against a fixture Codex auth volume, verify success and failure cases, then assert the stored profile contains only refs and metadata while no workflow payload, artifact, log, or API response contains credential contents.",
+      "acceptanceCriteria": [
+        "Codex OAuth profiles preserve runtime_id, provider_id, credential_source, runtime_materialization_mode, volume_ref, volume_mount_path, and slot policy fields.",
+        "OAuth/profile verification completes before a profile is registered or updated.",
+        "The auth volume is modeled as a credential backing store and is never listed as a task workspace or audit artifact.",
+        "Claude and Gemini auth profiles may be represented only as auth-volume/profile records unless their managed-session parity is explicitly implemented later.",
+        "Workflow history, logs, artifacts, and UI responses carry compact credential refs only and never credential file contents."
+      ],
+      "requirements": [
+        "Resolve or create the selected durable auth volume for Codex OAuth enrollment.",
+        "Persist Provider Profile metadata for OAuth-backed Codex runtimes using oauth_volume and oauth_home semantics.",
+        "Verify credential material through non-secret signals before profile mutation.",
+        "Keep provider-profile credential refs separate from task workspace, presentation artifact, and audit artifact models."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Establishes the provider-profile half of first-party OAuth enrollment."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Scopes the concrete managed-session target to Codex while allowing non-parity profile records for other runtimes."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Owns durable auth volume and profile field persistence."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Owns the credential-store, not workspace/artifact, interpretation for profiles."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "Owns secret-free provider-profile payload and artifact behavior."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "Owns Provider Profile registration after OAuth success."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Owns verification at the OAuth/profile boundary."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [],
+      "needsClarification": [],
+      "risks": [
+        "Provider-specific CLI verification signals may vary and should remain adapter-bound."
+      ]
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Run authenticated OAuth terminal sessions",
+      "shortName": "oauth-terminal-session",
+      "description": "As an authorized operator, I can start a browser-based OAuth terminal session that runs a provider login command inside a short-lived auth runner, streams PTY I/O through MoonMind, verifies the resulting credentials, and closes deterministically on success, cancellation, expiry, or failure.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/OAuthTerminal.md",
+        "title": "OAuth Terminal and Managed Session Auth Volumes",
+        "sections": [
+          "5. OAuth Terminal Contract",
+          "5.1 Auth runner container",
+          "5.2 Terminal bridge",
+          "5.3 Session transport state",
+          "9. Security Model"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-022"
+        ]
+      },
+      "why": "Interactive OAuth is the user-facing enrollment path and must be constrained before managed runtime execution can rely on reusable credentials.",
+      "scope": [
+        "OAuth Session API and MoonMind.OAuthSession workflow state",
+        "Short-lived auth runner container lifecycle",
+        "PTY allocation and authenticated WebSocket bridge for browser terminal I/O",
+        "Resize, heartbeat, TTL, ownership, disconnect, close, cancellation, expiry, and failure metadata",
+        "Transport-neutral session states and MoonMind-owned transport identifiers"
+      ],
+      "outOfScope": [
+        "Generic Docker exec terminal product",
+        "PTY attach for ordinary managed task runs",
+        "Live Logs transport for managed runs",
+        "Codex App Server task execution"
+      ],
+      "independentTest": "Create OAuth sessions for authorized and unauthorized users with a fake provider login command, drive PTY input/output over the WebSocket bridge, simulate resize, heartbeat loss, cancellation, expiry, and successful verification, and assert state transitions plus connection metadata without exposing Docker exec or task-run terminals.",
+      "acceptanceCriteria": [
+        "Only users with provider-profile management permission can create, attach to, cancel, or finalize OAuth terminal sessions.",
+        "The auth runner mounts the target auth volume at the provider enrollment path and stops after success, cancellation, expiry, or failure.",
+        "Browser terminal I/O is proxied only through an authenticated MoonMind PTY WebSocket bridge with ownership and TTL enforcement.",
+        "Resize, heartbeat, disconnect, reconnect, close reason, and terminal outcome metadata are persisted for diagnostics.",
+        "OAuth session state uses pending, starting, bridge_ready, awaiting_user, verifying, registering_profile, succeeded, failed, cancelled, and expired states.",
+        "The bridge does not expose generic Docker exec access or terminal attachment for ordinary managed task runs.",
+        "Provider semantics do not depend on tmate URLs; enabled transport uses a MoonMind-owned identifier such as moonmind_pty_ws."
+      ],
+      "requirements": [
+        "Expose OAuth terminal creation, attachment, cancellation, and finalization through authenticated control-plane APIs.",
+        "Launch one short-lived auth runner per OAuth session with the selected provider bootstrap command.",
+        "Bridge PTY streams to xterm.js through MoonMind-owned authenticated WebSockets.",
+        "Persist transport-neutral OAuth session state and terminal connection metadata.",
+        "Restrict browser-visible data to status, provider CLI terminal I/O, timestamps, failure reason, and registered profile summary."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Owns the first-party interactive enrollment surface."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Owns the Mission Control to workflow to auth runner to PTY bridge architecture."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Owns auth runner container lifecycle and enrollment-path mounting."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Owns the authenticated PTY WebSocket bridge and no-generic-exec guardrail."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "Owns OAuth session state and transport naming."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Owns authorization for OAuth session operations."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "ownership": "Owns browser-visible terminal and status boundaries."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "ownership": "Owns non-goals for generic shell and ordinary task-run PTY attach."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [],
+      "needsClarification": [],
+      "risks": [
+        "Browser terminal output is provider-generated and must still be treated as sensitive operational output in retention and redaction paths."
+      ]
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Launch managed Codex sessions with explicit auth materialization",
+      "shortName": "codex-auth-materialization",
+      "description": "As a task operator, I can launch a managed Codex session using a selected OAuth-backed Provider Profile, with the durable auth volume mounted only at an explicit auth target and eligible credentials copied one way into the per-run CODEX_HOME under the task workspace before Codex App Server starts.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/OAuthTerminal.md",
+        "title": "OAuth Terminal and Managed Session Auth Volumes",
+        "sections": [
+          "3.2 Shared task workspace volume",
+          "3.3 Explicit auth-volume target",
+          "4. Volume Targeting Rules",
+          "7. Managed Codex Session Launch",
+          "8. Verification"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "why": "The managed-session launch path is where durable OAuth credentials become usable by a task-scoped Codex runtime without turning the auth volume into the live runtime home.",
+      "scope": [
+        "Managed Codex launcher mount plan for agent_workspaces and conditional auth volume",
+        "Reserved MOONMIND_SESSION_* environment values",
+        "Validation of workspace-root paths and auth target separation",
+        "Per-run codexHomePath creation under the shared workspace",
+        "One-way eligible auth entry seeding from MANAGED_AUTH_VOLUME_PATH",
+        "Codex App Server startup with CODEX_HOME set to the per-run home"
+      ],
+      "outOfScope": [
+        "Interactive OAuth terminal enrollment",
+        "Provider Profile UI",
+        "Workload container credential inheritance",
+        "Making the durable auth volume the live CODEX_HOME"
+      ],
+      "independentTest": "Launch fixture managed Codex session containers with and without an OAuth-backed profile, assert mount targets and reserved env values, validate rejection when MANAGED_AUTH_VOLUME_PATH equals codexHomePath or is relative, and verify only eligible auth entries are seeded into the workspace CODEX_HOME before readiness.",
+      "acceptanceCriteria": [
+        "Every managed Codex session receives the shared task workspace volume at /work/agent_jobs.",
+        "The per-run CODEX_HOME is created under the task workspace and is writable by the managed-session container user.",
+        "The durable auth volume is mounted only when the selected provider profile and launcher policy require it.",
+        "MANAGED_AUTH_VOLUME_PATH must be absolute and must not equal the per-run codexHomePath.",
+        "Eligible auth entries are copied one way from MANAGED_AUTH_VOLUME_PATH into the per-run Codex home at startup.",
+        "Codex App Server starts with CODEX_HOME set to the per-run codexHomePath, not the durable auth volume.",
+        "The session is not marked ready until workspace paths, auth path separation, profile materialization, credential seeding, and App Server startup validation pass."
+      ],
+      "requirements": [
+        "Build Codex managed-session containers with required workspace mounts, conditional auth mounts, and optional workload/cache mounts only where declared.",
+        "Pass MOONMIND_SESSION_WORKSPACE_PATH, MOONMIND_SESSION_WORKSPACE_STATE_PATH, MOONMIND_SESSION_ARTIFACT_SPOOL_PATH, MOONMIND_SESSION_CODEX_HOME_PATH, and MOONMIND_SESSION_CONTROL_URL into the session container.",
+        "Resolve selected Provider Profile materialization into an explicit MANAGED_AUTH_VOLUME_PATH mount when needed.",
+        "Validate and seed credentials before starting Codex App Server and publishing readiness."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "Owns shared workspace and per-run CODEX_HOME placement."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "Owns explicit auth-volume target validation and mounting."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Owns one-way credential seeding into per-run homes."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Owns launcher mount classes and reserved environment values."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "Owns session startup validation and readiness."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Owns verification at managed-session launch boundary."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [],
+      "needsClarification": [],
+      "risks": [
+        "File ownership and permissions for copied auth entries must match the runtime container user across Docker volume implementations."
+      ]
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Enforce auth security boundaries for workloads and browser surfaces",
+      "shortName": "auth-security-boundaries",
+      "description": "As a security reviewer, I can verify that OAuth credentials never leak into workflow history, browser responses, logs, artifacts, raw volume listings, or Docker-backed workload containers unless a workload credential mount is explicitly declared and justified.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/OAuthTerminal.md",
+        "title": "OAuth Terminal and Managed Session Auth Volumes",
+        "sections": [
+          "4. Volume Targeting Rules",
+          "8. Verification",
+          "9. Security Model",
+          "11. Required Boundaries"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022"
+        ]
+      },
+      "why": "Credential safety spans multiple surfaces, so this story gives the design one focused acceptance gate for leakage and ownership boundaries.",
+      "scope": [
+        "Secret-free workflow payload, artifact, log, and UI response contracts",
+        "Browser-visible OAuth status and terminal output restrictions",
+        "Provider-profile management authorization checks",
+        "Workload container mount policy that denies implicit auth inheritance",
+        "Boundary tests for OAuth terminal, Provider Profile, managed-session controller, Codex runtime, and workload orchestration responsibilities"
+      ],
+      "outOfScope": [
+        "Implementing the OAuth terminal UI itself",
+        "Implementing Codex App Server protocol behavior",
+        "Declaring new credential-requiring workload profiles"
+      ],
+      "independentTest": "Execute boundary tests that inject secret-like fixture credential files and environment values, exercise OAuth status APIs, profile APIs, managed-session launch metadata, artifact/log publishing, and workload container launch, then assert secret values and raw volume listings never appear and undeclared workload auth mounts are rejected.",
+      "acceptanceCriteria": [
+        "Workflow payloads carry profile_id, volume_ref, and mount target refs only, never credential file contents.",
+        "Logs, diagnostics, artifacts, and browser responses redact or omit token values, credential files, environment dumps, and raw auth-volume listings.",
+        "OAuth management actions require provider-profile management permission at every control surface.",
+        "Workload containers launched from a managed session do not inherit auth volumes by default.",
+        "Any workload credential mount requires an explicit workload profile declaration and justification.",
+        "Tests cover the real adapter or service boundary where OAuth terminal, Provider Profile, managed-session controller, Codex runtime, and workload orchestration exchange metadata."
+      ],
+      "requirements": [
+        "Apply secret redaction and omission rules to all OAuth/profile/session status surfaces.",
+        "Enforce authorization for provider-profile and OAuth session mutation operations.",
+        "Fail closed when a workload container would implicitly inherit a managed-runtime auth volume.",
+        "Keep ownership boundaries explicit between enrollment, profile metadata, session mounts, runtime seeding, and workload orchestration."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "Owns no implicit workload auth inheritance."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "Owns credential leakage prevention across history, logs, artifacts, and UI."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Owns no-secret verification evidence at both boundaries."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Owns authorization enforcement for OAuth/profile management."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "ownership": "Owns browser response safety."
+        },
+        {
+          "id": "DESIGN-REQ-021",
+          "ownership": "Owns cross-component boundary enforcement tests."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "ownership": "Owns non-goal enforcement around auth inheritance and generic shell exposure."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-003"
+      ],
+      "assumptions": [],
+      "needsClarification": [],
+      "risks": [
+        "Redaction tests must avoid committing real secrets and should use deterministic fake secret patterns."
+      ]
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Project operator-visible managed auth diagnostics",
+      "shortName": "auth-operator-diagnostics",
+      "description": "As an operator, I can understand OAuth enrollment, Provider Profile registration, managed Codex auth materialization, and ordinary task execution through safe statuses, summaries, diagnostics, logs, artifacts, and session metadata without inspecting auth volumes, runtime homes, or terminal scrollback as execution records.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/OAuthTerminal.md",
+        "title": "OAuth Terminal and Managed Session Auth Volumes",
+        "sections": [
+          "1. Purpose",
+          "8. Verification",
+          "10. Operator Behavior",
+          "11. Required Boundaries"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022"
+        ]
+      },
+      "why": "Operators need reliable troubleshooting signals while the design intentionally hides raw credential stores and separates auth enrollment from task execution.",
+      "scope": [
+        "Safe OAuth enrollment and Provider Profile status summaries",
+        "Managed-session auth materialization diagnostics and failure reasons",
+        "Session metadata for profile refs, volume refs, mount targets, readiness, and validation outcomes",
+        "Operator guidance that ordinary task execution records are Live Logs, artifacts, summaries, diagnostics, and control-boundary artifacts",
+        "Clear distinction between enrollment terminal output and managed task execution observability"
+      ],
+      "outOfScope": [
+        "Displaying credential files or raw volume listings",
+        "Making runtime home directories browseable artifacts",
+        "Using OAuth terminal scrollback as the durable task execution record",
+        "Building Live Logs transport"
+      ],
+      "independentTest": "Simulate successful and failed enrollment plus successful and failed managed Codex session launch, then assert Mission Control/API projections show safe statuses, profile summaries, validation failures, diagnostics refs, and artifact/log pointers while omitting raw credentials, auth-volume listings, runtime-home contents, and terminal scrollback from ordinary task records.",
+      "acceptanceCriteria": [
+        "OAuth enrollment surfaces show session status, timestamps, failure reason, and registered profile summary where applicable.",
+        "Managed Codex session metadata records selected profile refs, volume refs, auth mount target, workspace Codex home path, readiness, and validation failure reasons without credential contents.",
+        "Ordinary task execution views direct operators to Live Logs, artifacts, summaries, diagnostics, and reset/control-boundary artifacts.",
+        "Runtime home directories and auth volumes are not exposed as presentation artifacts.",
+        "Enrollment terminal scrollback is not treated as the durable execution record for managed task runs.",
+        "Diagnostic events make it clear which component owns enrollment, profile metadata, session mounts, runtime seeding, or workload container behavior."
+      ],
+      "requirements": [
+        "Publish safe OAuth/profile/session status and diagnostics metadata for operator use.",
+        "Record managed-session readiness and auth materialization validation failures in session metadata or diagnostics artifacts.",
+        "Avoid presenting auth volumes, runtime homes, and terminal scrollback as task artifacts.",
+        "Keep operator-visible diagnostics aligned with the component ownership boundaries in the design."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Owns operator-facing distinction between credentials, workspaces, and artifacts."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "Owns projection of startup validation and readiness diagnostics."
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "ownership": "Owns durable execution record expectations."
+        },
+        {
+          "id": "DESIGN-REQ-021",
+          "ownership": "Owns diagnostics that preserve component responsibility boundaries."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "ownership": "Owns non-goals around Live Logs transport and task-run PTY attach in operator docs/projections."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-003"
+      ],
+      "assumptions": [],
+      "needsClarification": [],
+      "risks": [
+        "Operators may still need enough failure detail to repair local volume permissions without exposing sensitive file names or values."
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-002",
+      "STORY-004",
+      "STORY-005"
+    ]
+  }
+}
