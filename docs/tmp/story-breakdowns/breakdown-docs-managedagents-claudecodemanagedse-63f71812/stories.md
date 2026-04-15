@@ -35,7 +35,7 @@ Claude Code Managed Sessions is a Claude-specific binding of the shared Managed 
 - **DESIGN-REQ-023 - Normalize Claude OTel telemetry into shared observability** (observability, 20 Observability): Claude telemetry should map to shared metrics, logs/events, and optional traces with defined metrics and span boundaries.
 - **DESIGN-REQ-024 - Model layered security and governance explicitly** (security, 21 Security and governance): Managed settings, rules, modes, protected paths, sandboxing, hooks, classifier, dialogs, runtime isolation, trust levels, provider caveats, and hook audits must be first-class.
 - **DESIGN-REQ-025 - Preserve local-code residency expectations** (security, 19.1 Storage principle; 21.6 Cloud vs local security): Local execution and Remote Control should not centrally store source code or checkpoint payloads by default, while cloud execution is explicitly identified.
-- **DESIGN-REQ-026 - Maintain Codex plane compatibility without hiding semantic mismatches** (constraint, 22 Compatibility strategy with the Codex plane; 25 Recommended implementation stance): Shared interfaces remain unchanged, Claude-specific extensions are isolated, aliases are boundary-only, and mismatches such as managed defaults are declared.
+- **DESIGN-REQ-026 - Maintain Codex plane compatibility without hiding semantic mismatches** (constraint, 22 Compatibility strategy with the Codex plane; 25 Recommended implementation stance): Shared interfaces remain unchanged, Claude-specific extensions are isolated, unified `session_id` naming is used without legacy aliases, and mismatches such as managed defaults are declared.
 - **DESIGN-REQ-027 - Keep runtime-specific wire complexity inside adapters** (integration, 2.6 Keep runtime-specific complexity inside adapters; 8 High-level architecture): The shared plane defines normalized APIs and events; ClaudeRuntimeAdapter implementations translate local CLI, IDE, Remote Control, cloud, and SDK specifics.
 - **DESIGN-REQ-028 - Follow phased rollout dependencies** (migration, 23 Rollout plan): Rollout begins with metadata-only registry, then policy/decisions, context/checkpoints, child work, remote projection/handoff, and telemetry/audits.
 - **DESIGN-REQ-029 - Respect explicit non-goals** (non-goal, 4 Non-goals): The design must not reimplement Anthropic proprietary local protocol, replace git history, store all transcripts/diffs centrally, erase cloud/local distinctions, simulate non-native admin defaults, or collapse all collaboration products into one session type.
@@ -67,7 +67,6 @@ Claude Code Managed Sessions is a Claude-specific binding of the shared Managed 
   - Remote Control-shaped input adds a projection SurfaceBinding without changing execution_owner.
   - Cloud handoff-shaped input creates a new session with handoff lineage rather than mutating the source session.
   - Session, turn, work, and surface lifecycle transitions reject illegal transitions and emit normalized append-only events.
-  - The implementation does not write under specs/ and does not create spec.md as part of this breakdown handoff.
 - **Owned coverage:**
   - **DESIGN-REQ-001:** Owns preservation of shared nouns at the first session-plane slice.
   - **DESIGN-REQ-002:** Owns execution owner, surface, and projection axes in canonical session records.
@@ -166,7 +165,7 @@ Claude Code Managed Sessions is a Claude-specific binding of the shared Managed 
 - **Short name:** `claude-context-snapshots`
 - **Why:** Claude session quality and safety depend heavily on runtime context. The plane needs typed, reload-aware context metadata before checkpoint, rewind, and audit features can explain behavior.
 - **Description:** As an operator, I can inspect what context entered a Claude session, why it was loaded, whether it survives compaction, and which parts are guidance versus enforceable policy.
-- **Independent test:** Bootstrap a session with fixture startup context, simulate on-demand file, nested CLAUDE.md, rule, skill, hook, and subagent-summary context loads, run compaction, and verify a new ContextSnapshot epoch with expected reinjection policies and payload-light pointers.
+- **Independent test:** Bootstrap a session with fixture startup context, simulate on-demand file, nested CLAUDE.md, rule, skill, and hook context loads, run compaction, and verify a new ContextSnapshot epoch with expected reinjection policies and payload-light pointers.
 - **Dependencies:** STORY-001
 - **Needs clarification:** None
 - **Scope:**
@@ -181,7 +180,7 @@ Claude Code Managed Sessions is a Claude-specific binding of the shared Managed 
   - Checkpoint restore APIs
 - **Acceptance criteria:**
   - Startup context sources include system prompt, output style, managed/project/local CLAUDE.md, auto memory, MCP manifests, skill descriptions, and hook-injected context.
-  - On-demand context sources include file reads, nested CLAUDE.md, path rules, invoked skill bodies, and subagent return summaries.
+  - On-demand context sources include file reads, nested CLAUDE.md, path rules, and invoked skill bodies.
   - Compaction creates a new ContextSnapshot epoch instead of mutating the old one.
   - Startup-critical context is marked always or startup-refresh as appropriate; file reads default to never reinject.
   - Memory artifacts are never treated as hard policy sources.
@@ -246,7 +245,7 @@ Claude Code Managed Sessions is a Claude-specific binding of the shared Managed 
   - ChildContext records for subagents
   - SessionGroup records for agent teams
   - SpawnSubagent, CreateSessionGroup, CreateTeamTeammate, and SendTeamMessage APIs
-  - child usage rollup, team usage rollup, peer message eventing, teardown state, and background child execution states
+  - subagent return summaries, child usage rollup, team usage rollup, peer message eventing, teardown state, and background child execution states
 - **Out of scope:**
   - A general multi-agent collaboration product
   - Automatic promotion of long-running subagents to sessions
@@ -254,6 +253,7 @@ Claude Code Managed Sessions is a Claude-specific binding of the shared Managed 
 - **Acceptance criteria:**
   - Subagents receive child_context_id and do not become top-level peer sessions by default.
   - Subagent output returns to the parent turn as summary or summary_plus_metadata.
+  - Subagent return summaries are represented as child-work outputs for parent-turn consumption, not as generic context-index inputs.
   - Agent-team members each have ManagedSession ids under a shared session_group_id.
   - Team peer messaging emits direct team.message.sent events.
   - Usage rolls up correctly for child contexts and session groups.
@@ -314,7 +314,7 @@ Claude Code Managed Sessions is a Claude-specific binding of the shared Managed 
 - **Short name:** `claude-telemetry-audit`
 - **Why:** The final rollout phase turns normalized session state into enterprise-visible governance and operations signals while preserving shared-plane compatibility.
 - **Description:** As an administrator, I can query Claude managed-session metrics, logs, traces, hook audits, policy trust levels, provider caveats, retention classes, artifact pointers, usage rollups, and Codex-compatible compatibility views.
-- **Independent test:** Feed fixture Claude OTel events, hook audit events, policy trust states, checkpoint/context artifact pointers, and usage records into the exporter and verify normalized metrics, spans, audit rows, retention classes, and shared-plane compatibility aliases are produced without full payload storage.
+- **Independent test:** Feed fixture Claude OTel events, hook audit events, policy trust states, checkpoint/context artifact pointers, and usage records into the exporter and verify normalized metrics, spans, audit rows, retention classes, and shared-plane compatibility views use canonical `session_id` naming without full payload storage.
 - **Dependencies:** STORY-002, STORY-003, STORY-004, STORY-005, STORY-006, STORY-007
 - **Needs clarification:** None
 - **Scope:**
@@ -322,7 +322,7 @@ Claude Code Managed Sessions is a Claude-specific binding of the shared Managed 
   - recommended metrics and span boundaries
   - HookAudit stream, provider_mode-aware reporting, PolicyTrustLevel, and protected-path reporting
   - ArtifactIndex, UsageStore, retention class metadata, optional export sinks, and compliance archive pointers
-  - shared interface compatibility and adapter/serialization boundary aliases
+  - shared interface compatibility using canonical `session_id` naming
 - **Out of scope:**
   - Building a full dashboard UI beyond query/export surfaces
   - Changing core shared interfaces
@@ -333,7 +333,7 @@ Claude Code Managed Sessions is a Claude-specific binding of the shared Managed 
   - Trace spans include session.bootstrap, policy.resolve, turn.process, decision.resolve, hook.execute, tool.execute, checkpoint.capture, session.compact, checkpoint.restore, subagent.run, and team.session.run.
   - HookAudit includes hook name, source scope, event type, matcher, and outcome.
   - Retention classes are policy-driven and represented for session metadata, event logs, usage, audit metadata, and checkpoint payloads.
-  - Shared interfaces remain unchanged; aliases such as thread_id to session_id are limited to adapter or serialization boundaries.
+  - Shared interfaces remain unchanged and follow the unified session_id naming convention; legacy thread_id references are removed entirely per Rule 156.
 - **Owned coverage:**
   - **DESIGN-REQ-020:** Owns complete append-only event export views.
   - **DESIGN-REQ-021:** Owns ArtifactIndex and UsageStore reporting surfaces.
@@ -341,7 +341,7 @@ Claude Code Managed Sessions is a Claude-specific binding of the shared Managed 
   - **DESIGN-REQ-023:** Owns OTel normalization, metrics, and spans.
   - **DESIGN-REQ-024:** Owns hook audit, provider caveats, protected-path reporting, and governance layers.
   - **DESIGN-REQ-025:** Owns reporting distinctions for local, Remote Control, and cloud execution.
-  - **DESIGN-REQ-026:** Owns shared interface compatibility and boundary-only aliases.
+  - **DESIGN-REQ-026:** Owns shared interface compatibility with unified session_id naming and no legacy aliases.
   - **DESIGN-REQ-027:** Owns adapter-specific telemetry translation.
   - **DESIGN-REQ-028:** Owns rollout phase 6.
   - **DESIGN-REQ-029:** Owns non-goal of central transcript/diff storage by default.

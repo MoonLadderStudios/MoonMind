@@ -1488,17 +1488,11 @@ Where the Codex plane uses thread / turn / item language, the Claude plane shoul
 | `DecisionPoint` | approval request | permission / hook / classifier / dialog |
 | `SessionGroup` | parallel threads or multi-agent workflows | agent team |
 
-## 22.4 Shared-plane aliases
+## 22.4 Shared-plane naming
 
-To reduce churn in upstream systems, the implementation may expose aliases:
-
-```yaml
-aliases:
-  thread_id -> session_id
-  child_thread -> child_context | teammate_session
-```
-
-These aliases should exist only at adapter and serialization boundaries, not in the core Claude domain model.
+Shared-plane records use the unified `session_id` naming convention. Legacy
+Codex `thread_id` and `child_thread` naming must be removed from internal
+Claude managed-session contracts rather than preserved as aliases.
 
 ## 22.5 Known semantic mismatch
 
