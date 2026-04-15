@@ -41,6 +41,46 @@ class TestAgentKindForId(unittest.TestCase):
             )
 
 
+class TestJiraAgentPublishHelpers(unittest.TestCase):
+    def test_jira_issue_creator_agent_plan_makes_pr_publish_optional(self) -> None:
+        nodes = [
+            {
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                "inputs": {"selectedSkill": "jira-issue-creator"},
+            }
+        ]
+
+        self.assertTrue(MoonMindRunWorkflow._pr_publish_optional_for_plan(nodes))
+
+    def test_mixed_agent_plan_still_requires_requested_pr_publish(self) -> None:
+        nodes = [
+            {
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                "inputs": {"selectedSkill": "jira-issue-creator"},
+            },
+            {
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                "inputs": {"selectedSkill": "moonspec-breakdown"},
+            },
+        ]
+
+        self.assertFalse(MoonMindRunWorkflow._pr_publish_optional_for_plan(nodes))
+
+    def test_publishable_changes_are_detected_from_agent_outputs(self) -> None:
+        wf = MoonMindRunWorkflow()
+
+        self.assertTrue(
+            wf._execution_result_has_publishable_changes(
+                {"outputs": {"push_status": "pushed", "push_branch": "jira-edits"}}
+            )
+        )
+        self.assertFalse(
+            wf._execution_result_has_publishable_changes(
+                {"outputs": {"push_status": "no_commits"}}
+            )
+        )
+
+
 class TestMapAgentRunResult(unittest.TestCase):
     """Verify the _map_agent_run_result helper."""
 

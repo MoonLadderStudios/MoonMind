@@ -352,13 +352,34 @@ Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`, `i
 
 Broad Moon Spec breakdown is an agent-runtime operation that writes story candidates as durable handoff files under `docs/tmp/story-breakdowns/`. It does not create `spec.md` files and does not write under `specs/`.
 
-When a task requests Jira story output, the planner may add a first-party executable tool step:
+When a task requests Jira issue creation from ambiguous user intent, the planner should dispatch an `agent_runtime` step with the `jira-issue-creator` agent skill selected. The agent uses the Jira connector/API to resolve projects, issue types, create fields, and issue descriptions.
+
+```json
+{
+  "tool": {
+    "type": "agent_runtime",
+    "name": "codex_cli",
+    "version": "1.0"
+  },
+  "inputs": {
+    "selectedSkill": "jira-issue-creator",
+    "instructions": "Use $jira-issue-creator.\n\nCreate a Jira story for each story in docs/tmp/story-breakdowns/example.",
+    "runtime": {
+      "mode": "codex_cli"
+    }
+  }
+}
+```
+
+Pure Jira issue creation does not require branch or PR publishing. A PR is required only when the agent produces repository changes that need to be published.
+
+When a task already has fully structured story JSON and an exact Jira target, the planner may use the narrower deterministic batch tool:
 
 ```json
 {
   "tool": {
     "type": "skill",
-    "name": "jira-issue-creator",
+    "name": "story.create_jira_issues",
     "version": "1.0"
   },
   "inputs": {
@@ -374,7 +395,7 @@ When a task requests Jira story output, the planner may add a first-party execut
 }
 ```
 
-`jira-issue-creator` and `story.create_jira_issues` are executable tool names backed by `mm.tool.execute` and require `integration:jira`. They create one Jira issue per story from inline `stories` or from `storyBreakdownPath`.
+`story.create_jira_issues` is backed by `mm.tool.execute` and requires `integration:jira`. It creates one Jira issue per story from inline `stories` or from `storyBreakdownPath`; it is not the default path for ambiguous Jira requests.
 
 If Jira output succeeds, workflow PR output is skipped because Jira is the requested output. If Jira output cannot run or fails and fallback is enabled, the tool returns fallback metadata pointing to the existing `docs/tmp/story-breakdowns/...` handoff so normal branch/PR publishing can expose that docs output.
 

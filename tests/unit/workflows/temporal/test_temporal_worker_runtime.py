@@ -228,7 +228,7 @@ def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
     assert node_inputs["selectedSkill"] == "pr-resolver"
 
 
-def test_runtime_planner_routes_jira_issue_creator_as_integration_skill_step():
+def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
         digest="reg:sha256:test",
@@ -278,17 +278,52 @@ def test_runtime_planner_routes_jira_issue_creator_as_integration_skill_step():
     assert "commit your work" in breakdown["inputs"]["instructions"]
 
     assert jira["tool"] == {
-        "type": "skill",
+        "type": "agent_runtime",
         "name": "jira-issue-creator",
         "version": "1.0",
     }
     assert jira["inputs"]["selectedSkill"] == "jira-issue-creator"
+    assert jira["inputs"]["publishMode"] == "none"
+    assert jira["inputs"]["instructions"].startswith("Use $jira-issue-creator.")
     assert "commit your work" not in jira["inputs"]["instructions"]
     assert jira["inputs"]["storyOutput"]["mode"] == "jira"
     assert (
         jira["inputs"]["storyBreakdownPath"]
         == breakdown["inputs"]["storyBreakdownPath"]
     )
+
+
+def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Create Jira stories from docs/tmp/story-breakdowns/example.",
+                "tool": {"type": "skill", "name": "jira-issue-creator"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+    assert node["tool"] == {
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
+    }
+    assert node["inputs"]["selectedSkill"] == "jira-issue-creator"
+    assert node["inputs"]["publishMode"] == "none"
+    assert node["inputs"]["instructions"].startswith("Use $jira-issue-creator.")
+    assert "targetBranch" not in node["inputs"]
+    assert "commit your work" not in node["inputs"]["instructions"]
 
 
 def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():

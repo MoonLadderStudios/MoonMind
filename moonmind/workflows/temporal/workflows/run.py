@@ -88,6 +88,7 @@ DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
 _TERMINAL_LAST_ERROR_UNSET = object()
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
+_PR_OPTIONAL_AGENT_SKILLS = frozenset({"jira-issue-creator"})
 
 
 class RunWorkflowInput(TypedDict, total=False):
@@ -1650,7 +1651,12 @@ class MoonMindRunWorkflow:
         registry_snapshot_ref = plan_definition.metadata.registry_snapshot.artifact_ref
         failure_mode = plan_definition.policy.failure_mode
         publish_mode = self._publish_mode(parameters)
-        require_pull_request_url = publish_mode == "pr" and self._integration is None
+        pr_publish_optional = self._pr_publish_optional_for_plan(ordered_nodes)
+        require_pull_request_url = (
+            publish_mode == "pr"
+            and self._integration is None
+            and not pr_publish_optional
+        )
         pull_request_url: str | None = None
         skill_definitions_by_key: dict[tuple[str, str], Any] = {}
         requires_registry_lookup = any(
@@ -2093,6 +2099,12 @@ class MoonMindRunWorkflow:
                 parameters=parameters,
                 execution_result=execution_result,
             )
+            if (
+                pr_publish_optional
+                and publish_mode == "pr"
+                and self._execution_result_has_publishable_changes(execution_result)
+            ):
+                require_pull_request_url = True
             outputs_for_story_output = self._get_from_result(
                 execution_result, "outputs"
             )
@@ -2293,6 +2305,16 @@ class MoonMindRunWorkflow:
                         raise ValueError(
                             f"publishMode 'pr' requested; native PR creation failed: {e}"
                         ) from e
+        if (
+            pr_publish_optional
+            and publish_mode == "pr"
+            and self._publish_status is None
+            and pull_request_url is None
+        ):
+            self._publish_status = "not_required"
+            self._publish_reason = (
+                "Jira issue agent completed; no PR output required"
+            )
         # Persist the PR URL so the workflow output can determine if a PR was created.
         self._pull_request_url = pull_request_url
         publish_mode = self._publish_mode(parameters)
@@ -2818,6 +2840,58 @@ class MoonMindRunWorkflow:
             self._publish_context["pullRequestUrl"] = pull_request_url
 
     @staticmethod
+    def _node_selected_skill(node: Mapping[str, Any]) -> str:
+        inputs = node.get("inputs")
+        if not isinstance(inputs, Mapping):
+            return ""
+        selected_skill = str(inputs.get("selectedSkill") or "").strip().lower()
+        if selected_skill:
+            return selected_skill
+        runtime = inputs.get("runtime")
+        if isinstance(runtime, Mapping):
+            metadata = runtime.get("metadata")
+            if isinstance(metadata, Mapping):
+                moonmind = metadata.get("moonmind")
+                if isinstance(moonmind, Mapping):
+                    return str(moonmind.get("selectedSkill") or "").strip().lower()
+        return ""
+
+    @classmethod
+    def _pr_publish_optional_for_plan(cls, nodes: list[Mapping[str, Any]]) -> bool:
+        if not nodes:
+            return False
+        for node in nodes:
+            tool = node.get("tool")
+            if not isinstance(tool, Mapping):
+                return False
+            tool_type = str(tool.get("type") or tool.get("kind") or "").strip().lower()
+            if tool_type != "agent_runtime":
+                return False
+            if cls._node_selected_skill(node) not in _PR_OPTIONAL_AGENT_SKILLS:
+                return False
+        return True
+
+    def _execution_result_has_publishable_changes(self, execution_result: Any) -> bool:
+        if self._extract_pull_request_url(execution_result):
+            return True
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return False
+        push_status = str(outputs.get("push_status") or "").strip().lower()
+        if push_status in {"pushed", "published"}:
+            return True
+        commit_count = outputs.get("push_commit_count")
+        if commit_count is None:
+            commit_count = outputs.get("pushCommitCount")
+        if isinstance(commit_count, bool):
+            return False
+        if isinstance(commit_count, (int, float)):
+            return int(commit_count) > 0
+        if isinstance(commit_count, str) and commit_count.strip().isdigit():
+            return int(commit_count.strip()) > 0
+        return False
+
+    @staticmethod
     def _sanitize_operator_summary(summary: str | None) -> str | None:
         if not summary:
             return None
@@ -2886,6 +2960,13 @@ class MoonMindRunWorkflow:
                     True,
                 )
             return ("no_changes", "Workflow completed with no local changes", False)
+
+        if self._publish_status == "not_required":
+            return (
+                "success",
+                self._publish_reason or "Workflow completed successfully",
+                False,
+            )
 
         if self._publish_status == "failed":
             return (
@@ -3651,6 +3732,12 @@ class MoonMindRunWorkflow:
                         publish_status = "skipped"
                         publish_reason = (
                             self._publish_reason or "publish skipped: no local changes"
+                        )
+                    elif self._publish_status == "not_required":
+                        code = "PUBLISH_DISABLED"
+                        publish_status = "skipped"
+                        publish_reason = (
+                            self._publish_reason or "publish output not required"
                         )
                     elif publish_mode == "pr":
                         code = "PUBLISHED_PR"

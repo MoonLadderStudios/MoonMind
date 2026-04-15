@@ -473,6 +473,22 @@ async def test_default_skill_registry_payload_auto_placeholder_filtered():
     assert ("auto", "1.0") not in keyset
 
 
+async def test_default_skill_registry_payload_excludes_agent_only_jira_skill():
+    payload = _default_skill_registry_payload(
+        parameters={
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "jira-issue-creator",
+                    "version": "1.0",
+                }
+            }
+        }
+    )
+    skills = payload.get("skills")
+    assert skills == []
+
+
 async def test_default_skill_registry_payload_uses_dood_tool_definitions():
     payload = _default_skill_registry_payload(
         parameters={

@@ -711,7 +711,7 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if is_dood_tool(name):
         return build_dood_tool_definition_payload(name=name, version=version)
 
-    if name in {"jira-issue-creator", "story.create_jira_issues"}:
+    if name == "story.create_jira_issues":
         return {
             "name": name,
             "version": version,
@@ -840,6 +840,8 @@ def _iter_requested_registry_tools(
             selected_payload.get("name") or selected_payload.get("id") or ""
         ).strip()
         if not tool_name:
+            continue
+        if tool_name.lower() == "jira-issue-creator":
             continue
         tool_version = str(selected_payload.get("version") or "").strip() or "1.0"
         key = (tool_name, tool_version)
