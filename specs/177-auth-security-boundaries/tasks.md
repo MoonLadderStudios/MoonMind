@@ -13,7 +13,7 @@
 
 - Unit tests: `./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/workloads/test_workload_models.py tests/unit/workloads/test_docker_launcher.py`
 - Integration tests: `./tools/test_integration.sh` only if Temporal workflow/activity boundaries change
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -88,7 +88,7 @@
 
 - [X] T018 [P] Update quickstart or verification notes only if commands or evidence differ in `specs/177-auth-security-boundaries/quickstart.md`
 - [X] T019 Run `./tools/test_unit.sh` for full required unit verification
-- [X] T020 Run `/speckit.verify` equivalent by creating `specs/177-auth-security-boundaries/verification.md` after implementation and tests pass
+- [X] T020 Run `/moonspec-verify` equivalent by creating `specs/177-auth-security-boundaries/verification.md` after implementation and tests pass
 
 ---
 
