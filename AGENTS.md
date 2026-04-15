@@ -167,3 +167,10 @@ Key diagnostics:
 - **Local Overlay Source**: `.agents/skills/local` is a valid *local-only input/overlay path*. It is **not** the authoritative durable storage model for MoonMind-managed skills and should not be treated as the canonical source of truth.
 - **Adapter Mappings**: `skills_active` (or its equivalent run-scoped active directory) contains the **resolved immutable active skill set for the run**. Adapters traditionally map `.agents/skills -> ../skills_active` or `.gemini/skills -> ../skills_active` to link workflows to the snapshot. Checked-in repo skills and local-only skills are merely *inputs* to this resolution.
 - **Environment Targeting**: Prefer configuring `WORKFLOW_SKILLS_WORKSPACE_ROOT` and `WORKFLOW_SKILLS_CACHE_ROOT` to point to writable paths intended specifically for storing resolved active skill snapshots and related runtime materialization artifacts (these mounts are not arbitrary mutable replacements for the canonical design).
+
+## Active Technologies
+- Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers (176-temporal-type-gates)
+- No new persistent storage; review findings are produced as deterministic validation output and test evidence (176-temporal-type-gates)
+
+## Recent Changes
+- 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
