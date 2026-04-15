@@ -9,12 +9,12 @@
 
 ## Source Traceability
 
-- DESIGN-REQ-005: T001, T004, T007
-- DESIGN-REQ-006: T001, T002, T005, T006
-- DESIGN-REQ-007: T002, T005, T006
-- DESIGN-REQ-015: T001, T004, T006, T007
-- DESIGN-REQ-016: T002, T005, T006, T007
-- DESIGN-REQ-017: T001, T002, T006, T008
+- DESIGN-REQ-005: T001, T003, T007, T008, T009
+- DESIGN-REQ-006: T001, T003, T004, T005, T006, T007, T008, T009
+- DESIGN-REQ-007: T002, T003, T007, T008, T009
+- DESIGN-REQ-015: T001, T004, T005, T006, T007, T008, T009
+- DESIGN-REQ-016: T002, T004, T006, T007, T008, T009
+- DESIGN-REQ-017: T003, T007, T008, T009, T010
 
 ## Phase 1: Setup
 
@@ -37,4 +37,4 @@ Independent test: Verify selected profile metadata produces an explicit auth tar
 - [X] T007 Run targeted adapter and runtime unit tests for OAuth launch metadata, auth seeding, auth path rejection, and app-server `CODEX_HOME`. (FR-001 through FR-007, SC-001 through SC-004)
 - [X] T008 Run broader unit test coverage for the three managed-session launch/runtime test files. (FR-001 through FR-007)
 - [X] T009 Run integration verification or record exact local blocker. Blocked locally because `/var/run/docker.sock` is unavailable to `./tools/test_integration.sh`. (FR-007)
-- [X] T010 Run `/speckit.verify` equivalent and record final verdict: `ADDITIONAL_WORK_NEEDED` only for unavailable Docker-backed integration execution; implementation and unit evidence are complete. (SC-001 through SC-004)
+- [X] T010 Run `/moonspec-verify` equivalent and record final verdict: `ADDITIONAL_WORK_NEEDED` only for unavailable Docker-backed integration execution; implementation and unit evidence are complete. (SC-001 through SC-004)
