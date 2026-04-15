@@ -422,7 +422,7 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         await session.commit()
 
     stopped = {}
-    finalized_signal = {}
+    completed_signal = {}
 
     async def _successful_verify(**kwargs):
         assert kwargs["runtime_id"] == "codex_cli"
@@ -437,8 +437,8 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         stopped["session_id"] = session_obj.session_id
         stopped["container_name"] = session_obj.container_name
 
-    async def _capture_finalize_signal(signal_session_id):
-        finalized_signal["session_id"] = signal_session_id
+    async def _capture_complete_signal(signal_session_id):
+        completed_signal["session_id"] = signal_session_id
 
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
@@ -453,8 +453,8 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         _capture_stop,
     )
     monkeypatch.setattr(
-        "api_service.api.routers.oauth_sessions._finalize_oauth_session_workflow",
-        _capture_finalize_signal,
+        "api_service.api.routers.oauth_sessions._complete_oauth_session_workflow",
+        _capture_complete_signal,
     )
 
     async with db_base.async_session_maker() as session:
@@ -486,4 +486,4 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         "session_id": session_id,
         "container_name": "moonmind_auth_oas_registercodex1",
     }
-    assert finalized_signal == {"session_id": session_id}
+    assert completed_signal == {"session_id": session_id}

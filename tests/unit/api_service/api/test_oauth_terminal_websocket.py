@@ -61,3 +61,26 @@ def test_provider_bootstrap_command_uses_registry_command() -> None:
 def test_provider_bootstrap_command_rejects_unknown_runtime() -> None:
     with pytest.raises(ValueError, match="Unsupported OAuth runtime"):
         websockets._provider_bootstrap_command("unknown_runtime")
+
+
+def test_json_frame_from_text_treats_json_scalars_as_terminal_input() -> None:
+    assert websockets._json_frame_from_text('"1"') is None
+    assert websockets._json_frame_from_text("true") is None
+    assert websockets._json_frame_from_text("null") is None
+
+
+def test_json_frame_from_text_accepts_mapping_frames() -> None:
+    assert websockets._json_frame_from_text('{"type": "heartbeat"}') == {
+        "type": "heartbeat"
+    }
+
+
+def test_resize_dimensions_rejects_malformed_values() -> None:
+    assert websockets._resize_dimensions({"type": "resize", "cols": "bad"}) is None
+    assert websockets._resize_dimensions({"type": "resize", "rows": object()}) is None
+
+
+def test_resize_dimensions_parses_valid_values() -> None:
+    assert websockets._resize_dimensions(
+        {"type": "resize", "cols": "100", "rows": "40"}
+    ) == (100, 40)

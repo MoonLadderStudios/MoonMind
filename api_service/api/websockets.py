@@ -3,6 +3,7 @@ import json
 import logging
 import shlex
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,6 +67,25 @@ def _provider_bootstrap_command(runtime_id: str) -> list[str]:
 def _command_for_docker_exec(runtime_id: str) -> str:
     command = _provider_bootstrap_command(runtime_id)
     return " ".join(shlex.quote(part) for part in command)
+
+
+def _json_frame_from_text(text: str) -> dict[str, Any] | None:
+    try:
+        frame = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(frame, dict):
+        return None
+    return frame
+
+
+def _resize_dimensions(frame: dict[str, Any]) -> tuple[int, int] | None:
+    try:
+        cols = int(frame.get("cols", 80))
+        rows = int(frame.get("rows", 24))
+    except (TypeError, ValueError):
+        return None
+    return cols, rows
 
 
 async def _mark_terminal_connection(
@@ -172,9 +192,8 @@ async def terminal_websocket(
                     await loop.sock_sendall(raw_sock, message["bytes"])
                 elif "text" in message:
                     text = message["text"]
-                    try:
-                        frame = json.loads(text)
-                    except json.JSONDecodeError:
+                    frame = _json_frame_from_text(text)
+                    if frame is None:
                         await loop.sock_sendall(raw_sock, text.encode("utf-8"))
                         continue
 
@@ -182,8 +201,14 @@ async def terminal_websocket(
                     if frame_type == "heartbeat":
                         await websocket.send_text(json.dumps({"type": "heartbeat_ack"}))
                     elif frame_type == "resize":
-                        cols = int(frame.get("cols", 80))
-                        rows = int(frame.get("rows", 24))
+                        dimensions = _resize_dimensions(frame)
+                        if dimensions is None:
+                            logger.warning(
+                                "Invalid resize frame received for session %s",
+                                session_id,
+                            )
+                            continue
+                        cols, rows = dimensions
                         client.api.exec_resize(exec_instance["Id"], height=rows, width=cols)
                     elif frame_type == "input":
                         await loop.sock_sendall(

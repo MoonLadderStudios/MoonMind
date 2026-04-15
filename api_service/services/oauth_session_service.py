@@ -74,8 +74,8 @@ async def cancel_oauth_session_workflow(session_id: str) -> None:
         )
 
 
-async def finalize_oauth_session_workflow(session_id: str) -> None:
-    """Signal an OAuth session workflow to verify and finalize."""
+async def complete_oauth_session_workflow(session_id: str) -> None:
+    """Signal that the API has already verified and finalized a session."""
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     workflow_id = f"oauth-session:{session_id}"
@@ -84,11 +84,14 @@ async def finalize_oauth_session_workflow(session_id: str) -> None:
         adapter = TemporalClientAdapter()
         client = await adapter.get_client()
         handle = client.get_workflow_handle(workflow_id)
-        await handle.signal("finalize")
-        logger.info("Sent finalize signal to OAuth session workflow %s", workflow_id)
+        await handle.signal("api_finalize_succeeded")
+        logger.info(
+            "Sent API finalize completion signal to OAuth session workflow %s",
+            workflow_id,
+        )
     except Exception:
         logger.exception(
-            "Failed to finalize OAuth session workflow %s", session_id
+            "Failed to mark OAuth session workflow %s complete", session_id
         )
 
 

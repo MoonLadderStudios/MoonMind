@@ -361,7 +361,7 @@ async def finalize_oauth_session(
     
     await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
     await _stop_oauth_auth_runner(session_obj)
-    await _finalize_oauth_session_workflow(session_obj.session_id)
+    await _complete_oauth_session_workflow(session_obj.session_id)
     
     return {"status": "succeeded"}
 
@@ -370,15 +370,13 @@ async def _stop_oauth_auth_runner(session_obj: ManagedAgentOAuthSession) -> None
     if not session_obj.container_name:
         return
     try:
-        from moonmind.workflows.temporal.activities.oauth_session_activities import (
-            oauth_session_stop_auth_runner,
+        from api_service.services.oauth_auth_runner import (
+            stop_auth_runner_container,
         )
 
-        await oauth_session_stop_auth_runner(
-            {
-                "session_id": session_obj.session_id,
-                "container_name": session_obj.container_name,
-            }
+        await stop_auth_runner_container(
+            session_id=session_obj.session_id,
+            container_name=session_obj.container_name,
         )
     except Exception:
         logger.warning(
@@ -388,10 +386,10 @@ async def _stop_oauth_auth_runner(session_obj: ManagedAgentOAuthSession) -> None
         )
 
 
-async def _finalize_oauth_session_workflow(session_id: str) -> None:
-    from api_service.services.oauth_session_service import finalize_oauth_session_workflow
+async def _complete_oauth_session_workflow(session_id: str) -> None:
+    from api_service.services.oauth_session_service import complete_oauth_session_workflow
 
-    await finalize_oauth_session_workflow(session_id)
+    await complete_oauth_session_workflow(session_id)
 
 
 async def _fail_oauth_session_workflow(session_id: str, reason: str) -> None:
