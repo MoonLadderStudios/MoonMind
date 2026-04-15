@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from moonmind.schemas._validation import NonBlankStr, require_non_blank
-from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
+from moonmind.schemas.temporal_payload_policy import (
+    MAX_TEMPORAL_METADATA_STRING_CHARS,
+    validate_compact_temporal_mapping,
+)
 
 
 ManagedSessionControlAction = Literal[
@@ -85,6 +89,61 @@ def canonical_codex_managed_runtime_id(runtime_id: str) -> str | None:
     if normalized in {"codex", "codex_cli"}:
         return "codex_cli"
     return None
+
+
+_ASSISTANT_TEXT_METADATA_KEYS = frozenset({"assistantText", "lastAssistantText"})
+_ASSISTANT_TEXT_METADATA_MAX_BYTES = 8 * 1024
+
+
+def _truncate_utf8_text(value: str, *, max_bytes: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _truncate_json_text(value: str, *, max_bytes: int) -> str:
+    if len(json.dumps(value, allow_nan=False).encode("utf-8")) <= max_bytes:
+        return value
+    low = 0
+    high = len(value)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        candidate = value[:midpoint]
+        encoded_size = len(json.dumps(candidate, allow_nan=False).encode("utf-8"))
+        if encoded_size <= max_bytes:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return value[:low]
+
+
+def _compact_managed_session_metadata(
+    value: dict[str, Any],
+) -> dict[str, Any]:
+    """Clamp provider assistant text snippets before Temporal payload validation."""
+
+    normalized = dict(value)
+    for key in _ASSISTANT_TEXT_METADATA_KEYS:
+        raw_text = normalized.get(key)
+        if not isinstance(raw_text, str):
+            continue
+        original_chars = len(raw_text)
+        compact_text = raw_text[:MAX_TEMPORAL_METADATA_STRING_CHARS]
+        compact_text = _truncate_utf8_text(
+            compact_text,
+            max_bytes=_ASSISTANT_TEXT_METADATA_MAX_BYTES,
+        )
+        compact_text = _truncate_json_text(
+            compact_text,
+            max_bytes=_ASSISTANT_TEXT_METADATA_MAX_BYTES,
+        )
+        if compact_text != raw_text:
+            normalized[key] = compact_text
+            normalized[f"{key}Truncated"] = True
+            normalized[f"{key}OriginalChars"] = original_chars
+    return normalized
+
 
 class CodexManagedSessionPlaneContract(BaseModel):
     """Frozen Phase 1 MVP contract for the Codex managed session plane."""
@@ -167,7 +226,10 @@ class _CodexManagedSessionRemoteContract(BaseModel):
     @field_validator("metadata", mode="after", check_fields=False)
     @classmethod
     def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
-        return validate_compact_temporal_mapping(value, field_name="metadata")
+        return validate_compact_temporal_mapping(
+            _compact_managed_session_metadata(value),
+            field_name="metadata",
+        )
 
 
 class CodexManagedSessionLocator(_CodexManagedSessionRemoteContract):

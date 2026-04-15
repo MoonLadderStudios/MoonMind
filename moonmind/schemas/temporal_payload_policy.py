@@ -28,9 +28,12 @@ def validate_compact_temporal_mapping(
 
     _validate_json_value(value, path=field_name)
     try:
-        encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        encoded = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be JSON serializable") from exc
     if len(encoded) > MAX_TEMPORAL_METADATA_BYTES:
