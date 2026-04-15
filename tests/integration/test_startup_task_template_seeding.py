@@ -77,3 +77,39 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert [
             step["skill"]["id"] for step in jira_template.latest_version.steps
         ] == ["moonspec-breakdown", "jira-issue-creator"]
+
+        result = await session.execute(
+            select(TaskStepTemplate)
+            .where(
+                TaskStepTemplate.slug == "jira-orchestrate",
+                TaskStepTemplate.scope_type == TaskTemplateScopeType.GLOBAL,
+                TaskStepTemplate.scope_ref.is_(None),
+            )
+            .options(selectinload(TaskStepTemplate.latest_version))
+        )
+        jira_orchestrate_template = result.scalar_one_or_none()
+        assert jira_orchestrate_template is not None
+        assert jira_orchestrate_template.latest_version is not None
+        jira_orchestrate_steps = [
+            step["skill"]["id"]
+            for step in jira_orchestrate_template.latest_version.steps
+        ]
+        assert jira_orchestrate_steps[0] == "jira-issue-updater"
+        assert "moonspec-implement" in jira_orchestrate_steps
+        assert "moonspec-verify" in jira_orchestrate_steps
+        assert jira_orchestrate_steps[-2] == "jira-issue-updater"
+        pr_step = next(
+            step
+            for step in jira_orchestrate_template.latest_version.steps
+            if step["title"] == "Create pull request"
+        )
+        assert "pull request" in pr_step["instructions"]
+        assert "task.publish.mode=none" in pr_step["instructions"]
+        assert "artifacts/jira-orchestrate-pr.json" in pr_step["instructions"]
+        code_review_step = next(
+            step
+            for step in jira_orchestrate_template.latest_version.steps
+            if step["title"] == "Move Jira issue to Code Review"
+        )
+        assert "Code Review" in code_review_step["instructions"]
+        assert "pull_request_url" in code_review_step["instructions"]
