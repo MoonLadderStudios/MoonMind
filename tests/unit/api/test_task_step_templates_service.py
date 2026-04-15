@@ -464,6 +464,73 @@ async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
             assert "Source Document path" in expanded["steps"][1]["instructions"]
 
 
+async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="jira-orchestrate",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.title == "Jira Orchestrate"
+            assert template.latest_version is not None
+            assert template.latest_version.annotations["jiraWorkflow"] == (
+                "implementation-to-code-review"
+            )
+            assert [step["skill"]["id"] for step in template.latest_version.steps] == [
+                "jira-issue-updater",
+                "auto",
+                "auto",
+                "moonspec-specify",
+                "auto",
+                "moonspec-plan",
+                "moonspec-tasks",
+                "moonspec-align",
+                "moonspec-implement",
+                "moonspec-verify",
+                "auto",
+                "jira-issue-updater",
+                "auto",
+            ]
+
+            expanded = await service.expand_template(
+                slug="jira-orchestrate",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "jira_issue_key": "MM-328",
+                    "orchestration_mode": "runtime",
+                    "source_design_path": "",
+                    "constraints": "Keep the scope narrow.",
+                },
+                context={},
+            )
+
+            assert len(expanded["steps"]) == 13
+            assert expanded["steps"][0]["skill"]["id"] == "jira-issue-updater"
+            assert "MM-328" in expanded["steps"][0]["instructions"]
+            assert "In Progress" in expanded["steps"][0]["instructions"]
+            assert "Jira preset brief" in expanded["steps"][1]["instructions"]
+            assert "Keep the scope narrow." in expanded["steps"][2]["instructions"]
+            assert expanded["steps"][10]["title"] == "Create pull request"
+            assert "pull request title must include MM-328" in expanded["steps"][10][
+                "instructions"
+            ]
+            assert expanded["steps"][11]["skill"]["id"] == "jira-issue-updater"
+            assert "Code Review" in expanded["steps"][11]["instructions"]
+
+
 async def test_sync_seed_templates_creates_missing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"
     seed_data = {
