@@ -1178,6 +1178,7 @@ class TemporalSkillActivities:
             artifact_service=artifact_service,
             principal=principal,
             context=context,
+            idempotency_key=idempotency_key,
         )
 
     async def _execute_skill_invocation(
@@ -1189,6 +1190,7 @@ class TemporalSkillActivities:
         artifact_service: TemporalArtifactService | None = None,
         principal: str | None = None,
         context: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> SkillResult:
         resolved_snapshot = registry_snapshot
         resolved_artifact_service = artifact_service or self._artifact_service
@@ -1215,11 +1217,15 @@ class TemporalSkillActivities:
                 artifact_locator=_artifact_id_from_ref(registry_snapshot_ref),
             )
 
+        execution_context = dict(context or {})
+        if idempotency_key is not None:
+            execution_context["idempotency_key"] = idempotency_key
+
         return await execute_skill_activity(
             invocation_payload=invocation_payload,
             registry_snapshot=resolved_snapshot,
             dispatcher=self._dispatcher,
-            context=context,
+            context=execution_context,
         )
 
     async def mm_tool_execute(
@@ -1231,6 +1237,7 @@ class TemporalSkillActivities:
         artifact_service: TemporalArtifactService | None = None,
         principal: str | None = None,
         context: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> SkillResult:
         """Canonical tool-execution alias for mm.skill.execute."""
 
@@ -1241,6 +1248,7 @@ class TemporalSkillActivities:
             artifact_service=artifact_service,
             principal=principal,
             context=context,
+            idempotency_key=idempotency_key,
         )
 
 

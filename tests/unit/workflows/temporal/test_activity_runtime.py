@@ -1167,13 +1167,22 @@ async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_
     tmp_path: Path,
 ):
     dispatcher = SkillActivityDispatcher()
+    captured_context: dict[str, object] = {}
+
+    def _run_tests_handler(
+        inputs: Mapping[str, object],
+        context: Mapping[str, object] | None,
+    ) -> SkillResult:
+        captured_context.update(dict(context or {}))
+        return SkillResult(
+            status="COMPLETED",
+            outputs={"ok": str(inputs["repo_ref"]).endswith("#main")},
+        )
+
     dispatcher.register_skill(
         skill_name="repo.run_tests",
         version="1.0.0",
-        handler=lambda inputs, _context: SkillResult(
-            status="COMPLETED",
-            outputs={"ok": inputs["repo_ref"].endswith("#main")},
-        ),
+        handler=_run_tests_handler,
     )
     snapshot = create_registry_snapshot(
         skills=parse_skill_registry(_registry_payload()),
@@ -1215,11 +1224,14 @@ async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_
                     },
                     "registry_snapshot": snapshot,
                     "context": {"workflow_id": "wf-1"},
+                    "idempotency_key": "wf-1_n1_execute",
                 }
             )
 
             assert result.status == "COMPLETED"
             assert result.outputs["ok"] is True
+            assert captured_context["workflow_id"] == "wf-1"
+            assert captured_context["idempotency_key"] == "wf-1_n1_execute"
 
 
 async def test_build_activity_bindings_does_not_mutate_sandbox_method_signatures(
