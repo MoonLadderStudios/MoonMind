@@ -179,7 +179,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>(() => {
     const initialSortDir = initial.get('sortDir');
     if (initialSortDir === 'asc' || initialSortDir === 'desc') return initialSortDir;
-    return sortField === 'scheduledFor' ? 'asc' : 'desc';
+    return 'desc';
   });
   const normalizedRepository = repository.trim();
 
@@ -191,7 +191,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
     if (normalizedRepository) params.set('repo', normalizedRepository);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
-    if (sortField !== 'scheduledFor' || sortDir !== 'asc') {
+    if (sortField !== 'scheduledFor' || sortDir !== 'desc') {
       params.set('sort', sortField);
       params.set('sortDir', sortDir);
     }

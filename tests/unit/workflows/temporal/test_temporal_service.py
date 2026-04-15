@@ -2640,7 +2640,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_list_executions_orders_scheduled_rows_by_scheduled_for(tmp_path):
+async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
         owner_id = uuid4()
@@ -2710,8 +2710,8 @@ async def test_list_executions_orders_scheduled_rows_by_scheduled_for(tmp_path):
         )
 
         assert [item.workflow_id for item in listed.items[:2]] == [
-            early.workflow_id,
             late.workflow_id,
+            early.workflow_id,
         ]
         assert running.workflow_id in [item.workflow_id for item in listed.items[2:]]
         assert listed.items[0].started_at is None

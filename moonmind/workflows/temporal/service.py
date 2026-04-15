@@ -763,7 +763,11 @@ class TemporalExecutionService:
                 ),
                 else_=1,
             ).asc(),
-            TemporalExecutionRecord.scheduled_for.asc(),
+            case(
+                (TemporalExecutionRecord.scheduled_for.is_(None), 1),
+                else_=0,
+            ).asc(),
+            TemporalExecutionRecord.scheduled_for.desc(),
             func.coalesce(
                 TemporalExecutionRecord.updated_at,
                 TemporalExecutionCanonicalRecord.updated_at,
