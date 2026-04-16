@@ -102,6 +102,7 @@ REGISTERED_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.AgentRun",
     "MoonMind.OAuthSession",
     "MoonMind.MergeGate",
+    "MoonMind.MergeAutomation",
 )
 
 

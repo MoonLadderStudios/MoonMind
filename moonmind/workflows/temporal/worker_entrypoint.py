@@ -26,6 +26,9 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.temporal.workflows.merge_gate import MoonMindMergeGateWorkflow
+from moonmind.workflows.temporal.workflows.merge_automation import (
+    MoonMindMergeAutomationWorkflow,
+)
 
 
 async def main():
@@ -50,6 +53,7 @@ async def main():
                 MoonMindAgentRun,
                 MoonMindOAuthSessionWorkflow,
                 MoonMindMergeGateWorkflow,
+                MoonMindMergeAutomationWorkflow,
             ]
         )
         # Import ManifestIngest workflow if it exists
