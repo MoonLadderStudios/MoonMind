@@ -9,7 +9,7 @@ import posixpath
 import shlex
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping, Protocol, Sequence
 
 from moonmind.schemas.workload_models import (
     RunnerProfile,
@@ -27,6 +27,13 @@ _MAX_CAPTURED_STREAM_BYTES = 64_000
 
 class DockerWorkloadLauncherError(RuntimeError):
     """Raised when the Docker workload launcher cannot execute a request."""
+
+
+class _DockerMount(Protocol):
+    type: str
+    source: str
+    target: str
+    read_only: bool
 
 
 class _ConcurrencyLease:
@@ -141,7 +148,7 @@ def _docker_env(*, docker_host: str | None = None) -> dict[str, str]:
     return env
 
 
-def _mount_arg(mount: WorkloadMount) -> str:
+def _mount_arg(mount: _DockerMount) -> str:
     parts = [
         f"type={mount.type}",
         f"source={mount.source}",
@@ -265,6 +272,7 @@ def _workload_metadata(
         "profileId": request.profile.id,
         "imageRef": request.profile.image,
         "containerName": request.container_name,
+        "identityKind": request.ownership.kind,
         "status": status,
         "exitCode": exit_code,
         "startedAt": _isoformat(started_at),
@@ -296,6 +304,7 @@ def _helper_metadata(
         "profileId": request.profile.id,
         "imageRef": request.profile.image,
         "containerName": request.container_name,
+        "identityKind": request.ownership.kind,
         "status": status,
         "startedAt": _isoformat(started_at),
         "completedAt": _isoformat(completed_at),
@@ -564,6 +573,8 @@ class DockerWorkloadLauncher:
             args.extend(["--label", f"{key}={value}"])
         for mount in (*profile.required_mounts, *profile.optional_mounts):
             args.extend(["--mount", _mount_arg(mount)])
+        for mount in profile.credential_mounts:
+            args.extend(["--mount", _mount_arg(mount)])
         for key, value in workload.env_overrides.items():
             args.extend(["--env", f"{key}={value}"])
         for flag, value in _effective_resources(
@@ -613,6 +624,8 @@ class DockerWorkloadLauncher:
         for key, value in _operational_labels(request).items():
             args.extend(["--label", f"{key}={value}"])
         for mount in (*profile.required_mounts, *profile.optional_mounts):
+            args.extend(["--mount", _mount_arg(mount)])
+        for mount in profile.credential_mounts:
             args.extend(["--mount", _mount_arg(mount)])
         for key, value in workload.env_overrides.items():
             args.extend(["--env", f"{key}={value}"])

@@ -74,16 +74,11 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 
 MIT — free for personal and commercial use.
 
-**Exception:** The `speckit-*` agent skills under `.agents/skills/` (except
-`speckit-orchestrate`) are licensed under AGPL-3.0, derived from
-[dceoy/speckit-agent-skills](https://github.com/dceoy/speckit-agent-skills).
-See `.agents/skills/LICENSE` for details.
-
-### UI Development
+## UI Development
 
 **Prerequisite:** run `npm install` once to install frontend dependencies.
 
-#### Production-like mode (no dev server)
+### Production-like mode (no dev server)
 
 Build a fresh bundle and let FastAPI serve it from the manifest:
 
@@ -92,7 +87,7 @@ npm run ui:build
 # start FastAPI as usual (no special env vars needed)
 ```
 
-#### Live dev mode with HMR (two processes required)
+### Live dev mode with HMR (two processes required)
 
 UI dev mode requires **both** a Vite dev server **and** the `MOONMIND_UI_DEV_SERVER_URL` env var on the FastAPI backend:
 
@@ -108,7 +103,7 @@ When `MOONMIND_UI_DEV_SERVER_URL` is set, FastAPI bypasses the manifest entirely
 
 **Without `MOONMIND_UI_DEV_SERVER_URL`, FastAPI serves the built `dist/` bundle** — changes made in the Vite dev server will **not** appear.
 
-#### Frontend verification
+### Frontend verification
 
 ```bash
 npm run ui:test        # Vitest unit tests

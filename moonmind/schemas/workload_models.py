@@ -17,8 +17,7 @@ _CONTAINER_NAME_SAFE_PATTERN = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SIZE_PATTERN = re.compile(r"^(?P<value>\d+(?:\.\d+)?)(?P<unit>[kmgt]?i?b?)?$", re.I)
 _VOLUME_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 _AUTH_VOLUME_PATTERN = re.compile(
-    r"(codex|claude|gemini|anthropic).*(auth|credential|secret)|"
-    r"(auth|credential|secret).*(codex|claude|gemini|anthropic)",
+    r"(?<![a-z0-9])(auth|credential|secret)(?![a-z0-9])",
     re.I,
 )
 _SIZE_MULTIPLIERS: dict[str, int] = {
@@ -199,6 +198,33 @@ class WorkloadMount(BaseModel):
         return self
 
 
+class WorkloadCredentialMount(BaseModel):
+    """Explicit credential mount declaration for exceptional workload profiles."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: str = Field("volume", alias="type")
+    source: NonBlankStr = Field(..., alias="source")
+    target: NonBlankStr = Field(..., alias="target")
+    read_only: bool = Field(False, alias="readOnly")
+    justification: NonBlankStr = Field(..., alias="justification")
+    approval_ref: NonBlankStr = Field(..., alias="approvalRef")
+
+    @model_validator(mode="after")
+    def _validate_credential_mount(self) -> "WorkloadCredentialMount":
+        if self.type != "volume":
+            raise ValueError("credential mount type must be volume")
+        if _VOLUME_NAME_PATTERN.match(self.source) is None:
+            raise ValueError("credential mount source must be a Docker named volume")
+        if not _AUTH_VOLUME_PATTERN.search(self.source):
+            raise ValueError(
+                "credentialMounts must reference an auth, credential, or secret volume"
+            )
+        if not _is_safe_absolute_profile_path(self.target):
+            raise ValueError("credential mount target must be an absolute safe path")
+        return self
+
+
 class WorkloadResourceOverrides(BaseModel):
     """Per-request resource overrides capped by the selected runner profile."""
 
@@ -320,6 +346,10 @@ class RunnerProfile(BaseModel):
     optional_mounts: tuple[WorkloadMount, ...] = Field(
         default_factory=tuple,
         alias="optionalMounts",
+    )
+    credential_mounts: tuple[WorkloadCredentialMount, ...] = Field(
+        default_factory=tuple,
+        alias="credentialMounts",
     )
     env_allowlist: tuple[str, ...] = Field(default_factory=tuple, alias="envAllowlist")
     network_policy: WorkloadNetworkPolicy = Field("none", alias="networkPolicy")
