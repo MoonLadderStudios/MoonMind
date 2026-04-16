@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+from temporalio.exceptions import CancelledError
+from temporalio.workflow import ChildWorkflowCancellationType
 
 from moonmind.workflows.temporal.workflows import merge_automation as merge_automation_module
 from moonmind.workflows.temporal.workflows.merge_automation import (
@@ -125,6 +127,123 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         "name": "pr-resolver",
         "version": "1.0",
     }
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_resolver_child_uses_try_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    child_kwargs: dict[str, Any] = {}
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        _payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.Run"
+        child_kwargs.update(kwargs)
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert result["status"] == "merged"
+    assert child_kwargs["cancellation_type"] == ChildWorkflowCancellationType.TRY_CANCEL
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_cancellation_while_resolver_active_sets_canceled_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        _payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.Run"
+        assert kwargs["cancellation_type"] == ChildWorkflowCancellationType.TRY_CANCEL
+        raise CancelledError("resolver child canceled")
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    with pytest.raises(CancelledError):
+        await workflow.run(_payload())
+
+    assert workflow.summary()["status"] == "canceled"
+    assert (
+        workflow.summary()["summary"]
+        == "Merge automation canceled while resolver child was active."
+    )
 
 
 @pytest.mark.asyncio

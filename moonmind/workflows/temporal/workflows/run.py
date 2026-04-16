@@ -8,7 +8,8 @@ from typing import Any, Optional, TypedDict
 
 from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy, SearchAttributeKey, SearchAttributePair
-from temporalio.workflow import ActivityCancellationType
+from temporalio.exceptions import CancelledError
+from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
@@ -133,6 +134,14 @@ CLOSE_STATUS_FAILED = "failed"
 DEPENDENCY_RESOLUTION_NOT_APPLICABLE = "not_applicable"
 DEPENDENCY_RESOLUTION_SATISFIED = "satisfied"
 DEPENDENCY_RESOLUTION_FAILED = "dependency_failed"
+MERGE_AUTOMATION_SUCCESS_STATUSES = frozenset({"merged", "already_merged"})
+MERGE_AUTOMATION_FAILURE_STATUSES = frozenset({"blocked", "failed", "expired"})
+MERGE_AUTOMATION_CANCELED_STATUS = "canceled"
+MERGE_AUTOMATION_TERMINAL_STATUSES = (
+    MERGE_AUTOMATION_SUCCESS_STATUSES
+    | MERGE_AUTOMATION_FAILURE_STATUSES
+    | frozenset({MERGE_AUTOMATION_CANCELED_STATUS})
+)
 OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
 OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
 _GITHUB_PR_URL_PATTERN = re.compile(
@@ -3247,10 +3256,22 @@ class MoonMindRunWorkflow:
 
     def _merge_automation_child_succeeded(self, result: Any) -> bool:
         status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
-        return status in {"merged", "already_merged"}
+        return status in MERGE_AUTOMATION_SUCCESS_STATUSES
+
+    def _merge_automation_child_canceled(self, result: Any) -> bool:
+        status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
+        return status == MERGE_AUTOMATION_CANCELED_STATUS
+
+    def _merge_automation_child_status_valid(self, result: Any) -> bool:
+        status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
+        return bool(status) and status in MERGE_AUTOMATION_TERMINAL_STATUSES
 
     def _merge_automation_failure_reason(self, result: Any) -> str:
         status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
+        if not status:
+            return "merge automation failed: missing terminal status"
+        if status not in MERGE_AUTOMATION_TERMINAL_STATUSES:
+            return f"merge automation failed: unsupported terminal status {status}"
         blockers = self._get_from_result(result, "blockers")
         blocker_summary = ""
         if isinstance(blockers, list):
@@ -3303,9 +3324,19 @@ class MoonMindRunWorkflow:
                 payload,
                 id=workflow_id,
                 task_queue=WORKFLOW_TASK_QUEUE,
+                cancellation_type=ChildWorkflowCancellationType.TRY_CANCEL,
                 static_summary="Waiting for pull request merge readiness",
                 static_details=f"Merge automation for {pull_request_url}",
             )
+        except CancelledError:
+            self._awaiting_external = False
+            self._publish_context["mergeAutomationStatus"] = MERGE_AUTOMATION_CANCELED_STATUS
+            self._publish_context["mergeAutomationSummary"] = (
+                "Merge automation canceled while parent was awaiting child workflow."
+            )
+            self._update_memo()
+            self._update_search_attributes()
+            raise
         except Exception:
             self._awaiting_external = False
             self._publish_context["mergeAutomationStatus"] = "failed"
@@ -3322,8 +3353,22 @@ class MoonMindRunWorkflow:
         ) or "unknown"
         self._update_memo()
         self._update_search_attributes()
+        if self._merge_automation_child_canceled(child_result):
+            self._cancel_requested = True
+            self._close_status = CLOSE_STATUS_CANCELED
+            self._set_state(
+                STATE_CANCELED,
+                summary=self._merge_automation_failure_reason(child_result),
+            )
+            return
         if not self._merge_automation_child_succeeded(child_result):
-            raise ValueError(self._merge_automation_failure_reason(child_result))
+            reason = self._merge_automation_failure_reason(child_result)
+            if not self._merge_automation_child_status_valid(child_result):
+                self._publish_context["mergeAutomationStatus"] = "failed"
+                self._publish_context["mergeAutomationSummary"] = reason
+                self._update_memo()
+                self._update_search_attributes()
+            raise ValueError(reason)
 
     def _build_agent_execution_request(
         self,
