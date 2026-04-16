@@ -24,6 +24,7 @@ from api_service.services.task_templates.catalog import (
     TaskTemplateNotFoundError,
 )
 from api_service.services.task_templates.save import TaskTemplateSaveService
+from moonmind.config.settings import settings
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -465,6 +466,55 @@ async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
             assert "linear_blocker_chain" in expanded["steps"][1]["instructions"]
             assert "ordered blocker chain" in expanded["steps"][1]["instructions"]
             assert "Source Document path" in expanded["steps"][1]["instructions"]
+
+
+async def test_jira_breakdown_uses_first_allowed_project_as_runtime_default(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "MM,OPS")
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service.get_template(
+                slug="jira-breakdown",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+            )
+            project_input = next(
+                item
+                for item in template["inputs"]
+                if item["name"] == "jira_project_key"
+            )
+            assert project_input["default"] == "MM"
+
+            expanded = await service.expand_template(
+                slug="jira-breakdown",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_issue_type": "Story",
+                    "jira_dependency_mode": "none",
+                },
+                context={},
+            )
+
+            assert "Jira Story issue in project MM" in expanded["steps"][1][
+                "instructions"
+            ]
+            assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
 
 
 async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
