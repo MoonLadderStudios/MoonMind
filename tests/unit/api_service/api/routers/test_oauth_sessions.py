@@ -461,6 +461,87 @@ async def test_create_oauth_session_marks_failed_when_workflow_start_fails(
 
 
 @pytest.mark.asyncio
+async def test_oauth_terminal_attach_returns_one_time_websocket_token(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_terminalattach1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id="codex-cli-terminal-attach",
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_terminalattach1",
+                terminal_bridge_id="br_oas_terminalattach1",
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_id
+    assert payload["terminal_session_id"] == "term_oas_terminalattach1"
+    assert payload["terminal_bridge_id"] == "br_oas_terminalattach1"
+    assert payload["attach_token"]
+    assert payload["attach_token"] in payload["websocket_url"]
+    assert "docker" not in response.text.lower()
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.metadata_json is not None
+        assert row.metadata_json["terminal_attach_token_sha256"] != payload["attach_token"]
+        assert row.metadata_json["terminal_attach_token_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_attach_rejects_expired_session(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_terminalexpired1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id="codex-cli-terminal-expired",
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_terminalexpired1",
+                terminal_bridge_id="br_oas_terminalexpired1",
+                expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert response.status_code == 410
+    assert response.json()["detail"] == "OAuth terminal session has expired."
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.metadata_json is None
+
+
+@pytest.mark.asyncio
 async def test_finalize_oauth_session_rejects_failed_volume_verification(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:

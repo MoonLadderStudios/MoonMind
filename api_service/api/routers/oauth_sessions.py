@@ -1,19 +1,22 @@
 import logging
+import hashlib
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from api_service.api.schemas_oauth_sessions import (
     CreateOAuthSessionRequest,
+    OAuthTerminalAttachResponse,
     OAuthSessionResponse,
     ProviderProfileSummary,
 )
 from api_service.auth_providers import get_current_user
-from api_service.db.base import get_async_session
+from api_service.db.base import get_async_session, get_async_session_context
 from api_service.services.provider_profile_service import sync_provider_profile_manager
 from api_service.db.models import (
     ManagedAgentOAuthSession,
@@ -27,6 +30,10 @@ from api_service.db.models import (
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.runtime.providers.registry import get_provider_default
+from moonmind.workflows.temporal.runtime.terminal_bridge import (
+    TerminalBridgeConnection,
+    TerminalBridgeFrameError,
+)
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
 logger = logging.getLogger(__name__)
@@ -39,6 +46,29 @@ _ACTIVE_SESSION_STATUSES = (
     OAuthSessionStatus.REGISTERING_PROFILE,
 )
 _STALE_ACTIVE_SESSION_MINUTES = 45
+_TERMINAL_ATTACH_STATUSES = (
+    OAuthSessionStatus.BRIDGE_READY,
+    OAuthSessionStatus.AWAITING_USER,
+    OAuthSessionStatus.VERIFYING,
+)
+
+
+def _hash_attach_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _oauth_session_is_expired(session: ManagedAgentOAuthSession) -> bool:
+    return session.expires_at is not None and _as_aware_utc(session.expires_at) <= _utcnow()
 
 
 def _oauth_default(runtime_id: str, key: str) -> str | None:
@@ -283,6 +313,155 @@ async def cancel_oauth_session(
     await cancel_oauth_session_workflow(session_id)
     
     return {"status": "cancelled"}
+
+
+@router.post(
+    "/{session_id}/terminal/attach",
+    response_model=OAuthTerminalAttachResponse,
+)
+async def attach_oauth_terminal(
+    session_id: str,
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
+):
+    result = await db.execute(
+        select(ManagedAgentOAuthSession).where(
+            ManagedAgentOAuthSession.session_id == session_id,
+            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
+        )
+    )
+    session_obj = result.scalars().first()
+    if not session_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+    if session_obj.status not in _TERMINAL_ATTACH_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth terminal is not attachable in its current state.",
+        )
+    if _oauth_session_is_expired(session_obj):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="OAuth terminal session has expired.",
+        )
+    if not session_obj.terminal_session_id or not session_obj.terminal_bridge_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="OAuth terminal bridge is not ready.",
+        )
+
+    token = secrets.token_urlsafe(32)
+    metadata = dict(session_obj.metadata_json or {})
+    metadata["terminal_attach_token_sha256"] = _hash_attach_token(token)
+    metadata["terminal_attach_token_used"] = False
+    metadata["terminal_attach_issued_at"] = datetime.now(timezone.utc).isoformat()
+    session_obj.metadata_json = metadata
+    await db.commit()
+
+    return OAuthTerminalAttachResponse(
+        session_id=session_obj.session_id,
+        terminal_session_id=session_obj.terminal_session_id,
+        terminal_bridge_id=session_obj.terminal_bridge_id,
+        websocket_url=(
+            f"/api/v1/oauth-sessions/{session_obj.session_id}/terminal/ws"
+            f"?token={token}"
+        ),
+        attach_token=token,
+        expires_at=session_obj.expires_at,
+    )
+
+
+@router.websocket("/{session_id}/terminal/ws")
+async def oauth_terminal_websocket(
+    websocket: WebSocket,
+    session_id: str,
+    token: str,
+):
+    async with get_async_session_context() as db:
+        result = await db.execute(
+            select(ManagedAgentOAuthSession).where(
+                ManagedAgentOAuthSession.session_id == session_id
+            ).with_for_update()
+        )
+        session_obj = result.scalars().first()
+        metadata = dict(session_obj.metadata_json or {}) if session_obj else {}
+        expected_digest = metadata.get("terminal_attach_token_sha256")
+        token_used = metadata.get("terminal_attach_token_used") is True
+        if (
+            not session_obj
+            or session_obj.status not in _TERMINAL_ATTACH_STATUSES
+            or _oauth_session_is_expired(session_obj)
+            or not expected_digest
+            or token_used
+            or not secrets.compare_digest(expected_digest, _hash_attach_token(token))
+        ):
+            await websocket.close(code=4403)
+            return
+
+        metadata["terminal_attach_token_used"] = True
+        metadata["terminal_connected_at"] = datetime.now(timezone.utc).isoformat()
+        session_obj.metadata_json = metadata
+        session_obj.connected_at = datetime.now(timezone.utc)
+        await db.commit()
+        bridge = TerminalBridgeConnection(
+            session_id=session_obj.session_id,
+            terminal_bridge_id=session_obj.terminal_bridge_id or "",
+            owner_user_id=session_obj.requested_by_user_id,
+        )
+
+    await websocket.accept()
+    await websocket.send_json(
+        {
+            "type": "ready",
+            "session_id": session_id,
+            "transport": "moonmind_pty_ws",
+        }
+    )
+
+    close_reason = "client_disconnected"
+    try:
+        while True:
+            frame = await websocket.receive_json()
+            if not isinstance(frame, dict):
+                close_reason = "invalid_frame_format"
+                await websocket.send_json(
+                    {"type": "error", "detail": "Frame must be a JSON object"}
+                )
+                await websocket.close(code=4400)
+                break
+            try:
+                response = bridge.handle_frame(frame)
+            except TerminalBridgeFrameError as exc:
+                close_reason = str(exc)
+                await websocket.send_json({"type": "error", "detail": str(exc)})
+                await websocket.close(code=4400)
+                break
+            await websocket.send_json(response)
+            if response.get("type") == "close_ack":
+                close_reason = "client_closed"
+                await websocket.close(code=1000)
+                break
+    except WebSocketDisconnect:
+        close_reason = "client_disconnected"
+    finally:
+        async with get_async_session_context() as db:
+            result = await db.execute(
+                select(ManagedAgentOAuthSession).where(
+                    ManagedAgentOAuthSession.session_id == session_id
+                )
+            )
+            session_obj = result.scalars().first()
+            if session_obj:
+                metadata = dict(session_obj.metadata_json or {})
+                metadata["terminal_close_reason"] = close_reason
+                metadata["terminal_disconnected_at"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
+                session_obj.metadata_json = metadata
+                session_obj.disconnected_at = datetime.now(timezone.utc)
+                await db.commit()
 
 @router.post("/{session_id}/finalize")
 async def finalize_oauth_session(

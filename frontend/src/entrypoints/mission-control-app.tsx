@@ -7,6 +7,7 @@ type PageComponent = ComponentType<{ payload: BootPayload }>;
 const PAGE_COMPONENTS = {
   'manifest-submit': lazy(() => import('./manifest-submit')),
   manifests: lazy(() => import('./manifests')),
+  'oauth-terminal': lazy(() => import('./oauth-terminal')),
   proposals: lazy(() => import('./proposals')),
   schedules: lazy(() => import('./schedules')),
   settings: lazy(() => import('./settings')),

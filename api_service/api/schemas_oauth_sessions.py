@@ -44,3 +44,12 @@ class OAuthSessionResponse(BaseModel):
     failure_reason: Optional[str] = None
     created_at: Optional[datetime] = None
     profile_summary: Optional[ProviderProfileSummary] = None
+
+
+class OAuthTerminalAttachResponse(BaseModel):
+    session_id: str
+    terminal_session_id: str
+    terminal_bridge_id: str
+    websocket_url: str
+    attach_token: str
+    expires_at: Optional[datetime] = None

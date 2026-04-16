@@ -9,8 +9,8 @@
 ## Focused Unit Verification
 
 ```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py
-npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py tests/unit/services/temporal/runtime/test_terminal_bridge.py
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx
 ```
 
 Expected result: focused tests for `STORY-004` fail before implementation changes and pass after the story is complete.
@@ -35,7 +35,7 @@ Expected result: hermetic integration coverage passes in a Docker-enabled enviro
 
 ## End-To-End Story Check
 
-1. Confirm `spec.md` preserves `MM-318` and the original preset brief.
+1. Confirm `spec.md` preserves `MM-358` and the original preset brief.
 2. Confirm `plan.md`, `research.md`, `data-model.md`, `contracts/`, and `quickstart.md` exist.
 3. Confirm unit and integration test strategies remain separate.
 4. After implementation, run `/moonspec-verify` equivalent against `specs/183-oauth-terminal-flow/spec.md`.

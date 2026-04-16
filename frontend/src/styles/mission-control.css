@@ -1532,6 +1532,43 @@ button.secondary:hover {
   border-radius: 8px;
 }
 
+.oauth-terminal-page {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+}
+
+.oauth-terminal-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.oauth-terminal-header h1 {
+  margin: 4px 0 0;
+}
+
+.oauth-terminal-status {
+  border: 1px solid var(--mm-border, #cbd5e1);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.oauth-terminal-surface {
+  background: #111827;
+  border-radius: 8px;
+  color: #e5e7eb;
+  height: min(62vh, 560px);
+  min-height: 320px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.oauth-terminal-xterm {
+  height: 100%;
+}
+
 .jira-provenance-chip {
   display: inline-flex;
   align-items: center;

@@ -717,6 +717,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/oauth-sessions/{session_id}/terminal/attach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Attach Oauth Terminal */
+        post: operations["attach_oauth_terminal_api_v1_oauth_sessions__session_id__terminal_attach_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/oauth-sessions/{session_id}/finalize": {
         parameters: {
             query?: never;
@@ -4253,6 +4270,21 @@ export interface components {
          * @enum {string}
          */
         OAuthSessionStatus: "pending" | "starting" | "bridge_ready" | "awaiting_user" | "verifying" | "registering_profile" | "succeeded" | "failed" | "cancelled" | "expired";
+        /** OAuthTerminalAttachResponse */
+        OAuthTerminalAttachResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Terminal Session Id */
+            terminal_session_id: string;
+            /** Terminal Bridge Id */
+            terminal_bridge_id: string;
+            /** Websocket Url */
+            websocket_url: string;
+            /** Attach Token */
+            attach_token: string;
+            /** Expires At */
+            expires_at?: string | null;
+        };
         /**
          * PinArtifactRequest
          * @description Request body for explicit artifact pinning.
@@ -7443,6 +7475,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_oauth_terminal_api_v1_oauth_sessions__session_id__terminal_attach_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthTerminalAttachResponse"];
                 };
             };
             /** @description Validation Error */
