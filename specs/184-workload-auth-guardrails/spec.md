@@ -6,20 +6,71 @@
 **Input**:
 
 ```text
-Jira issue: MM-318 from MM board
-Summary: breakdown docs\ManagedAgents\OAuthTerminal.md
+Jira issue: MM-360 from MM project
+Summary: Workload Auth-Volume Guardrails
 Issue type: Story
 Current Jira status: In Progress
 Jira project key: MM
 
-Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-318 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-360 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
 
-MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md
+MM-360: Workload Auth-Volume Guardrails
 
-Selected generated story: STORY-006 Workload Auth-Volume Guardrails
-Dependencies: None
-Breakdown JSON: docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json
-Source design: docs/ManagedAgents/OAuthTerminal.md
+MoonSpec Story ID: STORY-006
+
+Short Name
+workload-auth-guardrails
+
+User Story
+As a security reviewer, I can verify that Docker-backed workload containers launched near managed sessions do not implicitly inherit managed-runtime auth volumes.
+
+Acceptance Criteria
+- A workload launch requested from a managed Codex session inherits no managed-runtime auth volume by default.
+- Ordinary workspace/cache workload mounts proceed without auth volumes.
+- Credential mounts without explicit approval are rejected with policy metadata.
+- Mission Control and APIs do not present workload containers as the managed Codex session identity.
+
+Requirements
+- Enforce workload profile mount allowlists.
+- Reject implicit managed-runtime auth-volume inheritance.
+- Require explicit justification/profile declaration for any credential mount.
+- Keep workload containers separate from managed session identity fields.
+
+Independent Test
+Launch workload profiles from a simulated managed-session-assisted step and assert auth-volume mounts are rejected unless explicitly declared by approved workload policy.
+
+Dependencies
+- None specified.
+
+Risks
+- Approved credential mount policy should stay narrow enough for future workload-specific exceptions.
+
+Out of Scope
+- Managed Codex session container launch itself.
+- OAuth terminal enrollment.
+- Specialized workload runner internals beyond mount policy.
+
+Source Document
+docs/ManagedAgents/OAuthTerminal.md
+
+Source Sections
+- 2. Scope
+- 4. Volume Targeting Rules
+- 9. Security Model
+- 11. Required Boundaries
+
+Coverage IDs
+- DESIGN-REQ-009
+- DESIGN-REQ-010
+- DESIGN-REQ-020
+
+Source Design Coverage
+- DESIGN-REQ-009: Do not make Docker workload containers inherit managed-runtime auth volumes by default.
+- DESIGN-REQ-010: Never place raw credential contents in workflow history, logs, artifacts, or UI responses.
+- DESIGN-REQ-020: Preserve ownership boundaries among OAuth terminal code, Provider Profile code, managed-session controller code, Codex session runtime code, and Docker workload orchestration.
+
+Needs Clarification
+- None
 ```
 
 ## User Story - Workload Auth-Volume Guardrails
@@ -56,7 +107,7 @@ Launch workload profiles from a simulated managed-session-assisted step and asse
 - **FR-002**: The system MUST reject implicit managed-runtime auth-volume inheritance.
 - **FR-003**: The system MUST require explicit justification/profile declaration for any credential mount.
 - **FR-004**: The system MUST keep workload containers separate from managed session identity fields.
-- **FR-005**: The spec artifacts MUST retain Jira issue key MM-318 and the original preset brief so final verification can compare against the originating Jira request.
+- **FR-005**: The spec artifacts MUST retain Jira issue key MM-360 and the original preset brief so final verification can compare against the originating Jira request.
 
 ## Source Design Requirements
 

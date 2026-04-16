@@ -10,13 +10,13 @@
 
 ## Source Traceability
 
-- Story: `STORY-006` from MM-318 breakdown
+- Story: `STORY-006` from MM-360 Jira preset brief
 - Coverage: FR-001 through FR-005; DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-020
-- Original preset brief: `MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md`
+- Original preset brief: `MM-360: Workload Auth-Volume Guardrails`
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm active story artifacts and MM-318 traceability in specs/184-workload-auth-guardrails/spec.md, specs/184-workload-auth-guardrails/plan.md, specs/184-workload-auth-guardrails/research.md, specs/184-workload-auth-guardrails/data-model.md, and specs/184-workload-auth-guardrails/contracts/workload-auth-guardrails.md (STORY-006)
+- [X] T001 Confirm active story artifacts and MM-360 traceability in specs/184-workload-auth-guardrails/spec.md, specs/184-workload-auth-guardrails/plan.md, specs/184-workload-auth-guardrails/research.md, specs/184-workload-auth-guardrails/data-model.md, and specs/184-workload-auth-guardrails/contracts/workload-auth-guardrails.md (STORY-006)
 - [X] T002 Confirm focused unit and integration commands from specs/184-workload-auth-guardrails/quickstart.md are runnable or have exact environment blockers recorded (STORY-006)
 
 ## Phase 2: Foundational
@@ -46,7 +46,7 @@ Integration test plan: write red-first hermetic integration tests for the real A
 - [X] T012 Implement workload identity separation and secret-free result metadata for FR-004 FR-005 in moonmind/workloads/docker_launcher.py
 - [X] T013 Run focused unit tests until green with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py` and update task evidence in specs/184-workload-auth-guardrails/tasks.md
 - [X] T014 Run integration verification with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/services/temporal/workflows/test_agent_run.py`; update task evidence in specs/184-workload-auth-guardrails/tasks.md
-- [X] T015 Validate the single-story acceptance scenarios and MM-318 traceability against specs/184-workload-auth-guardrails/spec.md and specs/184-workload-auth-guardrails/contracts/workload-auth-guardrails.md
+- [X] T015 Validate the single-story acceptance scenarios and MM-360 traceability against specs/184-workload-auth-guardrails/spec.md and specs/184-workload-auth-guardrails/contracts/workload-auth-guardrails.md
 
 ## Final Phase: Polish And Verification
 
@@ -60,7 +60,7 @@ Integration test plan: write red-first hermetic integration tests for the real A
 - Complete Phase 1 and Phase 2 before writing red-first story tests.
 - Write and confirm unit and integration tests fail before implementation tasks.
 - Complete implementation tasks before green validation and final verification.
-- Keep this task list scoped to exactly one story; do not implement other MM-318 generated specs here.
+- Keep this task list scoped to exactly one story; do not implement other OAuthTerminal-generated specs here.
 
 ## Parallel Examples
 
@@ -70,14 +70,14 @@ Integration test plan: write red-first hermetic integration tests for the real A
 ## Implementation Strategy
 
 - Follow TDD: red unit tests, red integration tests, production implementation, focused green tests, full unit suite, final `/moonspec-verify`.
-- Preserve `MM-318` and the preset brief in all verification evidence.
+- Preserve `MM-360` and the preset brief in all verification evidence.
 - Treat missing Docker socket as a blocker to record, not a passing integration result.
 
 ## Implementation Evidence
 
 - Red unit evidence: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py` failed before production changes on missing `credentialMounts` support and missing workload `identityKind` metadata.
 - Red integration evidence: `pytest tests/integration/services/temporal/workflows/test_agent_run.py -k workload_auth_volume_guardrails -q --tb=short` failed before production changes on missing `credentialMounts` support.
-- Focused unit green: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py` passed with 68 tests.
+- Focused unit green: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py` passed with 69 tests after MM-360 traceability alignment.
 - Focused integration green: `pytest tests/integration/services/temporal/workflows/test_agent_run.py -m integration_ci -k workload_auth_volume_guardrails -q --tb=short` passed with 1 test.
 - Full unit green: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` passed with 3202 Python tests, 16 subtests, and 221 frontend tests.
 - Required integration runner blocker: `./tools/test_integration.sh` could not connect to `/var/run/docker.sock`; Docker-backed compose verification was not available in this managed-agent environment.

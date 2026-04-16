@@ -2,11 +2,11 @@
 
 ## Story Boundary
 
-Source story: `STORY-006` from `docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json`.
+Source story: `STORY-006` from Jira issue `MM-360` and source design `docs/ManagedAgents/OAuthTerminal.md`.
 
 ## Inputs
 
-- Jira traceability: `MM-318` and preset brief `MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md`.
+- Jira traceability: `MM-360` and preset brief `MM-360: Workload Auth-Volume Guardrails`.
 - Source design coverage: DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-020.
 - Dependency requirements: None.
 
