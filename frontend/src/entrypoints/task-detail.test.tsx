@@ -1458,6 +1458,84 @@ describe('Task Detail Entrypoint', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
+  it('renders merge automation visibility from the run summary', async () => {
+    const mockExecution = {
+      taskId: 'test-merge-visibility',
+      workflowId: 'test-merge-visibility',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Merge visibility task',
+      summary: 'Waiting on merge automation',
+      status: 'running',
+      state: 'awaiting_external',
+      rawState: 'awaiting_external',
+      temporalStatus: 'running',
+      closeStatus: null,
+      summaryArtifactRef: 'art-summary-merge',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: null,
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-summary-merge/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              mergeAutomation: {
+                enabled: true,
+                status: 'blocked',
+                prNumber: 354,
+                prUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/354',
+                latestHeadSha: 'abc123',
+                cycles: 2,
+                childWorkflowId: 'merge-automation:wf-parent',
+                resolverChildWorkflowIds: ['resolver:wf-parent:1', 'resolver:wf-parent:2'],
+                blockers: [{ kind: 'checks_failed', summary: 'Required checks failed.' }],
+                artifactRefs: {
+                  summary: 'summary-artifact',
+                  gateSnapshots: ['gate-snapshot-artifact'],
+                  resolverAttempts: ['resolver-attempt-artifact'],
+                },
+              },
+            }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Merge Automation')).toBeTruthy();
+      expect(screen.getByText('blocked')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/354' })).toBeTruthy();
+      expect(screen.getByText('abc123')).toBeTruthy();
+      expect(screen.getByText('merge-automation:wf-parent')).toBeTruthy();
+      expect(screen.getByText('resolver:wf-parent:1')).toBeTruthy();
+      expect(screen.getByText('Required checks failed.')).toBeTruthy();
+      expect(screen.getByText('summary-artifact')).toBeTruthy();
+      expect(screen.queryByText('Schedule')).toBeNull();
+    });
+  });
+
   it('renders prerequisite and dependent panels for dependency-aware runs', async () => {
     const mockExecution = {
       taskId: 'mm:dependent-1',

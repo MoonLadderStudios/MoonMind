@@ -315,6 +315,86 @@ async def test_merge_automation_success_dispositions_complete_successfully(
 
 
 @pytest.mark.asyncio
+async def test_merge_automation_writes_visibility_artifact_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    created_names: list[str] = []
+    written_artifact_ids: list[str] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.create":
+            created_names.append(str(payload["name"]))
+            artifact_id = f"artifact-{len(created_names)}"
+            return ({"artifact_id": artifact_id}, {"upload_url": "memory://upload"})
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.Run"
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "artifact.write_complete"
+        written_artifact_ids.append(payload.artifact_id)
+        return {"artifact_id": payload.artifact_id}
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        merge_automation_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert result["status"] == "merged"
+    assert "reports/merge_automation_summary.json" in created_names
+    assert "artifacts/merge_automation/gate_snapshots/0.json" in created_names
+    assert "artifacts/merge_automation/resolver_attempts/1.json" in created_names
+    assert result["artifactRefs"]["summary"] in written_artifact_ids
+    assert result["artifactRefs"]["gateSnapshots"]
+    assert result["artifactRefs"]["resolverAttempts"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("disposition", "expected_summary"),
     [

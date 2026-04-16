@@ -541,6 +541,39 @@ const RunSummaryArtifactSchema = z
       })
       .passthrough()
       .optional(),
+    mergeAutomation: z
+      .object({
+        enabled: z.boolean().optional(),
+        status: z.string().nullable().optional(),
+        prNumber: z.union([z.number(), z.string()]).nullable().optional(),
+        prUrl: z.string().nullable().optional(),
+        latestHeadSha: z.string().nullable().optional(),
+        cycles: z.union([z.number(), z.string()]).nullable().optional(),
+        childWorkflowId: z.string().nullable().optional(),
+        resolverChildWorkflowIds: z.array(z.string()).default([]).optional(),
+        blockers: z
+          .array(
+            z
+              .object({
+                kind: z.string().nullable().optional(),
+                summary: z.string().nullable().optional(),
+                source: z.string().nullable().optional(),
+              })
+              .passthrough(),
+          )
+          .default([])
+          .optional(),
+        artifactRefs: z
+          .object({
+            summary: z.string().nullable().optional(),
+            gateSnapshots: z.array(z.string()).default([]).optional(),
+            resolverAttempts: z.array(z.string()).default([]).optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
@@ -3044,6 +3077,92 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     <Card label="Commit Count">{String(runSummary.publishContext.commitCount)}</Card>
                   ) : null}
                 </div>
+              ) : null}
+              {runSummary.mergeAutomation ? (
+                <section>
+                  <h3>Merge Automation</h3>
+                  <div className="grid-2">
+                    <Card label="Status">{runSummary.mergeAutomation.status || '—'}</Card>
+                    {runSummary.mergeAutomation.cycles !== undefined &&
+                    runSummary.mergeAutomation.cycles !== null ? (
+                      <Card label="Cycles">{String(runSummary.mergeAutomation.cycles)}</Card>
+                    ) : null}
+                    {runSummary.mergeAutomation.prUrl ? (
+                      <Card label="PR Link">
+                        {normalizeGitHubPullRequestUrl(runSummary.mergeAutomation.prUrl) ? (
+                          <a
+                            href={normalizeGitHubPullRequestUrl(runSummary.mergeAutomation.prUrl) ?? undefined}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {normalizeGitHubPullRequestUrl(runSummary.mergeAutomation.prUrl)}
+                          </a>
+                        ) : (
+                          '—'
+                        )}
+                      </Card>
+                    ) : null}
+                    {runSummary.mergeAutomation.latestHeadSha ? (
+                      <Card label="Latest Head SHA">
+                        <code className="text-xs break-all">{runSummary.mergeAutomation.latestHeadSha}</code>
+                      </Card>
+                    ) : null}
+                    {runSummary.mergeAutomation.childWorkflowId ? (
+                      <Card label="Child Workflow">
+                        <code className="text-xs break-all">{runSummary.mergeAutomation.childWorkflowId}</code>
+                      </Card>
+                    ) : null}
+                  </div>
+                  {runSummary.mergeAutomation.resolverChildWorkflowIds?.length ? (
+                    <div>
+                      <strong>Resolver Children</strong>
+                      <ul>
+                        {runSummary.mergeAutomation.resolverChildWorkflowIds.map((workflowId) => (
+                          <li key={workflowId}>
+                            <code className="text-xs break-all">{workflowId}</code>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {runSummary.mergeAutomation.blockers?.length ? (
+                    <div>
+                      <strong>Blockers</strong>
+                      <ul>
+                        {runSummary.mergeAutomation.blockers.map((blocker, index) => (
+                          <li key={`${blocker.kind || 'blocker'}-${index}`}>
+                            {blocker.summary || blocker.kind || 'Blocked'}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {runSummary.mergeAutomation.artifactRefs ? (
+                    <div>
+                      <strong>Artifacts</strong>
+                      <ul>
+                        {runSummary.mergeAutomation.artifactRefs.summary ? (
+                          <li>
+                            Summary:{' '}
+                            <code className="text-xs break-all">
+                              {runSummary.mergeAutomation.artifactRefs.summary}
+                            </code>
+                          </li>
+                        ) : null}
+                        {runSummary.mergeAutomation.artifactRefs.gateSnapshots?.map((artifactRef) => (
+                          <li key={`gate-${artifactRef}`}>
+                            Gate snapshot: <code className="text-xs break-all">{artifactRef}</code>
+                          </li>
+                        ))}
+                        {runSummary.mergeAutomation.artifactRefs.resolverAttempts?.map((artifactRef) => (
+                          <li key={`resolver-${artifactRef}`}>
+                            Resolver attempt: <code className="text-xs break-all">{artifactRef}</code>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </section>
               ) : null}
               {runSummary.lastStep?.summary && runSummary.lastStep.summary !== displayedSummary ? (
                 <div>
