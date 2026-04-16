@@ -200,6 +200,9 @@ ReadinessBlockerKind = Literal[
     "stale_revision",
     "policy_denied",
     "external_state_unavailable",
+    "manual_review",
+    "failed",
+    "resolver_disposition_invalid",
 ]
 
 

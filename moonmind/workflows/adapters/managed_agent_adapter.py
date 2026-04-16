@@ -72,6 +72,7 @@ _PR_RESOLVER_FAILURE_STATUSES: frozenset[str] = frozenset(
 _PR_RESOLVER_BLOCKED_STATUSES: frozenset[str] = frozenset(
     {"blocked", "attempts_exhausted"}
 )
+_PR_RESOLVER_MERGED_STATUSES: frozenset[str] = frozenset({"merged"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +288,33 @@ def _derive_pr_resolver_failure(
         "user_error" if status in _PR_RESOLVER_BLOCKED_STATUSES else "execution_error"
     )
     return failure_class, "; ".join(summary_parts)
+
+
+def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
+    """Return compact metadata from pr-resolver artifacts for parent workflows."""
+    payload = _load_pr_resolver_result(workspace_path)
+    if payload is None:
+        return {}
+
+    status = str(
+        payload.get("status") or payload.get("merge_outcome") or ""
+    ).strip().lower()
+    reason = str(payload.get("final_reason") or payload.get("reason") or "").strip()
+    metadata: dict[str, Any] = {}
+    if status in _PR_RESOLVER_MERGED_STATUSES:
+        metadata["mergeAutomationDisposition"] = (
+            "already_merged" if reason == "already_merged" else "merged"
+        )
+    head_sha = str(
+        payload.get("headSha")
+        or payload.get("head_sha")
+        or payload.get("latestHeadSha")
+        or payload.get("latest_head_sha")
+        or ""
+    ).strip()
+    if head_sha:
+        metadata["headSha"] = head_sha
+    return metadata
 
 
 def _is_generic_process_exit_summary(summary: str | None) -> bool:
@@ -548,6 +576,7 @@ class ManagedAgentAdapter:
                         output_refs.append(ref)
                 summary = record.error_message or f"Completed with status {record.status}"
                 failure_class = record.failure_class
+                metadata = _derive_pr_resolver_metadata(record.workspace_path)
                 if pr_resolver_expected:
                     derived_failure_class, derived_summary = _derive_pr_resolver_failure(
                         record.workspace_path
@@ -571,6 +600,7 @@ class ManagedAgentAdapter:
                     output_refs=output_refs,
                     failure_class=failure_class,
                     provider_error_code=record.provider_error_code,
+                    metadata=metadata,
                 )
         return AgentRunResult()
 
