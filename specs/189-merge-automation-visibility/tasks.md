@@ -3,7 +3,7 @@
 **Input**: Design documents from `specs/189-merge-automation-visibility/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
-**Tests**: Unit tests and UI tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement production code.
+**Tests**: Unit tests and integration/UI boundary tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement production code.
 
 **Test Commands**:
 

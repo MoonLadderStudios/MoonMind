@@ -20,3 +20,9 @@ Run full unit verification before final MoonSpec verification:
 ```bash
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
 ```
+
+Then run final MoonSpec verification:
+
+```bash
+/moonspec-verify
+```
