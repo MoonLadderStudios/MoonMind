@@ -43,12 +43,14 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ManagedProfileLaunchContext,
     _derive_pr_resolver_failure,
+    _derive_pr_resolver_metadata,
     _current_time,
     _generate_run_id,
     _is_generic_process_exit_summary,
     build_managed_profile_launch_context,
     default_credential_source_for_runtime,
 )
+from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.workflows.codex_session_timeouts import (
     MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
@@ -127,18 +129,12 @@ def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
     return truncated or normalized[:_MAX_AGENT_RUN_RESULT_SUMMARY_CHARS]
 
 
-def _selected_agent_skill(parameters: Mapping[str, Any] | None) -> str:
-    if not isinstance(parameters, Mapping):
-        return ""
-    return str(parameters.get("selectedSkill") or "").strip().lower()
-
-
 def _jira_issue_creator_blocker_summary(
     *,
     parameters: Mapping[str, Any] | None,
     assistant_text: str,
 ) -> str | None:
-    if _selected_agent_skill(parameters) != "jira-issue-creator":
+    if selected_agent_skill(parameters) != "jira-issue-creator":
         return None
     normalized = " ".join(str(assistant_text or "").lower().split())
     if not normalized:
@@ -586,6 +582,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 if record is not None:
                     failure_class = result.failure_class
                     summary = str(result.summary or "").strip()
+                    metadata = dict(result.metadata)
+                    metadata.update(_derive_pr_resolver_metadata(record.workspace_path))
                     derived_failure_class, derived_summary = (
                         _derive_pr_resolver_failure(record.workspace_path)
                     )
@@ -604,8 +602,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                                 update={
                                     "failure_class": derived_failure_class,
                                     "summary": derived_summary or summary,
+                                    "metadata": metadata,
                                 }
                             )
+                        elif metadata != result.metadata:
+                            result = result.model_copy(update={"metadata": metadata})
+                    elif metadata != result.metadata:
+                        result = result.model_copy(update={"metadata": metadata})
             return result
         return AgentRunResult(
             summary="Codex managed-session result not found.",
