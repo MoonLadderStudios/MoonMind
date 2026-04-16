@@ -49,7 +49,7 @@ Examples:
 
 Same as `branch`, but after the push completes the workflow creates a pull request via the `repo.create_pr` activity. The PR merges the head branch into the base branch (see [Branch Resolution](#branch-resolution) below).
 
-When merge automation is explicitly enabled for a PR-publishing task, successful PR publication may also start a separate `MoonMind.MergeGate` workflow. The original `MoonMind.Run` still completes after publishing; the merge gate waits for configured external readiness signals and then launches a follow-up `MoonMind.Run` that uses `pr-resolver` with publish mode `none`.
+When merge automation is explicitly enabled for a PR-publishing task, successful PR publication starts a child `MoonMind.MergeAutomation` workflow. That child workflow waits for configured external readiness signals and then launches a follow-up `MoonMind.Run` that uses `pr-resolver` with publish mode `none`.
 
 ## Branch Naming
 

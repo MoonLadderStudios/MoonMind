@@ -1,7 +1,7 @@
 # MoonSpec Verification Report
 
-**Feature**: Merge Gate (`specs/179-merge-gate`)
-**Spec**: `/work/agent_jobs/mm:d0e58dc1-67eb-428e-9443-b213003ed0c0/repo/specs/179-merge-gate/spec.md`
+**Feature**: Merge Gate (`specs/179-merge-automation`)
+**Spec**: `/work/agent_jobs/mm:d0e58dc1-67eb-428e-9443-b213003ed0c0/repo/specs/179-merge-automation/spec.md`
 **Original Request Source**: `spec.md` `Input` / `Original Jira Preset Brief` for MM-341
 **Verdict**: NO_DETERMINATION
 **Confidence**: MEDIUM
@@ -10,8 +10,8 @@
 
 | Suite | Command | Result | Notes |
 |-------|---------|--------|-------|
-| Red-first unit | `./tools/test_unit.sh tests/unit/workflows/temporal/test_merge_gate_models.py tests/unit/workflows/temporal/test_merge_gate_workflow.py tests/unit/workflows/temporal/test_run_merge_gate_start.py` | PASS | Confirmed failing before implementation for missing merge-gate contracts and parent startup helpers. |
-| Red-first workflow-boundary | `./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_merge_gate_temporal.py` | PASS | Confirmed failing before implementation for missing `MoonMind.MergeGate`. |
+| Red-first unit | `./tools/test_unit.sh tests/unit/workflows/temporal/test_merge_gate_models.py tests/unit/workflows/temporal/test_merge_gate_workflow.py tests/unit/workflows/temporal/test_run_merge_gate_start.py` | PASS | Confirmed failing before implementation for missing merge-automation contracts and parent startup helpers. |
+| Red-first workflow-boundary | `./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_merge_gate_temporal.py` | PASS | Confirmed failing before implementation for missing `MoonMind.MergeAutomation`. |
 | Focused post-implementation | `./tools/test_unit.sh tests/unit/workflows/adapters/test_github_service.py tests/unit/workflows/temporal/test_merge_gate_workflow.py tests/unit/workflows/temporal/workflows/test_merge_gate_temporal.py` | PASS | 18 Python tests passed; appended UI suite passed 221 tests. |
 | Full unit | `./tools/test_unit.sh` | PASS | 3214 Python tests passed, 1 xpassed, 16 subtests passed; appended UI suite passed 221 tests. |
 | Hermetic integration | `./tools/test_integration.sh` | NOT RUN | Docker daemon/socket is unavailable: `failed to connect to the docker API at unix:///var/run/docker.sock`. |
@@ -21,15 +21,15 @@
 | Requirement | Evidence | Status | Notes |
 |-------------|----------|--------|-------|
 | FR-001 | `MoonMind.Run._merge_automation_request`; `tests/unit/workflows/temporal/test_run_merge_gate_start.py` | VERIFIED | Merge automation is opt-in and disabled by default. |
-| FR-002 | `MoonMind.Run._maybe_start_merge_gate`; worker registration in `workers.py` and `worker_entrypoint.py` | VERIFIED | Parent starts a dedicated `MoonMind.MergeGate` child workflow after PR publication. |
+| FR-002 | `MoonMind.Run._maybe_start_merge_gate`; worker registration in `workers.py` and `worker_entrypoint.py` | VERIFIED | Parent starts a dedicated `MoonMind.MergeAutomation` child workflow after PR publication. |
 | FR-003 | `MergeGateStartInput`, `PullRequestRefModel`, `MergeGatePolicyModel`; model tests | VERIFIED | Start payload tracks parent, PR identity, revision, Jira key, policy, blockers, and resolver state. |
 | FR-004 | Child workflow startup occurs after PR publication without parent waiting on gate completion | VERIFIED | Parent stores the gate workflow id and continues finalization. |
-| FR-005 | `merge_gate.evaluate_readiness`; `GitHubService.evaluate_pull_request_readiness`; GitHub service tests | VERIFIED | Readiness is evaluated through activities and GitHub REST state, not workflow code. |
+| FR-005 | `merge_automation.evaluate_readiness`; `GitHubService.evaluate_pull_request_readiness`; GitHub service tests | VERIFIED | Readiness is evaluated through activities and GitHub REST state, not workflow code. |
 | FR-006 | `classify_readiness`; blocker kinds and sanitization tests | VERIFIED | Blockers distinguish checks, review, Jira, closed PR, stale revision, policy denial, and unavailable state. |
 | FR-007 | `MoonMindMergeGateWorkflow.run`; resolver creation activity | VERIFIED | Resolver creation happens only when readiness has no blockers. |
 | FR-008 | Resolver idempotency key and workflow in-memory resolver ref guard; duplicate run test | VERIFIED | Duplicate evaluations do not create a second resolver for the same revision. |
 | FR-009 | `build_resolver_run_request` | VERIFIED | Resolver follow-up carries PR context, policy, Jira key, `pr-resolver`, and publish mode `none`. |
-| FR-010 | Resolver request disables publish and carries merge-gate context | PARTIAL | Unit coverage validates no new publish step; a real resolver remediation wait loop was not integration-verified. |
+| FR-010 | Resolver request disables publish and carries merge-automation context | PARTIAL | Unit coverage validates no new publish step; a real resolver remediation wait loop was not integration-verified. |
 | FR-011 | Merge-gate memo/query summary plus docs | VERIFIED | Gate status, blockers, PR URL, head SHA, and resolver ref are compact and operator-visible. |
 | FR-012 | Readiness blockers and closed/stale/policy tests | VERIFIED | Terminal and unavailable states block with operator-readable reasons. |
 
@@ -43,7 +43,7 @@
 | 4 | Ready workflow test and resolver payload test | VERIFIED | Gate creates a resolver run when ready. |
 | 5 | Duplicate ready workflow test | VERIFIED | Repeated readiness evaluation launches one resolver. |
 | 6 | Closed PR/stale/policy blocker tests | VERIFIED | Blocks instead of launching resolver. |
-| 7 | Resolver publish mode `none` and merge-gate context | PARTIAL | Boundary evidence exists for resolver context; full resolver remediation-cycle integration is not runnable here. |
+| 7 | Resolver publish mode `none` and merge-automation context | PARTIAL | Boundary evidence exists for resolver context; full resolver remediation-cycle integration is not runnable here. |
 
 ## Constitution And Source Design Coverage
 
@@ -57,7 +57,7 @@
 ## Original Request Alignment
 
 - MM-341 is preserved in `spec.md`, tasks, verification, and implementation context.
-- The implementation uses the requested split: parent `MoonMind.Run` -> `MoonMind.MergeGate` -> resolver `MoonMind.Run`.
+- The implementation uses the requested split: parent `MoonMind.Run` -> `MoonMind.MergeAutomation` -> resolver `MoonMind.Run`.
 - The merge gate evaluates GitHub readiness through an activity and optional Jira status through the trusted Jira tool service.
 
 ## Gaps

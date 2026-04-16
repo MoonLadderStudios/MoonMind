@@ -3081,6 +3081,16 @@ class MoonMindRunWorkflow:
                     candidate.get("jiraIssueKey") or candidate.get("jira_issue_key"),
                     max_chars=40,
                 ),
+                "fallbackPollSeconds": (
+                    candidate.get("fallbackPollSeconds")
+                    or candidate.get("fallback_poll_seconds")
+                    or (
+                        candidate.get("timeouts", {}).get("fallbackPollSeconds")
+                        if isinstance(candidate.get("timeouts"), Mapping)
+                        else None
+                    )
+                    or 120
+                ),
             }
         return None
 
@@ -3122,8 +3132,17 @@ class MoonMindRunWorkflow:
             return None
         pr_number = int(parsed["number"])
         return {
-            "workflowType": "MoonMind.MergeGate",
-            "parent": {"workflowId": parent_workflow_id, "runId": parent_run_id},
+            "workflowType": "MoonMind.MergeAutomation",
+            "parentWorkflowId": parent_workflow_id,
+            "parentRunId": parent_run_id,
+            "publishContextRef": (
+                self._coerce_text(
+                    self._publish_context.get("publishContextRef")
+                    or self._publish_context.get("artifactRef"),
+                    max_chars=500,
+                )
+                or f"artifact://workflow/{parent_workflow_id}/publish-context"
+            ),
             "pullRequest": {
                 "repo": repo,
                 "number": pr_number,
@@ -3139,14 +3158,32 @@ class MoonMindRunWorkflow:
                 ),
             },
             "jiraIssueKey": request.get("jiraIssueKey"),
-            "policy": {
-                "checks": request.get("checks") or "required",
-                "automatedReview": request.get("automatedReview") or "required",
-                "jiraStatus": request.get("jiraStatus") or "optional",
-                "mergeMethod": request.get("mergeMethod") or "squash",
+            "mergeAutomationConfig": {
+                "gate": {
+                    "github": {
+                        "checks": request.get("checks") or "required",
+                        "automatedReview": request.get("automatedReview") or "required",
+                    },
+                    "jira": {
+                        "status": request.get("jiraStatus") or "optional",
+                        "issueKey": request.get("jiraIssueKey"),
+                    },
+                },
+                "resolver": {
+                    "skill": "pr-resolver",
+                    "mergeMethod": request.get("mergeMethod") or "squash",
+                },
+                "timeouts": {
+                    "fallbackPollSeconds": int(request.get("fallbackPollSeconds") or 120),
+                },
+            },
+            "resolverTemplate": {
+                "repository": repo,
+                "targetRuntime": "codex",
+                "requiredCapabilities": ["git", "gh"],
             },
             "idempotencyKey": (
-                f"merge-gate:{parent_workflow_id}:{repo}:{pr_number}:{normalized_head_sha}"
+                f"merge-automation:{parent_workflow_id}:{repo}:{pr_number}:{normalized_head_sha}"
             ),
         }
 
@@ -3170,14 +3207,14 @@ class MoonMindRunWorkflow:
             return
         workflow_id = str(payload["idempotencyKey"])
         await workflow.start_child_workflow(
-            "MoonMind.MergeGate",
+            "MoonMind.MergeAutomation",
             payload,
             id=workflow_id,
             task_queue=WORKFLOW_TASK_QUEUE,
-            static_summary="Waiting for pull request merge readiness",
-            static_details=f"Merge gate for {pull_request_url}",
+            static_summary="Waiting for pull request merge automation readiness",
+            static_details=f"Merge automation for {pull_request_url}",
         )
-        self._publish_context["mergeGateWorkflowId"] = workflow_id
+        self._publish_context["mergeAutomationWorkflowId"] = workflow_id
         self._update_memo()
 
     def _build_agent_execution_request(

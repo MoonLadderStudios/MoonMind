@@ -437,8 +437,14 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     # General-purpose repo operations (provider-agnostic)
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.merge_pr": ("integrations", "repo_merge_pr"),
-    "merge_gate.evaluate_readiness": ("integrations", "merge_gate_evaluate_readiness"),
-    "merge_gate.create_resolver_run": ("integrations", "merge_gate_create_resolver_run"),
+    "merge_automation.evaluate_readiness": (
+        "integrations",
+        "merge_automation_evaluate_readiness",
+    ),
+    "merge_automation.create_resolver_run": (
+        "integrations",
+        "merge_automation_create_resolver_run",
+    ),
     "agent_runtime.build_launch_context": (
         "agent_runtime",
         "agent_runtime_build_launch_context",
@@ -1954,7 +1960,7 @@ class TemporalIntegrationActivities:
         from moonmind.workflows.temporal.activities.jules_activities import repo_merge_pr_activity
         return await repo_merge_pr_activity(payload)
 
-    async def merge_gate_evaluate_readiness(self, payload, /, **kwargs):
+    async def merge_automation_evaluate_readiness(self, payload, /, **kwargs):
         from moonmind.workflows.adapters.github_service import GitHubService
 
         if not isinstance(payload, Mapping):
@@ -1964,7 +1970,7 @@ class TemporalIntegrationActivities:
                 "blockers": [
                     {
                         "kind": "external_state_unavailable",
-                        "summary": "Merge-gate readiness payload is invalid.",
+                    "summary": "Merge automation readiness payload is invalid.",
                         "retryable": False,
                         "source": "policy",
                     }
@@ -1973,11 +1979,16 @@ class TemporalIntegrationActivities:
             }
 
         pull_request = payload.get("pullRequest") or {}
-        policy = payload.get("policy") or {}
+        config = payload.get("mergeAutomationConfig") or {}
+        gate = config.get("gate") if isinstance(config, Mapping) else {}
+        policy = gate.get("github") if isinstance(gate, Mapping) else {}
+        jira_policy = gate.get("jira") if isinstance(gate, Mapping) else {}
         if not isinstance(pull_request, Mapping):
             pull_request = {}
         if not isinstance(policy, Mapping):
             policy = {}
+        if not isinstance(jira_policy, Mapping):
+            jira_policy = {}
 
         readiness = await GitHubService().evaluate_pull_request_readiness(
             repo=str(pull_request.get("repo") or ""),
@@ -1989,7 +2000,7 @@ class TemporalIntegrationActivities:
         evidence = readiness.model_dump(by_alias=True)
 
         jira_issue_key = str(payload.get("jiraIssueKey") or "").strip()
-        if policy.get("jiraStatus") == "required":
+        if jira_policy.get("status") == "required":
             jira_allowed, jira_blocker = await self._merge_gate_jira_status_allowed(
                 jira_issue_key
             )
@@ -2048,7 +2059,7 @@ class TemporalIntegrationActivities:
             },
         )
 
-    async def merge_gate_create_resolver_run(self, payload, /, **kwargs):
+    async def merge_automation_create_resolver_run(self, payload, /, **kwargs):
         import hashlib
 
         key = ""
@@ -2059,7 +2070,7 @@ class TemporalIntegrationActivities:
             if isinstance(run_payload, Mapping):
                 run_input = run_payload
         suffix = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16] if key else "resolver"
-        workflow_id = f"merge-gate-resolver-{suffix}"
+        workflow_id = f"merge-automation-resolver-{suffix}"
         if run_input is not None:
             try:
                 from moonmind.config.settings import settings

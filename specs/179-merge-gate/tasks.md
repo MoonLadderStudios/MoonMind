@@ -1,13 +1,13 @@
 # Tasks: Merge Gate
 
-**Input**: Design documents from `/specs/179-merge-gate/`
+**Input**: Design documents from `/specs/179-merge-automation/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement production code until they pass.
 
 **Organization**: Tasks are grouped by phase around the single story "Gate Pull Requests Before Automated Resolution" so the work stays focused, traceable, and independently testable.
 
-**Source Traceability**: The original MM-341 Jira preset brief is preserved in `specs/179-merge-gate/spec.md`. Tasks reference FR-001 through FR-012, acceptance scenarios 1-7, edge cases, and SC-001 through SC-005.
+**Source Traceability**: The original MM-341 Jira preset brief is preserved in `specs/179-merge-automation/spec.md`. Tasks reference FR-001 through FR-012, acceptance scenarios 1-7, edge cases, and SC-001 through SC-005.
 
 **Test Commands**:
 
@@ -26,10 +26,10 @@
 
 **Purpose**: Establish feature scaffolding and shared test locations without changing runtime behavior.
 
-- [X] T001 Confirm MM-341 active feature artifacts and traceability references in specs/179-merge-gate/spec.md
-- [X] T002 Create merge-gate workflow module placeholder in moonmind/workflows/temporal/workflows/merge_gate.py
+- [X] T001 Confirm MM-341 active feature artifacts and traceability references in specs/179-merge-automation/spec.md
+- [X] T002 Create merge-automation workflow module placeholder in moonmind/workflows/temporal/workflows/merge_gate.py
 - [X] T003 [P] Create unit test module placeholder for models in tests/unit/workflows/temporal/test_merge_gate_models.py
-- [X] T004 [P] Create unit test module placeholder for merge-gate workflow helpers in tests/unit/workflows/temporal/test_merge_gate_workflow.py
+- [X] T004 [P] Create unit test module placeholder for merge-automation workflow helpers in tests/unit/workflows/temporal/test_merge_gate_workflow.py
 - [X] T005 [P] Create unit test module placeholder for parent run gate startup in tests/unit/workflows/temporal/test_run_merge_gate_start.py
 - [X] T006 [P] Create Temporal boundary test module placeholder in tests/unit/workflows/temporal/workflows/test_merge_gate_temporal.py
 
@@ -41,9 +41,9 @@
 
 **CRITICAL**: No story implementation work begins until this phase is complete.
 
-- [X] T007 Confirm merge-gate contract inventory and payload names from specs/179-merge-gate/contracts/merge-gate-contract.md
-- [X] T008 Confirm merge-gate entity and state-transition inventory from specs/179-merge-gate/data-model.md
-- [X] T009 Confirm workflow registration and activity routing anchors from specs/179-merge-gate/plan.md
+- [X] T007 Confirm merge-automation contract inventory and payload names from specs/179-merge-automation/contracts/merge-automation-contract.md
+- [X] T008 Confirm merge-automation entity and state-transition inventory from specs/179-merge-automation/data-model.md
+- [X] T009 Confirm workflow registration and activity routing anchors from specs/179-merge-automation/plan.md
 - [X] T010 Add reusable fake readiness and resolver-launch fixtures for SC-001 through SC-005 in tests/unit/workflows/temporal/test_merge_gate_workflow.py
 - [X] T011 Add parent-run publish outcome fixture for acceptance scenarios 1 and 2 in tests/unit/workflows/temporal/test_run_merge_gate_start.py
 
@@ -67,7 +67,7 @@
 
 ### Unit Tests (write first)
 
-- [X] T012 [P] Add failing unit tests for merge-gate model validation covering FR-003, FR-005, FR-006, FR-012, stale revision, missing PR identity, and unsupported policy values in tests/unit/workflows/temporal/test_merge_gate_models.py
+- [X] T012 [P] Add failing unit tests for merge-automation model validation covering FR-003, FR-005, FR-006, FR-012, stale revision, missing PR identity, and unsupported policy values in tests/unit/workflows/temporal/test_merge_gate_models.py
 - [X] T013 [P] Add failing unit tests for readiness classification blockers covering acceptance scenarios 3 and 6, edge cases, SC-002, and SC-004 in tests/unit/workflows/temporal/test_merge_gate_workflow.py
 - [X] T014 [P] Add failing unit tests for resolver launch idempotency and publish mode `none` payloads covering FR-007, FR-008, FR-009, scenario 4, scenario 5, and SC-003 in tests/unit/workflows/temporal/test_merge_gate_workflow.py
 - [X] T015 [P] Add failing unit tests for parent `MoonMind.Run` gate-start decisions covering FR-001, FR-002, FR-004, scenario 1, scenario 2, and disabled merge automation in tests/unit/workflows/temporal/test_run_merge_gate_start.py
@@ -84,15 +84,15 @@
 
 ### Implementation
 
-- [X] T023 Implement merge-gate model contracts and validation for FR-003, FR-005, FR-006, FR-008, FR-012 in moonmind/schemas/temporal_models.py
-- [X] T024 Implement merge-gate activity names and routing metadata for FR-005 and FR-007 in moonmind/workflows/temporal/activity_catalog.py
+- [X] T023 Implement merge-automation model contracts and validation for FR-003, FR-005, FR-006, FR-008, FR-012 in moonmind/schemas/temporal_models.py
+- [X] T024 Implement merge-automation activity names and routing metadata for FR-005 and FR-007 in moonmind/workflows/temporal/activity_catalog.py
 - [X] T025 Implement readiness classification helper and sanitized blocker normalization for FR-005, FR-006, FR-012, SC-002, and SC-004 in moonmind/workflows/temporal/workflows/merge_gate.py
-- [X] T026 Implement `MoonMind.MergeGate` workflow wait/evaluate/open/block lifecycle for FR-005, FR-006, FR-007, FR-008, scenario 3, scenario 4, scenario 5, and scenario 6 in moonmind/workflows/temporal/workflows/merge_gate.py
+- [X] T026 Implement `MoonMind.MergeAutomation` workflow wait/evaluate/open/block lifecycle for FR-005, FR-006, FR-007, FR-008, scenario 3, scenario 4, scenario 5, and scenario 6 in moonmind/workflows/temporal/workflows/merge_gate.py
 - [X] T027 Implement external event signal handling for duplicate and out-of-order readiness events covering FR-008 and edge cases in moonmind/workflows/temporal/workflows/merge_gate.py
 - [X] T028 Implement resolver follow-up creation payload builder using pr-resolver and publish mode `none` for FR-007, FR-009, scenario 4, and contract resolver request in moonmind/workflows/temporal/workflows/merge_gate.py
-- [X] T029 Register merge-gate workflow type for FR-002 and operator visibility in moonmind/workflows/temporal/workers.py
-- [X] T030 Register merge-gate workflow implementation for FR-002 in moonmind/workflows/temporal/worker_entrypoint.py
-- [X] T031 Implement merge-gate activity runtime bindings for readiness evaluation and resolver creation covering FR-005, FR-007, FR-009, and contract activity names in moonmind/workflows/temporal/activity_runtime.py
+- [X] T029 Register merge-automation workflow type for FR-002 and operator visibility in moonmind/workflows/temporal/workers.py
+- [X] T030 Register merge-automation workflow implementation for FR-002 in moonmind/workflows/temporal/worker_entrypoint.py
+- [X] T031 Implement merge-automation activity runtime bindings for readiness evaluation and resolver creation covering FR-005, FR-007, FR-009, and contract activity names in moonmind/workflows/temporal/activity_runtime.py
 - [X] T032 Implement parent `MoonMind.Run` merge-automation request detection and post-PR gate startup for FR-001, FR-002, FR-004, scenario 1, scenario 2, and SC-001 in moonmind/workflows/temporal/workflows/run.py
 - [X] T033 Implement resolver-side readiness reuse hook or helper call after remediation commits for FR-010, scenario 7, and SC-005 in moonmind/workflows/temporal/workflows/run.py
 - [X] T034 Expose compact gate status, blockers, and resolver refs through existing workflow memo/query/projection path for FR-011 and contract projection shape in moonmind/workflows/temporal/workflows/merge_gate.py
@@ -106,13 +106,13 @@
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [X] T036 [P] Update operator-facing Temporal workflow catalog references for `MoonMind.MergeGate` in docs/Temporal/WorkflowTypeCatalogAndLifecycle.md
+- [X] T036 [P] Update operator-facing Temporal workflow catalog references for `MoonMind.MergeAutomation` in docs/Temporal/WorkflowTypeCatalogAndLifecycle.md
 - [X] T037 [P] Update publish/merge automation quick reference in docs/Tasks/TaskPublishing.md
 - [X] T038 [P] Add or refine edge-case unit coverage for sanitized blockers and secret-like provider details in tests/unit/workflows/temporal/test_merge_gate_workflow.py
-- [X] T039 Run quickstart validation commands from specs/179-merge-gate/quickstart.md
+- [X] T039 Run quickstart validation commands from specs/179-merge-automation/quickstart.md
 - [X] T040 Run full unit verification with `./tools/test_unit.sh`
-- [X] T041 Run hermetic integration verification with `./tools/test_integration.sh` when Docker Compose is available, or document the exact environment blocker in specs/179-merge-gate/verification.md
-- [X] T042 Run `/speckit.verify` for specs/179-merge-gate after implementation and tests pass
+- [X] T041 Run hermetic integration verification with `./tools/test_integration.sh` when Docker Compose is available, or document the exact environment blocker in specs/179-merge-automation/verification.md
+- [X] T042 Run `/speckit.verify` for specs/179-merge-automation after implementation and tests pass
 
 ---
 
@@ -148,7 +148,7 @@
 ## Parallel Example
 
 ```bash
-Task: "Add failing unit tests for merge-gate model validation in tests/unit/workflows/temporal/test_merge_gate_models.py"
+Task: "Add failing unit tests for merge-automation model validation in tests/unit/workflows/temporal/test_merge_gate_models.py"
 Task: "Add failing unit tests for parent MoonMind.Run gate-start decisions in tests/unit/workflows/temporal/test_run_merge_gate_start.py"
 Task: "Update operator-facing Temporal workflow catalog references in docs/Temporal/WorkflowTypeCatalogAndLifecycle.md"
 ```
@@ -158,7 +158,7 @@ Task: "Update operator-facing Temporal workflow catalog references in docs/Tempo
 ## Implementation Strategy
 
 1. Complete setup and foundational schema/activity scaffolding.
-2. Write all unit tests and confirm they fail for missing merge-gate models, workflow helpers, and parent startup logic.
+2. Write all unit tests and confirm they fail for missing merge-automation models, workflow helpers, and parent startup logic.
 3. Write all Temporal workflow-boundary tests and confirm they fail for missing workflow registration/lifecycle behavior.
 4. Implement compact models, activity names, readiness helpers, workflow lifecycle, activity bindings, and parent-run startup.
 5. Re-run focused unit and workflow-boundary tests until green.

@@ -59,11 +59,15 @@ def test_build_merge_gate_start_payload_from_published_pr() -> None:
     )
 
     assert payload is not None
-    assert payload["workflowType"] == "MoonMind.MergeGate"
+    assert payload["workflowType"] == "MoonMind.MergeAutomation"
+    assert payload["parentWorkflowId"] == "mm:parent"
+    assert payload["parentRunId"] == "run-1"
+    assert payload["publishContextRef"].startswith("artifact://")
     assert payload["pullRequest"]["number"] == 341
     assert payload["pullRequest"]["headSha"] == "abc123"
     assert payload["jiraIssueKey"] == "MM-341"
-    assert payload["policy"]["mergeMethod"] == "squash"
+    assert payload["mergeAutomationConfig"]["resolver"]["mergeMethod"] == "squash"
+    assert payload["resolverTemplate"]["repository"] == "MoonLadderStudios/MoonMind"
 
 
 def test_build_merge_gate_start_payload_requires_real_head_sha() -> None:

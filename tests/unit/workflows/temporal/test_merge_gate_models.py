@@ -4,8 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from moonmind.schemas.temporal_models import (
-    MergeGatePolicyModel,
-    MergeGateStartInput,
+    MergeAutomationConfigModel,
+    MergeAutomationStartInput,
     PullRequestRefModel,
     ReadinessEvidenceModel,
 )
@@ -27,14 +27,40 @@ def test_pull_request_ref_requires_compact_identity() -> None:
         PullRequestRefModel(repo="MoonLadderStudios/MoonMind", number=341, url="")
 
 
-def test_merge_gate_start_rejects_unsupported_policy_value() -> None:
+def test_merge_automation_start_rejects_unsupported_policy_value() -> None:
     with pytest.raises(ValidationError):
-        MergeGateStartInput(
-            workflowType="MoonMind.MergeGate",
-            parent={"workflowId": "mm:parent"},
+        MergeAutomationStartInput(
+            workflowType="MoonMind.MergeAutomation",
+            parentWorkflowId="mm:parent",
+            publishContextRef="artifact://publish-context",
             pullRequest=_valid_pull_request(),
-            policy={"checks": "sometimes"},
+            mergeAutomationConfig={"gate": {"github": {"checks": "sometimes"}}},
+            resolverTemplate={"repository": "MoonLadderStudios/MoonMind"},
         )
+
+
+def test_merge_automation_start_requires_publish_context_ref() -> None:
+    with pytest.raises(ValidationError):
+        MergeAutomationStartInput(
+            workflowType="MoonMind.MergeAutomation",
+            parentWorkflowId="mm:parent",
+            publishContextRef="",
+            pullRequest=_valid_pull_request(),
+            resolverTemplate={"repository": "MoonLadderStudios/MoonMind"},
+        )
+
+
+def test_merge_automation_start_normalizes_fallback_poll_seconds() -> None:
+    payload = MergeAutomationStartInput(
+        workflowType="MoonMind.MergeAutomation",
+        parentWorkflowId="mm:parent",
+        publishContextRef="artifact://publish-context",
+        pullRequest=_valid_pull_request(),
+        mergeAutomationConfig={"timeouts": {"fallbackPollSeconds": -1}},
+        resolverTemplate={"repository": "MoonLadderStudios/MoonMind"},
+    )
+
+    assert payload.config.timeouts.fallback_poll_seconds == 120
 
 
 def test_readiness_evidence_rejects_ready_with_blockers() -> None:
@@ -53,10 +79,9 @@ def test_readiness_evidence_rejects_ready_with_blockers() -> None:
 
 
 def test_policy_defaults_to_required_checks_and_reviews() -> None:
-    policy = MergeGatePolicyModel()
+    policy = MergeAutomationConfigModel().gate.github
 
     assert policy.checks == "required"
     assert policy.automated_review == "required"
-    assert policy.jira_status == "optional"
-    assert policy.merge_method == "squash"
-
+    assert MergeAutomationConfigModel().gate.jira.status == "optional"
+    assert MergeAutomationConfigModel().resolver.merge_method == "squash"

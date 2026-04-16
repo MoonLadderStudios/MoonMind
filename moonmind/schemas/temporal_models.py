@@ -9,7 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
-SUPPORTED_WORKFLOW_TYPES = ("MoonMind.Run", "MoonMind.ManifestIngest", "MoonMind.MergeGate")
+SUPPORTED_WORKFLOW_TYPES = (
+    "MoonMind.Run",
+    "MoonMind.ManifestIngest",
+    "MoonMind.MergeAutomation",
+)
 SUPPORTED_FAILURE_POLICIES = (
     "fail_fast",
     "continue_and_report",
@@ -58,7 +62,7 @@ def normalize_dependency_ids(raw_value: Any) -> list[str]:
 
 
 class PullRequestRefModel(BaseModel):
-    """Compact pull request identity carried through merge-gate workflow history."""
+    """Compact pull request identity carried through merge automation history."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -85,21 +89,93 @@ class PullRequestRefModel(BaseModel):
         return value
 
 
-MergeGatePolicySetting = Literal["required", "optional", "disabled"]
+MergeAutomationPolicySetting = Literal["required", "optional", "disabled"]
 MergeMethod = Literal["merge", "squash", "rebase"]
 
 
-class MergeGatePolicyModel(BaseModel):
-    """Readiness policy for one merge gate."""
+class MergeAutomationGitHubGateModel(BaseModel):
+    """GitHub readiness policy for merge automation."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    checks: MergeGatePolicySetting = Field("required", alias="checks")
-    automated_review: MergeGatePolicySetting = Field(
+    checks: MergeAutomationPolicySetting = Field("required", alias="checks")
+    automated_review: MergeAutomationPolicySetting = Field(
         "required", alias="automatedReview"
     )
-    jira_status: MergeGatePolicySetting = Field("optional", alias="jiraStatus")
+
+
+class MergeAutomationJiraGateModel(BaseModel):
+    """Jira readiness policy for merge automation."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = Field(False, alias="enabled")
+    issue_key: str | None = Field(None, alias="issueKey")
+    allowed_statuses: list[str] = Field(default_factory=list, alias="allowedStatuses")
+    status: MergeAutomationPolicySetting = Field("optional", alias="status")
+
+
+class MergeAutomationGateModel(BaseModel):
+    """Readiness policy for one merge automation workflow."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    github: MergeAutomationGitHubGateModel = Field(
+        default_factory=MergeAutomationGitHubGateModel,
+        alias="github",
+    )
+    jira: MergeAutomationJiraGateModel = Field(
+        default_factory=MergeAutomationJiraGateModel,
+        alias="jira",
+    )
+
+
+class MergeAutomationResolverModel(BaseModel):
+    """Resolver configuration for merge automation."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    skill: str = Field("pr-resolver", alias="skill")
     merge_method: MergeMethod = Field("squash", alias="mergeMethod")
+
+
+class MergeAutomationTimeoutsModel(BaseModel):
+    """Bounded wait settings for merge automation."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    fallback_poll_seconds: int = Field(120, alias="fallbackPollSeconds")
+    expire_after_seconds: int | None = Field(None, alias="expireAfterSeconds")
+
+    @field_validator("fallback_poll_seconds", mode="before")
+    @classmethod
+    def _normalize_fallback_poll_seconds(cls, value: Any) -> int:
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return 120
+        if candidate <= 0:
+            return 120
+        return min(candidate, 3600)
+
+
+class MergeAutomationConfigModel(BaseModel):
+    """Full merge automation configuration carried by workflow input."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    gate: MergeAutomationGateModel = Field(
+        default_factory=MergeAutomationGateModel,
+        alias="gate",
+    )
+    resolver: MergeAutomationResolverModel = Field(
+        default_factory=MergeAutomationResolverModel,
+        alias="resolver",
+    )
+    timeouts: MergeAutomationTimeoutsModel = Field(
+        default_factory=MergeAutomationTimeoutsModel,
+        alias="timeouts",
+    )
 
 
 ReadinessBlockerKind = Literal[
@@ -166,7 +242,7 @@ class ReadinessEvidenceModel(BaseModel):
 
 
 class ResolverRunRefModel(BaseModel):
-    """Reference to the resolver follow-up run launched by a merge gate."""
+    """Reference to the resolver follow-up run launched by merge automation."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -175,24 +251,48 @@ class ResolverRunRefModel(BaseModel):
     created: bool = Field(True, alias="created")
 
 
-class MergeGateStartInput(BaseModel):
-    """Start input for ``MoonMind.MergeGate``."""
+class MergeAutomationStartInput(BaseModel):
+    """Start input for ``MoonMind.MergeAutomation``."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    workflow_type: Literal["MoonMind.MergeGate"] = Field(..., alias="workflowType")
-    parent: dict[str, Any] = Field(..., alias="parent")
+    workflow_type: Literal["MoonMind.MergeAutomation"] = Field(..., alias="workflowType")
+    parent_workflow_id: str = Field(..., alias="parentWorkflowId")
+    parent_run_id: str | None = Field(None, alias="parentRunId")
+    publish_context_ref: str = Field(..., alias="publishContextRef")
     pull_request: PullRequestRefModel = Field(..., alias="pullRequest")
     jira_issue_key: str | None = Field(None, alias="jiraIssueKey")
-    policy: MergeGatePolicyModel = Field(default_factory=MergeGatePolicyModel, alias="policy")
+    config: MergeAutomationConfigModel = Field(
+        default_factory=MergeAutomationConfigModel,
+        alias="mergeAutomationConfig",
+    )
+    resolver_template: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="resolverTemplate",
+    )
+    blockers: list[ReadinessBlockerModel] = Field(default_factory=list, alias="blockers")
+    cycle_count: int = Field(0, alias="cycleCount")
+    resolver_history: list[ResolverRunRefModel] = Field(
+        default_factory=list,
+        alias="resolverHistory",
+    )
+    expire_at: str | None = Field(None, alias="expireAt")
     idempotency_key: str | None = Field(None, alias="idempotencyKey")
 
-    @model_validator(mode="after")
-    def _parent_has_workflow_id(self) -> "MergeGateStartInput":
-        workflow_id = str(self.parent.get("workflowId") or "").strip()
-        if not workflow_id:
-            raise ValueError("parent.workflowId is required")
-        return self
+    @field_validator("parent_workflow_id", "publish_context_ref")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise ValueError("field must be a non-empty string")
+        return candidate
+
+    @field_validator("cycle_count")
+    @classmethod
+    def _non_negative_cycle_count(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("cycleCount must be non-negative")
+        return value
 
 
 class DependencyResolvedSignalPayload(BaseModel):
