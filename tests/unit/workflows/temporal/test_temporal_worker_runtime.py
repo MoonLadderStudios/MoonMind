@@ -315,8 +315,16 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
                     },
                     {
                         "id": "jira",
-                        "tool": {"type": "skill", "name": "jira-issue-creator"},
+                        "tool": {"type": "skill", "name": "story.create_jira_issues"},
                         "instructions": "Create Jira issues from the generated breakdown.",
+                        "storyOutput": {
+                            "mode": "jira",
+                            "jira": {
+                                "projectKey": "MM",
+                                "issueTypeName": "Story",
+                                "dependencyMode": "linear_blocker_chain",
+                            },
+                        },
                     },
                 ],
             }
@@ -331,12 +339,22 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     assert breakdown["inputs"]["storyBreakdownPath"].startswith(
         "docs/tmp/story-breakdowns/"
     )
+    assert breakdown["inputs"]["storyOutput"]["mode"] == "jira"
+    assert breakdown["inputs"]["targetBranch"].startswith("jira-breakdown-")
     assert (
         jira["inputs"]["storyBreakdownPath"]
         == breakdown["inputs"]["storyBreakdownPath"]
     )
-    assert jira["inputs"]["selectedSkill"] == "jira-issue-creator"
-    assert jira["inputs"]["publishMode"] == "none"
+    assert jira["inputs"]["targetBranch"] == breakdown["inputs"]["targetBranch"]
+    assert jira["tool"] == {
+        "type": "skill",
+        "name": "story.create_jira_issues",
+        "version": "1.0",
+    }
+    assert jira["inputs"]["selectedSkill"] == "story.create_jira_issues"
+    assert jira["inputs"]["storyOutput"]["jira"]["dependencyMode"] == (
+        "linear_blocker_chain"
+    )
 
 
 def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():

@@ -30,9 +30,12 @@ inputs:
     default: Story
   - name: jira_dependency_mode
     label: Jira Dependency Mode
-    type: text
+    type: enum
     required: true
-    default: none
+    default: linear_blocker_chain
+    options:
+      - linear_blocker_chain
+      - none
 steps:
   - title: Break down declarative design
     instructions: |-
@@ -57,6 +60,12 @@ steps:
       If dependency mode is linear_blocker_chain, create an ordered blocker chain so each later story is blocked by the immediately preceding story.
       If dependency mode is none, create the Jira issues without dependency links.
       Return the created Jira issue keys, URLs, dependency mode, and created/reused/failed link results.
+    storyOutput:
+      mode: jira
+      jira:
+        projectKey: "{{ inputs.jira_project_key }}"
+        issueTypeName: "{{ inputs.jira_issue_type }}"
+        dependencyMode: "{{ inputs.jira_dependency_mode }}"
     skill:
-      id: jira-issue-creator
+      id: story.create_jira_issues
       args: {}

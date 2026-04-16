@@ -667,6 +667,168 @@ async def test_launch_session_materializes_profile_into_request_environment(
     )
 
 
+async def test_launch_session_returns_safe_auth_diagnostics_metadata(
+    tmp_path: Path,
+) -> None:
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+            metadata={"vendorThreadId": "vendor-thread-1"},
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+    codex_home_path = tmp_path / "task-1" / ".moonmind" / "codex-home"
+
+    result = await activities.agent_runtime_launch_session(
+        {
+            "request": {
+                "taskRunId": "task-1",
+                "sessionId": "sess-1",
+                "threadId": "thread-1",
+                "workspacePath": str(tmp_path / "task-1" / "repo"),
+                "sessionWorkspacePath": str(tmp_path / "task-1" / "session"),
+                "artifactSpoolPath": str(tmp_path / "task-1" / "artifacts"),
+                "codexHomePath": str(codex_home_path),
+                "imageRef": "moonmind:latest",
+                "environment": {"MANAGED_AUTH_VOLUME_PATH": "/home/app/.codex-auth"},
+            },
+            "profile": {
+                "runtimeId": "codex_cli",
+                "profileId": "codex-oauth",
+                "providerId": "openai",
+                "credentialSource": "oauth_volume",
+                "runtimeMaterializationMode": "oauth_home",
+                "volumeRef": "codex_auth_volume",
+                "volumeMountPath": "/home/app/.codex-auth",
+            },
+        }
+    )
+
+    diagnostics = result.metadata["authDiagnostics"]
+    assert result.metadata["vendorThreadId"] == "vendor-thread-1"
+    assert diagnostics == {
+        "component": "managed_session_controller",
+        "readiness": "ready",
+        "profileRef": "codex-oauth",
+        "runtimeId": "codex_cli",
+        "providerId": "openai",
+        "credentialSource": "oauth_volume",
+        "runtimeMaterializationMode": "oauth_home",
+        "volumeRef": "codex_auth_volume",
+        "authMountTarget": "/home/app/.codex-auth",
+        "codexHomePath": str(codex_home_path),
+    }
+    assert "auth.json" not in str(result.metadata)
+    assert "token=" not in str(result.metadata)
+
+
+async def test_launch_session_accepts_mapping_response_before_auth_diagnostics(
+    tmp_path: Path,
+) -> None:
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value={
+            "sessionState": {
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            "status": "ready",
+            "imageRef": "moonmind:latest",
+            "metadata": {"vendorThreadId": "vendor-thread-1"},
+        }
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+    codex_home_path = tmp_path / "task-1" / ".moonmind" / "codex-home"
+
+    result = await activities.agent_runtime_launch_session(
+        {
+            "request": {
+                "taskRunId": "task-1",
+                "sessionId": "sess-1",
+                "threadId": "thread-1",
+                "workspacePath": str(tmp_path / "task-1" / "repo"),
+                "sessionWorkspacePath": str(tmp_path / "task-1" / "session"),
+                "artifactSpoolPath": str(tmp_path / "task-1" / "artifacts"),
+                "codexHomePath": str(codex_home_path),
+                "imageRef": "moonmind:latest",
+            },
+            "profile": {
+                "runtimeId": "codex_cli",
+                "profileId": "codex-oauth",
+                "providerId": "openai",
+                "credentialSource": "oauth_volume",
+                "runtimeMaterializationMode": "oauth_home",
+                "volumeRef": "codex_auth_volume",
+                "volumeMountPath": "/home/app/.codex-auth",
+            },
+        }
+    )
+
+    assert isinstance(result, CodexManagedSessionHandle)
+    assert result.metadata["vendorThreadId"] == "vendor-thread-1"
+    assert result.metadata["authDiagnostics"]["profileRef"] == "codex-oauth"
+    assert result.metadata["authDiagnostics"]["readiness"] == "ready"
+
+
+async def test_launch_session_failure_reports_sanitized_auth_diagnostics(
+    tmp_path: Path,
+) -> None:
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        side_effect=RuntimeError(
+            "MANAGED_AUTH_VOLUME_PATH /home/app/.codex-auth/auth.json token=sk-test-secret failed"
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="component=managed_session_controller",
+    ) as exc_info:
+        await activities.agent_runtime_launch_session(
+            {
+                "request": {
+                    "taskRunId": "task-1",
+                    "sessionId": "sess-1",
+                    "threadId": "thread-1",
+                    "workspacePath": str(tmp_path / "task-1" / "repo"),
+                    "sessionWorkspacePath": str(tmp_path / "task-1" / "session"),
+                    "artifactSpoolPath": str(tmp_path / "task-1" / "artifacts"),
+                    "codexHomePath": str(
+                        tmp_path / "task-1" / ".moonmind" / "codex-home"
+                    ),
+                    "imageRef": "moonmind:latest",
+                    "environment": {"MANAGED_AUTH_VOLUME_PATH": "/home/app/.codex-auth"},
+                },
+                "profile": {
+                    "runtimeId": "codex_cli",
+                    "profileId": "codex-oauth",
+                    "providerId": "openai",
+                    "credentialSource": "oauth_volume",
+                    "runtimeMaterializationMode": "oauth_home",
+                    "volumeRef": "codex_auth_volume",
+                    "volumeMountPath": "/home/app/.codex-auth",
+                },
+            }
+        )
+
+    message = str(exc_info.value)
+    assert "sk-test-secret" not in message
+    assert "/home/app/.codex-auth/auth.json" not in message
+    assert "[REDACTED]" in message
+    assert "[REDACTED_AUTH_PATH]" in message
+
+
 async def test_launch_session_rejects_structured_secret_ref_values(
     tmp_path: Path,
 ) -> None:

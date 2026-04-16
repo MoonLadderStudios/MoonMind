@@ -441,7 +441,7 @@ async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
             assert template.latest_version is not None
             assert [step["skill"]["id"] for step in template.latest_version.steps] == [
                 "moonspec-breakdown",
-                "jira-issue-creator",
+                "story.create_jira_issues",
             ]
 
             expanded = await service.expand_template(
@@ -453,7 +453,6 @@ async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "TOOL",
                     "jira_issue_type": "Story",
-                    "jira_dependency_mode": "linear_blocker_chain",
                 },
                 context={},
             )
@@ -461,11 +460,22 @@ async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
             assert len(expanded["steps"]) == 2
             assert expanded["steps"][0]["skill"]["id"] == "moonspec-breakdown"
             assert "docs/Designs/RuntimeTypes.md" in expanded["steps"][0]["instructions"]
-            assert expanded["steps"][1]["skill"]["id"] == "jira-issue-creator"
+            assert expanded["steps"][1]["skill"]["id"] == "story.create_jira_issues"
             assert "Jira Story issue in project TOOL" in expanded["steps"][1]["instructions"]
             assert "linear_blocker_chain" in expanded["steps"][1]["instructions"]
             assert "ordered blocker chain" in expanded["steps"][1]["instructions"]
             assert "Source Document path" in expanded["steps"][1]["instructions"]
+            assert expanded["steps"][1]["storyOutput"] == {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "TOOL",
+                    "issueTypeName": "Story",
+                    "dependencyMode": "linear_blocker_chain",
+                },
+            }
+            assert expanded["appliedTemplate"]["inputs"]["jira_dependency_mode"] == (
+                "linear_blocker_chain"
+            )
 
 
 async def test_jira_breakdown_uses_first_allowed_project_as_runtime_default(
@@ -514,6 +524,12 @@ async def test_jira_breakdown_uses_first_allowed_project_as_runtime_default(
             assert "Jira Story issue in project MM" in expanded["steps"][1][
                 "instructions"
             ]
+            assert "Dependency mode: none." in expanded["steps"][1]["instructions"]
+            assert expanded["steps"][1]["storyOutput"]["jira"] == {
+                "projectKey": "MM",
+                "issueTypeName": "Story",
+                "dependencyMode": "none",
+            }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
 
 
