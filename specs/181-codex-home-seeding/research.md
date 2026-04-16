@@ -14,7 +14,7 @@ Alternatives considered: Provider verification tests were rejected for this plan
 
 ## Integration Test Strategy
 
-Decision: Use compose-backed hermetic integration coverage through `./tools/test_integration.sh # includes or is extended with tests/integration/services/temporal/test_codex_session_runtime.py` when Docker is available.
+Decision: Use compose-backed hermetic integration coverage through `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/services/temporal/test_codex_session_runtime.py`.
 Rationale: Stories touching API, Temporal, managed runtime, Docker, or browser transport need boundary evidence beyond isolated unit tests.
 Alternatives considered: Skipping integration was rejected; only local execution may be blocked when `/var/run/docker.sock` is unavailable.
 

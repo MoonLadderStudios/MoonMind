@@ -5,7 +5,7 @@
 ## Prerequisites
 
 - Unit command: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/auth/test_oauth_session_activities.py tests/unit/schemas/test_agent_runtime_models.py`
-- Integration command: `./tools/test_integration.sh # include tests/integration/temporal/test_oauth_session.py`
+- Integration command: `./tools/test_integration.sh`; required coverage target: `tests/integration/temporal/test_oauth_session.py`
 - Full unit command before verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 
 ## Source Traceability
@@ -36,17 +36,17 @@ Unit test plan: write red-first unit tests for validation, serialization, redact
 
 Integration test plan: write red-first hermetic integration tests for the real API/workflow/runtime/container/UI boundary before production code when Docker/browser services are available.
 
-- [ ] T005 [P] Add failing unit test for Codex OAuth profile shape validation for FR-001 FR-002 FR-004 DESIGN-REQ-003 in tests/unit/schemas/test_agent_runtime_models.py
+- [ ] T005 [P] Add failing unit test for Codex OAuth profile shape validation for FR-001 FR-002 FR-004 SC-003 DESIGN-REQ-003 in tests/unit/schemas/test_agent_runtime_models.py
 - [ ] T006 [P] Add failing unit test for secret-free Provider Profile registration/update for FR-002 FR-003 DESIGN-REQ-010 DESIGN-REQ-016 in tests/unit/auth/test_oauth_session_activities.py
-- [ ] T007 [P] Add failing unit test for serialized profile response redaction and non-Codex scope guardrail for FR-003 FR-005 DESIGN-REQ-002 in tests/unit/api_service/api/routers/test_provider_profiles.py
+- [ ] T007 [P] Add failing unit test for serialized profile response redaction and non-Codex scope guardrail for FR-003 FR-005 SC-004 DESIGN-REQ-002 in tests/unit/api_service/api/routers/test_provider_profiles.py
 - [ ] T008 [P] Add failing integration test for OAuth verification to Provider Profile registration boundary for SC-001 SC-002 DESIGN-REQ-001 DESIGN-REQ-016 in tests/integration/temporal/test_oauth_session.py
 - [ ] T009 Run red-first focused unit tests with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/auth/test_oauth_session_activities.py tests/unit/schemas/test_agent_runtime_models.py` and record expected failures in specs/179-codex-auth-profile/tasks.md (STORY-001)
-- [ ] T010 Run red-first integration tests with `./tools/test_integration.sh # include tests/integration/temporal/test_oauth_session.py` when Docker is available, or record `/var/run/docker.sock` blocker in specs/179-codex-auth-profile/tasks.md (STORY-001)
+- [ ] T010 Run red-first integration tests with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/temporal/test_oauth_session.py`; otherwise record `/var/run/docker.sock` blocker in specs/179-codex-auth-profile/tasks.md (STORY-001)
 - [ ] T011 Implement Codex OAuth profile validation fields for FR-001 FR-004 in moonmind/schemas/agent_runtime_models.py
 - [ ] T012 Implement Provider Profile registration/update metadata handling for FR-002 FR-003 in moonmind/workflows/temporal/activities/oauth_session_activities.py
 - [ ] T013 Implement secret-free profile serialization and non-Codex scope behavior for FR-003 FR-005 in api_service/api/routers/provider_profiles.py
 - [ ] T014 Run focused unit tests until green with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/auth/test_oauth_session_activities.py tests/unit/schemas/test_agent_runtime_models.py` and update task evidence in specs/179-codex-auth-profile/tasks.md
-- [ ] T015 Run integration verification with `./tools/test_integration.sh # include tests/integration/temporal/test_oauth_session.py` when Docker is available and update task evidence in specs/179-codex-auth-profile/tasks.md
+- [ ] T015 Run integration verification with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/temporal/test_oauth_session.py`; update task evidence in specs/179-codex-auth-profile/tasks.md
 - [ ] T016 Validate the single-story acceptance scenarios and MM-318 traceability against specs/179-codex-auth-profile/spec.md and specs/179-codex-auth-profile/contracts/codex-auth-profile.md
 
 ## Final Phase: Polish And Verification

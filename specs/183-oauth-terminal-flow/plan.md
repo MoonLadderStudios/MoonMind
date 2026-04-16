@@ -53,8 +53,8 @@ This story implements first-party OAuth terminal session, auth runner, and PTY/W
 
 ## Test Strategy
 
-- Unit strategy: add red-first tests around validation, serialization, state transitions, redaction, and boundary payload construction for this story. Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx` during focused iteration and `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` before final verification.
-- Integration strategy: add or update hermetic integration tests for the real API/workflow/runtime/container/browser boundary when this story crosses one. Run `./tools/test_integration.sh # includes or is extended with tests/integration/temporal/test_oauth_session.py` when Docker is available; record the exact blocker if the Docker socket is unavailable in a managed-agent container.
+- Unit strategy: add red-first tests around validation, serialization, state transitions, redaction, and boundary payload construction for this story. Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py` and `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx` during focused iteration and `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` before final verification.
+- Integration strategy: add or update hermetic integration tests for the real API/workflow/runtime/container/browser boundary when this story crosses one. Run `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/temporal/test_oauth_session.py`; record the exact blocker if the Docker socket is unavailable in a managed-agent container.
 
 ## Complexity Tracking
 

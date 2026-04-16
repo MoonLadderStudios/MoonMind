@@ -9,7 +9,8 @@
 ## Focused Unit Verification
 
 ```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py
+npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx
 ```
 
 Expected result: focused tests for `STORY-004` fail before implementation changes and pass after the story is complete.
@@ -25,8 +26,10 @@ Expected result: full required unit suite passes before final MoonSpec verificat
 ## Integration Verification
 
 ```bash
-./tools/test_integration.sh # includes or is extended with tests/integration/temporal/test_oauth_session.py
+./tools/test_integration.sh
 ```
+
+Coverage target: `tests/integration/temporal/test_oauth_session.py` must be included in or added to the hermetic integration suite.
 
 Expected result: hermetic integration coverage passes in a Docker-enabled environment. If `/var/run/docker.sock` is unavailable, record the blocker in verification output.
 

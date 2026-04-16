@@ -54,7 +54,7 @@ This story implements session-runtime auth seeding and per-run CODEX_HOME startu
 ## Test Strategy
 
 - Unit strategy: add red-first tests around validation, serialization, state transitions, redaction, and boundary payload construction for this story. Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_codex_session_runtime.py tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py` during focused iteration and `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` before final verification.
-- Integration strategy: add or update hermetic integration tests for the real API/workflow/runtime/container/browser boundary when this story crosses one. Run `./tools/test_integration.sh # includes or is extended with tests/integration/services/temporal/test_codex_session_runtime.py` when Docker is available; record the exact blocker if the Docker socket is unavailable in a managed-agent container.
+- Integration strategy: add or update hermetic integration tests for the real API/workflow/runtime/container/browser boundary when this story crosses one. Run `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/services/temporal/test_codex_session_runtime.py`; record the exact blocker if the Docker socket is unavailable in a managed-agent container.
 
 ## Complexity Tracking
 

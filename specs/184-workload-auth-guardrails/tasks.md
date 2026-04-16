@@ -5,7 +5,7 @@
 ## Prerequisites
 
 - Unit command: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py`
-- Integration command: `./tools/test_integration.sh # include tests/integration/services/temporal/workflows/test_agent_run.py`
+- Integration command: `./tools/test_integration.sh`; required coverage target: `tests/integration/services/temporal/workflows/test_agent_run.py`
 - Full unit command before verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 
 ## Source Traceability
@@ -36,16 +36,16 @@ Unit test plan: write red-first unit tests for validation, serialization, redact
 
 Integration test plan: write red-first hermetic integration tests for the real API/workflow/runtime/container/UI boundary before production code when Docker/browser services are available.
 
-- [ ] T005 [P] Add failing unit test for mount allowlist and credential mount declaration validation for FR-001 FR-002 FR-003 DESIGN-REQ-009 in tests/unit/workloads/test_workload_contract.py
+- [ ] T005 [P] Add failing unit test for mount allowlist and credential mount declaration validation for FR-001 FR-002 FR-003 SC-005 DESIGN-REQ-009 in tests/unit/workloads/test_workload_contract.py
 - [ ] T006 [P] Add failing unit test for secret redaction and workload identity separation for FR-004 FR-005 DESIGN-REQ-010 DESIGN-REQ-020 in tests/unit/workloads/test_docker_workload_launcher.py
 - [ ] T007 [P] Add failing integration test for workflow-to-workload launch boundary without implicit auth inheritance for SC-001 through SC-004 DESIGN-REQ-009 DESIGN-REQ-020 in tests/integration/services/temporal/workflows/test_agent_run.py
 - [ ] T008 Run red-first focused unit tests with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py` and record expected failures in specs/184-workload-auth-guardrails/tasks.md (STORY-006)
-- [ ] T009 Run red-first integration tests with `./tools/test_integration.sh # include tests/integration/services/temporal/workflows/test_agent_run.py` when Docker is available, or record `/var/run/docker.sock` blocker in specs/184-workload-auth-guardrails/tasks.md (STORY-006)
+- [ ] T009 Run red-first integration tests with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/services/temporal/workflows/test_agent_run.py`; otherwise record `/var/run/docker.sock` blocker in specs/184-workload-auth-guardrails/tasks.md (STORY-006)
 - [ ] T010 Implement workload profile mount allowlist and credential mount declaration validation for FR-001 FR-002 FR-003 in moonmind/schemas/workload_models.py
 - [ ] T011 Implement runtime launch rejection/redaction behavior for FR-002 FR-003 in moonmind/workloads/docker_launcher.py
 - [ ] T012 Implement workload identity separation and secret-free result metadata for FR-004 FR-005 in moonmind/workflows/temporal/artifacts.py
 - [ ] T013 Run focused unit tests until green with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py` and update task evidence in specs/184-workload-auth-guardrails/tasks.md
-- [ ] T014 Run integration verification with `./tools/test_integration.sh # include tests/integration/services/temporal/workflows/test_agent_run.py` when Docker is available and update task evidence in specs/184-workload-auth-guardrails/tasks.md
+- [ ] T014 Run integration verification with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/services/temporal/workflows/test_agent_run.py`; update task evidence in specs/184-workload-auth-guardrails/tasks.md
 - [ ] T015 Validate the single-story acceptance scenarios and MM-318 traceability against specs/184-workload-auth-guardrails/spec.md and specs/184-workload-auth-guardrails/contracts/workload-auth-guardrails.md
 
 ## Final Phase: Polish And Verification

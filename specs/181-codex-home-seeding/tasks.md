@@ -5,7 +5,7 @@
 ## Prerequisites
 
 - Unit command: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_codex_session_runtime.py tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py`
-- Integration command: `./tools/test_integration.sh # include tests/integration/services/temporal/test_codex_session_runtime.py`
+- Integration command: `./tools/test_integration.sh`; required coverage target: `tests/integration/services/temporal/test_codex_session_runtime.py`
 - Full unit command before verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 
 ## Source Traceability
@@ -38,14 +38,14 @@ Integration test plan: write red-first hermetic integration tests for the real A
 
 - [ ] T005 [P] Add failing unit test for per-run Codex home creation and missing auth source failures for FR-001 FR-002 DESIGN-REQ-005 DESIGN-REQ-007 in tests/unit/services/temporal/runtime/test_codex_session_runtime.py
 - [ ] T006 [P] Add failing unit test for auth seeding eligibility/exclusions and config preservation for FR-002 FR-004 DESIGN-REQ-010 DESIGN-REQ-019 in tests/unit/services/temporal/runtime/test_codex_session_runtime.py
-- [ ] T007 [P] Add failing unit test for runtime evidence surface guardrails for FR-004 DESIGN-REQ-019 in tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py
+- [ ] T007 [P] Add failing unit test for runtime evidence surface guardrails for FR-004 SC-005 DESIGN-REQ-019 in tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py
 - [ ] T008 [P] Add failing integration test for in-container runtime launch and CODEX_HOME behavior for SC-001 through SC-004 DESIGN-REQ-008 in tests/integration/services/temporal/test_codex_session_runtime.py
 - [ ] T009 Run red-first focused unit tests with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_codex_session_runtime.py tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py` and record expected failures in specs/181-codex-home-seeding/tasks.md (STORY-003)
-- [ ] T010 Run red-first integration tests with `./tools/test_integration.sh # include tests/integration/services/temporal/test_codex_session_runtime.py` when Docker is available, or record `/var/run/docker.sock` blocker in specs/181-codex-home-seeding/tasks.md (STORY-003)
+- [ ] T010 Run red-first integration tests with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/services/temporal/test_codex_session_runtime.py`; otherwise record `/var/run/docker.sock` blocker in specs/181-codex-home-seeding/tasks.md (STORY-003)
 - [ ] T011 Implement per-run home creation, auth seeding, error handling, and CODEX_HOME startup for FR-001 FR-002 FR-003 in moonmind/workflows/temporal/runtime/codex_session_runtime.py
 - [ ] T012 Implement operator evidence handling that avoids runtime homes/auth volumes for FR-004 in moonmind/workflows/temporal/runtime/strategies/codex_cli.py
 - [ ] T013 Run focused unit tests until green with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_codex_session_runtime.py tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py` and update task evidence in specs/181-codex-home-seeding/tasks.md
-- [ ] T014 Run integration verification with `./tools/test_integration.sh # include tests/integration/services/temporal/test_codex_session_runtime.py` when Docker is available and update task evidence in specs/181-codex-home-seeding/tasks.md
+- [ ] T014 Run integration verification with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/services/temporal/test_codex_session_runtime.py`; update task evidence in specs/181-codex-home-seeding/tasks.md
 - [ ] T015 Validate the single-story acceptance scenarios and MM-318 traceability against specs/181-codex-home-seeding/spec.md and specs/181-codex-home-seeding/contracts/codex-home-seeding.md
 
 ## Final Phase: Polish And Verification

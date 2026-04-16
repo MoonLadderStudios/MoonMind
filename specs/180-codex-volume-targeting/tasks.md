@@ -5,7 +5,7 @@
 ## Prerequisites
 
 - Unit command: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_codex_session_adapter.py tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/schemas/test_managed_session_models.py`
-- Integration command: `./tools/test_integration.sh # include tests/integration/services/temporal/test_codex_session_task_creation.py`
+- Integration command: `./tools/test_integration.sh`; required coverage target: `tests/integration/services/temporal/test_codex_session_task_creation.py`
 - Full unit command before verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 
 ## Source Traceability
@@ -38,15 +38,15 @@ Integration test plan: write red-first hermetic integration tests for the real A
 
 - [ ] T005 [P] Add failing unit test for launch request path and auth target validation for FR-001 FR-003 DESIGN-REQ-006 in tests/unit/schemas/test_managed_session_models.py
 - [ ] T006 [P] Add failing unit test for profile-derived auth target and workspace Codex home payload for FR-001 FR-002 DESIGN-REQ-005 in tests/unit/workflows/adapters/test_codex_session_adapter.py
-- [ ] T007 [P] Add failing unit test for Docker mount command and reserved environment behavior for FR-002 FR-003 FR-004 DESIGN-REQ-017 in tests/unit/services/temporal/runtime/test_managed_session_controller.py
+- [ ] T007 [P] Add failing unit test for Docker mount command and reserved environment behavior for FR-002 FR-003 FR-004 SC-005 DESIGN-REQ-017 in tests/unit/services/temporal/runtime/test_managed_session_controller.py
 - [ ] T008 [P] Add failing integration test for compose-backed managed session launch boundary for SC-001 through SC-004 DESIGN-REQ-004 DESIGN-REQ-017 in tests/integration/services/temporal/test_codex_session_task_creation.py
 - [ ] T009 Run red-first focused unit tests with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_codex_session_adapter.py tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/schemas/test_managed_session_models.py` and record expected failures in specs/180-codex-volume-targeting/tasks.md (STORY-002)
-- [ ] T010 Run red-first integration tests with `./tools/test_integration.sh # include tests/integration/services/temporal/test_codex_session_task_creation.py` when Docker is available, or record `/var/run/docker.sock` blocker in specs/180-codex-volume-targeting/tasks.md (STORY-002)
+- [ ] T010 Run red-first integration tests with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/services/temporal/test_codex_session_task_creation.py`; otherwise record `/var/run/docker.sock` blocker in specs/180-codex-volume-targeting/tasks.md (STORY-002)
 - [ ] T011 Implement launch request validation for FR-001 FR-003 in moonmind/schemas/managed_session_models.py
 - [ ] T012 Implement OAuth-backed profile launch payload shaping for FR-001 FR-002 in moonmind/workflows/adapters/codex_session_adapter.py
 - [ ] T013 Implement workspace/auth volume mounting and reserved environment propagation for FR-002 FR-003 FR-004 in moonmind/workflows/temporal/runtime/managed_session_controller.py
 - [ ] T014 Run focused unit tests until green with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/adapters/test_codex_session_adapter.py tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/schemas/test_managed_session_models.py` and update task evidence in specs/180-codex-volume-targeting/tasks.md
-- [ ] T015 Run integration verification with `./tools/test_integration.sh # include tests/integration/services/temporal/test_codex_session_task_creation.py` when Docker is available and update task evidence in specs/180-codex-volume-targeting/tasks.md
+- [ ] T015 Run integration verification with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/services/temporal/test_codex_session_task_creation.py`; update task evidence in specs/180-codex-volume-targeting/tasks.md
 - [ ] T016 Validate the single-story acceptance scenarios and MM-318 traceability against specs/180-codex-volume-targeting/spec.md and specs/180-codex-volume-targeting/contracts/codex-volume-targeting.md
 
 ## Final Phase: Polish And Verification

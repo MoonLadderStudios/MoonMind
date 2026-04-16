@@ -25,8 +25,10 @@ Expected result: full required unit suite passes before final MoonSpec verificat
 ## Integration Verification
 
 ```bash
-./tools/test_integration.sh # includes or is extended with tests/integration/services/temporal/workflows/test_agent_run.py
+./tools/test_integration.sh
 ```
+
+Coverage target: `tests/integration/services/temporal/workflows/test_agent_run.py` must be included in or added to the hermetic integration suite.
 
 Expected result: hermetic integration coverage passes in a Docker-enabled environment. If `/var/run/docker.sock` is unavailable, record the blocker in verification output.
 

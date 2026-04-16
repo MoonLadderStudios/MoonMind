@@ -54,7 +54,7 @@ This story implements provider profile registration and secret-free profile seri
 ## Test Strategy
 
 - Unit strategy: add red-first tests around validation, serialization, state transitions, redaction, and boundary payload construction for this story. Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py tests/unit/auth/test_oauth_session_activities.py tests/unit/schemas/test_agent_runtime_models.py` during focused iteration and `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` before final verification.
-- Integration strategy: add or update hermetic integration tests for the real API/workflow/runtime/container/browser boundary when this story crosses one. Run `./tools/test_integration.sh # includes or is extended with tests/integration/temporal/test_oauth_session.py` when Docker is available; record the exact blocker if the Docker socket is unavailable in a managed-agent container.
+- Integration strategy: add or update hermetic integration tests for the real API/workflow/runtime/container/browser boundary when this story crosses one. Run `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/temporal/test_oauth_session.py`; record the exact blocker if the Docker socket is unavailable in a managed-agent container.
 
 ## Complexity Tracking
 
