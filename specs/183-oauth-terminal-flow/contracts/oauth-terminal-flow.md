@@ -2,11 +2,11 @@
 
 ## Story Boundary
 
-Source story: `STORY-004` from `docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json`.
+Source story: `STORY-004` from the OAuth Terminal design coverage preserved in Jira issue `MM-358`.
 
 ## Inputs
 
-- Jira traceability: `MM-318` and preset brief `MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md`.
+- Jira traceability: `MM-358` and preset brief `MM-358: OAuth Terminal Enrollment Flow`.
 - Source design coverage: DESIGN-REQ-001, DESIGN-REQ-008, DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-020.
 - Dependency requirements: STORY-001, STORY-005.
 

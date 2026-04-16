@@ -1,11 +1,61 @@
-"Terminal PTY bridge startup logic."
+"Terminal PTY bridge startup and frame validation logic."
 
 import asyncio
+from dataclasses import dataclass, field
 import logging
 import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+class TerminalBridgeFrameError(ValueError):
+    """Raised when a browser terminal frame is unsupported or unsafe."""
+
+
+@dataclass
+class TerminalBridgeConnection:
+    """Validate browser terminal frames before they reach the auth runner PTY."""
+
+    session_id: str
+    terminal_bridge_id: str
+    owner_user_id: str | None
+    resize_events: list[tuple[int, int]] = field(default_factory=list)
+    input_events: list[str] = field(default_factory=list)
+    heartbeat_count: int = 0
+    output_events: list[str] = field(default_factory=list)
+
+    def handle_frame(self, frame: dict[str, Any]) -> dict[str, Any]:
+        frame_type = str(frame.get("type", "")).strip()
+        if frame_type == "resize":
+            cols = int(frame.get("cols", 0))
+            rows = int(frame.get("rows", 0))
+            if cols <= 0 or rows <= 0 or cols > 500 or rows > 500:
+                raise TerminalBridgeFrameError("resize dimensions are out of range")
+            self.resize_events.append((cols, rows))
+            return {"type": "resize_ack", "cols": cols, "rows": rows}
+        if frame_type == "input":
+            data = frame.get("data")
+            if not isinstance(data, str):
+                raise TerminalBridgeFrameError("input frame data must be text")
+            self.input_events.append(data)
+            return {"type": "input_ack", "bytes": len(data.encode("utf-8"))}
+        if frame_type == "heartbeat":
+            self.heartbeat_count += 1
+            return {"type": "heartbeat_ack"}
+        if frame_type == "close":
+            return {"type": "close_ack"}
+        if frame_type == "output":
+            data = frame.get("data")
+            if not isinstance(data, str):
+                raise TerminalBridgeFrameError("output frame data must be text")
+            self.output_events.append(data)
+            return {"type": "output_ack", "bytes": len(data.encode("utf-8"))}
+        if frame_type in {"exec", "docker_exec", "task_terminal"}:
+            raise TerminalBridgeFrameError(
+                "generic Docker exec and task terminal frames are not supported"
+            )
+        raise TerminalBridgeFrameError(f"unsupported terminal frame type: {frame_type}")
 
 async def start_terminal_bridge_container(
     session_id: str,
