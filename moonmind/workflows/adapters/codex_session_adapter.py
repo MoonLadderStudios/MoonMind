@@ -129,31 +129,50 @@ def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
     return truncated or normalized[:_MAX_AGENT_RUN_RESULT_SUMMARY_CHARS]
 
 
-def _jira_issue_creator_blocker_summary(
+def _jira_skill_blocker_summary(
     *,
     parameters: Mapping[str, Any] | None,
     assistant_text: str,
 ) -> str | None:
-    if selected_agent_skill(parameters) != "jira-issue-creator":
+    selected_skill = selected_agent_skill(parameters)
+    if selected_skill not in {"jira-issue-creator", "jira-pr-verify"}:
         return None
     normalized = " ".join(str(assistant_text or "").lower().split())
     if not normalized:
         return None
-    if _JIRA_CREATED_ISSUE_KEYS_PATTERN.search(str(assistant_text or "")):
-        return None
-    blocker_markers = (
-        "no jira issues were created",
-        "could not create the jira",
-        "could not create jira",
-        "jira access is not configured",
-        "jira tools are not enabled",
-        "jira tool calls are unavailable",
-        "no jira mcp connector/tool is available",
-    )
+    if selected_skill == "jira-issue-creator":
+        if _JIRA_CREATED_ISSUE_KEYS_PATTERN.search(str(assistant_text or "")):
+            return None
+        blocker_markers = (
+            "no jira issues were created",
+            "could not create the jira",
+            "could not create jira",
+            "jira access is not configured",
+            "jira tools are not enabled",
+            "jira tool calls are unavailable",
+            "no jira mcp connector/tool is available",
+        )
+        default_summary = "Jira issue creation was blocked."
+    else:
+        blocker_markers = (
+            "could not read the jira issue body",
+            "could not fetch the jira issue",
+            "could not access jira",
+            "jira issue body is unavailable",
+            "jira content is not already available",
+            "no authenticated jira session",
+            "without an authenticated jira session",
+            "trusted jira content is unavailable",
+            "jira access is not configured",
+            "jira tools are not enabled",
+            "jira tool calls are unavailable",
+            "no jira mcp connector/tool is available",
+        )
+        default_summary = "Jira PR verification was blocked."
     if any(marker in normalized for marker in blocker_markers):
         return _clamp_agent_run_result_summary(
             assistant_text,
-            default="Jira issue creation was blocked.",
+            default=default_summary,
         )
     return None
 
@@ -434,7 +453,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         "turnId": turn_id,
                     },
                 )
-                jira_blocker_summary = _jira_issue_creator_blocker_summary(
+                jira_blocker_summary = _jira_skill_blocker_summary(
                     parameters=request.parameters,
                     assistant_text=assistant_text,
                 )

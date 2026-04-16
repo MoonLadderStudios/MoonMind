@@ -3301,44 +3301,66 @@ class TemporalAgentRuntimeActivities:
         *,
         parameters: Mapping[str, Any] | None,
     ) -> str:
-        prepared = cls._append_jira_issue_creator_tool_hint(
+        prepared = cls._append_selected_jira_tool_hint(
             instructions,
             parameters=parameters,
         )
         return append_managed_codex_runtime_note(prepared)
 
     @staticmethod
-    def _append_jira_issue_creator_tool_hint(
+    def _append_selected_jira_tool_hint(
         instructions: str,
         *,
         parameters: Mapping[str, Any] | None,
     ) -> str:
         params = parameters if isinstance(parameters, Mapping) else {}
-        if selected_agent_skill(params) != "jira-issue-creator":
+        selected_skill = selected_agent_skill(params)
+        if selected_skill not in {"jira-issue-creator", "jira-pr-verify"}:
             return instructions
         if "MoonMind trusted Jira tools" in instructions:
             return instructions
-        story_breakdown_path = str(params.get("storyBreakdownPath") or "").strip()
-        story_breakdown_hint = (
-            f"- Read MoonSpec story candidates from `{story_breakdown_path}`.\n"
-            if story_breakdown_path
-            else ""
-        )
+        tool_lines = [
+            "- Use the internal MoonMind API from the managed session via "
+            "`$MOONMIND_URL` for Jira operations; do not look for raw Jira "
+            "credentials in the shell.",
+            "- List available tools with `GET $MOONMIND_URL/mcp/tools`.",
+            "- Invoke Jira tools with `POST $MOONMIND_URL/mcp/tools/call`.",
+        ]
+        if selected_skill == "jira-issue-creator":
+            story_breakdown_path = str(params.get("storyBreakdownPath") or "").strip()
+            if story_breakdown_path:
+                tool_lines.insert(
+                    0,
+                    f"- Read MoonSpec story candidates from `{story_breakdown_path}`.",
+                )
+            tool_lines.extend(
+                [
+                    "- Example create-metadata call: "
+                    '`{"tool":"jira.list_create_issue_types",'
+                    '"arguments":{"projectKey":"<PROJECT_KEY>"}}`.',
+                    "- Resolve the Story issue type through "
+                    "`jira.list_create_issue_types` and create issues through "
+                    "`jira.create_issue`.",
+                    "- Treat the task as blocked if Jira tool calls are unavailable "
+                    "or no Jira issue key is returned.",
+                ]
+            )
+        else:
+            tool_lines.extend(
+                [
+                    "- Fetch the Jira issue body through `jira.get_issue` before "
+                    "verifying PR coverage.",
+                    "- Example issue fetch call: "
+                    '`{"tool":"jira.get_issue",'
+                    '"arguments":{"issueKey":"<ISSUE_KEY>"}}`.',
+                    "- Treat the task as blocked if trusted Jira tool calls are "
+                    "unavailable or the issue fetch is denied.",
+                ]
+            )
         return (
             instructions.rstrip()
             + "\n\nMoonMind trusted Jira tools:\n"
-            + story_breakdown_hint
-            + "- Use the internal MoonMind API from the managed session via "
-            + "`$MOONMIND_URL` for Jira operations; do not look for raw Jira "
-            + "credentials in the shell.\n"
-            + "- List available tools with `GET $MOONMIND_URL/mcp/tools`.\n"
-            + "- Invoke Jira tools with `POST $MOONMIND_URL/mcp/tools/call` and "
-            + "JSON like `{\"tool\":\"jira.list_create_issue_types\","
-            + "\"arguments\":{\"projectKey\":\"<PROJECT_KEY>\"}}`.\n"
-            + "- Resolve the Story issue type through `jira.list_create_issue_types` "
-            + "and create issues through `jira.create_issue`.\n"
-            + "- Treat the task as blocked if Jira tool calls are unavailable or no "
-            + "Jira issue key is returned."
+            + "\n".join(tool_lines)
         )
 
     async def agent_runtime_send_turn(
