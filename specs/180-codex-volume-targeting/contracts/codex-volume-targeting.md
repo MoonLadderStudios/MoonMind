@@ -2,11 +2,11 @@
 
 ## Story Boundary
 
-Source story: `STORY-002` from `docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json`.
+Source story: `STORY-002` from Jira issue `MM-356` and source design `docs/ManagedAgents/OAuthTerminal.md`.
 
 ## Inputs
 
-- Jira traceability: `MM-318` and preset brief `MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md`.
+- Jira traceability: `MM-356` and preset brief `MM-356: Codex Managed Session Volume Targeting`.
 - Source design coverage: DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-017, DESIGN-REQ-020.
 - Dependency requirements: STORY-001.
 

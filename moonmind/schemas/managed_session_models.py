@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, get_args
 
@@ -31,6 +32,17 @@ HandoffSeedArtifactRef = Annotated[
         max_length=MAX_TEMPORAL_METADATA_REF_CHARS,
     ),
 ]
+
+
+def _validate_absolute_posix_path(value: str, *, field_name: str) -> str:
+    normalized = require_non_blank(value, field_name=field_name).replace("\\", "/")
+    normalized = posixpath.normpath(normalized)
+    if not normalized.startswith("/"):
+        raise ValueError(f"{field_name} must be an absolute path")
+    return normalized
+
+
+_RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
 
 
 ManagedSessionControlAction = Literal[
@@ -734,10 +746,41 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
 
     @model_validator(mode="after")
     def _normalize_environment(self) -> "LaunchCodexManagedSessionRequest":
+        self.workspace_path = _validate_absolute_posix_path(
+            self.workspace_path,
+            field_name="workspacePath",
+        )
+        self.session_workspace_path = _validate_absolute_posix_path(
+            self.session_workspace_path,
+            field_name="sessionWorkspacePath",
+        )
+        self.artifact_spool_path = _validate_absolute_posix_path(
+            self.artifact_spool_path,
+            field_name="artifactSpoolPath",
+        )
+        self.codex_home_path = _validate_absolute_posix_path(
+            self.codex_home_path,
+            field_name="codexHomePath",
+        )
         normalized: dict[str, str] = {}
         for raw_key, raw_value in self.environment.items():
             key = require_non_blank(str(raw_key), field_name="environment key")
-            normalized[key] = str(raw_value)
+            value = str(raw_value)
+            if key.startswith(_RESERVED_SESSION_ENV_PREFIX):
+                raise ValueError(
+                    "environment cannot override reserved session keys: " + key
+                )
+            if key == "MANAGED_AUTH_VOLUME_PATH":
+                value = _validate_absolute_posix_path(
+                    value,
+                    field_name="environment.MANAGED_AUTH_VOLUME_PATH",
+                )
+                if value == self.codex_home_path:
+                    raise ValueError(
+                        "environment.MANAGED_AUTH_VOLUME_PATH must not equal "
+                        "codexHomePath"
+                    )
+            normalized[key] = value
         self.environment = normalized
         self.workspace_spec = (
             dict(self.workspace_spec)

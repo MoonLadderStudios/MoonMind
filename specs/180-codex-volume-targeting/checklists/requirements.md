@@ -37,5 +37,5 @@
 ## Notes
 
 - Runtime mode selected.
-- `MM-318` and the original preset brief are preserved in `spec.md` Input.
-- This spec covers one isolated generated story from the MM-318 breakdown.
+- `MM-356` and the original preset brief are preserved in `spec.md` Input.
+- This spec covers one isolated generated story from the OAuthTerminal source design.

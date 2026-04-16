@@ -3563,16 +3563,20 @@ async def test_controller_launch_cleans_up_container_when_handshake_fails() -> N
 
 @pytest.mark.asyncio
 async def test_controller_launch_rejects_reserved_session_environment() -> None:
-    request = LaunchCodexManagedSessionRequest(
-        taskRunId="task-1",
-        sessionId="sess-1",
-        threadId="logical-thread-1",
-        workspacePath="/tmp/agent_jobs/task-1/repo",
-        sessionWorkspacePath="/tmp/agent_jobs/task-1/session",
-        artifactSpoolPath="/tmp/agent_jobs/task-1/artifacts",
-        codexHomePath="/home/app/.codex",
-        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+    request = LaunchCodexManagedSessionRequest.model_construct(
+        task_run_id="task-1",
+        workflow_id=None,
+        session_id="sess-1",
+        session_epoch=1,
+        thread_id="logical-thread-1",
+        workspace_path="/tmp/agent_jobs/task-1/repo",
+        session_workspace_path="/tmp/agent_jobs/task-1/session",
+        artifact_spool_path="/tmp/agent_jobs/task-1/artifacts",
+        codex_home_path="/home/app/.codex",
+        image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+        turn_completion_timeout_seconds=3600,
         environment={"MOONMIND_SESSION_WORKSPACE_PATH": "/tmp/override"},
+        workspace_spec={},
     )
 
     async def _fake_runner(
