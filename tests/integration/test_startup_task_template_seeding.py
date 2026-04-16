@@ -64,6 +64,12 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert seeded_step_titles[0] == "Create or select Moon Spec"
         assert "moonspec-breakdown" not in seeded_skill_ids
         assert "speckit-analyze" not in seeded_skill_ids
+        specify_step = template.latest_version.steps[0]
+        assert "Before running moonspec-specify, validate" in specify_step[
+            "instructions"
+        ]
+        assert "stop immediately" in specify_step["instructions"]
+        assert "routed through moonspec-breakdown" in specify_step["instructions"]
         tasks_step = next(
             step
             for step in template.latest_version.steps

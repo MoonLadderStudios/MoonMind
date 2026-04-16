@@ -50,6 +50,8 @@ steps:
       If the request is "Implement Docs/<path>.md", treat it as runtime intent and use the document as source requirements.
       Source design path (optional): {{ inputs.source_design_path }}.
 
+      Before running moonspec-specify, validate that the input is already exactly one independently testable story or an active feature directory with an existing one-story spec.md.
+      If the input is a broad design, names multiple stories/features, asks to split or implement all stories, or otherwise cannot be bounded to one independently testable story without selection, stop immediately and report that MoonSpec Orchestrate requires a preselected single story and that the input must be routed through moonspec-breakdown or another upstream selector first.
       Run moonspec-specify unless an active spec.md already passes the specify gate.
       Do not classify this input into a different workflow and do not run moonspec-breakdown from this preset; any story splitting must already be complete before MoonSpec Orchestrate starts.
       Preserve the original request or source design in spec.md so final verification can compare against it.

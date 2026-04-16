@@ -32,6 +32,8 @@ Default intent is `runtime`: production code plus tests must be delivered. Use `
 ## Core Rules
 
 - Moon Spec uses one independently testable story per `spec.md`.
+- Before starting downstream stages, validate that the input is already exactly one independently testable story or an active feature directory with an existing one-story `spec.md`.
+- If the input is a broad design, names multiple stories/features, asks to split or implement all stories, or otherwise cannot be bounded to one independently testable story without selection, stop immediately and report that a higher-level workflow must route it through `moonspec-breakdown` or another upstream selector first.
 - Single-story requests go through `moonspec-specify`.
 - TDD is the default strategy.
 - Unit tests and integration tests are both expected.
@@ -103,9 +105,11 @@ If a gate fails, stop or run the appropriate upstream skill. Do not continue on 
 
 Use the provided input as a preselected single-story request or active feature directory:
 
-1. Run `moonspec-specify` if `spec.md` does not already exist.
-2. Verify the specify gate.
-3. Do not run `moonspec-breakdown` or create more than one spec from this workflow.
+1. Validate the single-story precondition before running `moonspec-specify`.
+2. Stop immediately if the input still needs story splitting or upstream story selection.
+3. Run `moonspec-specify` if `spec.md` does not already exist.
+4. Verify the specify gate.
+5. Do not run `moonspec-breakdown` or create more than one spec from this workflow.
 
 ### 2. Plan
 
