@@ -50,6 +50,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     build_managed_profile_launch_context,
     default_credential_source_for_runtime,
 )
+from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.workflows.codex_session_timeouts import (
     MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
@@ -128,18 +129,12 @@ def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
     return truncated or normalized[:_MAX_AGENT_RUN_RESULT_SUMMARY_CHARS]
 
 
-def _selected_agent_skill(parameters: Mapping[str, Any] | None) -> str:
-    if not isinstance(parameters, Mapping):
-        return ""
-    return str(parameters.get("selectedSkill") or "").strip().lower()
-
-
 def _jira_issue_creator_blocker_summary(
     *,
     parameters: Mapping[str, Any] | None,
     assistant_text: str,
 ) -> str | None:
-    if _selected_agent_skill(parameters) != "jira-issue-creator":
+    if selected_agent_skill(parameters) != "jira-issue-creator":
         return None
     normalized = " ".join(str(assistant_text or "").lower().split())
     if not normalized:

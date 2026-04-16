@@ -44,6 +44,7 @@ from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgen
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
 from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DISABLED_MESSAGE
 from moonmind.workflows.adapters.jules_client import JulesClient
+from moonmind.workflows.agent_skills.selection import selected_agent_skill
 
 
 from moonmind.schemas.agent_runtime_models import (
@@ -3365,8 +3366,7 @@ class TemporalAgentRuntimeActivities:
         parameters: Mapping[str, Any] | None,
     ) -> str:
         params = parameters if isinstance(parameters, Mapping) else {}
-        selected_skill = str(params.get("selectedSkill") or "").strip().lower()
-        if selected_skill != "jira-issue-creator":
+        if selected_agent_skill(params) != "jira-issue-creator":
             return instructions
         if "MoonMind trusted Jira tools" in instructions:
             return instructions

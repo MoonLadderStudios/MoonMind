@@ -1242,7 +1242,42 @@ describe("Task Create Entrypoint", () => {
       });
   });
 
-  it("prefers the seeded MoonSpec orchestrate template over legacy SpecKit rows", () => {
+  it("prefers the seeded Jira Orchestrate template over MoonSpec and legacy SpecKit rows", () => {
+    const preferred = preferredTemplate([
+      {
+        key: "global::::jira-orchestrate",
+        slug: "jira-orchestrate",
+        scope: "global",
+        title: "Jira Orchestrate",
+        description: "Jira preset.",
+        latestVersion: "1.0.0",
+        version: "1.0.0",
+      },
+      {
+        key: "global::::speckit-orchestrate",
+        slug: "speckit-orchestrate",
+        scope: "global",
+        title: "SpecKit Orchestrate",
+        description: "Legacy preset.",
+        latestVersion: "1.0.0",
+        version: "1.0.0",
+      },
+      {
+        key: "global::::moonspec-orchestrate",
+        slug: "moonspec-orchestrate",
+        scope: "global",
+        title: "MoonSpec Orchestrate",
+        description: "MoonSpec preset.",
+        latestVersion: "1.0.0",
+        version: "1.0.0",
+      },
+    ]);
+
+    expect(preferred?.slug).toBe("jira-orchestrate");
+    expect(preferred?.scope).toBe("global");
+  });
+
+  it("falls back to the seeded MoonSpec orchestrate template when Jira Orchestrate is absent", () => {
     const preferred = preferredTemplate([
       {
         key: "global::::speckit-orchestrate",

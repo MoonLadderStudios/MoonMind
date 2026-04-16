@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -256,6 +256,51 @@ ClaudeHookWorkEventName = Literal[
     "work.hook.completed",
     "work.hook.blocked",
 ]
+ClaudeCheckpointTrigger = Literal[
+    "user_prompt",
+    "tracked_file_edit",
+    "bash_side_effect",
+    "external_manual_edit",
+]
+ClaudeCheckpointCaptureMode = Literal[
+    "conversation",
+    "code_and_conversation",
+    "code",
+    "best_effort",
+    "skipped",
+]
+ClaudeCheckpointStatus = Literal[
+    "captured",
+    "skipped",
+    "expired",
+    "garbage_collected",
+]
+ClaudeCheckpointRetentionState = Literal[
+    "addressable",
+    "expires_at",
+    "expired",
+    "garbage_collected",
+]
+ClaudeRewindMode = Literal[
+    "restore_code_and_conversation",
+    "restore_conversation_only",
+    "restore_code_only",
+    "summarize_from_here",
+]
+ClaudeRewindStatus = Literal["started", "completed", "failed"]
+ClaudeCheckpointWorkEventName = Literal[
+    "work.checkpoint.created",
+    "work.rewind.started",
+    "work.rewind.completed",
+]
+ClaudeManagedWorkEventName = Literal[
+    "work.hook.started",
+    "work.hook.completed",
+    "work.hook.blocked",
+    "work.checkpoint.created",
+    "work.rewind.started",
+    "work.rewind.completed",
+]
 ClaudeContextSourceKind = Literal[
     "system_prompt",
     "output_style",
@@ -288,6 +333,41 @@ ClaudeContextEventName = Literal[
     "work.compaction.started",
     "work.compaction.completed",
 ]
+ClaudeChildContextReturnShape = Literal["summary", "summary_plus_metadata"]
+ClaudeChildContextCommunication = Literal["caller_only"]
+ClaudeChildContextLifecycleOwner = Literal["parent_turn"]
+ClaudeChildContextStatus = Literal[
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "canceled",
+]
+ClaudeSessionGroupStatus = Literal[
+    "creating",
+    "active",
+    "tearing_down",
+    "completed",
+    "failed",
+    "canceled",
+]
+ClaudeTeamMemberRole = Literal["lead", "teammate"]
+ClaudeTeamMemberStatus = Literal[
+    "starting",
+    "running",
+    "completed",
+    "failed",
+    "canceled",
+]
+ClaudeChildWorkEventName = Literal[
+    "child.subagent.started",
+    "child.subagent.completed",
+    "team.group.created",
+    "team.member.started",
+    "team.message.sent",
+    "team.member.completed",
+    "team.group.completed",
+]
 
 CLAUDE_DECISION_STAGE_ORDER: tuple[ClaudeDecisionStage, ...] = (
     "session_state_guard",
@@ -317,6 +397,41 @@ CLAUDE_HOOK_WORK_EVENT_NAMES: tuple[ClaudeHookWorkEventName, ...] = (
     "work.hook.completed",
     "work.hook.blocked",
 )
+CLAUDE_CHECKPOINT_TRIGGERS: tuple[ClaudeCheckpointTrigger, ...] = (
+    "user_prompt",
+    "tracked_file_edit",
+    "bash_side_effect",
+    "external_manual_edit",
+)
+CLAUDE_CHECKPOINT_CAPTURE_MODES: tuple[ClaudeCheckpointCaptureMode, ...] = (
+    "conversation",
+    "code_and_conversation",
+    "code",
+    "best_effort",
+    "skipped",
+)
+CLAUDE_CHECKPOINT_RETENTION_STATES: tuple[
+    ClaudeCheckpointRetentionState, ...
+] = (
+    "addressable",
+    "expires_at",
+    "expired",
+    "garbage_collected",
+)
+CLAUDE_REWIND_MODES: tuple[ClaudeRewindMode, ...] = (
+    "restore_code_and_conversation",
+    "restore_conversation_only",
+    "restore_code_only",
+    "summarize_from_here",
+)
+assert set(CLAUDE_REWIND_MODES) == set(get_args(ClaudeRewindMode))
+CLAUDE_CHECKPOINT_WORK_EVENT_NAMES: tuple[
+    ClaudeCheckpointWorkEventName, ...
+] = (
+    "work.checkpoint.created",
+    "work.rewind.started",
+    "work.rewind.completed",
+)
 CLAUDE_CONTEXT_STARTUP_KINDS: tuple[ClaudeContextSourceKind, ...] = (
     "system_prompt",
     "output_style",
@@ -339,6 +454,15 @@ CLAUDE_CONTEXT_EVENT_NAMES: tuple[ClaudeContextEventName, ...] = (
     "work.context.loaded",
     "work.compaction.started",
     "work.compaction.completed",
+)
+CLAUDE_CHILD_WORK_EVENT_NAMES: tuple[ClaudeChildWorkEventName, ...] = (
+    "child.subagent.started",
+    "child.subagent.completed",
+    "team.group.created",
+    "team.member.started",
+    "team.message.sent",
+    "team.member.completed",
+    "team.group.completed",
 )
 _CLAUDE_CONTEXT_GUIDANCE_KINDS: frozenset[ClaudeContextSourceKind] = frozenset(
     {
@@ -1265,7 +1389,7 @@ class ClaudeManagedWorkItem(BaseModel):
     session_id: NonBlankStr = Field(..., alias="sessionId")
     kind: ClaudeWorkItemKind = Field(..., alias="kind")
     status: ClaudeWorkItemStatus = Field(..., alias="status")
-    event_name: ClaudeHookWorkEventName | None = Field(None, alias="eventName")
+    event_name: ClaudeManagedWorkEventName | None = Field(None, alias="eventName")
     payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
     started_at: datetime = Field(..., alias="startedAt")
     ended_at: datetime | None = Field(None, alias="endedAt")
@@ -1281,9 +1405,330 @@ class ClaudeManagedWorkItem(BaseModel):
             self.started_at = self.started_at.replace(tzinfo=UTC)
         if self.ended_at is not None and self.ended_at.tzinfo is None:
             self.ended_at = self.ended_at.replace(tzinfo=UTC)
-        if self.event_name is not None and self.kind != "hook_call":
+        if (
+            self.event_name in CLAUDE_HOOK_WORK_EVENT_NAMES
+            and self.kind != "hook_call"
+        ):
             raise ValueError("Hook event names require hook_call work items")
+        if self.event_name == "work.checkpoint.created" and self.kind != "checkpoint":
+            raise ValueError(
+                "Checkpoint and rewind event names require checkpoint or rewind work items"
+            )
+        if (
+            self.event_name
+            in {"work.rewind.started", "work.rewind.completed"}
+            and self.kind != "rewind"
+        ):
+            raise ValueError(
+                "Checkpoint and rewind event names require checkpoint or rewind work items"
+            )
         return self
+
+
+class ClaudeCheckpointCaptureDecision(BaseModel):
+    """Documented checkpoint capture decision for one Claude runtime trigger."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    trigger: ClaudeCheckpointTrigger
+    should_create_checkpoint: bool = Field(..., alias="shouldCreateCheckpoint")
+    capture_mode: ClaudeCheckpointCaptureMode = Field(..., alias="captureMode")
+    reason: NonBlankStr
+
+
+def claude_checkpoint_capture_decision(
+    trigger: ClaudeCheckpointTrigger,
+) -> ClaudeCheckpointCaptureDecision:
+    """Return the documented default checkpoint capture decision."""
+
+    decisions: dict[
+        ClaudeCheckpointTrigger, tuple[bool, ClaudeCheckpointCaptureMode, str]
+    ] = {
+        "user_prompt": (
+            True,
+            "conversation",
+            "User prompts create conversation rewind points.",
+        ),
+        "tracked_file_edit": (
+            True,
+            "code_and_conversation",
+            "Tracked file edits create restorable code and conversation state.",
+        ),
+        "bash_side_effect": (
+            False,
+            "skipped",
+            "Bash side effects do not create code-state checkpoints by default.",
+        ),
+        "external_manual_edit": (
+            True,
+            "best_effort",
+            "Manual external edits are represented as best-effort checkpoints.",
+        ),
+    }
+    if trigger not in decisions:
+        raise ValueError(f"Unsupported Claude checkpoint trigger: {trigger}")
+    should_create, capture_mode, reason = decisions[trigger]
+    return ClaudeCheckpointCaptureDecision(
+        trigger=trigger,
+        shouldCreateCheckpoint=should_create,
+        captureMode=capture_mode,
+        reason=reason,
+    )
+
+
+class ClaudeCheckpoint(BaseModel):
+    """Bounded metadata for one Claude session checkpoint."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    checkpoint_id: NonBlankStr = Field(..., alias="checkpointId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    turn_id: NonBlankStr | None = Field(None, alias="turnId")
+    trigger: ClaudeCheckpointTrigger
+    capture_mode: ClaudeCheckpointCaptureMode = Field(..., alias="captureMode")
+    status: ClaudeCheckpointStatus = "captured"
+    storage_ref: NonBlankStr = Field(..., alias="storageRef")
+    is_active: bool = Field(False, alias="isActive")
+    retention_state: ClaudeCheckpointRetentionState = Field(
+        "addressable", alias="retentionState"
+    )
+    created_at: datetime = Field(..., alias="createdAt")
+    expires_at: datetime | None = Field(None, alias="expiresAt")
+    rewound_from_checkpoint_id: NonBlankStr | None = Field(
+        None, alias="rewoundFromCheckpointId"
+    )
+    event_log_ref: NonBlankStr | None = Field(None, alias="eventLogRef")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_invariants(self) -> "ClaudeCheckpoint":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.expires_at is not None and self.expires_at.tzinfo is None:
+            self.expires_at = self.expires_at.replace(tzinfo=UTC)
+        if (
+            self.trigger == "bash_side_effect"
+            and self.capture_mode in {"code", "code_and_conversation"}
+        ):
+            raise ValueError(
+                "Bash side effects do not create code-state checkpoints by default"
+            )
+        if (
+            self.trigger == "external_manual_edit"
+            and self.capture_mode != "best_effort"
+        ):
+            raise ValueError("Manual external edits must use best_effort capture")
+        return self
+
+
+class ClaudeCheckpointIndex(BaseModel):
+    """Operator-visible checkpoint metadata for one Claude session."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    active_checkpoint_id: NonBlankStr | None = Field(
+        None, alias="activeCheckpointId"
+    )
+    checkpoints: tuple[ClaudeCheckpoint, ...] = Field(...)
+    generated_at: datetime = Field(..., alias="generatedAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_invariants(self) -> "ClaudeCheckpointIndex":
+        if self.generated_at.tzinfo is None:
+            self.generated_at = self.generated_at.replace(tzinfo=UTC)
+        checkpoint_ids = {checkpoint.checkpoint_id for checkpoint in self.checkpoints}
+        if self.active_checkpoint_id is not None and (
+            self.active_checkpoint_id not in checkpoint_ids
+        ):
+            raise ValueError("activeCheckpointId must refer to a listed checkpoint")
+        for checkpoint in self.checkpoints:
+            if checkpoint.session_id != self.session_id:
+                raise ValueError("CheckpointIndex cannot mix sessionId values")
+        return self
+
+
+class ClaudeRewindRequest(BaseModel):
+    """Validated request to restore or summarize from a Claude checkpoint."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    request_id: NonBlankStr = Field(..., alias="requestId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    checkpoint_id: NonBlankStr = Field(..., alias="checkpointId")
+    mode: ClaudeRewindMode
+    instructions: str | None = None
+    requested_at: datetime = Field(..., alias="requestedAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("instructions", mode="after")
+    @classmethod
+    def _validate_instructions(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return require_non_blank(value, field_name="instructions")
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeRewindRequest":
+        if self.requested_at.tzinfo is None:
+            self.requested_at = self.requested_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeRewindResult(BaseModel):
+    """Provenance-preserving result for a Claude rewind operation."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    result_id: NonBlankStr = Field(..., alias="resultId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    request_id: NonBlankStr = Field(..., alias="requestId")
+    source_checkpoint_id: NonBlankStr = Field(..., alias="sourceCheckpointId")
+    previous_active_checkpoint_id: NonBlankStr | None = Field(
+        None, alias="previousActiveCheckpointId"
+    )
+    active_checkpoint_id: NonBlankStr = Field(..., alias="activeCheckpointId")
+    mode: ClaudeRewindMode
+    status: ClaudeRewindStatus
+    rewound_from_checkpoint_id: NonBlankStr | None = Field(
+        None, alias="rewoundFromCheckpointId"
+    )
+    preserved_event_log_ref: NonBlankStr = Field(..., alias="preservedEventLogRef")
+    summary_ref: NonBlankStr | None = Field(None, alias="summaryRef")
+    code_state_restored: bool = Field(..., alias="codeStateRestored")
+    conversation_state_restored: bool = Field(..., alias="conversationStateRestored")
+    created_at: datetime = Field(..., alias="createdAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_invariants(self) -> "ClaudeRewindResult":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.status != "completed":
+            return self
+        if self.mode == "summarize_from_here":
+            if self.summary_ref is None:
+                raise ValueError("summarize_from_here requires summaryRef")
+            if self.code_state_restored:
+                raise ValueError("summarize_from_here cannot restore code state")
+            if not self.conversation_state_restored:
+                raise ValueError(
+                    "summarize_from_here must restore conversation state"
+                )
+        if self.mode == "restore_code_only" and self.conversation_state_restored:
+            raise ValueError("restore_code_only cannot restore conversation state")
+        if self.mode == "restore_code_only" and not self.code_state_restored:
+            raise ValueError("restore_code_only must restore code state")
+        if self.mode == "restore_conversation_only" and self.code_state_restored:
+            raise ValueError("restore_conversation_only cannot restore code state")
+        if (
+            self.mode == "restore_conversation_only"
+            and not self.conversation_state_restored
+        ):
+            raise ValueError(
+                "restore_conversation_only must restore conversation state"
+            )
+        if (
+            self.mode == "restore_code_and_conversation"
+            and not (self.code_state_restored and self.conversation_state_restored)
+        ):
+            raise ValueError(
+                "restore_code_and_conversation must restore code and conversation state"
+            )
+        return self
+
+
+def create_claude_checkpoint_work_item(
+    *,
+    item_id: str,
+    turn_id: str,
+    session_id: str,
+    checkpoint_id: str,
+    created_at: datetime,
+    payload: dict[str, Any] | None = None,
+) -> ClaudeManagedWorkItem:
+    """Create bounded work evidence for checkpoint capture."""
+
+    next_payload = dict(payload or {})
+    next_payload["checkpointId"] = checkpoint_id
+    return ClaudeManagedWorkItem(
+        itemId=item_id,
+        turnId=turn_id,
+        sessionId=session_id,
+        kind="checkpoint",
+        status="completed",
+        eventName="work.checkpoint.created",
+        payload=next_payload,
+        startedAt=created_at,
+        endedAt=created_at,
+    )
+
+
+def create_claude_rewind_work_items(
+    *,
+    started_item_id: str,
+    completed_item_id: str,
+    turn_id: str,
+    session_id: str,
+    request_id: str,
+    result_id: str,
+    source_checkpoint_id: str,
+    active_checkpoint_id: str,
+    created_at: datetime,
+) -> tuple[ClaudeManagedWorkItem, ClaudeManagedWorkItem]:
+    """Create bounded work evidence for a completed rewind lifecycle."""
+
+    started = ClaudeManagedWorkItem(
+        itemId=started_item_id,
+        turnId=turn_id,
+        sessionId=session_id,
+        kind="rewind",
+        status="in_progress",
+        eventName="work.rewind.started",
+        payload={
+            "requestId": request_id,
+            "sourceCheckpointId": source_checkpoint_id,
+        },
+        startedAt=created_at,
+    )
+    completed = ClaudeManagedWorkItem(
+        itemId=completed_item_id,
+        turnId=turn_id,
+        sessionId=session_id,
+        kind="rewind",
+        status="completed",
+        eventName="work.rewind.completed",
+        payload={
+            "requestId": request_id,
+            "resultId": result_id,
+            "sourceCheckpointId": source_checkpoint_id,
+            "activeCheckpointId": active_checkpoint_id,
+        },
+        startedAt=created_at,
+        endedAt=created_at,
+    )
+    return started, completed
 
 
 def claude_default_reinjection_policy(
@@ -1405,6 +1850,388 @@ class ClaudeContextCompactionResult(BaseModel):
     snapshot: ClaudeContextSnapshot
     work_item: ClaudeManagedWorkItem = Field(..., alias="workItem")
     events: tuple[ClaudeContextEvent, ...]
+
+
+class ClaudeChildWorkUsage(BaseModel):
+    """Bounded usage accounting for Claude child work."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    input_tokens: int = Field(0, alias="inputTokens", ge=0)
+    output_tokens: int = Field(0, alias="outputTokens", ge=0)
+    total_tokens: int = Field(..., alias="totalTokens", ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_total(self) -> "ClaudeChildWorkUsage":
+        if self.total_tokens < self.input_tokens + self.output_tokens:
+            raise ValueError(
+                "totalTokens must be greater than or equal to "
+                "inputTokens + outputTokens"
+            )
+        return self
+
+
+class ClaudeChildContext(BaseModel):
+    """Parent-owned subagent child context for one Claude turn."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    child_context_id: NonBlankStr = Field(..., alias="childContextId")
+    parent_session_id: NonBlankStr = Field(..., alias="parentSessionId")
+    parent_turn_id: NonBlankStr = Field(..., alias="parentTurnId")
+    profile: NonBlankStr
+    context_window: Literal["isolated"] = Field("isolated", alias="contextWindow")
+    return_shape: ClaudeChildContextReturnShape = Field(..., alias="returnShape")
+    communication: ClaudeChildContextCommunication = "caller_only"
+    lifecycle_owner: ClaudeChildContextLifecycleOwner = Field(
+        "parent_turn", alias="lifecycleOwner"
+    )
+    status: ClaudeChildContextStatus
+    usage: ClaudeChildWorkUsage | None = None
+    started_at: datetime = Field(..., alias="startedAt")
+    completed_at: datetime | None = Field(None, alias="completedAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        compact = validate_compact_temporal_mapping(value, field_name="metadata")
+        promotion_keys = {"promotedSessionId", "promotionTarget", "peerSessionId"}
+        if promotion_keys.intersection(compact):
+            raise ValueError(
+                "Subagent promotion to sibling session is out of scope for MM-347"
+            )
+        return compact
+
+    @model_validator(mode="after")
+    def _validate_datetimes(self) -> "ClaudeChildContext":
+        if self.started_at.tzinfo is None:
+            self.started_at = self.started_at.replace(tzinfo=UTC)
+        if self.completed_at is not None:
+            if self.completed_at.tzinfo is None:
+                self.completed_at = self.completed_at.replace(tzinfo=UTC)
+            if self.completed_at < self.started_at:
+                raise ValueError("completedAt cannot precede startedAt")
+        return self
+
+
+class ClaudeSessionGroup(BaseModel):
+    """Grouped sibling sessions for a Claude agent team."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_group_id: NonBlankStr = Field(..., alias="sessionGroupId")
+    lead_session_id: NonBlankStr = Field(..., alias="leadSessionId")
+    status: ClaudeSessionGroupStatus
+    usage: ClaudeChildWorkUsage | None = None
+    created_at: datetime = Field(..., alias="createdAt")
+    completed_at: datetime | None = Field(None, alias="completedAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_datetimes(self) -> "ClaudeSessionGroup":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.completed_at is not None:
+            if self.completed_at.tzinfo is None:
+                self.completed_at = self.completed_at.replace(tzinfo=UTC)
+            if self.completed_at < self.created_at:
+                raise ValueError("completedAt cannot precede createdAt")
+        return self
+
+
+class ClaudeTeamMemberSession(BaseModel):
+    """Distinct managed session participating in a Claude agent team."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    session_group_id: NonBlankStr = Field(..., alias="sessionGroupId")
+    role: ClaudeTeamMemberRole
+    status: ClaudeTeamMemberStatus
+    usage: ClaudeChildWorkUsage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+
+class ClaudeTeamMessage(BaseModel):
+    """Direct peer message exchanged inside one Claude session group."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    message_id: NonBlankStr = Field(..., alias="messageId")
+    session_group_id: NonBlankStr = Field(..., alias="sessionGroupId")
+    sender_session_id: NonBlankStr = Field(..., alias="senderSessionId")
+    peer_session_id: NonBlankStr = Field(..., alias="peerSessionId")
+    sent_at: datetime = Field(..., alias="sentAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_message(self) -> "ClaudeTeamMessage":
+        if self.sender_session_id == self.peer_session_id:
+            raise ValueError("peerSessionId must differ from senderSessionId")
+        if self.sent_at.tzinfo is None:
+            self.sent_at = self.sent_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeChildWorkEvent(BaseModel):
+    """Normalized event for Claude subagent and team child work."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    event_id: NonBlankStr = Field(..., alias="eventId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    turn_id: NonBlankStr | None = Field(None, alias="turnId")
+    child_context_id: NonBlankStr | None = Field(None, alias="childContextId")
+    session_group_id: NonBlankStr | None = Field(None, alias="sessionGroupId")
+    peer_session_id: NonBlankStr | None = Field(None, alias="peerSessionId")
+    event_name: ClaudeChildWorkEventName = Field(..., alias="eventName")
+    occurred_at: datetime = Field(..., alias="occurredAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_event_shape(self) -> "ClaudeChildWorkEvent":
+        if self.event_name.startswith("child."):
+            if not self.child_context_id:
+                raise ValueError("childContextId is required for subagent events")
+            if not self.turn_id:
+                raise ValueError("turnId is required for subagent events")
+        if self.event_name.startswith("team.") and not self.session_group_id:
+            raise ValueError("sessionGroupId is required for team events")
+        if self.event_name == "team.message.sent" and not self.peer_session_id:
+            raise ValueError("peerSessionId is required for team.message.sent")
+        if self.occurred_at.tzinfo is None:
+            self.occurred_at = self.occurred_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeChildWorkFixtureFlow(BaseModel):
+    """Deterministic provider-free fixture flow for child-work boundaries."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    parent_session: ClaudeManagedSession = Field(..., alias="parentSession")
+    child_context: ClaudeChildContext = Field(..., alias="childContext")
+    session_group: ClaudeSessionGroup = Field(..., alias="sessionGroup")
+    team_members: tuple[ClaudeTeamMemberSession, ...] = Field(
+        ..., alias="teamMembers", min_length=2
+    )
+    team_message: ClaudeTeamMessage = Field(..., alias="teamMessage")
+    events: tuple[ClaudeChildWorkEvent, ...]
+
+
+def validate_claude_team_message_membership(
+    *,
+    message: ClaudeTeamMessage,
+    members: tuple[ClaudeTeamMemberSession, ...],
+) -> None:
+    """Validate that a team message stays inside one session group."""
+
+    by_session_id = {member.session_id: member for member in members}
+    sender = by_session_id.get(message.sender_session_id)
+    peer = by_session_id.get(message.peer_session_id)
+    if sender is None or peer is None:
+        raise ValueError("sender and peer must both be team members")
+    if (
+        sender.session_group_id != message.session_group_id
+        or peer.session_group_id != message.session_group_id
+    ):
+        raise ValueError("sender and peer must belong to the same session group")
+
+
+def build_claude_child_work_fixture_flow(
+    *,
+    parent_session_id: str,
+    parent_turn_id: str,
+    child_context_id: str,
+    session_group_id: str,
+    lead_session_id: str,
+    teammate_session_id: str,
+    message_id: str,
+    created_at: datetime,
+    metadata: dict[str, Any] | None = None,
+) -> ClaudeChildWorkFixtureFlow:
+    """Build a deterministic child-work flow for schema boundary tests."""
+
+    parent_session = ClaudeManagedSession(
+        sessionId=parent_session_id,
+        executionOwner="local_process",
+        state="active",
+        primarySurface="terminal",
+        projectionMode="primary",
+        activeTurnId=parent_turn_id,
+        createdBy="user",
+        createdAt=created_at,
+        updatedAt=created_at,
+    )
+    child_context = ClaudeChildContext(
+        childContextId=child_context_id,
+        parentSessionId=parent_session_id,
+        parentTurnId=parent_turn_id,
+        profile="researcher",
+        returnShape="summary_plus_metadata",
+        status="completed",
+        usage=ClaudeChildWorkUsage(
+            inputTokens=1000,
+            outputTokens=400,
+            totalTokens=1400,
+            metadata={"rollupTarget": "parent_session"},
+        ),
+        startedAt=created_at,
+        completedAt=created_at,
+        metadata=metadata or {},
+    )
+    session_group = ClaudeSessionGroup(
+        sessionGroupId=session_group_id,
+        leadSessionId=lead_session_id,
+        status="completed",
+        usage=ClaudeChildWorkUsage(
+            inputTokens=1200,
+            outputTokens=800,
+            totalTokens=2000,
+            metadata={"rollupTarget": "session_group"},
+        ),
+        createdAt=created_at,
+        completedAt=created_at,
+    )
+    lead = ClaudeTeamMemberSession(
+        sessionId=lead_session_id,
+        sessionGroupId=session_group_id,
+        role="lead",
+        status="completed",
+        usage=ClaudeChildWorkUsage(
+            inputTokens=700,
+            outputTokens=500,
+            totalTokens=1200,
+            metadata={"rollupTarget": "session_group"},
+        ),
+    )
+    teammate = ClaudeTeamMemberSession(
+        sessionId=teammate_session_id,
+        sessionGroupId=session_group_id,
+        role="teammate",
+        status="completed",
+        usage=ClaudeChildWorkUsage(
+            inputTokens=500,
+            outputTokens=300,
+            totalTokens=800,
+            metadata={"rollupTarget": "session_group"},
+        ),
+    )
+    team_message = ClaudeTeamMessage(
+        messageId=message_id,
+        sessionGroupId=session_group_id,
+        senderSessionId=lead_session_id,
+        peerSessionId=teammate_session_id,
+        sentAt=created_at,
+        metadata={"messageRef": f"artifact://messages/{message_id}"},
+    )
+    validate_claude_team_message_membership(
+        message=team_message,
+        members=(lead, teammate),
+    )
+    events = (
+        ClaudeChildWorkEvent(
+            eventId=f"{child_context_id}:started",
+            sessionId=parent_session_id,
+            turnId=parent_turn_id,
+            childContextId=child_context_id,
+            eventName="child.subagent.started",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{child_context_id}:completed",
+            sessionId=parent_session_id,
+            turnId=parent_turn_id,
+            childContextId=child_context_id,
+            eventName="child.subagent.completed",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{session_group_id}:created",
+            sessionId=lead_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.group.created",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{lead_session_id}:started",
+            sessionId=lead_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.member.started",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{teammate_session_id}:started",
+            sessionId=teammate_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.member.started",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{message_id}:sent",
+            sessionId=lead_session_id,
+            sessionGroupId=session_group_id,
+            peerSessionId=teammate_session_id,
+            eventName="team.message.sent",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{lead_session_id}:completed",
+            sessionId=lead_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.member.completed",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{teammate_session_id}:completed",
+            sessionId=teammate_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.member.completed",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{session_group_id}:completed",
+            sessionId=lead_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.group.completed",
+            occurredAt=created_at,
+        ),
+    )
+    return ClaudeChildWorkFixtureFlow(
+        parentSession=parent_session,
+        childContext=child_context,
+        sessionGroup=session_group,
+        teamMembers=(lead, teammate),
+        teamMessage=team_message,
+        events=events,
+    )
 
 
 def compact_claude_context_snapshot(
@@ -2254,12 +3081,26 @@ def resolve_claude_policy_envelope(
 
 __all__ = [
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
+    "CLAUDE_CHILD_WORK_EVENT_NAMES",
+    "CLAUDE_CHECKPOINT_CAPTURE_MODES",
+    "CLAUDE_CHECKPOINT_RETENTION_STATES",
+    "CLAUDE_CHECKPOINT_TRIGGERS",
+    "CLAUDE_CHECKPOINT_WORK_EVENT_NAMES",
     "CLAUDE_CONTEXT_EVENT_NAMES",
     "CLAUDE_CONTEXT_ON_DEMAND_KINDS",
     "CLAUDE_CONTEXT_STARTUP_KINDS",
     "CLAUDE_DECISION_EVENT_NAMES",
     "CLAUDE_DECISION_STAGE_ORDER",
     "CLAUDE_HOOK_WORK_EVENT_NAMES",
+    "ClaudeChildContext",
+    "ClaudeChildContextCommunication",
+    "ClaudeChildContextLifecycleOwner",
+    "ClaudeChildContextReturnShape",
+    "ClaudeChildContextStatus",
+    "ClaudeChildWorkEvent",
+    "ClaudeChildWorkEventName",
+    "ClaudeChildWorkFixtureFlow",
+    "ClaudeChildWorkUsage",
     "ClaudeContextCompactionResult",
     "ClaudeContextEvent",
     "ClaudeContextEventName",
@@ -2269,6 +3110,14 @@ __all__ = [
     "ClaudeContextSegment",
     "ClaudeContextSnapshot",
     "ClaudeContextSourceKind",
+    "ClaudeCheckpoint",
+    "ClaudeCheckpointCaptureDecision",
+    "ClaudeCheckpointCaptureMode",
+    "ClaudeCheckpointIndex",
+    "ClaudeCheckpointRetentionState",
+    "ClaudeCheckpointStatus",
+    "ClaudeCheckpointTrigger",
+    "ClaudeCheckpointWorkEventName",
     "ClaudeDecisionEventName",
     "ClaudeDecisionOutcome",
     "ClaudeDecisionPoint",
@@ -2283,6 +3132,7 @@ __all__ = [
     "ClaudeManagedSession",
     "ClaudeManagedSourceKind",
     "ClaudeManagedTurn",
+    "ClaudeManagedWorkEventName",
     "ClaudeManagedWorkItem",
     "ClaudePermissionMode",
     "ClaudePolicyBootstrapTemplate",
@@ -2303,11 +3153,21 @@ __all__ = [
     "ClaudeProjectionMode",
     "ClaudeProviderMode",
     "ClaudeRuntimeFamily",
+    "ClaudeRewindMode",
+    "ClaudeRewindRequest",
+    "ClaudeRewindResult",
+    "ClaudeRewindStatus",
     "ClaudeSessionCreatedBy",
+    "ClaudeSessionGroup",
+    "ClaudeSessionGroupStatus",
     "ClaudeSessionState",
     "ClaudeSurfaceBinding",
     "ClaudeSurfaceConnectionState",
     "ClaudeSurfaceKind",
+    "ClaudeTeamMemberRole",
+    "ClaudeTeamMemberSession",
+    "ClaudeTeamMemberStatus",
+    "ClaudeTeamMessage",
     "ClaudeTurnInputOrigin",
     "ClaudeTurnState",
     "ClaudeWorkItemKind",
@@ -2346,11 +3206,16 @@ __all__ = [
     "ManagedSessionRequestTrackingStatus",
     "ManagedSessionTurnStatus",
     "PublishCodexManagedSessionArtifactsRequest",
+    "build_claude_child_work_fixture_flow",
+    "claude_checkpoint_capture_decision",
     "claude_default_reinjection_policy",
     "compact_claude_context_snapshot",
+    "create_claude_checkpoint_work_item",
+    "create_claude_rewind_work_items",
     "resolve_claude_policy_envelope",
     "SendCodexManagedSessionTurnRequest",
     "SteerCodexManagedSessionTurnRequest",
     "TerminateCodexManagedSessionRequest",
     "canonical_codex_managed_runtime_id",
+    "validate_claude_team_message_membership",
 ]
