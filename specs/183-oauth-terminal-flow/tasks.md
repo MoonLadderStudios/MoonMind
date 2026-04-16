@@ -4,8 +4,8 @@
 
 ## Prerequisites
 
-- Unit command: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py`
-- UI command: `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx`
+- Unit command: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py tests/unit/services/temporal/runtime/test_terminal_bridge.py`
+- UI command: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx`
 - Integration command: `./tools/test_integration.sh`; required coverage target: `tests/integration/temporal/test_oauth_session.py`
 - Full unit command before verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 
@@ -33,7 +33,7 @@ Independent test: Start OAuth session with fake bootstrap command, attach over W
 
 Traceability IDs: FR-001 through FR-005; DESIGN-REQ-001, DESIGN-REQ-008, DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-020
 
-Unit test plan: write red-first unit tests for validation, serialization, redaction, and boundary payload behavior before production code.
+Unit test plan: write red-first unit tests for validation, serialization, redaction, terminal bridge frame handling, Mission Control attach behavior, and boundary payload behavior before production code.
 
 Integration test plan: write red-first hermetic integration tests for the real API/workflow/runtime/container/UI boundary before production code when Docker/browser services are available.
 
@@ -42,14 +42,14 @@ Integration test plan: write red-first hermetic integration tests for the real A
 - [X] T007 [P] Add failing unit test for PTY/WebSocket resize/input/output/heartbeat ownership behavior for FR-003 FR-004 DESIGN-REQ-013 DESIGN-REQ-014 in tests/unit/services/temporal/runtime/test_terminal_bridge.py
 - [X] T008 [P] Add failing unit test for Mission Control terminal rendering and no task-terminal exposure for FR-003 FR-004 DESIGN-REQ-008 in frontend/src/entrypoints/mission-control.test.tsx
 - [X] T009 [P] Add failing integration test for OAuth workflow plus terminal bridge lifecycle for SC-001 through SC-005 DESIGN-REQ-011 DESIGN-REQ-014 in tests/integration/temporal/test_oauth_session.py
-- [X] T010 Run red-first focused Python unit tests with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py` and UI tests with `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx` and record expected failures in specs/183-oauth-terminal-flow/tasks.md (STORY-004)
+- [X] T010 Run red-first focused Python unit tests with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py tests/unit/services/temporal/runtime/test_terminal_bridge.py` and UI tests with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx` and record expected failures in specs/183-oauth-terminal-flow/tasks.md (STORY-004)
 - [X] T011 Run red-first integration tests with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/temporal/test_oauth_session.py`; otherwise record `/var/run/docker.sock` blocker in specs/183-oauth-terminal-flow/tasks.md (STORY-004)
-- [X] T012 Implement OAuth session create/attach/cancel/finalize API behavior for FR-001 FR-004 in api_service/api/routers/oauth_sessions.py
+- [X] T012 Implement OAuth session create/attach/cancel/finalize API behavior for FR-001 FR-004 in api_service/api/routers/oauth_sessions.py and api_service/api/schemas_oauth_sessions.py
 - [X] T013 Implement authenticated PTY/WebSocket bridge behavior for FR-003 FR-004 in moonmind/workflows/temporal/runtime/terminal_bridge.py
 - [X] T014 Implement auth runner startup and cleanup for FR-002 FR-004 in moonmind/workflows/temporal/activities/oauth_session_activities.py
 - [X] T015 Implement session lifecycle transitions and cleanup coordination for FR-001 FR-004 in moonmind/workflows/temporal/workflows/oauth_session.py
-- [X] T016 Implement Mission Control terminal surface for FR-003 in frontend/src/entrypoints/mission-control.tsx
-- [X] T017 Run focused Python unit tests until green with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py` and UI tests with `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx` and update task evidence in specs/183-oauth-terminal-flow/tasks.md
+- [X] T016 Implement Mission Control terminal surface for FR-003 in frontend/src/entrypoints/oauth-terminal.tsx and frontend/src/entrypoints/mission-control-app.tsx
+- [X] T017 Run focused Python unit tests until green with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py tests/unit/services/temporal/runtime/test_terminal_bridge.py` and UI tests with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx` and update task evidence in specs/183-oauth-terminal-flow/tasks.md
 - [X] T018 Run integration verification with `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/temporal/test_oauth_session.py`; update task evidence in specs/183-oauth-terminal-flow/tasks.md
 - [X] T019 Validate the single-story acceptance scenarios and MM-358 traceability against specs/183-oauth-terminal-flow/spec.md and specs/183-oauth-terminal-flow/contracts/oauth-terminal-flow.md
 
