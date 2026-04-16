@@ -149,17 +149,23 @@ class MoonMindOAuthSessionWorkflow:
             raise exceptions.ApplicationError(
                 "session_id and runtime_id are required", non_retryable=True
             )
+
+        # Step 1: Transition to starting
+        await self._update_status("starting")
+
         if runtime_id == "codex_cli" and (
             not str(volume_ref or "").strip()
             or not str(volume_mount_path or "").strip()
         ):
-            raise exceptions.ApplicationError(
-                "volume_ref and volume_mount_path are required for Codex OAuth sessions",
-                non_retryable=True,
+            failure_reason = (
+                "volume_ref and volume_mount_path are required for Codex OAuth sessions"
             )
-
-        # Step 1: Transition to starting
-        await self._update_status("starting")
+            await self._mark_failed(failure_reason)
+            return OAuthSessionOutput(
+                session_id=self._session_id,
+                status="failed",
+                failure_reason=failure_reason,
+            )
 
         # Step 2: Ensure the Docker volume exists
         try:

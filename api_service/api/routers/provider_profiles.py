@@ -21,7 +21,8 @@ from api_service.db.models import (
     User,
 )
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
-from moonmind.utils.logging import redact_sensitive_payload
+from moonmind.utils.logging import redact_profile_file_templates, redact_sensitive_payload
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
@@ -443,8 +444,9 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
-    for key in ("env_template", "file_templates", "command_behavior"):
+    for key in ("env_template", "command_behavior"):
         payload[key] = redact_sensitive_payload(payload[key])
+    payload["file_templates"] = redact_profile_file_templates(payload["file_templates"])
     return payload
 
 

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from api_service.db.models import ManagedAgentProviderProfile
-from moonmind.utils.logging import redact_sensitive_payload
+from moonmind.utils.logging import redact_profile_file_templates, redact_sensitive_payload
 
 logger = logging.getLogger(__name__)
 
@@ -66,26 +66,6 @@ async def normalize_runtime_default_profile(
     return selected_id
 
 
-def _redact_profile_file_templates(value: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    redacted = redact_sensitive_payload(value)
-    if not isinstance(redacted, list):
-        return []
-
-    templates: list[dict[str, Any]] = []
-    for item in redacted:
-        if not isinstance(item, dict):
-            templates.append(item)
-            continue
-        template = dict(item)
-        for content_key in ("content", "contentTemplate"):
-            if content_key in template:
-                template[content_key] = redact_sensitive_payload(
-                    template[content_key], key="secret"
-                )
-        templates.append(template)
-    return templates
-
-
 def _manager_profile_payload(row: ManagedAgentProviderProfile) -> dict[str, Any]:
     return {
         "profile_id": row.profile_id,
@@ -105,7 +85,7 @@ def _manager_profile_payload(row: ManagedAgentProviderProfile) -> dict[str, Any]
         "secret_refs": row.secret_refs or {},
         "clear_env_keys": row.clear_env_keys or [],
         "env_template": redact_sensitive_payload(row.env_template or {}),
-        "file_templates": _redact_profile_file_templates(row.file_templates or []),
+        "file_templates": redact_profile_file_templates(row.file_templates or []),
         "home_path_overrides": row.home_path_overrides or {},
         "command_behavior": redact_sensitive_payload(row.command_behavior or {}),
         "max_parallel_runs": row.max_parallel_runs,
