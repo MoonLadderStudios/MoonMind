@@ -534,6 +534,33 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Aauto-primary-skill?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:auto-primary-skill",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              targetSkill: "moonspec-orchestrate",
+              inputParameters: {
+                task: {
+                  instructions: "Preserve the target skill.",
+                  steps: [
+                    {
+                      instructions: "Preserve the target skill.",
+                      skill: { id: "auto" },
+                    },
+                  ],
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aartifact-edit?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -1750,6 +1777,74 @@ describe("Task Create Entrypoint", () => {
     ]);
   });
 
+  it("does not synthesize a task objective into an editable step", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:objective-differs",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Preset-level objective text.",
+          steps: [
+            {
+              id: "step-1",
+              title: "Execute preset",
+              instructions: "Run the first explicit preset step.",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.steps).toEqual([
+      expect.objectContaining({
+        id: "step-1",
+        title: "Execute preset",
+        instructions: "Run the first explicit preset step.",
+      }),
+    ]);
+  });
+
+  it("uses artifact steps when inline execution steps are partial", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:partial-inline-steps",
+        workflowType: "MoonMind.Run",
+        inputArtifactRef: "full-input",
+        inputParameters: {
+          task: {
+            instructions: "Run the artifact-backed plan.",
+            steps: [
+              {
+                id: "placeholder",
+                instructions: "Inline placeholder step.",
+              },
+            ],
+          },
+        },
+      },
+      {
+        task: {
+          instructions: "Run the artifact-backed plan.",
+          steps: [
+            {
+              id: "artifact-1",
+              instructions: "Hydrated artifact step one.",
+            },
+            {
+              id: "artifact-2",
+              instructions: "Hydrated artifact step two.",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(draft.steps.map((step) => step.id)).toEqual([
+      "artifact-1",
+      "artifact-2",
+    ]);
+  });
+
   it("uses null for optional draft fields that cannot be reconstructed", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:minimal",
@@ -1858,6 +1953,17 @@ describe("Task Create Entrypoint", () => {
       expect(screen.getByText("Step 1 (Primary)")).toBeTruthy();
       expect(screen.getByText("Step 2")).toBeTruthy();
       expect(screen.getByText("Step 3")).toBeTruthy();
+    });
+  });
+
+  it("uses the target skill when the first reconstructed step is auto", async () => {
+    renderForEdit("mm:auto-primary-skill");
+
+    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText(/Skill \(optional\)/) as HTMLInputElement).value,
+      ).toBe("moonspec-orchestrate");
     });
   });
 

@@ -786,18 +786,24 @@ function createStepStateEntriesFromTemporalDraft(
     ];
   }
 
-  return draft.steps.map((step, index) =>
-    createStepStateEntry(index + 1, {
+  return draft.steps.map((step, index) => {
+    const primarySkill = draft.primarySkill || "";
+    const shouldUsePrimarySkill =
+      index === 0 &&
+      primarySkill !== "" &&
+      !hasExplicitSkillSelection(step.skillId);
+
+    return createStepStateEntry(index + 1, {
       id: step.id,
       title: step.title,
       instructions: step.instructions,
-      skillId: step.skillId || (index === 0 ? draft.primarySkill || "" : ""),
+      skillId: shouldUsePrimarySkill ? primarySkill : step.skillId,
       skillArgs: stringifySkillArgs(step.skillArgs),
       skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
-    }),
-  );
+    });
+  });
 }
 
 function hasExplicitSkillSelection(skillId: string): boolean {

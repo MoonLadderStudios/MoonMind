@@ -302,23 +302,17 @@ function draftStepsFromTask(
     return [];
   }
 
-  const taskInstructions = stringValue(task.instructions);
-  if (taskInstructions && taskInstructions !== steps[0]?.instructions) {
-    return [
-      {
-        id: '',
-        title: '',
-        instructions: taskInstructions,
-        skillId: '',
-        skillArgs: {},
-        skillRequiredCapabilities: [],
-        templateStepId: '',
-        templateInstructions: '',
-      },
-      ...steps,
-    ];
-  }
   return steps;
+}
+
+function selectDraftSteps(
+  taskSteps: TemporalSubmissionDraft['steps'],
+  artifactTaskSteps: TemporalSubmissionDraft['steps'],
+): TemporalSubmissionDraft['steps'] {
+  if (artifactTaskSteps.length > taskSteps.length) {
+    return artifactTaskSteps;
+  }
+  return taskSteps.length > 0 ? taskSteps : artifactTaskSteps;
 }
 
 function nullableStringValue(...values: unknown[]): string | null {
@@ -532,7 +526,7 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactSkill.name,
       artifactTaskSkills[0],
     ),
-    steps: taskSteps.length > 0 ? taskSteps : artifactTaskSteps,
+    steps: selectDraftSteps(taskSteps, artifactTaskSteps),
     appliedTemplates: normalizeAppliedTemplates(
       task.appliedStepTemplates || artifactTask.appliedStepTemplates,
     ),
