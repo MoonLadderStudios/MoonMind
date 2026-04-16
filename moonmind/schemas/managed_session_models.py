@@ -256,6 +256,38 @@ ClaudeHookWorkEventName = Literal[
     "work.hook.completed",
     "work.hook.blocked",
 ]
+ClaudeContextSourceKind = Literal[
+    "system_prompt",
+    "output_style",
+    "managed_claude_md",
+    "project_claude_md",
+    "local_claude_md",
+    "auto_memory",
+    "mcp_tool_manifest",
+    "skill_description",
+    "hook_injected_context",
+    "file_read",
+    "nested_claude_md",
+    "path_rule",
+    "invoked_skill_body",
+    "runtime_summary",
+    "transcript_summary",
+]
+ClaudeContextLoadedAt = Literal["startup", "on_demand", "post_compaction"]
+ClaudeContextReinjectionPolicy = Literal[
+    "always",
+    "on_demand",
+    "budgeted",
+    "never",
+    "startup_refresh",
+    "configurable",
+]
+ClaudeContextGuidanceRole = Literal["guidance", "enforcement", "neutral"]
+ClaudeContextEventName = Literal[
+    "work.context.loaded",
+    "work.compaction.started",
+    "work.compaction.completed",
+]
 
 CLAUDE_DECISION_STAGE_ORDER: tuple[ClaudeDecisionStage, ...] = (
     "session_state_guard",
@@ -285,6 +317,44 @@ CLAUDE_HOOK_WORK_EVENT_NAMES: tuple[ClaudeHookWorkEventName, ...] = (
     "work.hook.completed",
     "work.hook.blocked",
 )
+CLAUDE_CONTEXT_STARTUP_KINDS: tuple[ClaudeContextSourceKind, ...] = (
+    "system_prompt",
+    "output_style",
+    "managed_claude_md",
+    "project_claude_md",
+    "local_claude_md",
+    "auto_memory",
+    "mcp_tool_manifest",
+    "skill_description",
+    "hook_injected_context",
+)
+CLAUDE_CONTEXT_ON_DEMAND_KINDS: tuple[ClaudeContextSourceKind, ...] = (
+    "file_read",
+    "nested_claude_md",
+    "path_rule",
+    "invoked_skill_body",
+    "runtime_summary",
+)
+CLAUDE_CONTEXT_EVENT_NAMES: tuple[ClaudeContextEventName, ...] = (
+    "work.context.loaded",
+    "work.compaction.started",
+    "work.compaction.completed",
+)
+_CLAUDE_CONTEXT_GUIDANCE_KINDS: frozenset[ClaudeContextSourceKind] = frozenset(
+    {
+        "managed_claude_md",
+        "project_claude_md",
+        "local_claude_md",
+        "auto_memory",
+        "nested_claude_md",
+        "path_rule",
+        "invoked_skill_body",
+        "skill_description",
+    }
+)
+_CLAUDE_CONTEXT_RETAINED_POLICIES: frozenset[
+    ClaudeContextReinjectionPolicy
+] = frozenset({"always", "startup_refresh", "budgeted", "configurable"})
 
 CODEX_MANAGED_SESSION_CONTROL_ACTIONS: tuple[ManagedSessionControlAction, ...] = (
     "start_session",
@@ -1216,6 +1286,216 @@ class ClaudeManagedWorkItem(BaseModel):
         return self
 
 
+def claude_default_reinjection_policy(
+    kind: ClaudeContextSourceKind,
+) -> ClaudeContextReinjectionPolicy:
+    """Return the documented default reinjection policy for a context kind."""
+
+    policies: dict[ClaudeContextSourceKind, ClaudeContextReinjectionPolicy] = {
+        "system_prompt": "always",
+        "output_style": "always",
+        "managed_claude_md": "always",
+        "project_claude_md": "always",
+        "local_claude_md": "always",
+        "auto_memory": "always",
+        "mcp_tool_manifest": "startup_refresh",
+        "skill_description": "startup_refresh",
+        "hook_injected_context": "configurable",
+        "file_read": "never",
+        "nested_claude_md": "on_demand",
+        "path_rule": "on_demand",
+        "invoked_skill_body": "budgeted",
+        "runtime_summary": "on_demand",
+        "transcript_summary": "always",
+    }
+    return policies[kind]
+
+
+class ClaudeContextSegment(BaseModel):
+    """Bounded metadata for one Claude context source."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    segment_id: NonBlankStr = Field(..., alias="segmentId")
+    kind: ClaudeContextSourceKind
+    source_ref: NonBlankStr = Field(..., alias="sourceRef")
+    loaded_at: ClaudeContextLoadedAt = Field(..., alias="loadedAt")
+    reinjection_policy: ClaudeContextReinjectionPolicy = Field(
+        ..., alias="reinjectionPolicy"
+    )
+    guidance_role: ClaudeContextGuidanceRole = Field(..., alias="guidanceRole")
+    token_budget_hint: int | None = Field(
+        None, alias="tokenBudgetHint", ge=0
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_guidance_boundary(self) -> "ClaudeContextSegment":
+        if (
+            self.kind in _CLAUDE_CONTEXT_GUIDANCE_KINDS
+            and self.guidance_role == "enforcement"
+        ):
+            raise ValueError(
+                "Claude guidance and memory context cannot be enforcement sources"
+            )
+        return self
+
+
+class ClaudeContextSnapshot(BaseModel):
+    """Immutable context metadata for a Claude managed session epoch."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    snapshot_id: NonBlankStr = Field(..., alias="snapshotId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    turn_id: NonBlankStr | None = Field(None, alias="turnId")
+    compaction_epoch: int = Field(..., alias="compactionEpoch", ge=0)
+    segments: tuple[ClaudeContextSegment, ...] = Field(..., min_length=1)
+    created_at: datetime = Field(..., alias="createdAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeContextSnapshot":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeContextEvent(BaseModel):
+    """Normalized event for Claude context loading and compaction."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    event_id: NonBlankStr = Field(..., alias="eventId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    turn_id: NonBlankStr | None = Field(None, alias="turnId")
+    snapshot_id: NonBlankStr | None = Field(None, alias="snapshotId")
+    work_item_id: NonBlankStr | None = Field(None, alias="workItemId")
+    event_name: ClaudeContextEventName = Field(..., alias="eventName")
+    occurred_at: datetime = Field(..., alias="occurredAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeContextEvent":
+        if self.occurred_at.tzinfo is None:
+            self.occurred_at = self.occurred_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeContextCompactionResult(BaseModel):
+    """Deterministic output for a Claude context compaction boundary."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    snapshot: ClaudeContextSnapshot
+    work_item: ClaudeManagedWorkItem = Field(..., alias="workItem")
+    events: tuple[ClaudeContextEvent, ...]
+
+
+def compact_claude_context_snapshot(
+    *,
+    snapshot: ClaudeContextSnapshot,
+    snapshot_id: str,
+    work_item_id: str,
+    created_at: datetime,
+    turn_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> ClaudeContextCompactionResult:
+    """Create a post-compaction snapshot and bounded work/event evidence."""
+
+    next_turn_id = turn_id if turn_id is not None else snapshot.turn_id
+    retained_segments = tuple(
+        segment.model_copy(
+            deep=True,
+            update={
+                "loaded_at": "post_compaction",
+            }
+        )
+        for segment in snapshot.segments
+        if segment.reinjection_policy in _CLAUDE_CONTEXT_RETAINED_POLICIES
+    )
+    next_snapshot = ClaudeContextSnapshot(
+        snapshotId=snapshot_id,
+        sessionId=snapshot.session_id,
+        turnId=next_turn_id,
+        compactionEpoch=snapshot.compaction_epoch + 1,
+        segments=retained_segments,
+        createdAt=created_at,
+        metadata=metadata or {},
+    )
+    omitted_segment_ids = [
+        segment.segment_id
+        for segment in snapshot.segments
+        if segment.reinjection_policy not in _CLAUDE_CONTEXT_RETAINED_POLICIES
+    ]
+    work_item = ClaudeManagedWorkItem(
+        itemId=work_item_id,
+        turnId=next_turn_id or "context-compaction",
+        sessionId=snapshot.session_id,
+        kind="compaction",
+        status="completed",
+        payload={
+            "previousSnapshotId": snapshot.snapshot_id,
+            "nextSnapshotId": next_snapshot.snapshot_id,
+            "previousEpoch": snapshot.compaction_epoch,
+            "nextEpoch": next_snapshot.compaction_epoch,
+            "retainedSegmentIds": [
+                segment.segment_id for segment in retained_segments
+            ],
+            "omittedSegmentIds": omitted_segment_ids,
+        },
+        startedAt=created_at,
+        endedAt=created_at,
+    )
+    events = (
+        ClaudeContextEvent(
+            eventId=f"{work_item_id}:started",
+            sessionId=snapshot.session_id,
+            turnId=next_turn_id,
+            snapshotId=snapshot.snapshot_id,
+            workItemId=work_item_id,
+            eventName="work.compaction.started",
+            occurredAt=created_at,
+            metadata={"previousSnapshotId": snapshot.snapshot_id},
+        ),
+        ClaudeContextEvent(
+            eventId=f"{work_item_id}:completed",
+            sessionId=snapshot.session_id,
+            turnId=next_turn_id,
+            snapshotId=next_snapshot.snapshot_id,
+            workItemId=work_item_id,
+            eventName="work.compaction.completed",
+            occurredAt=created_at,
+            metadata={
+                "previousSnapshotId": snapshot.snapshot_id,
+                "nextSnapshotId": next_snapshot.snapshot_id,
+                "retainedSegmentCount": len(retained_segments),
+                "omittedSegmentCount": len(omitted_segment_ids),
+            },
+        ),
+    )
+    return ClaudeContextCompactionResult(
+        snapshot=next_snapshot,
+        workItem=work_item,
+        events=events,
+    )
+
+
 def _decision_event_for_outcome(
     outcome: ClaudeDecisionOutcome,
 ) -> ClaudeDecisionEventName:
@@ -1974,9 +2254,21 @@ def resolve_claude_policy_envelope(
 
 __all__ = [
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
+    "CLAUDE_CONTEXT_EVENT_NAMES",
+    "CLAUDE_CONTEXT_ON_DEMAND_KINDS",
+    "CLAUDE_CONTEXT_STARTUP_KINDS",
     "CLAUDE_DECISION_EVENT_NAMES",
     "CLAUDE_DECISION_STAGE_ORDER",
     "CLAUDE_HOOK_WORK_EVENT_NAMES",
+    "ClaudeContextCompactionResult",
+    "ClaudeContextEvent",
+    "ClaudeContextEventName",
+    "ClaudeContextGuidanceRole",
+    "ClaudeContextLoadedAt",
+    "ClaudeContextReinjectionPolicy",
+    "ClaudeContextSegment",
+    "ClaudeContextSnapshot",
+    "ClaudeContextSourceKind",
     "ClaudeDecisionEventName",
     "ClaudeDecisionOutcome",
     "ClaudeDecisionPoint",
@@ -2054,6 +2346,8 @@ __all__ = [
     "ManagedSessionRequestTrackingStatus",
     "ManagedSessionTurnStatus",
     "PublishCodexManagedSessionArtifactsRequest",
+    "claude_default_reinjection_policy",
+    "compact_claude_context_snapshot",
     "resolve_claude_policy_envelope",
     "SendCodexManagedSessionTurnRequest",
     "SteerCodexManagedSessionTurnRequest",

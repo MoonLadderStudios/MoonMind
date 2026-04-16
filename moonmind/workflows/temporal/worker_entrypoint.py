@@ -25,7 +25,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     MoonMindProviderProfileManagerWorkflow,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from moonmind.workflows.temporal.workflows.merge_gate import (
+from moonmind.workflows.temporal.workflows.merge_automation import (
     MoonMindMergeAutomationWorkflow,
 )
 

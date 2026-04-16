@@ -491,9 +491,8 @@ class MoonMindMergeAutomationWorkflow:
                     ),
                 )
                 self._last_handled_event_count = self._external_event_count
-            except Exception:
-                # Timeout/cancellation from the wait is intentionally tolerated;
-                # the next loop iteration refreshes readiness from provider state.
+            except TimeoutError:
+                # Expected fallback poll wake-up when no external signal arrives.
                 pass
             try:
                 info = workflow.info()
