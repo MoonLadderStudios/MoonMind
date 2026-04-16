@@ -1496,6 +1496,72 @@ describe("Task Create Entrypoint", () => {
     expect(draft.primarySkill).toBe("pr-resolver");
   });
 
+  it("reconstructs a skill-only task snapshot without free-text instructions", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:snapshot-skill-only",
+        workflowType: "MoonMind.Run",
+        taskInputSnapshot: {
+          available: true,
+          artifactRef: "art_snapshot_skill_only",
+          snapshotVersion: 1,
+          sourceKind: "create",
+          reconstructionMode: "authoritative",
+          disabledReasons: {},
+          fallbackEvidenceRefs: [],
+        },
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          task: {
+            runtime: {
+              mode: "codex_cli",
+              model: "gpt-5.4",
+              effort: "medium",
+            },
+          },
+        },
+      },
+      {
+        snapshotVersion: 1,
+        source: { kind: "create" },
+        draft: {
+          taskShape: "skill_only",
+          runtime: "codex_cli",
+          model: "gpt-5.4",
+          effort: "medium",
+          repository: "MoonLadderStudios/MoonMind",
+          startingBranch: "main",
+          targetBranch: "durable-task-edit-reconstruction",
+          publish: { mode: "none" },
+          instructions: "",
+          primarySkill: {
+            name: "moonspec-orchestrate",
+            inputs: {
+              request: "Define durable task edit reconstruction model",
+            },
+          },
+          appliedTemplates: [],
+          dependencies: [],
+          attachments: [],
+          proposeTasks: false,
+          proposalPolicy: null,
+        },
+      },
+    );
+
+    expect(draft).toMatchObject({
+      runtime: "codex_cli",
+      model: "gpt-5.4",
+      effort: "medium",
+      repository: "MoonLadderStudios/MoonMind",
+      startingBranch: "main",
+      targetBranch: "durable-task-edit-reconstruction",
+      publishMode: "none",
+      taskInstructions: "",
+      primarySkill: "moonspec-orchestrate",
+    });
+  });
+
   it("includes step-level instructions when reconstructing a draft", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:step-instructions",

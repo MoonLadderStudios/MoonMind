@@ -1860,13 +1860,28 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         }
 
         let artifactInput: Record<string, unknown> | undefined;
+        const snapshotArtifactRef = String(
+          execution.taskInputSnapshot?.artifactRef || "",
+        ).trim();
         const inputArtifactRef = String(execution.inputArtifactRef || "").trim();
         const inlineTask = execution.inputParameters?.task;
-        if (inputArtifactRef && !hasInlineTaskInstructions(inlineTask)) {
-          artifactInput = recordValue(await readTemporalInputArtifact(
-            artifactDownloadEndpoint,
-            inputArtifactRef,
-          ));
+        if (
+          execution.taskInputSnapshot?.reconstructionMode === "authoritative" &&
+          snapshotArtifactRef
+        ) {
+          artifactInput = recordValue(
+            await readTemporalInputArtifact(
+              artifactDownloadEndpoint,
+              snapshotArtifactRef,
+            ),
+          );
+        } else if (inputArtifactRef && !hasInlineTaskInstructions(inlineTask)) {
+          artifactInput = recordValue(
+            await readTemporalInputArtifact(
+              artifactDownloadEndpoint,
+              inputArtifactRef,
+            ),
+          );
         }
 
         const draft = buildTemporalSubmissionDraftFromExecution(

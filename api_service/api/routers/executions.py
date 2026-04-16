@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -30,6 +31,7 @@ from api_service.db.models import (
     TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
     TemporalExecutionRecord,
+    TemporalArtifactRetentionClass,
     User,
 )
 from moonmind.config.settings import settings
@@ -50,6 +52,7 @@ from moonmind.schemas.temporal_models import (
     ExecutionModel,
     ExecutionProgressModel,
     ExecutionRefreshEnvelope,
+    TaskInputSnapshotDescriptorModel,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
     ScheduleCreatedResponse,
@@ -79,6 +82,7 @@ from moonmind.workflows.tasks.task_contract import (
     TaskSkillSelectors,
 )
 from api_service.api.schemas import CreateJobRequest
+from moonmind.workflows import get_temporal_artifact_service
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
@@ -114,6 +118,11 @@ _PR_URL_CANDIDATE_SOURCES = (
     ("params", "pullRequestUrl"),
 )
 _TASK_EDITING_UPDATE_NAMES = {"UpdateInputs", "RequestRerun"}
+_TASK_INPUT_SNAPSHOT_CONTENT_TYPE = (
+    "application/vnd.moonmind.task-input-snapshot+json;version=1"
+)
+_TASK_INPUT_SNAPSHOT_LINK_TYPE = "input.original_snapshot"
+_TASK_INPUT_SNAPSHOT_VERSION = 1
 
 
 def _bounded_metric_tag(value: object | None, *, fallback: str = "unknown") -> str:
@@ -649,6 +658,7 @@ def _serialize_execution(
         memo=memo,
         input_parameters=params,
         input_artifact_ref=getattr(record, "input_ref", None),
+        task_input_snapshot=_task_input_snapshot_descriptor_from_record(record),
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
@@ -1066,6 +1076,10 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     enabled = state_actions.get(raw_state, set())
     if workflow_type_value != "MoonMind.Run" or not temporal_task_editing_enabled:
         enabled = enabled - {"can_update_inputs", "can_rerun"}
+    elif not _task_input_snapshot_ref_from_memo(
+        dict(getattr(record, "memo", None) or {})
+    ):
+        enabled = enabled - {"can_update_inputs", "can_rerun"}
     capability_values = {
         "can_set_title": "canSetTitle",
         "can_update_inputs": "canUpdateInputs",
@@ -1087,6 +1101,11 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                 continue
             if not temporal_task_editing_enabled:
                 disabled_reasons[alias] = "temporal_task_editing_disabled"
+                continue
+            if not _task_input_snapshot_ref_from_memo(
+                dict(getattr(record, "memo", None) or {})
+            ):
+                disabled_reasons[alias] = "original_task_input_snapshot_missing"
                 continue
         disabled_reasons[alias] = "state_not_eligible"
     return ExecutionActionCapabilityModel(
@@ -1586,6 +1605,213 @@ def _derive_task_summary(
     return "Execution initialized."
 
 
+def _task_input_snapshot_ref_from_memo(
+    memo: Mapping[str, Any],
+) -> str | None:
+    value = memo.get("task_input_snapshot_ref") or memo.get("taskInputSnapshotRef")
+    candidate = str(value or "").strip()
+    return candidate or None
+
+
+def _task_input_snapshot_descriptor_from_record(
+    record,
+) -> TaskInputSnapshotDescriptorModel:
+    memo = dict(getattr(record, "memo", None) or {})
+    artifact_ref = _task_input_snapshot_ref_from_memo(memo)
+    if artifact_ref:
+        return TaskInputSnapshotDescriptorModel(
+            available=True,
+            artifactRef=artifact_ref,
+            snapshotVersion=int(
+                memo.get("task_input_snapshot_version")
+                or memo.get("taskInputSnapshotVersion")
+                or _TASK_INPUT_SNAPSHOT_VERSION
+            ),
+            sourceKind=str(
+                memo.get("task_input_snapshot_source_kind")
+                or memo.get("taskInputSnapshotSourceKind")
+                or "unknown"
+            ),
+            reconstructionMode="authoritative",
+            disabledReasons={},
+            fallbackEvidenceRefs=[],
+        )
+    fallback_refs = [
+        str(ref).strip()
+        for ref in (
+            getattr(record, "input_ref", None),
+            getattr(record, "plan_ref", None),
+        )
+        if str(ref or "").strip()
+    ]
+    return TaskInputSnapshotDescriptorModel(
+        available=False,
+        artifactRef=None,
+        snapshotVersion=None,
+        sourceKind="unknown",
+        reconstructionMode=(
+            "degraded_read_only" if fallback_refs else "unavailable"
+        ),
+        disabledReasons={
+            "draft": "original_task_input_snapshot_missing",
+        },
+        fallbackEvidenceRefs=fallback_refs,
+    )
+
+
+def _build_original_task_input_snapshot_payload(
+    *,
+    source_kind: str,
+    payload: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+    source_workflow_id: str | None = None,
+    source_run_id: str | None = None,
+) -> dict[str, Any]:
+    draft = {
+        "taskShape": _derive_task_snapshot_shape(task_payload),
+        "repository": payload.get("repository"),
+        "targetRuntime": payload.get("targetRuntime"),
+        "requiredCapabilities": list(payload.get("requiredCapabilities") or []),
+        "task": dict(task_payload),
+    }
+    return {
+        "snapshotVersion": _TASK_INPUT_SNAPSHOT_VERSION,
+        "source": {
+            "kind": source_kind,
+            **({"sourceWorkflowId": source_workflow_id} if source_workflow_id else {}),
+            **({"sourceRunId": source_run_id} if source_run_id else {}),
+        },
+        "draft": draft,
+        "largeContentRefs": {},
+        "attachmentRefs": [],
+        "lineage": {},
+        "excluded": {
+            "schedule": (
+                "Schedule controls are creation-only and are not editable through "
+                "task edit/rerun."
+            )
+        },
+    }
+
+
+def _derive_task_snapshot_shape(task_payload: Mapping[str, Any]) -> str:
+    instructions = str(task_payload.get("instructions") or "").strip()
+    steps = task_payload.get("steps")
+    if isinstance(steps, list) and steps:
+        return "multi_step"
+    if task_payload.get("inputArtifactRef"):
+        return "artifact_backed"
+    if task_payload.get("appliedStepTemplates"):
+        return "template_derived"
+    if not instructions and (
+        isinstance(task_payload.get("tool"), Mapping)
+        or isinstance(task_payload.get("skill"), Mapping)
+        or task_payload.get("skills")
+    ):
+        return "skill_only"
+    return "inline_instructions"
+
+
+def _snapshot_source_payload_from_parameters(
+    parameters: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    task: dict[str, Any] = {}
+    task_value = parameters.get("task")
+    if isinstance(task_value, Mapping):
+        task = dict(task_value)
+    instructions = str(parameters.get("instructions") or "").strip()
+    if instructions and not str(task.get("instructions") or "").strip():
+        task["instructions"] = instructions
+    capabilities_value = parameters.get("requiredCapabilities")
+    payload = {
+        "repository": parameters.get("repository"),
+        "targetRuntime": parameters.get("targetRuntime"),
+        "requiredCapabilities": (
+            list(capabilities_value) if isinstance(capabilities_value, list) else []
+        ),
+    }
+    return payload, task
+
+
+async def _persist_original_task_input_snapshot(
+    *,
+    session: AsyncSession,
+    record,
+    user: User,
+    payload: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+    source_kind: str,
+    source_workflow_id: str | None = None,
+    source_run_id: str | None = None,
+) -> str:
+    if not isinstance(
+        record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)
+    ):
+        return ""
+    canonical_record = (
+        record
+        if isinstance(record, TemporalExecutionCanonicalRecord)
+        else await session.get(TemporalExecutionCanonicalRecord, record.workflow_id)
+    )
+    if canonical_record is None:
+        return ""
+    snapshot_payload = _build_original_task_input_snapshot_payload(
+        source_kind=source_kind,
+        payload=payload,
+        task_payload=task_payload,
+        source_workflow_id=source_workflow_id,
+        source_run_id=source_run_id,
+    )
+    artifact_service = get_temporal_artifact_service(session)
+    principal = str(getattr(user, "id", "") or "system")
+    body = json.dumps(snapshot_payload, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    artifact, _upload = await artifact_service.create(
+        principal=principal,
+        content_type=_TASK_INPUT_SNAPSHOT_CONTENT_TYPE,
+        size_bytes=len(body),
+        retention_class=TemporalArtifactRetentionClass.LONG,
+        link={
+            "namespace": canonical_record.namespace,
+            "workflow_id": canonical_record.workflow_id,
+            "run_id": canonical_record.run_id,
+            "link_type": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
+            "label": "Original task input snapshot",
+        },
+        metadata_json={
+            "artifact_class": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
+            "snapshot_version": _TASK_INPUT_SNAPSHOT_VERSION,
+            "workflow_type": "MoonMind.Run",
+            "source_kind": source_kind,
+            "draft_shape": snapshot_payload["draft"]["taskShape"],
+            "schema_name": "OriginalTaskInputSnapshot",
+            "created_by": principal,
+        },
+    )
+    completed = await artifact_service.write_complete(
+        artifact_id=artifact.artifact_id,
+        principal=principal,
+        payload=body,
+        content_type=_TASK_INPUT_SNAPSHOT_CONTENT_TYPE,
+    )
+
+    records_to_update = [canonical_record]
+    if record is not canonical_record:
+        records_to_update.append(record)
+    for target_record in records_to_update:
+        memo = dict(target_record.memo or {})
+        memo["task_input_snapshot_ref"] = completed.artifact_id
+        memo["task_input_snapshot_version"] = _TASK_INPUT_SNAPSHOT_VERSION
+        memo["task_input_snapshot_source_kind"] = source_kind
+        target_record.memo = memo
+        refs = list(target_record.artifact_refs or [])
+        if completed.artifact_id not in refs:
+            refs.append(completed.artifact_id)
+            target_record.artifact_refs = refs
+    return completed.artifact_id
+
+
 async def _create_execution_from_task_request(
     *,
     request: CreateJobRequest,
@@ -1857,7 +2083,18 @@ async def _create_execution_from_task_request(
             },
         ) from exc
 
-    return _serialize_execution(record, user=user)
+    snapshot_ref = await _persist_original_task_input_snapshot(
+        session=session,
+        record=record,
+        user=user,
+        payload=payload,
+        task_payload=task_payload,
+        source_kind="create",
+    )
+    execution = _serialize_execution(record, user=user)
+    if snapshot_ref:
+        await session.commit()
+    return execution
 
 
 async def _create_execution_from_manifest_request(
@@ -2574,6 +2811,7 @@ async def update_execution(
     payload: UpdateExecutionRequest,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
     _actions_enabled: None = Depends(_ensure_actions_enabled),
 ) -> UpdateExecutionResponse:
@@ -2649,6 +2887,24 @@ async def update_execution(
         str(update_result.get("workflow_id") or "").strip() or record.workflow_id
     )
     refreshed_record = await service.describe_execution(response_workflow_id)
+    snapshot_ref = ""
+    if is_task_editing_update:
+        snapshot_payload, snapshot_task = _snapshot_source_payload_from_parameters(
+            dict(getattr(refreshed_record, "parameters", None) or {})
+        )
+        if snapshot_task:
+            snapshot_ref = await _persist_original_task_input_snapshot(
+                session=session,
+                record=refreshed_record,
+                user=user,
+                payload=snapshot_payload,
+                task_payload=snapshot_task,
+                source_kind=(
+                    "rerun" if payload.update_name == "RequestRerun" else "edit"
+                ),
+                source_workflow_id=record.workflow_id,
+                source_run_id=getattr(record, "run_id", None),
+            )
     if is_task_editing_update:
         accepted = bool(update_result.get("accepted", True))
         applied = str(update_result.get("applied") or "").strip() or None
@@ -2682,14 +2938,19 @@ async def update_execution(
             canonical_identifier=canonical_workflow_id,
         )
 
+    execution = _serialize_execution(refreshed_record, user=user)
+    refreshed_at = _compatibility_refreshed_at(refreshed_record)
+    if snapshot_ref:
+        await session.commit()
+
     return UpdateExecutionResponse(
         **update_result,
-        execution=_serialize_execution(refreshed_record, user=user),
+        execution=execution,
         refresh=ExecutionRefreshEnvelope(
             patched_execution=True,
             list_stale=True,
             refetch_suggested=True,
-            refreshed_at=_compatibility_refreshed_at(refreshed_record),
+            refreshed_at=refreshed_at,
         ),
     )
 
@@ -3017,6 +3278,22 @@ async def rerun_execution(
             },
         ) from exc
 
+    snapshot_payload, snapshot_task = _snapshot_source_payload_from_parameters(
+        dict(initial_params)
+    )
+    snapshot_ref = ""
+    if snapshot_task:
+        snapshot_ref = await _persist_original_task_input_snapshot(
+            session=session,
+            record=record,
+            user=user,
+            payload=snapshot_payload,
+            task_payload=snapshot_task,
+            source_kind="rerun",
+            source_workflow_id=canonical.workflow_id,
+            source_run_id=canonical.run_id,
+        )
+
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
         _mark_execution_alias_usage(
@@ -3025,7 +3302,10 @@ async def rerun_execution(
             canonical_identifier=canonical_workflow_id,
         )
 
-    return _serialize_execution(record, user=user)
+    execution = _serialize_execution(record, user=user)
+    if snapshot_ref:
+        await session.commit()
+    return execution
 
 
 __all__ = ["router"]

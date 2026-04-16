@@ -574,6 +574,36 @@ class ExecutionProgressModel(BaseModel):
     updated_at: datetime = Field(..., alias="updatedAt")
 
 
+class TaskInputSnapshotDescriptorModel(BaseModel):
+    """Compact pointer to the authoritative original task input snapshot."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    available: bool = Field(False, alias="available")
+    artifact_ref: str | None = Field(None, alias="artifactRef")
+    snapshot_version: int | None = Field(None, alias="snapshotVersion")
+    source_kind: Literal["create", "edit", "rerun", "unknown"] = Field(
+        "unknown", alias="sourceKind"
+    )
+    reconstruction_mode: Literal[
+        "authoritative",
+        "degraded_read_only",
+        "unavailable",
+    ] = Field("unavailable", alias="reconstructionMode")
+    disabled_reasons: dict[str, str] = Field(
+        default_factory=dict, alias="disabledReasons"
+    )
+    fallback_evidence_refs: list[str] = Field(
+        default_factory=list, alias="fallbackEvidenceRefs"
+    )
+
+    @model_validator(mode="after")
+    def _authoritative_requires_ref(self) -> "TaskInputSnapshotDescriptorModel":
+        if self.reconstruction_mode == "authoritative" and not self.artifact_ref:
+            raise ValueError("authoritative reconstruction requires artifactRef")
+        return self
+
+
 class StepLedgerCheckModel(BaseModel):
     """Structured step-level review or check result."""
 
@@ -737,6 +767,10 @@ class ExecutionModel(BaseModel):
         default_factory=dict, alias="inputParameters"
     )
     input_artifact_ref: Optional[str] = Field(None, alias="inputArtifactRef")
+    task_input_snapshot: TaskInputSnapshotDescriptorModel = Field(
+        default_factory=TaskInputSnapshotDescriptorModel,
+        alias="taskInputSnapshot",
+    )
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
     target_skill: Optional[str] = Field(None, alias="targetSkill")
     model: Optional[str] = Field(None, alias="model")

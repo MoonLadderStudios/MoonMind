@@ -19,6 +19,15 @@ export type TemporalTaskEditingExecutionContract = {
   temporalStatus?: string | null;
   inputParameters?: Record<string, unknown>;
   inputArtifactRef?: string | null;
+  taskInputSnapshot?: {
+    available?: boolean;
+    artifactRef?: string | null;
+    snapshotVersion?: number | null;
+    sourceKind?: string | null;
+    reconstructionMode?: string | null;
+    disabledReasons?: Record<string, string>;
+    fallbackEvidenceRefs?: string[];
+  } | null;
   planArtifactRef?: string | null;
   targetRuntime?: string | null;
   profileId?: string | null;
@@ -244,14 +253,74 @@ function normalizeAppliedTemplates(
     .filter((entry) => entry.slug);
 }
 
+function snapshotDraftTask(
+  snapshotDraft: Record<string, unknown>,
+): Record<string, unknown> {
+  const nestedTask = objectValue(snapshotDraft.task);
+  if (Object.keys(nestedTask).length > 0) {
+    return nestedTask;
+  }
+  const primarySkill = objectValue(snapshotDraft.primarySkill);
+  const publish = objectValue(snapshotDraft.publish);
+  const task: Record<string, unknown> = {
+    ...(stringValue(snapshotDraft.instructions)
+      ? { instructions: stringValue(snapshotDraft.instructions) }
+      : {}),
+    ...(Object.keys(primarySkill).length > 0
+      ? {
+          tool: {
+            type: 'skill',
+            name: stringValue(primarySkill.name),
+            version: stringValue(primarySkill.version) || '1.0',
+            inputs: objectValue(primarySkill.inputs),
+          },
+          skill: {
+            id: stringValue(primarySkill.name),
+            args: objectValue(primarySkill.inputs),
+          },
+          inputs: objectValue(primarySkill.inputs),
+        }
+      : {}),
+    ...(Object.keys(publish).length > 0 ? { publish } : {}),
+    ...(Array.isArray(snapshotDraft.appliedTemplates)
+      ? { appliedStepTemplates: snapshotDraft.appliedTemplates }
+      : {}),
+    ...(Array.isArray(snapshotDraft.steps) ? { steps: snapshotDraft.steps } : {}),
+  };
+  const startingBranch = stringValue(snapshotDraft.startingBranch);
+  const targetBranch = stringValue(snapshotDraft.targetBranch);
+  if (startingBranch || targetBranch) {
+    task.git = {
+      ...(startingBranch ? { startingBranch } : {}),
+      ...(targetBranch ? { targetBranch } : {}),
+    };
+  }
+  const runtime = stringValue(snapshotDraft.runtime);
+  const model = stringValue(snapshotDraft.model);
+  const effort = stringValue(snapshotDraft.effort);
+  const providerProfile = stringValue(snapshotDraft.providerProfile);
+  if (runtime || model || effort || providerProfile) {
+    task.runtime = {
+      ...(runtime ? { mode: runtime } : {}),
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
+      ...(providerProfile ? { profileId: providerProfile } : {}),
+    };
+  }
+  return task;
+}
+
 export function buildTemporalSubmissionDraftFromExecution(
   execution: TemporalTaskEditingExecutionContract,
   artifactInput?: unknown,
 ): TemporalSubmissionDraft {
   const params = objectValue(execution.inputParameters);
   const artifactParams = objectValue(artifactInput);
+  const snapshotDraft = objectValue(artifactParams.draft);
   const task = objectValue(params.task);
-  const artifactTask = objectValue(artifactParams.task);
+  const artifactTask = Object.keys(snapshotDraft).length > 0
+    ? snapshotDraftTask(snapshotDraft)
+    : objectValue(artifactParams.task);
   const runtime = objectValue(task.runtime);
   const artifactRuntime = objectValue(artifactTask.runtime);
   const git = objectValue(task.git);
@@ -272,6 +341,7 @@ export function buildTemporalSubmissionDraftFromExecution(
 
   const draft: TemporalSubmissionDraft = {
     runtime: nullableStringValue(
+      snapshotDraft.runtime,
       execution.targetRuntime,
       params.targetRuntime,
       runtime.mode,
@@ -279,12 +349,14 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactParams.targetRuntime,
     ),
     providerProfile: nullableStringValue(
+      snapshotDraft.providerProfile,
       execution.profileId,
       params.profileId,
       runtime.profileId,
       artifactRuntime.profileId,
     ),
     model: nullableStringValue(
+      snapshotDraft.model,
       execution.model,
       execution.requestedModel,
       execution.resolvedModel,
@@ -293,12 +365,14 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactRuntime.model,
     ),
     effort: nullableStringValue(
+      snapshotDraft.effort,
       execution.effort,
       params.effort,
       runtime.effort,
       artifactRuntime.effort,
     ),
     repository: nullableStringValue(
+      snapshotDraft.repository,
       execution.repository,
       params.repository,
       task.repository,
@@ -308,6 +382,7 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactGit.repository,
     ),
     startingBranch: nullableStringValue(
+      snapshotDraft.startingBranch,
       execution.startingBranch,
       task.startingBranch,
       git.startingBranch,
@@ -316,6 +391,7 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactGit.startingBranch,
     ),
     targetBranch: nullableStringValue(
+      snapshotDraft.targetBranch,
       execution.targetBranch,
       task.targetBranch,
       git.targetBranch,
@@ -347,7 +423,7 @@ export function buildTemporalSubmissionDraftFromExecution(
     ),
   };
 
-  if (!draft.taskInstructions) {
+  if (!draft.taskInstructions && !draft.primarySkill) {
     throw new Error(
       'Task instructions could not be reconstructed from this execution.',
     );

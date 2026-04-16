@@ -3333,6 +3333,7 @@ export interface components {
             };
             /** Inputartifactref */
             inputArtifactRef?: string | null;
+            taskInputSnapshot?: components["schemas"]["TaskInputSnapshotDescriptorModel"];
             /** Targetruntime */
             targetRuntime?: string | null;
             /** Targetskill */
@@ -5068,6 +5069,39 @@ export interface components {
          * @enum {string}
          */
         SummaryType: "readme";
+        /**
+         * TaskInputSnapshotDescriptorModel
+         * @description Compact pointer to the authoritative original task input snapshot.
+         */
+        TaskInputSnapshotDescriptorModel: {
+            /**
+             * Available
+             * @default false
+             */
+            available: boolean;
+            /** Artifactref */
+            artifactRef?: string | null;
+            /** Snapshotversion */
+            snapshotVersion?: number | null;
+            /**
+             * Sourcekind
+             * @default unknown
+             * @enum {string}
+             */
+            sourceKind: "create" | "edit" | "rerun" | "unknown";
+            /**
+             * Reconstructionmode
+             * @default unavailable
+             * @enum {string}
+             */
+            reconstructionMode: "authoritative" | "degraded_read_only" | "unavailable";
+            /** Disabledreasons */
+            disabledReasons?: {
+                [key: string]: string;
+            };
+            /** Fallbackevidencerefs */
+            fallbackEvidenceRefs?: string[];
+        };
         /**
          * TaskProposalCreateRequest
          * @description Request payload for creating a task proposal.

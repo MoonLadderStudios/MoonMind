@@ -93,6 +93,7 @@ def _build_execution_record(
     workflow_type: TemporalWorkflowType = TemporalWorkflowType.RUN,
     state: MoonMindWorkflowState = MoonMindWorkflowState.EXECUTING,
     owner_id: str = "user-123",
+    has_task_input_snapshot: bool = True,
 ) -> SimpleNamespace:
     now = datetime.now(UTC)
     entry = (
@@ -117,6 +118,16 @@ def _build_execution_record(
             "summary": "Waiting on review.",
             "continue_as_new_cause": "manual_rerun",
             "latest_temporal_run_id": "run-2",
+            **(
+                {
+                    "task_input_snapshot_ref": "art_snapshot_1",
+                    "task_input_snapshot_version": 1,
+                    "task_input_snapshot_source_kind": "create",
+                }
+                if workflow_type is TemporalWorkflowType.RUN
+                and has_task_input_snapshot
+                else {}
+            ),
         },
         artifact_refs=["art_123"],
         manifest_ref=(
@@ -2420,7 +2431,9 @@ def test_describe_execution_includes_actions_and_debug_fields(
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_task_editing_enabled", True
+    )
     monkeypatch.setattr(settings.temporal_dashboard, "debug_fields_enabled", True)
 
     with TestClient(app) as test_client:
@@ -2501,6 +2514,25 @@ def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
     assert (
         disabled_manifest_actions.disabled_reasons["canRerun"]
         == "unsupported_workflow_type"
+    )
+
+
+def test_temporal_task_editing_actions_require_original_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_task_editing_enabled", True)
+    record = _build_execution_record(
+        state=MoonMindWorkflowState.COMPLETED,
+        has_task_input_snapshot=False,
+    )
+
+    actions = _serialize_execution(record).actions
+
+    assert actions.can_rerun is False
+    assert (
+        actions.disabled_reasons["canRerun"]
+        == "original_task_input_snapshot_missing"
     )
 
 
