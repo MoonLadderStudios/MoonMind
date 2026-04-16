@@ -123,10 +123,15 @@ async def test_provider_profile_response_redacts_secret_like_runtime_fields(
                     volume_mount_path="/home/app/.codex",
                     env_template={"OPENAI_API_KEY": raw_secret},
                     file_templates=[
+                        {"path": "/tmp/auth.json", "content": raw_secret},
+                        {
+                            "path": "/tmp/config.json",
+                            "contentTemplate": {"token": raw_secret},
+                        },
                         {
                             "path": "/tmp/config.toml",
                             "content_template": {"api_key": raw_secret},
-                        }
+                        },
                     ],
                     command_behavior={"authorization": f"Bearer {raw_secret}"},
                     secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
@@ -145,8 +150,12 @@ async def test_provider_profile_response_redacts_secret_like_runtime_fields(
     assert response.json()["volume_ref"] == "codex_auth_volume"
     assert response.json()["volume_mount_path"] == "/home/app/.codex"
     assert response.json()["env_template"]["OPENAI_API_KEY"] == "[REDACTED]"
+    assert response.json()["file_templates"][0]["content"] == "[REDACTED]"
+    assert response.json()["file_templates"][1]["contentTemplate"]["token"] == (
+        "[REDACTED]"
+    )
     assert (
-        response.json()["file_templates"][0]["content_template"]["api_key"]
+        response.json()["file_templates"][2]["content_template"]["api_key"]
         == "[REDACTED]"
     )
     assert response.json()["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
@@ -164,10 +173,12 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
         volume_mount_path="/home/app/.codex",
         env_template={"OPENAI_API_KEY": raw_secret},
         file_templates=[
+            {"path": "/tmp/auth.json", "content": raw_secret},
+            {"path": "/tmp/config.json", "contentTemplate": raw_secret},
             {
-                "path": "/tmp/auth.json",
+                "path": "/tmp/config.toml",
                 "content_template": {"api_key": raw_secret},
-            }
+            },
         ],
         command_behavior={"authorization": f"Bearer {raw_secret}"},
         secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
@@ -186,7 +197,9 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
     assert payload["cooldown_after_429_seconds"] == 120
     assert payload["max_lease_duration_seconds"] == 900
     assert payload["env_template"]["OPENAI_API_KEY"] == "[REDACTED]"
-    assert payload["file_templates"][0]["content_template"]["api_key"] == "[REDACTED]"
+    assert payload["file_templates"][0]["content"] == "[REDACTED]"
+    assert payload["file_templates"][1]["contentTemplate"] == "[REDACTED]"
+    assert payload["file_templates"][2]["content_template"]["api_key"] == "[REDACTED]"
     assert payload["command_behavior"]["authorization"] == "[REDACTED_AUTHORIZATION]"
     assert payload["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
 

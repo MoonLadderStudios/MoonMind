@@ -127,7 +127,7 @@ def redact_profile_file_templates(value: list[Any]) -> list[Any]:
 
     templates: list[Any] = []
     for item in redacted:
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             templates.append(item)
             continue
         template = dict(item)
