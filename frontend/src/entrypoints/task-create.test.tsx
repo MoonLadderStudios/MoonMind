@@ -473,6 +473,67 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Amulti-step-edit?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:multi-step-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-default",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              startingBranch: "main",
+              targetBranch: "mm-340-edit-task-all-steps",
+              publishMode: "pr",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  instructions: "Investigate why edit shows only step 1.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-default",
+                  },
+                  git: {
+                    startingBranch: "main",
+                    targetBranch: "mm-340-edit-task-all-steps",
+                  },
+                  publish: { mode: "pr" },
+                  steps: [
+                    {
+                      id: "step-primary",
+                      title: "Investigate",
+                      instructions: "Investigate why edit shows only step 1.",
+                      skill: {
+                        id: "moonspec-orchestrate",
+                        args: { mode: "runtime" },
+                        requiredCapabilities: ["git"],
+                      },
+                    },
+                    {
+                      id: "step-patch",
+                      title: "Patch",
+                      instructions: "Patch the edit reconstruction path.",
+                    },
+                    {
+                      id: "step-verify",
+                      title: "Verify",
+                      instructions: "Run the focused task-create tests.",
+                    },
+                  ],
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aartifact-edit?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -785,6 +846,17 @@ describe("Task Create Entrypoint", () => {
               applied: "immediate",
               message: "Inputs updated.",
               execution: { workflowId: "mm:edit-123" },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Amulti-step-edit/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "immediate",
+              message: "Inputs updated.",
+              execution: { workflowId: "mm:multi-step-edit" },
             }),
           } as Response);
         }
@@ -1621,6 +1693,63 @@ describe("Task Create Entrypoint", () => {
     );
   });
 
+  it("reconstructs ordered editable steps from Temporal execution fields", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:ordered-steps",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Primary operator objective.",
+          steps: [
+            {
+              id: "step-primary",
+              title: "Primary",
+              instructions: "Primary operator objective.",
+              skill: {
+                id: "moonspec-orchestrate",
+                args: { mode: "runtime" },
+                requiredCapabilities: ["git"],
+              },
+            },
+            {},
+            {
+              id: "step-second",
+              title: "Second",
+              instructions: "Second step instructions.",
+              tool: {
+                name: "pr-resolver",
+                inputs: { merge: false },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.steps).toEqual([
+      {
+        id: "step-primary",
+        title: "Primary",
+        instructions: "Primary operator objective.",
+        skillId: "moonspec-orchestrate",
+        skillArgs: { mode: "runtime" },
+        skillRequiredCapabilities: ["git"],
+        templateStepId: "",
+        templateInstructions: "",
+      },
+      {
+        id: "step-second",
+        title: "Second",
+        instructions: "Second step instructions.",
+        skillId: "pr-resolver",
+        skillArgs: { merge: false },
+        skillRequiredCapabilities: [],
+        templateStepId: "",
+        templateInstructions: "",
+      },
+    ]);
+  });
+
   it("uses null for optional draft fields that cannot be reconstructed", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:minimal",
@@ -1711,6 +1840,77 @@ describe("Task Create Entrypoint", () => {
     });
     expect(screen.queryByText("Schedule (optional)")).toBeNull();
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeTruthy();
+  });
+
+  it("loads every step when editing a multi-step Temporal execution", async () => {
+    renderForEdit("mm:multi-step-edit");
+
+    expect(await screen.findByRole("heading", { name: "Edit Task" })).toBeTruthy();
+    await waitFor(() => {
+      const instructions = screen.getAllByLabelText(
+        "Instructions",
+      ) as HTMLTextAreaElement[];
+      expect(instructions.map((item) => item.value)).toEqual([
+        "Investigate why edit shows only step 1.",
+        "Patch the edit reconstruction path.",
+        "Run the focused task-create tests.",
+      ]);
+      expect(screen.getByText("Step 1 (Primary)")).toBeTruthy();
+      expect(screen.getByText("Step 2")).toBeTruthy();
+      expect(screen.getByText("Step 3")).toBeTruthy();
+    });
+  });
+
+  it("preserves unchanged later steps when saving a multi-step edit", async () => {
+    renderForEdit("mm:multi-step-edit");
+
+    await waitFor(() => {
+      expect(screen.getAllByLabelText("Instructions")).toHaveLength(3);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Amulti-step-edit/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) => String(url) === "/api/executions/mm%3Amulti-step-edit/update",
+      )
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request).toMatchObject({
+      updateName: "UpdateInputs",
+      parametersPatch: {
+        task: {
+          instructions: "Investigate why edit shows only step 1.",
+          steps: [
+            {
+              id: "step-primary",
+              title: "Investigate",
+              instructions: "Investigate why edit shows only step 1.",
+              skill: {
+                id: "moonspec-orchestrate",
+                args: { mode: "runtime" },
+                requiredCapabilities: ["git"],
+              },
+            },
+            {
+              id: "step-patch",
+              title: "Patch",
+              instructions: "Patch the edit reconstruction path.",
+            },
+            {
+              id: "step-verify",
+              title: "Verify",
+              instructions: "Run the focused task-create tests.",
+            },
+          ],
+        },
+      },
+    });
   });
 
   it("loads rerun mode instructions from an input artifact when inline instructions are absent", async () => {

@@ -55,6 +55,16 @@ export type TemporalSubmissionDraft = {
   publishMode: string | null;
   taskInstructions: string;
   primarySkill: string | null;
+  steps: Array<{
+    id: string;
+    title: string;
+    instructions: string;
+    skillId: string;
+    skillArgs: Record<string, unknown>;
+    skillRequiredCapabilities: string[];
+    templateStepId: string;
+    templateInstructions: string;
+  }>;
   appliedTemplates: Array<{
     slug: string;
     version: string;
@@ -196,6 +206,31 @@ function stepInstructions(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function stringArrayValue(...values: unknown[]): string[] {
+  for (const value of values) {
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    const normalized = value
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean);
+    if (normalized.length > 0) {
+      return normalized;
+    }
+  }
+  return [];
+}
+
+function firstObjectValue(...values: unknown[]): Record<string, unknown> {
+  for (const value of values) {
+    const normalized = objectValue(value);
+    if (Object.keys(normalized).length > 0) {
+      return normalized;
+    }
+  }
+  return {};
+}
+
 function taskInstructionsFrom(...tasks: Record<string, unknown>[]): string {
   for (const task of tasks) {
     const instructions = [
@@ -207,6 +242,83 @@ function taskInstructionsFrom(...tasks: Record<string, unknown>[]): string {
     }
   }
   return '';
+}
+
+function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number] | null {
+  const step = objectValue(value);
+  if (Object.keys(step).length === 0) {
+    return null;
+  }
+
+  const tool = objectValue(step.tool);
+  const skill = objectValue(step.skill);
+  const instructions = stringValue(step.instructions);
+  const id = stringValue(step.id);
+  const templateStepId = stringValue(
+    step.templateStepId,
+    step.template_step_id,
+    id.startsWith('tpl:') ? id : '',
+  );
+  const result = {
+    id,
+    title: stringValue(step.title),
+    instructions,
+    skillId: stringValue(tool.name, tool.id, skill.id, skill.name),
+    skillArgs: firstObjectValue(tool.inputs, tool.args, skill.inputs, skill.args),
+    skillRequiredCapabilities: stringArrayValue(
+      tool.requiredCapabilities,
+      skill.requiredCapabilities,
+    ),
+    templateStepId,
+    templateInstructions: stringValue(
+      step.templateInstructions,
+      step.template_instructions,
+      templateStepId ? instructions : '',
+    ),
+  };
+
+  const hasContent =
+    result.id ||
+    result.title ||
+    result.instructions ||
+    result.skillId ||
+    Object.keys(result.skillArgs).length > 0 ||
+    result.skillRequiredCapabilities.length > 0 ||
+    result.templateStepId ||
+    result.templateInstructions;
+  return hasContent ? result : null;
+}
+
+function draftStepsFromTask(
+  task: Record<string, unknown>,
+): TemporalSubmissionDraft['steps'] {
+  const rawSteps = Array.isArray(task.steps) ? task.steps : [];
+  const steps = rawSteps
+    .map((entry) => draftStepFrom(entry))
+    .filter((entry): entry is TemporalSubmissionDraft['steps'][number] =>
+      Boolean(entry),
+    );
+  if (steps.length === 0) {
+    return [];
+  }
+
+  const taskInstructions = stringValue(task.instructions);
+  if (taskInstructions && taskInstructions !== steps[0]?.instructions) {
+    return [
+      {
+        id: '',
+        title: '',
+        instructions: taskInstructions,
+        skillId: '',
+        skillArgs: {},
+        skillRequiredCapabilities: [],
+        templateStepId: '',
+        templateInstructions: '',
+      },
+      ...steps,
+    ];
+  }
+  return steps;
 }
 
 function nullableStringValue(...values: unknown[]): string | null {
@@ -331,6 +443,8 @@ export function buildTemporalSubmissionDraftFromExecution(
   const skill = objectValue(task.skill);
   const artifactTool = objectValue(artifactTask.tool);
   const artifactSkill = objectValue(artifactTask.skill);
+  const taskSteps = draftStepsFromTask(task);
+  const artifactTaskSteps = draftStepsFromTask(artifactTask);
 
   const artifactRepository = stringValue(artifactParams.repository);
   const taskSkills = skillSelectorNames(task.skills);
@@ -418,12 +532,16 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactSkill.name,
       artifactTaskSkills[0],
     ),
+    steps: taskSteps.length > 0 ? taskSteps : artifactTaskSteps,
     appliedTemplates: normalizeAppliedTemplates(
       task.appliedStepTemplates || artifactTask.appliedStepTemplates,
     ),
   };
 
-  if (!draft.taskInstructions && !draft.primarySkill) {
+  const hasStepContent = draft.steps.some(
+    (step) => step.instructions || step.skillId,
+  );
+  if (!draft.taskInstructions && !draft.primarySkill && !hasStepContent) {
     throw new Error(
       'Task instructions could not be reconstructed from this execution.',
     );

@@ -774,6 +774,32 @@ function createStepStateEntry(
   };
 }
 
+function createStepStateEntriesFromTemporalDraft(
+  draft: ReturnType<typeof buildTemporalSubmissionDraftFromExecution>,
+): StepState[] {
+  if (draft.steps.length === 0) {
+    return [
+      createStepStateEntry(1, {
+        instructions: draft.taskInstructions,
+        ...(draft.primarySkill ? { skillId: draft.primarySkill } : {}),
+      }),
+    ];
+  }
+
+  return draft.steps.map((step, index) =>
+    createStepStateEntry(index + 1, {
+      id: step.id,
+      title: step.title,
+      instructions: step.instructions,
+      skillId: step.skillId || (index === 0 ? draft.primarySkill || "" : ""),
+      skillArgs: stringifySkillArgs(step.skillArgs),
+      skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
+      templateStepId: step.templateStepId,
+      templateInstructions: step.templateInstructions,
+    }),
+  );
+}
+
 function hasExplicitSkillSelection(skillId: string): boolean {
   const normalized = skillId.trim().toLowerCase();
   return normalized !== "" && normalized !== "auto";
@@ -2088,13 +2114,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (draft.publishMode) {
       setPublishMode(draft.publishMode);
     }
-    setSteps([
-      createStepStateEntry(1, {
-        instructions: draft.taskInstructions,
-        ...(draft.primarySkill ? { skillId: draft.primarySkill } : {}),
-      }),
-    ]);
-    setNextStepNumber(2);
+    const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
+    setSteps(reconstructedSteps);
+    setNextStepNumber(reconstructedSteps.length + 1);
     setAppliedTemplates(draft.appliedTemplates);
     setAppliedTemplateFeatureRequest("");
     setScheduleMode("immediate");
