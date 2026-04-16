@@ -158,6 +158,7 @@ RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
+RUN_PARENT_OWNED_MERGE_AUTOMATION_PATCH = "run-parent-owned-merge-automation-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
@@ -3122,7 +3123,7 @@ class MoonMindRunWorkflow:
             return None
         pr_number = int(parsed["number"])
         return {
-            "workflowType": "MoonMind.MergeGate",
+            "workflowType": "MoonMind.MergeAutomation",
             "parent": {"workflowId": parent_workflow_id, "runId": parent_run_id},
             "pullRequest": {
                 "repo": repo,
@@ -3146,9 +3147,45 @@ class MoonMindRunWorkflow:
                 "mergeMethod": request.get("mergeMethod") or "squash",
             },
             "idempotencyKey": (
-                f"merge-gate:{parent_workflow_id}:{repo}:{pr_number}:{normalized_head_sha}"
+                f"merge-automation:{parent_workflow_id}:{repo}:{pr_number}:{normalized_head_sha}"
             ),
         }
+
+    def _merge_automation_child_succeeded(self, result: Any) -> bool:
+        status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
+        return status in {"merged", "already_merged"}
+
+    @staticmethod
+    def _legacy_merge_gate_start_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+        legacy_payload = dict(payload)
+        legacy_payload["workflowType"] = "MoonMind.MergeGate"
+        idempotency_key = str(legacy_payload.get("idempotencyKey") or "")
+        if idempotency_key.startswith("merge-automation:"):
+            legacy_payload["idempotencyKey"] = idempotency_key.replace(
+                "merge-automation:",
+                "merge-gate:",
+                1,
+            )
+        return legacy_payload
+
+    def _merge_automation_failure_reason(self, result: Any) -> str:
+        status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
+        blockers = self._get_from_result(result, "blockers")
+        blocker_summary = ""
+        if isinstance(blockers, list):
+            for blocker in blockers:
+                if not isinstance(blocker, Mapping):
+                    continue
+                summary = self._coerce_text(blocker.get("summary"), max_chars=500)
+                if summary:
+                    blocker_summary = summary
+                    break
+        if blocker_summary:
+            return f"merge automation {status or 'failed'}: {blocker_summary}"
+        summary = self._coerce_text(self._get_from_result(result, "summary"), max_chars=500)
+        if summary:
+            return f"merge automation {status or 'failed'}: {summary}"
+        return f"merge automation {status or 'failed'}"
 
     async def _maybe_start_merge_gate(
         self,
@@ -3169,16 +3206,65 @@ class MoonMindRunWorkflow:
         if payload is None:
             return
         workflow_id = str(payload["idempotencyKey"])
-        await workflow.start_child_workflow(
-            "MoonMind.MergeGate",
-            payload,
-            id=workflow_id,
-            task_queue=WORKFLOW_TASK_QUEUE,
-            static_summary="Waiting for pull request merge readiness",
-            static_details=f"Merge gate for {pull_request_url}",
-        )
-        self._publish_context["mergeGateWorkflowId"] = workflow_id
+        if (
+            self._publish_context.get("mergeAutomationWorkflowId") == workflow_id
+            and self._publish_context.get("mergeAutomationResult") is not None
+        ):
+            return
+        self._awaiting_external = True
+        self._publish_context["mergeAutomationWorkflowId"] = workflow_id
+        self._publish_context["mergeAutomationStatus"] = "awaiting_child"
+        self._update_search_attributes()
         self._update_memo()
+        try:
+            if workflow.patched(RUN_PARENT_OWNED_MERGE_AUTOMATION_PATCH):
+                child_result = await workflow.execute_child_workflow(
+                    "MoonMind.MergeAutomation",
+                    payload,
+                    id=workflow_id,
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                    static_summary="Waiting for pull request merge readiness",
+                    static_details=f"Merge automation for {pull_request_url}",
+                )
+            else:
+                legacy_payload = self._legacy_merge_gate_start_payload(payload)
+                legacy_workflow_id = str(legacy_payload["idempotencyKey"])
+                await workflow.start_child_workflow(
+                    "MoonMind.MergeGate",
+                    legacy_payload,
+                    id=legacy_workflow_id,
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                    static_summary="Waiting for pull request merge readiness",
+                    static_details=f"Merge gate for {pull_request_url}",
+                )
+                self._awaiting_external = False
+                self._publish_context["mergeAutomationWorkflowId"] = legacy_workflow_id
+                self._publish_context["mergeAutomationResult"] = {
+                    "status": "started",
+                    "workflowId": legacy_workflow_id,
+                }
+                self._publish_context["mergeAutomationStatus"] = "started"
+                self._update_memo()
+                self._update_search_attributes()
+                return
+        except Exception:
+            self._awaiting_external = False
+            self._publish_context["mergeAutomationStatus"] = "failed"
+            self._update_memo()
+            self._update_search_attributes()
+            raise
+        self._awaiting_external = False
+        self._publish_context["mergeAutomationResult"] = (
+            dict(child_result) if isinstance(child_result, Mapping) else child_result
+        )
+        self._publish_context["mergeAutomationStatus"] = self._coerce_text(
+            self._get_from_result(child_result, "status"),
+            max_chars=40,
+        ) or "unknown"
+        self._update_memo()
+        self._update_search_attributes()
+        if not self._merge_automation_child_succeeded(child_result):
+            raise ValueError(self._merge_automation_failure_reason(child_result))
 
     def _build_agent_execution_request(
         self,

@@ -59,7 +59,7 @@ def test_build_merge_gate_start_payload_from_published_pr() -> None:
     )
 
     assert payload is not None
-    assert payload["workflowType"] == "MoonMind.MergeGate"
+    assert payload["workflowType"] == "MoonMind.MergeAutomation"
     assert payload["pullRequest"]["number"] == 341
     assert payload["pullRequest"]["headSha"] == "abc123"
     assert payload["jiraIssueKey"] == "MM-341"
