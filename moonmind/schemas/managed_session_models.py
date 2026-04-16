@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -256,6 +256,51 @@ ClaudeHookWorkEventName = Literal[
     "work.hook.completed",
     "work.hook.blocked",
 ]
+ClaudeCheckpointTrigger = Literal[
+    "user_prompt",
+    "tracked_file_edit",
+    "bash_side_effect",
+    "external_manual_edit",
+]
+ClaudeCheckpointCaptureMode = Literal[
+    "conversation",
+    "code_and_conversation",
+    "code",
+    "best_effort",
+    "skipped",
+]
+ClaudeCheckpointStatus = Literal[
+    "captured",
+    "skipped",
+    "expired",
+    "garbage_collected",
+]
+ClaudeCheckpointRetentionState = Literal[
+    "addressable",
+    "expires_at",
+    "expired",
+    "garbage_collected",
+]
+ClaudeRewindMode = Literal[
+    "restore_code_and_conversation",
+    "restore_conversation_only",
+    "restore_code_only",
+    "summarize_from_here",
+]
+ClaudeRewindStatus = Literal["started", "completed", "failed"]
+ClaudeCheckpointWorkEventName = Literal[
+    "work.checkpoint.created",
+    "work.rewind.started",
+    "work.rewind.completed",
+]
+ClaudeManagedWorkEventName = Literal[
+    "work.hook.started",
+    "work.hook.completed",
+    "work.hook.blocked",
+    "work.checkpoint.created",
+    "work.rewind.started",
+    "work.rewind.completed",
+]
 ClaudeContextSourceKind = Literal[
     "system_prompt",
     "output_style",
@@ -316,6 +361,41 @@ CLAUDE_HOOK_WORK_EVENT_NAMES: tuple[ClaudeHookWorkEventName, ...] = (
     "work.hook.started",
     "work.hook.completed",
     "work.hook.blocked",
+)
+CLAUDE_CHECKPOINT_TRIGGERS: tuple[ClaudeCheckpointTrigger, ...] = (
+    "user_prompt",
+    "tracked_file_edit",
+    "bash_side_effect",
+    "external_manual_edit",
+)
+CLAUDE_CHECKPOINT_CAPTURE_MODES: tuple[ClaudeCheckpointCaptureMode, ...] = (
+    "conversation",
+    "code_and_conversation",
+    "code",
+    "best_effort",
+    "skipped",
+)
+CLAUDE_CHECKPOINT_RETENTION_STATES: tuple[
+    ClaudeCheckpointRetentionState, ...
+] = (
+    "addressable",
+    "expires_at",
+    "expired",
+    "garbage_collected",
+)
+CLAUDE_REWIND_MODES: tuple[ClaudeRewindMode, ...] = (
+    "restore_code_and_conversation",
+    "restore_conversation_only",
+    "restore_code_only",
+    "summarize_from_here",
+)
+assert set(CLAUDE_REWIND_MODES) == set(get_args(ClaudeRewindMode))
+CLAUDE_CHECKPOINT_WORK_EVENT_NAMES: tuple[
+    ClaudeCheckpointWorkEventName, ...
+] = (
+    "work.checkpoint.created",
+    "work.rewind.started",
+    "work.rewind.completed",
 )
 CLAUDE_CONTEXT_STARTUP_KINDS: tuple[ClaudeContextSourceKind, ...] = (
     "system_prompt",
@@ -1265,7 +1345,7 @@ class ClaudeManagedWorkItem(BaseModel):
     session_id: NonBlankStr = Field(..., alias="sessionId")
     kind: ClaudeWorkItemKind = Field(..., alias="kind")
     status: ClaudeWorkItemStatus = Field(..., alias="status")
-    event_name: ClaudeHookWorkEventName | None = Field(None, alias="eventName")
+    event_name: ClaudeManagedWorkEventName | None = Field(None, alias="eventName")
     payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
     started_at: datetime = Field(..., alias="startedAt")
     ended_at: datetime | None = Field(None, alias="endedAt")
@@ -1281,9 +1361,330 @@ class ClaudeManagedWorkItem(BaseModel):
             self.started_at = self.started_at.replace(tzinfo=UTC)
         if self.ended_at is not None and self.ended_at.tzinfo is None:
             self.ended_at = self.ended_at.replace(tzinfo=UTC)
-        if self.event_name is not None and self.kind != "hook_call":
+        if (
+            self.event_name in CLAUDE_HOOK_WORK_EVENT_NAMES
+            and self.kind != "hook_call"
+        ):
             raise ValueError("Hook event names require hook_call work items")
+        if self.event_name == "work.checkpoint.created" and self.kind != "checkpoint":
+            raise ValueError(
+                "Checkpoint and rewind event names require checkpoint or rewind work items"
+            )
+        if (
+            self.event_name
+            in {"work.rewind.started", "work.rewind.completed"}
+            and self.kind != "rewind"
+        ):
+            raise ValueError(
+                "Checkpoint and rewind event names require checkpoint or rewind work items"
+            )
         return self
+
+
+class ClaudeCheckpointCaptureDecision(BaseModel):
+    """Documented checkpoint capture decision for one Claude runtime trigger."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    trigger: ClaudeCheckpointTrigger
+    should_create_checkpoint: bool = Field(..., alias="shouldCreateCheckpoint")
+    capture_mode: ClaudeCheckpointCaptureMode = Field(..., alias="captureMode")
+    reason: NonBlankStr
+
+
+def claude_checkpoint_capture_decision(
+    trigger: ClaudeCheckpointTrigger,
+) -> ClaudeCheckpointCaptureDecision:
+    """Return the documented default checkpoint capture decision."""
+
+    decisions: dict[
+        ClaudeCheckpointTrigger, tuple[bool, ClaudeCheckpointCaptureMode, str]
+    ] = {
+        "user_prompt": (
+            True,
+            "conversation",
+            "User prompts create conversation rewind points.",
+        ),
+        "tracked_file_edit": (
+            True,
+            "code_and_conversation",
+            "Tracked file edits create restorable code and conversation state.",
+        ),
+        "bash_side_effect": (
+            False,
+            "skipped",
+            "Bash side effects do not create code-state checkpoints by default.",
+        ),
+        "external_manual_edit": (
+            True,
+            "best_effort",
+            "Manual external edits are represented as best-effort checkpoints.",
+        ),
+    }
+    if trigger not in decisions:
+        raise ValueError(f"Unsupported Claude checkpoint trigger: {trigger}")
+    should_create, capture_mode, reason = decisions[trigger]
+    return ClaudeCheckpointCaptureDecision(
+        trigger=trigger,
+        shouldCreateCheckpoint=should_create,
+        captureMode=capture_mode,
+        reason=reason,
+    )
+
+
+class ClaudeCheckpoint(BaseModel):
+    """Bounded metadata for one Claude session checkpoint."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    checkpoint_id: NonBlankStr = Field(..., alias="checkpointId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    turn_id: NonBlankStr | None = Field(None, alias="turnId")
+    trigger: ClaudeCheckpointTrigger
+    capture_mode: ClaudeCheckpointCaptureMode = Field(..., alias="captureMode")
+    status: ClaudeCheckpointStatus = "captured"
+    storage_ref: NonBlankStr = Field(..., alias="storageRef")
+    is_active: bool = Field(False, alias="isActive")
+    retention_state: ClaudeCheckpointRetentionState = Field(
+        "addressable", alias="retentionState"
+    )
+    created_at: datetime = Field(..., alias="createdAt")
+    expires_at: datetime | None = Field(None, alias="expiresAt")
+    rewound_from_checkpoint_id: NonBlankStr | None = Field(
+        None, alias="rewoundFromCheckpointId"
+    )
+    event_log_ref: NonBlankStr | None = Field(None, alias="eventLogRef")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_invariants(self) -> "ClaudeCheckpoint":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.expires_at is not None and self.expires_at.tzinfo is None:
+            self.expires_at = self.expires_at.replace(tzinfo=UTC)
+        if (
+            self.trigger == "bash_side_effect"
+            and self.capture_mode in {"code", "code_and_conversation"}
+        ):
+            raise ValueError(
+                "Bash side effects do not create code-state checkpoints by default"
+            )
+        if (
+            self.trigger == "external_manual_edit"
+            and self.capture_mode != "best_effort"
+        ):
+            raise ValueError("Manual external edits must use best_effort capture")
+        return self
+
+
+class ClaudeCheckpointIndex(BaseModel):
+    """Operator-visible checkpoint metadata for one Claude session."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    active_checkpoint_id: NonBlankStr | None = Field(
+        None, alias="activeCheckpointId"
+    )
+    checkpoints: tuple[ClaudeCheckpoint, ...] = Field(...)
+    generated_at: datetime = Field(..., alias="generatedAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_invariants(self) -> "ClaudeCheckpointIndex":
+        if self.generated_at.tzinfo is None:
+            self.generated_at = self.generated_at.replace(tzinfo=UTC)
+        checkpoint_ids = {checkpoint.checkpoint_id for checkpoint in self.checkpoints}
+        if self.active_checkpoint_id is not None and (
+            self.active_checkpoint_id not in checkpoint_ids
+        ):
+            raise ValueError("activeCheckpointId must refer to a listed checkpoint")
+        for checkpoint in self.checkpoints:
+            if checkpoint.session_id != self.session_id:
+                raise ValueError("CheckpointIndex cannot mix sessionId values")
+        return self
+
+
+class ClaudeRewindRequest(BaseModel):
+    """Validated request to restore or summarize from a Claude checkpoint."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    request_id: NonBlankStr = Field(..., alias="requestId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    checkpoint_id: NonBlankStr = Field(..., alias="checkpointId")
+    mode: ClaudeRewindMode
+    instructions: str | None = None
+    requested_at: datetime = Field(..., alias="requestedAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("instructions", mode="after")
+    @classmethod
+    def _validate_instructions(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return require_non_blank(value, field_name="instructions")
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeRewindRequest":
+        if self.requested_at.tzinfo is None:
+            self.requested_at = self.requested_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeRewindResult(BaseModel):
+    """Provenance-preserving result for a Claude rewind operation."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    result_id: NonBlankStr = Field(..., alias="resultId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    request_id: NonBlankStr = Field(..., alias="requestId")
+    source_checkpoint_id: NonBlankStr = Field(..., alias="sourceCheckpointId")
+    previous_active_checkpoint_id: NonBlankStr | None = Field(
+        None, alias="previousActiveCheckpointId"
+    )
+    active_checkpoint_id: NonBlankStr = Field(..., alias="activeCheckpointId")
+    mode: ClaudeRewindMode
+    status: ClaudeRewindStatus
+    rewound_from_checkpoint_id: NonBlankStr | None = Field(
+        None, alias="rewoundFromCheckpointId"
+    )
+    preserved_event_log_ref: NonBlankStr = Field(..., alias="preservedEventLogRef")
+    summary_ref: NonBlankStr | None = Field(None, alias="summaryRef")
+    code_state_restored: bool = Field(..., alias="codeStateRestored")
+    conversation_state_restored: bool = Field(..., alias="conversationStateRestored")
+    created_at: datetime = Field(..., alias="createdAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_invariants(self) -> "ClaudeRewindResult":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.status != "completed":
+            return self
+        if self.mode == "summarize_from_here":
+            if self.summary_ref is None:
+                raise ValueError("summarize_from_here requires summaryRef")
+            if self.code_state_restored:
+                raise ValueError("summarize_from_here cannot restore code state")
+            if not self.conversation_state_restored:
+                raise ValueError(
+                    "summarize_from_here must restore conversation state"
+                )
+        if self.mode == "restore_code_only" and self.conversation_state_restored:
+            raise ValueError("restore_code_only cannot restore conversation state")
+        if self.mode == "restore_code_only" and not self.code_state_restored:
+            raise ValueError("restore_code_only must restore code state")
+        if self.mode == "restore_conversation_only" and self.code_state_restored:
+            raise ValueError("restore_conversation_only cannot restore code state")
+        if (
+            self.mode == "restore_conversation_only"
+            and not self.conversation_state_restored
+        ):
+            raise ValueError(
+                "restore_conversation_only must restore conversation state"
+            )
+        if (
+            self.mode == "restore_code_and_conversation"
+            and not (self.code_state_restored and self.conversation_state_restored)
+        ):
+            raise ValueError(
+                "restore_code_and_conversation must restore code and conversation state"
+            )
+        return self
+
+
+def create_claude_checkpoint_work_item(
+    *,
+    item_id: str,
+    turn_id: str,
+    session_id: str,
+    checkpoint_id: str,
+    created_at: datetime,
+    payload: dict[str, Any] | None = None,
+) -> ClaudeManagedWorkItem:
+    """Create bounded work evidence for checkpoint capture."""
+
+    next_payload = dict(payload or {})
+    next_payload["checkpointId"] = checkpoint_id
+    return ClaudeManagedWorkItem(
+        itemId=item_id,
+        turnId=turn_id,
+        sessionId=session_id,
+        kind="checkpoint",
+        status="completed",
+        eventName="work.checkpoint.created",
+        payload=next_payload,
+        startedAt=created_at,
+        endedAt=created_at,
+    )
+
+
+def create_claude_rewind_work_items(
+    *,
+    started_item_id: str,
+    completed_item_id: str,
+    turn_id: str,
+    session_id: str,
+    request_id: str,
+    result_id: str,
+    source_checkpoint_id: str,
+    active_checkpoint_id: str,
+    created_at: datetime,
+) -> tuple[ClaudeManagedWorkItem, ClaudeManagedWorkItem]:
+    """Create bounded work evidence for a completed rewind lifecycle."""
+
+    started = ClaudeManagedWorkItem(
+        itemId=started_item_id,
+        turnId=turn_id,
+        sessionId=session_id,
+        kind="rewind",
+        status="in_progress",
+        eventName="work.rewind.started",
+        payload={
+            "requestId": request_id,
+            "sourceCheckpointId": source_checkpoint_id,
+        },
+        startedAt=created_at,
+    )
+    completed = ClaudeManagedWorkItem(
+        itemId=completed_item_id,
+        turnId=turn_id,
+        sessionId=session_id,
+        kind="rewind",
+        status="completed",
+        eventName="work.rewind.completed",
+        payload={
+            "requestId": request_id,
+            "resultId": result_id,
+            "sourceCheckpointId": source_checkpoint_id,
+            "activeCheckpointId": active_checkpoint_id,
+        },
+        startedAt=created_at,
+        endedAt=created_at,
+    )
+    return started, completed
 
 
 def claude_default_reinjection_policy(
@@ -2254,6 +2655,10 @@ def resolve_claude_policy_envelope(
 
 __all__ = [
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
+    "CLAUDE_CHECKPOINT_CAPTURE_MODES",
+    "CLAUDE_CHECKPOINT_RETENTION_STATES",
+    "CLAUDE_CHECKPOINT_TRIGGERS",
+    "CLAUDE_CHECKPOINT_WORK_EVENT_NAMES",
     "CLAUDE_CONTEXT_EVENT_NAMES",
     "CLAUDE_CONTEXT_ON_DEMAND_KINDS",
     "CLAUDE_CONTEXT_STARTUP_KINDS",
@@ -2269,6 +2674,14 @@ __all__ = [
     "ClaudeContextSegment",
     "ClaudeContextSnapshot",
     "ClaudeContextSourceKind",
+    "ClaudeCheckpoint",
+    "ClaudeCheckpointCaptureDecision",
+    "ClaudeCheckpointCaptureMode",
+    "ClaudeCheckpointIndex",
+    "ClaudeCheckpointRetentionState",
+    "ClaudeCheckpointStatus",
+    "ClaudeCheckpointTrigger",
+    "ClaudeCheckpointWorkEventName",
     "ClaudeDecisionEventName",
     "ClaudeDecisionOutcome",
     "ClaudeDecisionPoint",
@@ -2283,6 +2696,7 @@ __all__ = [
     "ClaudeManagedSession",
     "ClaudeManagedSourceKind",
     "ClaudeManagedTurn",
+    "ClaudeManagedWorkEventName",
     "ClaudeManagedWorkItem",
     "ClaudePermissionMode",
     "ClaudePolicyBootstrapTemplate",
@@ -2303,6 +2717,10 @@ __all__ = [
     "ClaudeProjectionMode",
     "ClaudeProviderMode",
     "ClaudeRuntimeFamily",
+    "ClaudeRewindMode",
+    "ClaudeRewindRequest",
+    "ClaudeRewindResult",
+    "ClaudeRewindStatus",
     "ClaudeSessionCreatedBy",
     "ClaudeSessionState",
     "ClaudeSurfaceBinding",
@@ -2346,8 +2764,11 @@ __all__ = [
     "ManagedSessionRequestTrackingStatus",
     "ManagedSessionTurnStatus",
     "PublishCodexManagedSessionArtifactsRequest",
+    "claude_checkpoint_capture_decision",
     "claude_default_reinjection_policy",
     "compact_claude_context_snapshot",
+    "create_claude_checkpoint_work_item",
+    "create_claude_rewind_work_items",
     "resolve_claude_policy_envelope",
     "SendCodexManagedSessionTurnRequest",
     "SteerCodexManagedSessionTurnRequest",
