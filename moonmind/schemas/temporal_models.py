@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
-SUPPORTED_WORKFLOW_TYPES = ("MoonMind.Run", "MoonMind.ManifestIngest")
+SUPPORTED_WORKFLOW_TYPES = ("MoonMind.Run", "MoonMind.ManifestIngest", "MoonMind.MergeGate")
 SUPPORTED_FAILURE_POLICIES = (
     "fail_fast",
     "continue_and_report",
@@ -55,6 +55,144 @@ def normalize_dependency_ids(raw_value: Any) -> list[str]:
         seen.add(candidate)
         normalized.append(candidate)
     return normalized
+
+
+class PullRequestRefModel(BaseModel):
+    """Compact pull request identity carried through merge-gate workflow history."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    repo: str = Field(..., alias="repo")
+    number: int = Field(..., alias="number")
+    url: str = Field(..., alias="url")
+    head_sha: str = Field(..., alias="headSha")
+    head_branch: str | None = Field(None, alias="headBranch")
+    base_branch: str | None = Field(None, alias="baseBranch")
+
+    @field_validator("repo", "url", "head_sha")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise ValueError("field must be a non-empty string")
+        return candidate
+
+    @field_validator("number")
+    @classmethod
+    def _positive_number(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("number must be positive")
+        return value
+
+
+MergeGatePolicySetting = Literal["required", "optional", "disabled"]
+MergeMethod = Literal["merge", "squash", "rebase"]
+
+
+class MergeGatePolicyModel(BaseModel):
+    """Readiness policy for one merge gate."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    checks: MergeGatePolicySetting = Field("required", alias="checks")
+    automated_review: MergeGatePolicySetting = Field(
+        "required", alias="automatedReview"
+    )
+    jira_status: MergeGatePolicySetting = Field("optional", alias="jiraStatus")
+    merge_method: MergeMethod = Field("squash", alias="mergeMethod")
+
+
+ReadinessBlockerKind = Literal[
+    "checks_running",
+    "checks_failed",
+    "automated_review_pending",
+    "jira_status_pending",
+    "pull_request_closed",
+    "stale_revision",
+    "policy_denied",
+    "external_state_unavailable",
+]
+
+
+class ReadinessBlockerModel(BaseModel):
+    """Bounded operator-visible reason a merge gate is not open."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: ReadinessBlockerKind = Field(..., alias="kind")
+    summary: str = Field(..., alias="summary")
+    retryable: bool = Field(True, alias="retryable")
+    source: str | None = Field(None, alias="source")
+
+    @field_validator("summary")
+    @classmethod
+    def _summary_required(cls, value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise ValueError("summary must be a non-empty string")
+        return candidate[:500]
+
+
+class ReadinessEvidenceModel(BaseModel):
+    """Compact result of evaluating external PR readiness."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    head_sha: str = Field(..., alias="headSha")
+    ready: bool = Field(False, alias="ready")
+    pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
+    checks_complete: bool | None = Field(None, alias="checksComplete")
+    checks_passing: bool | None = Field(None, alias="checksPassing")
+    automated_review_complete: bool | None = Field(
+        None, alias="automatedReviewComplete"
+    )
+    jira_status_allowed: bool | None = Field(None, alias="jiraStatusAllowed")
+    policy_allowed: bool | None = Field(None, alias="policyAllowed")
+    blockers: list[ReadinessBlockerModel] = Field(default_factory=list, alias="blockers")
+
+    @field_validator("head_sha")
+    @classmethod
+    def _head_sha_required(cls, value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise ValueError("headSha must be a non-empty string")
+        return candidate
+
+    @model_validator(mode="after")
+    def _ready_requires_no_blockers(self) -> "ReadinessEvidenceModel":
+        if self.ready and self.blockers:
+            raise ValueError("ready evidence cannot include blockers")
+        return self
+
+
+class ResolverRunRefModel(BaseModel):
+    """Reference to the resolver follow-up run launched by a merge gate."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId")
+    run_id: str | None = Field(None, alias="runId")
+    created: bool = Field(True, alias="created")
+
+
+class MergeGateStartInput(BaseModel):
+    """Start input for ``MoonMind.MergeGate``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_type: Literal["MoonMind.MergeGate"] = Field(..., alias="workflowType")
+    parent: dict[str, Any] = Field(..., alias="parent")
+    pull_request: PullRequestRefModel = Field(..., alias="pullRequest")
+    jira_issue_key: str | None = Field(None, alias="jiraIssueKey")
+    policy: MergeGatePolicyModel = Field(default_factory=MergeGatePolicyModel, alias="policy")
+    idempotency_key: str | None = Field(None, alias="idempotencyKey")
+
+    @model_validator(mode="after")
+    def _parent_has_workflow_id(self) -> "MergeGateStartInput":
+        workflow_id = str(self.parent.get("workflowId") or "").strip()
+        if not workflow_id:
+            raise ValueError("parent.workflowId is required")
+        return self
 
 
 class DependencyResolvedSignalPayload(BaseModel):
