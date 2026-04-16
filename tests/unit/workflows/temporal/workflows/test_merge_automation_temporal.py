@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -41,6 +42,96 @@ def _payload() -> dict[str, Any]:
         },
         "idempotencyKey": "merge-automation:wf-parent:MoonLadderStudios/MoonMind:350:abc123",
     }
+
+
+def test_merge_automation_extracts_artifact_id_from_ref_shapes() -> None:
+    assert (
+        MoonMindMergeAutomationWorkflow._artifact_id_from_ref(
+            {"artifact_id": "art-snake"}
+        )
+        == "art-snake"
+    )
+    assert (
+        MoonMindMergeAutomationWorkflow._artifact_id_from_ref(
+            {"artifactId": "art-camel"}
+        )
+        == "art-camel"
+    )
+    assert (
+        MoonMindMergeAutomationWorkflow._artifact_id_from_ref(
+            SimpleNamespace(artifact_id="art-attr-snake")
+        )
+        == "art-attr-snake"
+    )
+    assert (
+        MoonMindMergeAutomationWorkflow._artifact_id_from_ref(
+            SimpleNamespace(artifactId="art-attr-camel")
+        )
+        == "art-attr-camel"
+    )
+
+
+def test_merge_automation_summary_payload_bounds_published_artifact_refs() -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    max_refs = merge_automation_module.MAX_PUBLISHED_ARTIFACT_REFS
+    workflow._gate_snapshot_artifact_refs = [
+        f"gate-{index}" for index in range(max_refs + 5)
+    ]
+    workflow._resolver_attempt_artifact_refs = [
+        f"attempt-{index}" for index in range(max_refs + 3)
+    ]
+
+    payload = workflow.summary()
+
+    assert payload["artifactRefs"]["gateSnapshots"] == [
+        f"gate-{index}" for index in range(5, max_refs + 5)
+    ]
+    assert payload["artifactRefs"]["resolverAttempts"] == [
+        f"attempt-{index}" for index in range(3, max_refs + 3)
+    ]
+    assert len(workflow._gate_snapshot_artifact_refs) == max_refs + 5
+    assert len(workflow._resolver_attempt_artifact_refs) == max_refs + 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_at", ["create", "write_complete"])
+async def test_write_json_artifact_preserves_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_at: str,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        assert activity_type == "artifact.create"
+        if cancel_at == "create":
+            raise CancelledError("artifact create canceled")
+        return ({"artifact_id": "art-cancel"}, {"upload_url": "memory://upload"})
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, str]:
+        assert activity_type == "artifact.write_complete"
+        raise CancelledError("artifact write canceled")
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    with pytest.raises(CancelledError):
+        await workflow._write_json_artifact(name="artifact.json", payload={})
 
 
 @pytest.mark.asyncio
@@ -312,6 +403,86 @@ async def test_merge_automation_success_dispositions_complete_successfully(
 
     assert result["status"] == expected_status
     assert result["blockers"] == []
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_writes_visibility_artifact_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    created_names: list[str] = []
+    written_artifact_ids: list[str] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.create":
+            created_names.append(str(payload["name"]))
+            artifact_id = f"artifact-{len(created_names)}"
+            return ({"artifact_id": artifact_id}, {"upload_url": "memory://upload"})
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.Run"
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "artifact.write_complete"
+        written_artifact_ids.append(payload.artifact_id)
+        return {"artifact_id": payload.artifact_id}
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        merge_automation_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert result["status"] == "merged"
+    assert "reports/merge_automation_summary.json" in created_names
+    assert "artifacts/merge_automation/gate_snapshots/0.json" in created_names
+    assert "artifacts/merge_automation/resolver_attempts/1.json" in created_names
+    assert result["artifactRefs"]["summary"] in written_artifact_ids
+    assert result["artifactRefs"]["gateSnapshots"]
+    assert result["artifactRefs"]["resolverAttempts"]
 
 
 @pytest.mark.asyncio

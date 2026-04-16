@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any
@@ -16,10 +17,13 @@ with workflow.unsafe.imports_passed_through():
         MergeAutomationStartInput,
         ReadinessBlockerModel,
     )
+    from moonmind.schemas.temporal_activity_models import ArtifactWriteCompleteInput
     from moonmind.workflows.temporal.activity_catalog import (
+        ARTIFACTS_TASK_QUEUE,
         INTEGRATIONS_TASK_QUEUE,
         WORKFLOW_TASK_QUEUE,
     )
+    from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.temporal.workflows.merge_gate import (
         DEFAULT_ACTIVITY_RETRY_POLICY,
         TERMINAL_BLOCKER_KINDS,
@@ -49,6 +53,7 @@ NON_SUCCESS_DISPOSITIONS = frozenset({DISPOSITION_MANUAL_REVIEW, DISPOSITION_FAI
 ALLOWED_DISPOSITIONS = SUCCESS_DISPOSITIONS | NON_SUCCESS_DISPOSITIONS | {
     DISPOSITION_REENTER_GATE
 }
+MAX_PUBLISHED_ARTIFACT_REFS = 20
 
 
 @workflow.defn(name=WORKFLOW_NAME)
@@ -60,26 +65,148 @@ class MoonMindMergeAutomationWorkflow:
         self._input: MergeAutomationStartInput | None = None
         self._blockers: list[ReadinessBlockerModel] = []
         self._resolver_child_workflow_ids: list[str] = []
+        self._gate_snapshot_artifact_refs: list[str] = []
+        self._resolver_attempt_artifact_refs: list[str] = []
+        self._summary_artifact_ref: str | None = None
         self._external_event_count = 0
         self._refresh_tracked_head_sha_on_next_evaluation = False
         self._summary: str | None = None
 
     def _summary_payload(self) -> dict[str, Any]:
         pr = self._input.pull_request if self._input is not None else None
+        artifact_refs = {
+            "summary": self._summary_artifact_ref,
+            "gateSnapshots": self._published_artifact_refs(
+                self._gate_snapshot_artifact_refs
+            ),
+            "resolverAttempts": self._published_artifact_refs(
+                self._resolver_attempt_artifact_refs
+            ),
+        }
         payload = {
             "status": self._status,
             "prNumber": pr.number if pr is not None else None,
             "prUrl": pr.url if pr is not None else None,
             "cycles": len(self._resolver_child_workflow_ids),
             "resolverChildWorkflowIds": list(self._resolver_child_workflow_ids),
-            "lastHeadSha": pr.head_sha if pr is not None else None,
+            "latestHeadSha": pr.head_sha if pr is not None else None,
             "blockers": [
                 blocker.model_dump(by_alias=True, mode="json")
                 for blocker in self._blockers
             ],
+            "artifactRefs": artifact_refs,
         }
         if self._summary:
             payload["summary"] = self._summary
+        return payload
+
+    @staticmethod
+    def _published_artifact_refs(refs: list[str]) -> list[str]:
+        return list(refs[-MAX_PUBLISHED_ARTIFACT_REFS:])
+
+    @staticmethod
+    def _artifact_id_from_ref(artifact_ref: Any) -> str:
+        if isinstance(artifact_ref, Mapping):
+            return str(
+                artifact_ref.get("artifact_id") or artifact_ref.get("artifactId") or ""
+            )
+        return str(
+            getattr(artifact_ref, "artifact_id", "")
+            or getattr(artifact_ref, "artifactId", "")
+        )
+
+    def _principal(self) -> str:
+        if self._input is None:
+            return "merge-automation"
+        return self._input.principal or self._input.parent_workflow_id
+
+    async def _write_json_artifact(self, *, name: str, payload: dict[str, Any]) -> str | None:
+        try:
+            artifact_ref, _upload_desc = await workflow.execute_activity(
+                "artifact.create",
+                {
+                    "principal": self._principal(),
+                    "name": name,
+                    "content_type": "application/json",
+                },
+                task_queue=ARTIFACTS_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=60),
+                schedule_to_close_timeout=timedelta(seconds=120),
+                retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            )
+            artifact_id = self._artifact_id_from_ref(artifact_ref)
+            if not artifact_id:
+                return None
+            await execute_typed_activity(
+                "artifact.write_complete",
+                ArtifactWriteCompleteInput(
+                    principal=self._principal(),
+                    artifact_id=artifact_id,
+                    payload=(json.dumps(payload, sort_keys=True, indent=2) + "\n").encode(
+                        "utf-8"
+                    ),
+                    content_type="application/json",
+                ),
+                task_queue=ARTIFACTS_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=60),
+                schedule_to_close_timeout=timedelta(seconds=120),
+                retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            )
+            return artifact_id
+        except CancelledError:
+            raise
+        except Exception:
+            return None
+
+    async def _write_gate_snapshot(self, *, evidence_ready: bool) -> None:
+        snapshot_name = (
+            "artifacts/merge_automation/gate_snapshots/"
+            f"{len(self._resolver_child_workflow_ids)}.json"
+        )
+        artifact_id = await self._write_json_artifact(
+            name=snapshot_name,
+            payload={
+                "status": self._status,
+                "ready": evidence_ready,
+                "summary": self._summary_payload(),
+            },
+        )
+        if artifact_id:
+            self._gate_snapshot_artifact_refs.append(artifact_id)
+
+    async def _write_resolver_attempt(
+        self, *, workflow_id: str, result: Any | None = None
+    ) -> None:
+        payload: dict[str, Any] = {
+            "status": self._status,
+            "workflowId": workflow_id,
+            "attempt": len(self._resolver_child_workflow_ids),
+            "summary": self._summary_payload(),
+        }
+        if isinstance(result, Mapping):
+            payload["result"] = {
+                "status": result.get("status"),
+                "mergeAutomationDisposition": result.get("mergeAutomationDisposition"),
+                "headSha": result.get("headSha"),
+            }
+        attempt_name = (
+            "artifacts/merge_automation/resolver_attempts/"
+            f"{len(self._resolver_child_workflow_ids)}.json"
+        )
+        artifact_id = await self._write_json_artifact(name=attempt_name, payload=payload)
+        if artifact_id:
+            self._resolver_attempt_artifact_refs.append(artifact_id)
+
+    async def _finish(self) -> dict[str, Any]:
+        payload = self._summary_payload()
+        artifact_id = await self._write_json_artifact(
+            name="reports/merge_automation_summary.json",
+            payload=payload,
+        )
+        if artifact_id:
+            self._summary_artifact_ref = artifact_id
+            payload = self._summary_payload()
+        self._publish_visibility()
         return payload
 
     def _publish_visibility(self) -> None:
@@ -131,13 +258,14 @@ class MoonMindMergeAutomationWorkflow:
         self._input.pull_request.head_sha = head_sha
         return True
 
-    def _failed_resolver_summary(
+    async def _failed_resolver_summary(
         self,
         *,
         summary: str,
         blocker_kind: str,
     ) -> dict[str, Any]:
         self._status = STATE_FAILED
+        self._summary = summary
         self._blockers = [
             ReadinessBlockerModel.model_validate(
                 {
@@ -148,10 +276,8 @@ class MoonMindMergeAutomationWorkflow:
                 }
             )
         ]
-        result = self._summary_payload()
-        result["summary"] = summary
         self._publish_visibility()
-        return result
+        return await self._finish()
 
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -164,7 +290,7 @@ class MoonMindMergeAutomationWorkflow:
             if expire_at is not None and workflow.now() >= expire_at:
                 self._status = STATE_EXPIRED
                 self._publish_visibility()
-                return self._summary_payload()
+                return await self._finish()
 
             evaluation = await workflow.execute_activity(
                 "merge_automation.evaluate_readiness",
@@ -186,6 +312,7 @@ class MoonMindMergeAutomationWorkflow:
                         tracked_head_sha=self._input.pull_request.head_sha,
                     )
             self._blockers = list(evidence.blockers)
+            await self._write_gate_snapshot(evidence_ready=evidence.ready)
             if evidence.ready:
                 self._status = STATE_EXECUTING
                 self._publish_visibility()
@@ -220,8 +347,13 @@ class MoonMindMergeAutomationWorkflow:
                     self._summary = (
                         "Merge automation canceled while resolver child was active."
                     )
+                    await self._write_resolver_attempt(workflow_id=resolver_workflow_id)
                     self._publish_visibility()
-                    return self._summary_payload()
+                    return await self._finish()
+                await self._write_resolver_attempt(
+                    workflow_id=resolver_workflow_id,
+                    result=resolver_result,
+                )
                 resolver_status = str(
                     (resolver_result or {}).get("status")
                     if isinstance(resolver_result, Mapping)
@@ -229,12 +361,12 @@ class MoonMindMergeAutomationWorkflow:
                 ).strip()
                 resolver_disposition = self._resolver_disposition(resolver_result)
                 if resolver_status != "success":
-                    return self._failed_resolver_summary(
+                    return await self._failed_resolver_summary(
                         summary="pr-resolver child run did not complete successfully.",
                         blocker_kind=DISPOSITION_FAILED,
                     )
                 if not resolver_disposition:
-                    return self._failed_resolver_summary(
+                    return await self._failed_resolver_summary(
                         summary=(
                             "pr-resolver child result missing "
                             "mergeAutomationDisposition."
@@ -242,7 +374,7 @@ class MoonMindMergeAutomationWorkflow:
                         blocker_kind="resolver_disposition_invalid",
                     )
                 if resolver_disposition not in ALLOWED_DISPOSITIONS:
-                    return self._failed_resolver_summary(
+                    return await self._failed_resolver_summary(
                         summary=(
                             "pr-resolver child result has unsupported "
                             "mergeAutomationDisposition: "
@@ -261,21 +393,19 @@ class MoonMindMergeAutomationWorkflow:
                     continue
                 if resolver_disposition == DISPOSITION_ALREADY_MERGED:
                     self._status = STATE_ALREADY_MERGED
-                    summary = self._summary_payload()
                     self._publish_visibility()
-                    return summary
+                    return await self._finish()
                 if resolver_disposition == DISPOSITION_MERGED:
                     self._status = STATE_MERGED
-                    summary = self._summary_payload()
                     self._publish_visibility()
-                    return summary
+                    return await self._finish()
                 if resolver_disposition == DISPOSITION_MANUAL_REVIEW:
-                    return self._failed_resolver_summary(
+                    return await self._failed_resolver_summary(
                         summary="pr-resolver requested manual review.",
                         blocker_kind=DISPOSITION_MANUAL_REVIEW,
                     )
                 if resolver_disposition == DISPOSITION_FAILED:
-                    return self._failed_resolver_summary(
+                    return await self._failed_resolver_summary(
                         summary="pr-resolver reported failure.",
                         blocker_kind=DISPOSITION_FAILED,
                     )
@@ -283,7 +413,7 @@ class MoonMindMergeAutomationWorkflow:
             if any(blocker.kind in TERMINAL_BLOCKER_KINDS for blocker in self._blockers):
                 self._status = STATE_BLOCKED
                 self._publish_visibility()
-                return self._summary_payload()
+                return await self._finish()
 
             self._status = STATE_WAITING
             self._publish_visibility()
