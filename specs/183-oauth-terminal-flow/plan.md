@@ -15,7 +15,7 @@ This story implements first-party OAuth terminal session, auth runner, and PTY/W
 - Language/version: Python 3.12; TypeScript only when the story touches Mission Control UI behavior.
 - Primary dependencies: Pydantic v2 models, FastAPI routers, Temporal Python SDK workflows/activities, pytest, and existing Docker/runtime helpers.
 - Storage: existing database/workflow/profile/session/workload records only; no new persistent storage unless a later plan revision explicitly proves it is required.
-- Unit testing: `./tools/test_unit.sh` with `MOONMIND_FORCE_LOCAL_TESTS=1`; focused frontend tests use `npm run ui:test -- <path>` only for UI stories.
+- Unit testing: `./tools/test_unit.sh` with `MOONMIND_FORCE_LOCAL_TESTS=1`; focused frontend tests use `./tools/test_unit.sh --dashboard-only --ui-args <path>` in managed-agent paths.
 - Integration testing: `./tools/test_integration.sh` for compose-backed `integration_ci` coverage when Docker is available.
 - Target platform: MoonMind API service, Temporal worker/runtime services, managed Codex session containers, and Mission Control where applicable.
 - Project type: backend orchestration/runtime with optional browser surface for OAuth terminal flow.
@@ -47,13 +47,13 @@ This story implements first-party OAuth terminal session, auth runner, and PTY/W
 - Data model: `specs/183-oauth-terminal-flow/data-model.md`
 - Contract: `specs/183-oauth-terminal-flow/contracts/oauth-terminal-flow.md`
 - Quickstart: `specs/183-oauth-terminal-flow/quickstart.md`
-- Likely production touchpoints: api_service/api/routers/oauth_sessions.py, moonmind/workflows/temporal/runtime/terminal_bridge.py, moonmind/workflows/temporal/workflows/oauth_session.py, frontend/src/entrypoints/mission-control.tsx
-- Unit test targets: tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx
+- Likely production touchpoints: api_service/api/routers/oauth_sessions.py, api_service/api/schemas_oauth_sessions.py, moonmind/workflows/temporal/runtime/terminal_bridge.py, moonmind/workflows/temporal/workflows/oauth_session.py, frontend/src/entrypoints/oauth-terminal.tsx, frontend/src/entrypoints/mission-control-app.tsx
+- Unit test targets: tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py tests/unit/services/temporal/runtime/test_terminal_bridge.py frontend/src/entrypoints/mission-control.test.tsx
 - Integration test targets: tests/integration/temporal/test_oauth_session.py
 
 ## Test Strategy
 
-- Unit strategy: add red-first tests around validation, serialization, state transitions, redaction, and boundary payload construction for this story. Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py` and `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx` during focused iteration and `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` before final verification.
+- Unit strategy: add red-first tests around validation, serialization, state transitions, redaction, terminal bridge frame handling, Mission Control attach behavior, and boundary payload construction for this story. Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py tests/unit/services/temporal/runtime/test_terminal_bridge.py` and `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx` during focused iteration and `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` before final verification.
 - Integration strategy: add or update hermetic integration tests for the real API/workflow/runtime/container/browser boundary when this story crosses one. Run `./tools/test_integration.sh` when Docker is available; required coverage target: `tests/integration/temporal/test_oauth_session.py`; record the exact blocker if the Docker socket is unavailable in a managed-agent container.
 
 ## Complexity Tracking

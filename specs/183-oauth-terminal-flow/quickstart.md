@@ -9,8 +9,8 @@
 ## Focused Unit Verification
 
 ```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py
-npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py tests/unit/services/temporal/runtime/test_terminal_bridge.py
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx
 ```
 
 Expected result: focused tests for `STORY-004` fail before implementation changes and pass after the story is complete.

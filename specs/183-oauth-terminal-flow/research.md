@@ -2,13 +2,13 @@
 
 ## Implementation Boundary
 
-Decision: Implement first-party OAuth terminal session, auth runner, and PTY/WebSocket bridge lifecycle in existing MoonMind modules: api_service/api/routers/oauth_sessions.py, moonmind/workflows/temporal/runtime/terminal_bridge.py, moonmind/workflows/temporal/workflows/oauth_session.py, frontend/src/entrypoints/mission-control.tsx.
+Decision: Implement first-party OAuth terminal session, auth runner, and PTY/WebSocket bridge lifecycle in existing MoonMind modules: api_service/api/routers/oauth_sessions.py, api_service/api/schemas_oauth_sessions.py, moonmind/workflows/temporal/runtime/terminal_bridge.py, moonmind/workflows/temporal/workflows/oauth_session.py, frontend/src/entrypoints/oauth-terminal.tsx, and frontend/src/entrypoints/mission-control-app.tsx.
 Rationale: The source design requires thin orchestration boundaries and explicit ownership rather than new parallel runtime systems.
 Alternatives considered: Creating new subsystems or compatibility wrappers was rejected because MoonMind is pre-release and internal contracts should fail fast rather than gain compatibility aliases.
 
 ## Unit Test Strategy
 
-Decision: Use focused Python unit coverage through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py` and focused UI coverage through `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx`.
+Decision: Use focused Python unit coverage through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_oauth_sessions.py tests/unit/auth/test_oauth_session_activities.py tests/unit/services/temporal/runtime/test_terminal_bridge.py` and focused UI coverage through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/mission-control.test.tsx`.
 Rationale: Unit tests can prove validation, serialization, redaction, policy, and state behavior without requiring Docker credentials or external providers.
 Alternatives considered: Provider verification tests were rejected for this planning phase because MM-358 requires deterministic local evidence first.
 
