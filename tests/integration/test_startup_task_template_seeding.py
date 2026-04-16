@@ -56,7 +56,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "moonspec-align",
             "moonspec-implement",
             "moonspec-verify",
-            "auto",
         ]
         seeded_step_titles = [step["title"] for step in template.latest_version.steps]
         assert "Classify request and resume point" not in seeded_step_titles
@@ -113,7 +112,8 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert jira_orchestrate_steps[0] == "jira-issue-updater"
         assert "moonspec-implement" in jira_orchestrate_steps
         assert "moonspec-verify" in jira_orchestrate_steps
-        assert jira_orchestrate_steps[-2] == "jira-issue-updater"
+        assert jira_orchestrate_steps[-1] == "jira-issue-updater"
+        assert len(jira_orchestrate_steps) == 12
         pr_step = next(
             step
             for step in jira_orchestrate_template.latest_version.steps
@@ -127,5 +127,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             for step in jira_orchestrate_template.latest_version.steps
             if step["title"] == "Move Jira issue to Code Review"
         )
+        assert code_review_step == jira_orchestrate_template.latest_version.steps[-1]
         assert "Code Review" in code_review_step["instructions"]
         assert "pull_request_url" in code_review_step["instructions"]

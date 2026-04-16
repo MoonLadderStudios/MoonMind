@@ -569,8 +569,9 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 "moonspec-verify",
                 "auto",
                 "jira-issue-updater",
-                "auto",
             ]
+            step_titles = [step["title"] for step in template.latest_version.steps]
+            assert "Return Jira orchestration report" not in step_titles
 
             expanded = await service.expand_template(
                 slug="jira-orchestrate",
@@ -586,7 +587,7 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 context={},
             )
 
-            assert len(expanded["steps"]) == 13
+            assert len(expanded["steps"]) == 12
             assert expanded["steps"][0]["skill"]["id"] == "jira-issue-updater"
             assert "MM-328" in expanded["steps"][0]["instructions"]
             assert "In Progress" in expanded["steps"][0]["instructions"]
@@ -606,6 +607,70 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 "instructions"
             ]
             assert "Code Review" in expanded["steps"][11]["instructions"]
+            assert all(
+                step["title"] != "Return Jira orchestration report"
+                for step in expanded["steps"]
+            )
+
+
+async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
+    tmp_path,
+):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="moonspec-orchestrate",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.title == "MoonSpec Orchestrate"
+            assert template.latest_version is not None
+            assert [step["skill"]["id"] for step in template.latest_version.steps] == [
+                "moonspec-specify",
+                "moonspec-plan",
+                "moonspec-tasks",
+                "moonspec-align",
+                "moonspec-implement",
+                "moonspec-verify",
+            ]
+            step_titles = [step["title"] for step in template.latest_version.steps]
+            assert (
+                "Return orchestration report and defer publish actions"
+                not in step_titles
+            )
+            assert step_titles[-1] == "Verify completion"
+
+            expanded = await service.expand_template(
+                slug="moonspec-orchestrate",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "MM-366: Simplify Orchestrate Summary",
+                    "orchestration_mode": "runtime",
+                    "source_design_path": "",
+                    "constraints": "Keep the scope narrow.",
+                },
+                context={},
+            )
+
+            assert len(expanded["steps"]) == 6
+            assert expanded["steps"][-1]["title"] == "Verify completion"
+            assert "moonspec-verify" == expanded["steps"][-1]["skill"]["id"]
+            assert all(
+                step["title"] != "Return orchestration report and defer publish actions"
+                for step in expanded["steps"]
+            )
 
 
 async def test_sync_seed_templates_creates_missing_seed(tmp_path):
