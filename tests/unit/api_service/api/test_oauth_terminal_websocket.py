@@ -54,8 +54,8 @@ def test_terminal_close_reason_accepts_active_unexpired_session() -> None:
 
 
 def test_provider_bootstrap_command_uses_registry_command() -> None:
-    assert websockets._provider_bootstrap_command("codex_cli") == ["true"]
-    assert websockets._command_for_docker_exec("codex_cli") == "true"
+    assert websockets._provider_bootstrap_command("codex_cli") == ["codex", "login"]
+    assert websockets._command_for_docker_exec("codex_cli") == "codex login"
 
 
 def test_provider_bootstrap_command_rejects_unknown_runtime() -> None:

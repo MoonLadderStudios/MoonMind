@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from moonmind.workflows.temporal.runtime.providers.registry import (
     OAUTH_PROVIDERS,
+    get_provider_bootstrap_command,
     get_provider,
     get_provider_default,
     supported_runtime_ids,
@@ -90,3 +93,23 @@ class TestOAuthProviderRegistry:
             assert len(spec["bootstrap_command"]) > 0, (
                 f"Provider '{runtime_id}' bootstrap_command should not be empty"
             )
+
+    def test_codex_bootstrap_command_is_not_placeholder(self) -> None:
+        assert get_provider_bootstrap_command("codex_cli") == ("codex", "login")
+
+    def test_bootstrap_command_rejects_unknown_runtime(self) -> None:
+        with pytest.raises(ValueError, match="Unsupported OAuth runtime"):
+            get_provider_bootstrap_command("unknown_runtime")
+
+    def test_bootstrap_command_rejects_blank_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        providers = dict(OAUTH_PROVIDERS)
+        providers["codex_cli"] = dict(providers["codex_cli"], bootstrap_command=[" "])
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.runtime.providers.registry.OAUTH_PROVIDERS",
+            providers,
+        )
+
+        with pytest.raises(ValueError, match="bootstrap command is not configured"):
+            get_provider_bootstrap_command("codex_cli")
