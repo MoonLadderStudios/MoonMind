@@ -160,7 +160,6 @@ RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
-RUN_PARENT_OWNED_MERGE_AUTOMATION_PATCH = "run-parent-owned-merge-automation-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
@@ -3082,6 +3081,9 @@ class MoonMindRunWorkflow:
                 continue
             if not _coerce_bool(candidate.get("enabled"), default=False):
                 continue
+            timeout_config = candidate.get("timeouts")
+            if not isinstance(timeout_config, Mapping):
+                timeout_config = {}
             return {
                 "enabled": True,
                 "checks": self._coerce_text(candidate.get("checks"), max_chars=20)
@@ -3106,8 +3108,38 @@ class MoonMindRunWorkflow:
                     candidate.get("jiraIssueKey") or candidate.get("jira_issue_key"),
                     max_chars=40,
                 ),
+                "fallbackPollSeconds": (
+                    candidate.get("fallbackPollSeconds")
+                    or candidate.get("fallback_poll_seconds")
+                    or timeout_config.get("fallbackPollSeconds")
+                    or timeout_config.get("fallback_poll_seconds")
+                    or 120
+                ),
+                "expireAfterSeconds": (
+                    candidate.get("expireAfterSeconds")
+                    or candidate.get("expire_after_seconds")
+                    or timeout_config.get("expireAfterSeconds")
+                    or timeout_config.get("expire_after_seconds")
+                ),
             }
         return None
+
+    @staticmethod
+    def _normalize_positive_int(
+        value: Any,
+        *,
+        default: int | None,
+        maximum: int,
+    ) -> int | None:
+        if value is None or value == "":
+            return default
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return default
+        if candidate <= 0:
+            return default
+        return min(candidate, maximum)
 
     @staticmethod
     def _parse_github_pull_request_url(url: str) -> dict[str, Any] | None:
@@ -3146,9 +3178,31 @@ class MoonMindRunWorkflow:
         if not normalized_head_sha:
             return None
         pr_number = int(parsed["number"])
+        fallback_poll_seconds = self._normalize_positive_int(
+            request.get("fallbackPollSeconds"),
+            default=120,
+            maximum=3600,
+        )
+        expire_after_seconds = self._normalize_positive_int(
+            request.get("expireAfterSeconds"),
+            default=None,
+            maximum=2_592_000,
+        )
+        timeouts: dict[str, Any] = {"fallbackPollSeconds": fallback_poll_seconds or 120}
+        if expire_after_seconds is not None:
+            timeouts["expireAfterSeconds"] = expire_after_seconds
         return {
             "workflowType": "MoonMind.MergeAutomation",
-            "parent": {"workflowId": parent_workflow_id, "runId": parent_run_id},
+            "parentWorkflowId": parent_workflow_id,
+            "parentRunId": parent_run_id,
+            "publishContextRef": (
+                self._coerce_text(
+                    self._publish_context.get("publishContextRef")
+                    or self._publish_context.get("artifactRef"),
+                    max_chars=500,
+                )
+                or f"artifact://workflow/{parent_workflow_id}/publish-context"
+            ),
             "pullRequest": {
                 "repo": repo,
                 "number": pr_number,
@@ -3164,11 +3218,27 @@ class MoonMindRunWorkflow:
                 ),
             },
             "jiraIssueKey": request.get("jiraIssueKey"),
-            "policy": {
-                "checks": request.get("checks") or "required",
-                "automatedReview": request.get("automatedReview") or "required",
-                "jiraStatus": request.get("jiraStatus") or "optional",
-                "mergeMethod": request.get("mergeMethod") or "squash",
+            "mergeAutomationConfig": {
+                "gate": {
+                    "github": {
+                        "checks": request.get("checks") or "required",
+                        "automatedReview": request.get("automatedReview") or "required",
+                    },
+                    "jira": {
+                        "status": request.get("jiraStatus") or "optional",
+                        "issueKey": request.get("jiraIssueKey"),
+                    },
+                },
+                "resolver": {
+                    "skill": "pr-resolver",
+                    "mergeMethod": request.get("mergeMethod") or "squash",
+                },
+                "timeouts": timeouts,
+            },
+            "resolverTemplate": {
+                "repository": repo,
+                "targetRuntime": "codex",
+                "requiredCapabilities": ["git", "gh"],
             },
             "idempotencyKey": (
                 f"merge-automation:{parent_workflow_id}:{repo}:{pr_number}:{normalized_head_sha}"
@@ -3178,19 +3248,6 @@ class MoonMindRunWorkflow:
     def _merge_automation_child_succeeded(self, result: Any) -> bool:
         status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
         return status in {"merged", "already_merged"}
-
-    @staticmethod
-    def _legacy_merge_gate_start_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-        legacy_payload = dict(payload)
-        legacy_payload["workflowType"] = "MoonMind.MergeGate"
-        idempotency_key = str(legacy_payload.get("idempotencyKey") or "")
-        if idempotency_key.startswith("merge-automation:"):
-            legacy_payload["idempotencyKey"] = idempotency_key.replace(
-                "merge-automation:",
-                "merge-gate:",
-                1,
-            )
-        return legacy_payload
 
     def _merge_automation_failure_reason(self, result: Any) -> str:
         status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
@@ -3241,36 +3298,14 @@ class MoonMindRunWorkflow:
         self._update_search_attributes()
         self._update_memo()
         try:
-            if workflow.patched(RUN_PARENT_OWNED_MERGE_AUTOMATION_PATCH):
-                child_result = await workflow.execute_child_workflow(
-                    "MoonMind.MergeAutomation",
-                    payload,
-                    id=workflow_id,
-                    task_queue=WORKFLOW_TASK_QUEUE,
-                    static_summary="Waiting for pull request merge readiness",
-                    static_details=f"Merge automation for {pull_request_url}",
-                )
-            else:
-                legacy_payload = self._legacy_merge_gate_start_payload(payload)
-                legacy_workflow_id = str(legacy_payload["idempotencyKey"])
-                await workflow.start_child_workflow(
-                    "MoonMind.MergeGate",
-                    legacy_payload,
-                    id=legacy_workflow_id,
-                    task_queue=WORKFLOW_TASK_QUEUE,
-                    static_summary="Waiting for pull request merge readiness",
-                    static_details=f"Merge gate for {pull_request_url}",
-                )
-                self._awaiting_external = False
-                self._publish_context["mergeAutomationWorkflowId"] = legacy_workflow_id
-                self._publish_context["mergeAutomationResult"] = {
-                    "status": "started",
-                    "workflowId": legacy_workflow_id,
-                }
-                self._publish_context["mergeAutomationStatus"] = "started"
-                self._update_memo()
-                self._update_search_attributes()
-                return
+            child_result = await workflow.execute_child_workflow(
+                "MoonMind.MergeAutomation",
+                payload,
+                id=workflow_id,
+                task_queue=WORKFLOW_TASK_QUEUE,
+                static_summary="Waiting for pull request merge readiness",
+                static_details=f"Merge automation for {pull_request_url}",
+            )
         except Exception:
             self._awaiting_external = False
             self._publish_context["mergeAutomationStatus"] = "failed"

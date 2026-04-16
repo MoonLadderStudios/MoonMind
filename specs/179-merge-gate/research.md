@@ -2,7 +2,7 @@
 
 ## Workflow Boundary
 
-Decision: Add a distinct `MoonMind.MergeGate` workflow that is started by `MoonMind.Run` only after a pull request is confirmed and merge automation is enabled.
+Decision: Add a distinct `MoonMind.MergeAutomation` workflow that is started by `MoonMind.Run` only after a pull request is confirmed and merge automation is enabled.
 Rationale: The parent implementation run should complete independently of external review latency, while the merge gate can wait, receive signals, poll, and expose blockers without keeping implementation work in a running state.
 Alternatives considered: Keeping the gate inside `MoonMind.Run` was rejected because it couples implementation completion to review latency and bloats parent workflow history. Launching pr-resolver immediately after PR creation was rejected because it can race CI and automated review providers.
 
@@ -34,4 +34,4 @@ Alternatives considered: Starting a new merge gate after every resolver push was
 
 Decision: Use unit tests for Pydantic/request models, readiness classification helpers, and launch idempotency keys; use Temporal workflow-boundary tests for parent-to-gate startup, blocker waiting, gate-open resolver launch, duplicate-event handling, and stale/closed/denied stop paths.
 Rationale: MM-341 changes workflow/activity contracts and long-lived orchestration behavior, so isolated unit tests are insufficient. Boundary tests are required by repository guidance for Temporal-facing contract changes.
-Alternatives considered: Testing only GitHub service helpers was rejected because it would miss parent workflow completion and merge-gate replay/idempotency behavior.
+Alternatives considered: Testing only GitHub service helpers was rejected because it would miss parent workflow completion and merge-automation replay/idempotency behavior.

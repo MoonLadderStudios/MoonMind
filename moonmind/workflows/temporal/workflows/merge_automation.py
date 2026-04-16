@@ -12,7 +12,7 @@ from temporalio.workflow import ActivityCancellationType
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.temporal_models import (
-        MergeGateStartInput,
+        MergeAutomationStartInput,
         ReadinessBlockerModel,
     )
     from moonmind.workflows.temporal.activity_catalog import (
@@ -22,6 +22,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.workflows.merge_gate import (
         DEFAULT_ACTIVITY_RETRY_POLICY,
         TERMINAL_BLOCKER_KINDS,
+        _effective_expire_at,
         build_resolver_run_request,
         classify_readiness,
         deterministic_resolver_idempotency_key,
@@ -34,6 +35,7 @@ STATE_EXECUTING = "executing"
 STATE_BLOCKED = "blocked"
 STATE_MERGED = "merged"
 STATE_ALREADY_MERGED = "already_merged"
+STATE_EXPIRED = "expired"
 STATE_FAILED = "failed"
 DISPOSITION_REENTER_GATE = "reenter_gate"
 DISPOSITION_MERGED = "merged"
@@ -53,7 +55,7 @@ class MoonMindMergeAutomationWorkflow:
 
     def __init__(self) -> None:
         self._status = STATE_WAITING
-        self._input: MergeGateStartInput | None = None
+        self._input: MergeAutomationStartInput | None = None
         self._blockers: list[ReadinessBlockerModel] = []
         self._resolver_child_workflow_ids: list[str] = []
         self._external_event_count = 0
@@ -147,13 +149,19 @@ class MoonMindMergeAutomationWorkflow:
 
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
-        self._input = MergeGateStartInput.model_validate(payload)
+        self._input = MergeAutomationStartInput.model_validate(payload)
         self._status = STATE_WAITING
+        expire_at = _effective_expire_at(self._input, started_at=workflow.now())
         self._publish_visibility()
 
         while True:
+            if expire_at is not None and workflow.now() >= expire_at:
+                self._status = STATE_EXPIRED
+                self._publish_visibility()
+                return self._summary_payload()
+
             evaluation = await workflow.execute_activity(
-                "merge_gate.evaluate_readiness",
+                "merge_automation.evaluate_readiness",
                 self._input.model_dump(by_alias=True, mode="json"),
                 start_to_close_timeout=timedelta(minutes=2),
                 task_queue=INTEGRATIONS_TASK_QUEUE,
@@ -176,13 +184,13 @@ class MoonMindMergeAutomationWorkflow:
                 self._status = STATE_EXECUTING
                 self._publish_visibility()
                 resolver_request = build_resolver_run_request(
-                    parent_workflow_id=str(self._input.parent["workflowId"]),
+                    parent_workflow_id=self._input.parent_workflow_id,
                     pull_request=self._input.pull_request,
                     jira_issue_key=self._input.jira_issue_key,
-                    merge_method=self._input.policy.merge_method,
+                    merge_method=self._input.config.resolver.merge_method,
                 )
                 resolver_workflow_id = deterministic_resolver_idempotency_key(
-                    parent_workflow_id=str(self._input.parent["workflowId"]),
+                    parent_workflow_id=self._input.parent_workflow_id,
                     repo=self._input.pull_request.repo,
                     pr_number=self._input.pull_request.number,
                     head_sha=self._input.pull_request.head_sha,
@@ -265,9 +273,12 @@ class MoonMindMergeAutomationWorkflow:
             self._status = STATE_WAITING
             self._publish_visibility()
             try:
+                target_event_count = self._external_event_count
                 await workflow.wait_condition(
-                    lambda: self._external_event_count > 0,
-                    timeout=timedelta(minutes=5),
+                    lambda: self._external_event_count > target_event_count,
+                    timeout=timedelta(
+                        seconds=self._input.config.timeouts.fallback_poll_seconds
+                    ),
                 )
             except TimeoutError:
                 # Expected fallback poll wake-up when no external signal arrives.

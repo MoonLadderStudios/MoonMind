@@ -6,13 +6,15 @@ from typing import Any
 import pytest
 
 from moonmind.workflows.temporal.workflows import merge_gate as merge_gate_module
-from moonmind.workflows.temporal.workflows.merge_gate import MoonMindMergeGateWorkflow
+from moonmind.workflows.temporal.workflows.merge_gate import MoonMindMergeAutomationWorkflow
 
 
 def _start_input() -> dict[str, Any]:
     return {
-        "workflowType": "MoonMind.MergeGate",
-        "parent": {"workflowId": "mm:parent", "runId": "run-1"},
+        "workflowType": "MoonMind.MergeAutomation",
+        "parentWorkflowId": "mm:parent",
+        "parentRunId": "run-1",
+        "publishContextRef": "artifact://publish-context",
         "pullRequest": {
             "repo": "MoonLadderStudios/MoonMind",
             "number": 341,
@@ -22,19 +24,28 @@ def _start_input() -> dict[str, Any]:
             "baseBranch": "main",
         },
         "jiraIssueKey": "MM-341",
-        "policy": {"mergeMethod": "squash"},
-        "idempotencyKey": "merge-gate:mm-parent:MoonLadderStudios/MoonMind:341:abc123",
+        "mergeAutomationConfig": {
+            "resolver": {"mergeMethod": "squash"},
+            "timeouts": {"fallbackPollSeconds": 12},
+        },
+        "resolverTemplate": {"repository": "MoonLadderStudios/MoonMind"},
+        "idempotencyKey": "merge-automation:mm-parent:MoonLadderStudios/MoonMind:341:abc123",
     }
 
 
 @pytest.mark.asyncio
 async def test_merge_gate_rechecks_after_wait_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    workflow = MoonMindMergeGateWorkflow()
+    workflow = MoonMindMergeAutomationWorkflow()
     evaluations = 0
+    wait_timeouts: list[object] = []
 
-    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> dict[str, Any]:
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
         nonlocal evaluations
-        assert activity_type == "merge_gate.evaluate_readiness"
+        assert activity_type == "merge_automation.evaluate_readiness"
         evaluations += 1
         if evaluations == 2:
             return {
@@ -62,33 +73,43 @@ async def test_merge_gate_rechecks_after_wait_timeout(monkeypatch: pytest.Monkey
             ],
         }
 
-    async def fake_wait_condition(*_args: Any, **_kwargs: Any) -> None:
+    async def fake_wait_condition(*_args: Any, **kwargs: Any) -> None:
+        wait_timeouts.append(kwargs["timeout"])
         raise TimeoutError("stop test loop")
 
-    monkeypatch.setattr(merge_gate_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        merge_gate_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
     monkeypatch.setattr(merge_gate_module.workflow, "wait_condition", fake_wait_condition)
     monkeypatch.setattr(merge_gate_module.workflow, "now", lambda: datetime.now(timezone.utc))
     monkeypatch.setattr(merge_gate_module.workflow, "upsert_memo", lambda _memo: None)
-    monkeypatch.setattr(merge_gate_module.workflow, "upsert_search_attributes", lambda _attrs: None)
+    monkeypatch.setattr(
+        merge_gate_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
 
     result = await workflow.run(_start_input())
 
     assert result["status"] == "blocked"
     summary = workflow.summary()
-    assert summary["status"] == "blocked"
+    assert summary["outputStatus"] == "blocked"
+    assert str(wait_timeouts[0]) == "0:00:12"
     assert evaluations == 2
 
 
 @pytest.mark.asyncio
 async def test_merge_gate_launches_one_resolver_when_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    workflow = MoonMindMergeGateWorkflow()
+    workflow = MoonMindMergeAutomationWorkflow()
     calls: list[tuple[str, Any]] = []
 
     async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> dict[str, Any]:
         calls.append((activity_type, payload))
-        if activity_type == "merge_gate.evaluate_readiness":
+        if activity_type == "merge_automation.evaluate_readiness":
             return {"headSha": "abc123", "ready": True, "blockers": []}
-        if activity_type == "merge_gate.create_resolver_run":
+        if activity_type == "merge_automation.create_resolver_run":
             return {"workflowId": "mm:resolver", "runId": "run-resolver", "created": True}
         raise AssertionError(activity_type)
 
@@ -100,19 +121,20 @@ async def test_merge_gate_launches_one_resolver_when_ready(monkeypatch: pytest.M
     result = await workflow.run(_start_input())
     result_again = await workflow.run(_start_input())
 
-    assert result["status"] == "completed"
-    assert result_again["status"] == "completed"
-    assert [name for name, _ in calls].count("merge_gate.create_resolver_run") == 1
+    assert result["status"] == "resolver_launched"
+    assert result_again["status"] == "resolver_launched"
+    assert [name for name, _ in calls].count("merge_automation.create_resolver_run") == 1
     resolver_payload = calls[1][1]
     assert resolver_payload["idempotencyKey"] == "resolver:mm:parent:MoonLadderStudios/MoonMind:341:abc123"
+    assert resolver_payload["runInput"]["initialParameters"]["task"]["publish"]["mode"] == "none"
 
 
 @pytest.mark.asyncio
 async def test_merge_gate_blocks_closed_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    workflow = MoonMindMergeGateWorkflow()
+    workflow = MoonMindMergeAutomationWorkflow()
 
     async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> dict[str, Any]:
-        assert activity_type == "merge_gate.evaluate_readiness"
+        assert activity_type == "merge_automation.evaluate_readiness"
         return {
             "headSha": "abc123",
             "ready": False,
@@ -135,3 +157,93 @@ async def test_merge_gate_blocks_closed_pull_request(monkeypatch: pytest.MonkeyP
 
     assert result["status"] == "blocked"
     assert workflow.summary()["blockers"][0]["kind"] == "pull_request_closed"
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_expires_without_resolver_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    payload = {**_start_input(), "expireAt": "2026-04-16T00:00:00+00:00"}
+    calls: list[str] = []
+
+    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> dict[str, Any]:
+        calls.append(activity_type)
+        if activity_type == "merge_automation.evaluate_readiness":
+            return {
+                "headSha": "abc123",
+                "ready": False,
+                "blockers": [
+                    {
+                        "kind": "checks_running",
+                        "summary": "Checks still running.",
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            }
+        raise AssertionError(activity_type)
+
+    monkeypatch.setattr(merge_gate_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        merge_gate_module.workflow,
+        "now",
+        lambda: datetime(2026, 4, 16, 0, 0, 1, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(merge_gate_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(merge_gate_module.workflow, "upsert_search_attributes", lambda _attrs: None)
+
+    result = await workflow.run(payload)
+
+    assert result["status"] == "expired"
+    assert "merge_automation.create_resolver_run" not in calls
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_honors_expire_after_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    payload = _start_input()
+    payload["mergeAutomationConfig"]["timeouts"] = {
+        "fallbackPollSeconds": 1,
+        "expireAfterSeconds": 1,
+    }
+    calls: list[str] = []
+    start = datetime(2026, 4, 16, 0, 0, 0, tzinfo=timezone.utc)
+    now_values = iter(
+        [
+            start,
+            start,
+            datetime(2026, 4, 16, 0, 0, 2, tzinfo=timezone.utc),
+        ]
+    )
+
+    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> dict[str, Any]:
+        calls.append(activity_type)
+        if activity_type == "merge_automation.evaluate_readiness":
+            return {
+                "headSha": "abc123",
+                "ready": False,
+                "blockers": [
+                    {
+                        "kind": "checks_running",
+                        "summary": "Checks still running.",
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            }
+        raise AssertionError(activity_type)
+
+    async def fake_wait_condition(*_args: Any, **_kwargs: Any) -> None:
+        raise TimeoutError("advance to expiration")
+
+    monkeypatch.setattr(merge_gate_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(merge_gate_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(merge_gate_module.workflow, "now", lambda: next(now_values))
+    monkeypatch.setattr(merge_gate_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(merge_gate_module.workflow, "upsert_search_attributes", lambda _attrs: None)
+
+    result = await workflow.run(payload)
+
+    assert result["status"] == "expired"
+    assert calls == ["merge_automation.evaluate_readiness"]

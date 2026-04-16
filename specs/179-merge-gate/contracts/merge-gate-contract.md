@@ -2,7 +2,7 @@
 
 ## Workflow Type
 
-`MoonMind.MergeGate`
+`MoonMind.MergeAutomation`
 
 Purpose: Wait for configured pull request readiness signals after a parent implementation run publishes a PR, then create one resolver follow-up `MoonMind.Run` when the gate opens.
 
@@ -10,7 +10,7 @@ Purpose: Wait for configured pull request readiness signals after a parent imple
 
 ```json
 {
-  "workflowType": "MoonMind.MergeGate",
+  "workflowType": "MoonMind.MergeAutomation",
   "parent": {
     "workflowId": "mm:parent",
     "runId": "temporal-run-id"
@@ -30,20 +30,20 @@ Purpose: Wait for configured pull request readiness signals after a parent imple
     "jiraStatus": "optional",
     "mergeMethod": "squash"
   },
-  "idempotencyKey": "merge-gate:mm-parent:owner/repo:123:abc123"
+  "idempotencyKey": "merge-automation:mm-parent:owner/repo:123:abc123"
 }
 ```
 
 Rules:
 
-- `workflowType` must be exactly `MoonMind.MergeGate`.
+- `workflowType` must be exactly `MoonMind.MergeAutomation`.
 - `pullRequest.repo`, `pullRequest.number`, `pullRequest.url`, and `pullRequest.headSha` are required.
 - The start input must not contain check logs, PR comments, raw provider responses, credentials, or large artifact bodies.
 - The parent `MoonMind.Run` starts this workflow only after PR publication succeeds and merge automation is enabled.
 
 ## Readiness Evaluation Activity
 
-Activity name: `merge_gate.evaluate_readiness`
+Activity name: `merge_automation.evaluate_readiness`
 
 Request:
 
@@ -89,7 +89,7 @@ Rules:
 
 ## External Event Signal
 
-Signal name: `merge_gate.external_event`
+Signal name: `merge_automation.external_event`
 
 Payload:
 
@@ -112,7 +112,7 @@ Rules:
 
 ## Resolver Follow-up Creation Activity
 
-Activity name: `merge_gate.create_resolver_run`
+Activity name: `merge_automation.create_resolver_run`
 
 Request:
 

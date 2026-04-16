@@ -14,7 +14,9 @@ from moonmind.workflows.temporal.workflows.merge_automation import (
 def _payload() -> dict[str, Any]:
     return {
         "workflowType": "MoonMind.MergeAutomation",
-        "parent": {"workflowId": "wf-parent", "runId": "run-parent"},
+        "parentWorkflowId": "wf-parent",
+        "parentRunId": "run-parent",
+        "publishContextRef": "artifact://publish-context",
         "pullRequest": {
             "repo": "MoonLadderStudios/MoonMind",
             "number": 350,
@@ -24,11 +26,16 @@ def _payload() -> dict[str, Any]:
             "baseBranch": "main",
         },
         "jiraIssueKey": "MM-350",
-        "policy": {
-            "checks": "required",
-            "automatedReview": "required",
-            "jiraStatus": "optional",
-            "mergeMethod": "squash",
+        "mergeAutomationConfig": {
+            "gate": {
+                "github": {
+                    "checks": "required",
+                    "automatedReview": "required",
+                },
+                "jira": {"status": "optional"},
+            },
+            "resolver": {"mergeMethod": "squash"},
+            "timeouts": {"fallbackPollSeconds": 300},
         },
         "idempotencyKey": "merge-automation:wf-parent:MoonLadderStudios/MoonMind:350:abc123",
     }
@@ -59,7 +66,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         **_kwargs: Any,
     ) -> dict[str, Any]:
         nonlocal readiness_calls
-        assert activity_type == "merge_gate.evaluate_readiness"
+        assert activity_type == "merge_automation.evaluate_readiness"
         readiness_calls += 1
         head_sha = "abc123" if readiness_calls == 1 else "def456"
         return {
@@ -140,7 +147,7 @@ async def test_merge_automation_success_dispositions_complete_successfully(
         _payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert activity_type == "merge_gate.evaluate_readiness"
+        assert activity_type == "merge_automation.evaluate_readiness"
         return {
             "headSha": "abc123",
             "ready": True,
@@ -204,7 +211,7 @@ async def test_merge_automation_non_success_dispositions_fail(
         _payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert activity_type == "merge_gate.evaluate_readiness"
+        assert activity_type == "merge_automation.evaluate_readiness"
         return {
             "headSha": "abc123",
             "ready": True,
@@ -277,7 +284,7 @@ async def test_merge_automation_invalid_dispositions_fail_deterministically(
         _payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert activity_type == "merge_gate.evaluate_readiness"
+        assert activity_type == "merge_automation.evaluate_readiness"
         return {
             "headSha": "abc123",
             "ready": True,
@@ -336,7 +343,7 @@ async def test_merge_automation_ignores_wait_condition_timeout_only(
         **_kwargs: Any,
     ) -> dict[str, Any]:
         nonlocal readiness_calls
-        assert activity_type == "merge_gate.evaluate_readiness"
+        assert activity_type == "merge_automation.evaluate_readiness"
         readiness_calls += 1
         if readiness_calls == 1:
             return {
@@ -391,7 +398,7 @@ async def test_merge_automation_propagates_unexpected_wait_condition_error(
         _payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert activity_type == "merge_gate.evaluate_readiness"
+        assert activity_type == "merge_automation.evaluate_readiness"
         return {
             "headSha": "abc123",
             "ready": False,
