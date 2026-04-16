@@ -36,7 +36,7 @@ Unit test plan: write red-first unit tests for validation, serialization, redact
 
 Integration test plan: write red-first hermetic integration tests for the real API/workflow/runtime/container/UI boundary before production code when Docker/browser services are available.
 
-- [X] T005 [P] Add failing unit test for mount allowlist and credential mount declaration validation for FR-001 FR-002 FR-003 SC-005 DESIGN-REQ-009 in tests/unit/workloads/test_workload_contract.py
+- [X] T005 [P] Add failing unit test for mount allowlist and credential mount declaration validation for FR-001 FR-002 FR-003 SC-002 SC-003 SC-005 DESIGN-REQ-009 in tests/unit/workloads/test_workload_contract.py
 - [X] T006 [P] Add failing unit test for secret redaction and workload identity separation for FR-004 FR-005 DESIGN-REQ-010 DESIGN-REQ-020 in tests/unit/workloads/test_docker_workload_launcher.py
 - [X] T007 [P] Add failing integration test for workflow-to-workload launch boundary without implicit auth inheritance for SC-001 through SC-004 DESIGN-REQ-009 DESIGN-REQ-020 in tests/integration/services/temporal/workflows/test_agent_run.py
 - [X] T008 Run red-first focused unit tests with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py` and record expected failures in specs/184-workload-auth-guardrails/tasks.md (STORY-006)
