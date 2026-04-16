@@ -27,7 +27,10 @@ from api_service.db.models import (
     OAuthSessionStatus,
 )
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
-from moonmind.workflows.temporal.runtime.providers.registry import get_provider_default
+from moonmind.workflows.temporal.runtime.providers.registry import (
+    get_provider_bootstrap_command,
+    get_provider_default,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +96,7 @@ async def oauth_session_start_auth_runner(
     if not volume_mount_path:
         raise ValueError("volume_mount_path is required")
     session_ttl = max(60, min(session_ttl, 86400))
+    bootstrap_command = get_provider_bootstrap_command(runtime_id)
 
     from moonmind.workflows.temporal.runtime.terminal_bridge import start_terminal_bridge_container
     
@@ -102,6 +106,7 @@ async def oauth_session_start_auth_runner(
         volume_ref=volume_ref,
         volume_mount_path=volume_mount_path,
         session_ttl=session_ttl,
+        bootstrap_command=bootstrap_command,
     )
     bridge_info.setdefault(
         "expires_at",
