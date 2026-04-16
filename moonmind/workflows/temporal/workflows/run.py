@@ -2353,6 +2353,7 @@ class MoonMindRunWorkflow:
             parameters=parameters,
             pull_request_url=pull_request_url,
         )
+
         if self._cancel_requested:
             return
 
@@ -3353,10 +3354,21 @@ class MoonMindRunWorkflow:
             self._get_from_result(child_result, "status"),
             max_chars=40,
         ) or "unknown"
-        if self._merge_automation_child_canceled(child_result):
+        child_status_valid = self._merge_automation_child_status_valid(child_result)
+        reason = (
+            self._merge_automation_failure_reason(child_result)
+            if not self._merge_automation_child_succeeded(child_result)
+            else None
+        )
+        if child_status_valid:
             self._publish_context["mergeAutomationStatus"] = child_status
-            self._update_memo()
-            self._update_search_attributes()
+        else:
+            self._publish_context["mergeAutomationStatus"] = "failed"
+        if reason:
+            self._publish_context["mergeAutomationSummary"] = reason
+        self._update_memo()
+        self._update_search_attributes()
+        if self._merge_automation_child_canceled(child_result):
             self._cancel_requested = True
             self._close_status = CLOSE_STATUS_CANCELED
             self._set_state(
@@ -3365,18 +3377,7 @@ class MoonMindRunWorkflow:
             )
             return
         if not self._merge_automation_child_succeeded(child_result):
-            reason = self._merge_automation_failure_reason(child_result)
-            if not self._merge_automation_child_status_valid(child_result):
-                self._publish_context["mergeAutomationStatus"] = "failed"
-                self._publish_context["mergeAutomationSummary"] = reason
-            else:
-                self._publish_context["mergeAutomationStatus"] = child_status
-            self._update_memo()
-            self._update_search_attributes()
-            raise ValueError(reason)
-        self._publish_context["mergeAutomationStatus"] = child_status
-        self._update_memo()
-        self._update_search_attributes()
+            raise ValueError(reason or "merge automation failed")
 
     def _build_agent_execution_request(
         self,
