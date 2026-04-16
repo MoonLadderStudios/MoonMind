@@ -1,6 +1,6 @@
 # Feature Specification: Claude Surfaces Handoff
 
-**Feature Branch**: `189-claude-surfaces-handoff`  
+**Feature Branch**: `190-claude-surfaces-handoff`  
 **Created**: 2026-04-16  
 **Status**: Draft  
 **Input**:

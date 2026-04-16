@@ -1,7 +1,7 @@
 # Implementation Plan: Claude Surfaces Handoff
 
-**Branch**: `189-claude-surfaces-handoff` | **Date**: 2026-04-16 | **Spec**: [spec.md](./spec.md)  
-**Input**: Single-story feature specification from `specs/189-claude-surfaces-handoff/spec.md`
+**Branch**: `190-claude-surfaces-handoff` | **Date**: 2026-04-16 | **Spec**: [spec.md](./spec.md)  
+**Input**: Single-story feature specification from `specs/190-claude-surfaces-handoff/spec.md`
 
 ## Summary
 
@@ -43,7 +43,7 @@ Implement the MM-348 Claude multi-surface projection and handoff story as runtim
 ### Documentation (this feature)
 
 ```text
-specs/189-claude-surfaces-handoff/
+specs/190-claude-surfaces-handoff/
 ├── spec.md
 ├── plan.md
 ├── research.md

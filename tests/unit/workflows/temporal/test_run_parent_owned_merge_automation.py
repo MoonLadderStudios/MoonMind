@@ -131,3 +131,46 @@ def test_run_records_merge_automation_disposition_from_step_outputs() -> None:
 
     assert workflow._merge_automation_disposition == "already_merged"
     assert workflow._merge_automation_head_sha == "abc123"
+
+
+def test_parent_run_summary_projects_merge_automation_visibility() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._publish_context = {
+        "pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/354",
+        "headSha": "abc123",
+        "mergeAutomationWorkflowId": "merge-automation:wf-parent",
+        "mergeAutomationStatus": "blocked",
+        "mergeAutomationResult": {
+            "status": "blocked",
+            "prNumber": 354,
+            "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/354",
+            "latestHeadSha": "abc123",
+            "cycles": 2,
+            "resolverChildWorkflowIds": ["resolver-1", "resolver-2"],
+            "blockers": [{"kind": "checks_failed", "summary": "Checks failed."}],
+            "artifactRefs": {
+                "summary": "summary-artifact",
+                "gateSnapshots": ["gate-artifact"],
+                "resolverAttempts": ["resolver-artifact"],
+            },
+        },
+    }
+
+    summary = workflow._merge_automation_summary_from_context()
+
+    assert summary == {
+        "enabled": True,
+        "status": "blocked",
+        "prNumber": 354,
+        "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/354",
+        "latestHeadSha": "abc123",
+        "childWorkflowId": "merge-automation:wf-parent",
+        "resolverChildWorkflowIds": ["resolver-1", "resolver-2"],
+        "cycles": 2,
+        "blockers": [{"kind": "checks_failed", "summary": "Checks failed."}],
+        "artifactRefs": {
+            "summary": "summary-artifact",
+            "gateSnapshots": ["gate-artifact"],
+            "resolverAttempts": ["resolver-artifact"],
+        },
+    }

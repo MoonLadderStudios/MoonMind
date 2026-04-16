@@ -3207,6 +3207,7 @@ class MoonMindRunWorkflow:
             "workflowType": "MoonMind.MergeAutomation",
             "parentWorkflowId": parent_workflow_id,
             "parentRunId": parent_run_id,
+            "principal": self._owner_id or parent_workflow_id,
             "publishContextRef": (
                 self._coerce_text(
                     self._publish_context.get("publishContextRef")
@@ -3256,6 +3257,74 @@ class MoonMindRunWorkflow:
                 f"merge-automation:{parent_workflow_id}:{repo}:{pr_number}:{normalized_head_sha}"
             ),
         }
+
+    def _merge_automation_summary_from_context(self) -> dict[str, Any] | None:
+        context = self._publish_context
+        if not context:
+            return None
+        result = context.get("mergeAutomationResult")
+        result_map = result if isinstance(result, Mapping) else {}
+        status = self._coerce_text(
+            context.get("mergeAutomationStatus") or result_map.get("status"),
+            max_chars=40,
+        )
+        workflow_id = self._coerce_text(
+            context.get("mergeAutomationWorkflowId"),
+            max_chars=500,
+        )
+        if not status and not workflow_id and not result_map:
+            return None
+        pr_url = self._coerce_text(
+            result_map.get("prUrl") or context.get("pullRequestUrl"),
+            max_chars=500,
+        )
+        pr_number = result_map.get("prNumber")
+        if pr_number is None and pr_url:
+            parsed = self._parse_github_pull_request_url(pr_url)
+            if parsed is not None:
+                pr_number = parsed.get("number")
+        resolver_ids = result_map.get("resolverChildWorkflowIds")
+        if not isinstance(resolver_ids, list):
+            resolver_ids = []
+        blockers = result_map.get("blockers")
+        if not isinstance(blockers, list):
+            blockers = []
+        artifact_refs = result_map.get("artifactRefs")
+        if not isinstance(artifact_refs, Mapping):
+            artifact_refs = {}
+        summary: dict[str, Any] = {
+            "enabled": True,
+            "status": status or "unknown",
+        }
+        if pr_number is not None:
+            summary["prNumber"] = pr_number
+        if pr_url:
+            summary["prUrl"] = pr_url
+        latest_head_sha = self._coerce_text(
+            result_map.get("latestHeadSha")
+            or result_map.get("lastHeadSha")
+            or context.get("headSha"),
+            max_chars=80,
+        )
+        if latest_head_sha:
+            summary["latestHeadSha"] = latest_head_sha
+        if workflow_id:
+            summary["childWorkflowId"] = workflow_id
+        normalized_resolver_ids: list[str] = []
+        for item in resolver_ids:
+            resolver_id = self._coerce_text(item, max_chars=500)
+            if resolver_id:
+                normalized_resolver_ids.append(resolver_id)
+        summary["resolverChildWorkflowIds"] = normalized_resolver_ids
+        cycles = result_map.get("cycles")
+        if cycles is not None:
+            summary["cycles"] = cycles
+        summary["blockers"] = [
+            dict(blocker) for blocker in blockers if isinstance(blocker, Mapping)
+        ]
+        if artifact_refs:
+            summary["artifactRefs"] = dict(artifact_refs)
+        return summary
 
     def _merge_automation_child_succeeded(self, result: Any) -> bool:
         status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
@@ -4287,6 +4356,9 @@ class MoonMindRunWorkflow:
                 finish_summary["operatorSummary"] = self._operator_summary
             if self._publish_context:
                 finish_summary["publishContext"] = dict(self._publish_context)
+                merge_automation_summary = self._merge_automation_summary_from_context()
+                if merge_automation_summary:
+                    finish_summary["mergeAutomation"] = merge_automation_summary
             if self._last_step_id or self._last_step_summary or self._last_diagnostics_ref:
                 finish_summary["lastStep"] = {
                     "id": self._last_step_id,

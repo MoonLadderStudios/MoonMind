@@ -1,6 +1,6 @@
 # Tasks: Claude Surfaces Handoff
 
-**Input**: Design documents from `specs/189-claude-surfaces-handoff/`  
+**Input**: Design documents from `specs/190-claude-surfaces-handoff/`  
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement production code until they pass.
@@ -23,9 +23,9 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-348 input and active artifacts in docs/tmp/jira-orchestration-inputs/MM-348-moonspec-orchestration-input.md and specs/189-claude-surfaces-handoff/spec.md (MM-348)
+- [X] T001 Confirm MM-348 input and active artifacts in docs/tmp/jira-orchestration-inputs/MM-348-moonspec-orchestration-input.md and specs/190-claude-surfaces-handoff/spec.md (MM-348)
 - [X] T002 Confirm existing Claude session schema boundary in moonmind/schemas/managed_session_models.py and moonmind/schemas/__init__.py (FR-001 through FR-019)
-- [X] T003 Confirm focused unit and integration commands from specs/189-claude-surfaces-handoff/quickstart.md (SC-001 through SC-007)
+- [X] T003 Confirm focused unit and integration commands from specs/190-claude-surfaces-handoff/quickstart.md (SC-001 through SC-007)
 
 ## Phase 2: Foundational
 
@@ -35,8 +35,8 @@
 - [X] T005 Add failing unit tests for disconnect/reconnect/detach, resume, cloud handoff seed refs, and execution security classification in tests/unit/schemas/test_claude_surfaces_handoff.py (FR-007 through FR-014, FR-018, SC-003, SC-004, SC-005, DESIGN-REQ-019, DESIGN-REQ-024, DESIGN-REQ-028)
 - [X] T006 Add failing unit tests for normalized surface lifecycle events and invalid event/handoff payloads in tests/unit/schemas/test_claude_surfaces_handoff.py (FR-015 through FR-017, FR-019, DESIGN-REQ-020)
 - [X] T007 [P] Add failing integration-style boundary test for attach, disconnect, reconnect, resume, and cloud handoff fixture flow in tests/integration/schemas/test_claude_surfaces_handoff_boundary.py (Acceptance Scenarios 1-6, SC-006)
-- [X] T008 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/schemas/test_claude_surfaces_handoff.py` and record expected missing-export failures in specs/189-claude-surfaces-handoff/tasks.md (T004-T006 red-first)
-- [X] T009 Run `pytest tests/integration/schemas/test_claude_surfaces_handoff_boundary.py -q` and record expected missing-export failures in specs/189-claude-surfaces-handoff/tasks.md (T007 red-first)
+- [X] T008 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/schemas/test_claude_surfaces_handoff.py` and record expected missing-export failures in specs/190-claude-surfaces-handoff/tasks.md (T004-T006 red-first)
+- [X] T009 Run `pytest tests/integration/schemas/test_claude_surfaces_handoff_boundary.py -q` and record expected missing-export failures in specs/190-claude-surfaces-handoff/tasks.md (T007 red-first)
 
 ## Phase 3: Story - Claude Surface Projection And Handoff
 
@@ -60,17 +60,17 @@
 - [X] T016 Add surface capability, lifecycle event, and security mode literal types and exports in moonmind/schemas/managed_session_models.py (FR-002, FR-014 through FR-019)
 - [X] T017 Extend `ClaudeSurfaceBinding` and `ClaudeManagedSession` with binding invariants and operations in moonmind/schemas/managed_session_models.py (FR-001 through FR-013)
 - [X] T018 Add `ClaudeSurfaceLifecycleEvent`, security classifier, and deterministic fixture-flow helper in moonmind/schemas/managed_session_models.py (FR-014 through FR-019)
-- [X] T019 Export new MM-348 schema names from moonmind/schemas/managed_session_models.py and moonmind/schemas/__init__.py (contract: specs/189-claude-surfaces-handoff/contracts/claude-surfaces-handoff.md)
+- [X] T019 Export new MM-348 schema names from moonmind/schemas/managed_session_models.py and moonmind/schemas/__init__.py (contract: specs/190-claude-surfaces-handoff/contracts/claude-surfaces-handoff.md)
 - [X] T020 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/schemas/test_claude_surfaces_handoff.py` and fix failures (FR-001 through FR-019)
 - [X] T021 Run `pytest tests/integration/schemas/test_claude_surfaces_handoff_boundary.py -q` and fix failures (Acceptance Scenarios 1-6)
 
 ## Phase 4: Polish And Verification
 
-- [X] T022 Update specs/189-claude-surfaces-handoff/tasks.md with completed task markers and final test evidence (MM-348)
-- [X] T023 Run quickstart validation commands from specs/189-claude-surfaces-handoff/quickstart.md and record results (SC-001 through SC-007)
+- [X] T022 Update specs/190-claude-surfaces-handoff/tasks.md with completed task markers and final test evidence (MM-348)
+- [X] T023 Run quickstart validation commands from specs/190-claude-surfaces-handoff/quickstart.md and record results (SC-001 through SC-007)
 - [X] T024 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit verification or record exact blocker
 - [X] T025 Run `./tools/test_integration.sh` for hermetic integration CI when Docker is available or record exact Docker blocker
-- [X] T026 Run `/moonspec-verify` against specs/189-claude-surfaces-handoff/spec.md after implementation and tests pass
+- [X] T026 Run `/moonspec-verify` against specs/190-claude-surfaces-handoff/spec.md after implementation and tests pass
 
 ## Dependencies And Execution Order
 
@@ -98,4 +98,4 @@
 - Related Claude integration-style regression: `pytest tests/integration/schemas/test_claude_managed_session_boundary.py tests/integration/schemas/test_claude_child_work_boundary.py tests/integration/schemas/test_claude_surfaces_handoff_boundary.py -q` passed; 3 passed.
 - Full unit verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` passed; Python unit suite 3402 passed, 1 xpassed, 16 subtests passed, and required UI tests 223 passed.
 - Hermetic integration CI: `./tools/test_integration.sh` could not run because Docker is unavailable in this managed container (`/var/run/docker.sock` missing: `connect: no such file or directory`).
-- MoonSpec verify: manual verification against specs/189-claude-surfaces-handoff/spec.md found the MM-348 story fully implemented with unit and integration-style evidence; hermetic integration CI remains environment-blocked by missing Docker socket.
+- MoonSpec verify: manual verification against specs/190-claude-surfaces-handoff/spec.md found the MM-348 story fully implemented with unit and integration-style evidence; hermetic integration CI remains environment-blocked by missing Docker socket.
