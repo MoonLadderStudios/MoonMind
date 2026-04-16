@@ -62,6 +62,73 @@ ManagedSessionRequestTrackingStatus = Literal[
     "superseded",
 ]
 
+ClaudeRuntimeFamily = Literal["claude_code"]
+ClaudeExecutionOwner = Literal["local_process", "anthropic_cloud_vm", "sdk_host"]
+ClaudeSurfaceKind = Literal[
+    "terminal",
+    "vscode",
+    "jetbrains",
+    "desktop",
+    "web",
+    "mobile",
+    "scheduler",
+    "channel",
+    "sdk",
+]
+ClaudeProjectionMode = Literal["primary", "remote_projection", "handoff"]
+ClaudeSurfaceProjectionMode = Literal["primary", "remote_projection"]
+ClaudeSessionState = Literal[
+    "creating",
+    "starting",
+    "active",
+    "waiting",
+    "compacting",
+    "rewinding",
+    "archiving",
+    "ended",
+    "failed",
+]
+ClaudeTurnInputOrigin = Literal["human", "schedule", "channel", "sdk", "team_message"]
+ClaudeTurnState = Literal[
+    "submitted",
+    "gathering_context",
+    "pending_decision",
+    "executing",
+    "verifying",
+    "interrupted",
+    "completed",
+    "failed",
+]
+ClaudeWorkItemKind = Literal[
+    "context_read",
+    "context_injection",
+    "tool_call",
+    "hook_call",
+    "approval_request",
+    "checkpoint",
+    "compaction",
+    "rewind",
+    "subagent",
+    "team_message",
+    "summary",
+    "telemetry_flush",
+]
+ClaudeWorkItemStatus = Literal[
+    "queued",
+    "in_progress",
+    "completed",
+    "failed",
+    "declined",
+    "canceled",
+]
+ClaudeSurfaceConnectionState = Literal[
+    "connected",
+    "disconnected",
+    "reconnecting",
+    "detached",
+]
+ClaudeSessionCreatedBy = Literal["user", "schedule", "channel", "sdk", "team_lead"]
+
 CODEX_MANAGED_SESSION_CONTROL_ACTIONS: tuple[ManagedSessionControlAction, ...] = (
     "start_session",
     "resume_session",
@@ -825,8 +892,187 @@ class CodexManagedSessionSnapshot(BaseModel):
     )
 
 
+class ClaudeSurfaceBinding(BaseModel):
+    """Durable representation of one surface attached to a Claude session."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    surface_id: NonBlankStr = Field(..., alias="surfaceId")
+    surface_kind: ClaudeSurfaceKind = Field(..., alias="surfaceKind")
+    projection_mode: ClaudeSurfaceProjectionMode = Field(
+        ..., alias="projectionMode"
+    )
+    connection_state: ClaudeSurfaceConnectionState = Field(
+        "connected", alias="connectionState"
+    )
+    interactive: bool = Field(..., alias="interactive")
+
+
+class ClaudeManagedSession(BaseModel):
+    """Canonical Claude Code session record for the shared session plane."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    runtime_family: ClaudeRuntimeFamily = Field(
+        "claude_code", alias="runtimeFamily"
+    )
+    execution_owner: ClaudeExecutionOwner = Field(..., alias="executionOwner")
+    state: ClaudeSessionState = Field(..., alias="state")
+    primary_surface: ClaudeSurfaceKind = Field(..., alias="primarySurface")
+    projection_mode: ClaudeProjectionMode = Field(..., alias="projectionMode")
+    surface_bindings: tuple[ClaudeSurfaceBinding, ...] = Field(
+        default=(), alias="surfaceBindings"
+    )
+    active_turn_id: NonBlankStr | None = Field(None, alias="activeTurnId")
+    parent_session_id: NonBlankStr | None = Field(None, alias="parentSessionId")
+    fork_of_session_id: NonBlankStr | None = Field(None, alias="forkOfSessionId")
+    handoff_from_session_id: NonBlankStr | None = Field(
+        None, alias="handoffFromSessionId"
+    )
+    session_group_id: NonBlankStr | None = Field(None, alias="sessionGroupId")
+    created_by: ClaudeSessionCreatedBy = Field(..., alias="createdBy")
+    created_at: datetime = Field(..., alias="createdAt")
+    updated_at: datetime = Field(..., alias="updatedAt")
+    ended_at: datetime | None = Field(None, alias="endedAt")
+    extensions: dict[str, Any] = Field(default_factory=dict, alias="extensions")
+
+    @field_validator("extensions", mode="after")
+    @classmethod
+    def _validate_extensions(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="extensions")
+
+    @model_validator(mode="after")
+    def _validate_datetimes(self) -> "ClaudeManagedSession":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.updated_at.tzinfo is None:
+            self.updated_at = self.updated_at.replace(tzinfo=UTC)
+        if self.ended_at is not None and self.ended_at.tzinfo is None:
+            self.ended_at = self.ended_at.replace(tzinfo=UTC)
+        return self
+
+    def with_remote_projection(
+        self,
+        *,
+        surface_id: str,
+        surface_kind: ClaudeSurfaceKind,
+        interactive: bool,
+        updated_at: datetime,
+    ) -> "ClaudeManagedSession":
+        """Return a copy with an added Remote Control projection surface."""
+
+        binding = ClaudeSurfaceBinding(
+            surfaceId=surface_id,
+            surfaceKind=surface_kind,
+            projectionMode="remote_projection",
+            connectionState="connected",
+            interactive=interactive,
+        )
+        return self.model_copy(
+            deep=True,
+            update={
+                "surface_bindings": (*self.surface_bindings, binding),
+                "updated_at": updated_at,
+            }
+        )
+
+    def cloud_handoff(
+        self,
+        *,
+        session_id: str,
+        primary_surface: ClaudeSurfaceKind,
+        created_by: ClaudeSessionCreatedBy,
+        created_at: datetime,
+    ) -> "ClaudeManagedSession":
+        """Create a distinct cloud-owned session with lineage to this session."""
+
+        destination_session_id = require_non_blank(
+            session_id, field_name="sessionId"
+        )
+        if destination_session_id == self.session_id:
+            raise ValueError("cloud_handoff must create a distinct sessionId")
+        return ClaudeManagedSession(
+            sessionId=destination_session_id,
+            executionOwner="anthropic_cloud_vm",
+            state="creating",
+            primarySurface=primary_surface,
+            projectionMode="handoff",
+            surfaceBindings=(),
+            handoffFromSessionId=self.session_id,
+            createdBy=created_by,
+            createdAt=created_at,
+            updatedAt=created_at,
+        )
+
+
+class ClaudeManagedTurn(BaseModel):
+    """Bounded input turn processed within a Claude managed session."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    turn_id: NonBlankStr = Field(..., alias="turnId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    input_origin: ClaudeTurnInputOrigin = Field(..., alias="inputOrigin")
+    state: ClaudeTurnState = Field(..., alias="state")
+    summary: str | None = Field(None, alias="summary")
+    started_at: datetime = Field(..., alias="startedAt")
+    completed_at: datetime | None = Field(None, alias="completedAt")
+
+    @model_validator(mode="after")
+    def _validate_datetimes(self) -> "ClaudeManagedTurn":
+        if self.started_at.tzinfo is None:
+            self.started_at = self.started_at.replace(tzinfo=UTC)
+        if self.completed_at is not None and self.completed_at.tzinfo is None:
+            self.completed_at = self.completed_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeManagedWorkItem(BaseModel):
+    """Event-bearing work unit emitted during a Claude managed turn."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    item_id: NonBlankStr = Field(..., alias="itemId")
+    turn_id: NonBlankStr = Field(..., alias="turnId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    kind: ClaudeWorkItemKind = Field(..., alias="kind")
+    status: ClaudeWorkItemStatus = Field(..., alias="status")
+    payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
+    started_at: datetime = Field(..., alias="startedAt")
+    ended_at: datetime | None = Field(None, alias="endedAt")
+
+    @field_validator("payload", mode="after")
+    @classmethod
+    def _validate_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="payload")
+
+    @model_validator(mode="after")
+    def _validate_datetimes(self) -> "ClaudeManagedWorkItem":
+        if self.started_at.tzinfo is None:
+            self.started_at = self.started_at.replace(tzinfo=UTC)
+        if self.ended_at is not None and self.ended_at.tzinfo is None:
+            self.ended_at = self.ended_at.replace(tzinfo=UTC)
+        return self
+
+
 __all__ = [
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
+    "ClaudeExecutionOwner",
+    "ClaudeManagedSession",
+    "ClaudeManagedTurn",
+    "ClaudeManagedWorkItem",
+    "ClaudeProjectionMode",
+    "ClaudeRuntimeFamily",
+    "ClaudeSessionCreatedBy",
+    "ClaudeSessionState",
+    "ClaudeSurfaceBinding",
+    "ClaudeSurfaceConnectionState",
+    "ClaudeSurfaceKind",
+    "ClaudeTurnInputOrigin",
+    "ClaudeTurnState",
+    "ClaudeWorkItemKind",
+    "ClaudeWorkItemStatus",
     "CodexManagedSessionArtifactsPublication",
     "CodexManagedSessionAttachRuntimeHandlesSignal",
     "CodexManagedSessionBinding",
