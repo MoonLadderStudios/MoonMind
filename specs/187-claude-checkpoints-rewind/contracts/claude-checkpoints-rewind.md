@@ -67,7 +67,7 @@ Contract rules:
 ```json
 {
   "sessionId": "claude-session-1",
-  "activeCheckpointId": "checkpoint-2",
+  "activeCheckpointId": null,
   "generatedAt": "2026-04-16T00:00:00Z",
   "checkpoints": []
 }
@@ -118,10 +118,11 @@ Allowed modes:
 ```
 
 Contract rules:
-- `summarize_from_here` requires `summaryRef`.
-- `summarize_from_here` must set `codeStateRestored = false`.
-- `restore_code_only` must set `conversationStateRestored = false`.
-- `restore_conversation_only` must set `codeStateRestored = false`.
+- Restore-state invariants apply when `status = completed`; `started` and `failed` results may report unrestored state.
+- Completed `summarize_from_here` requires `summaryRef`, must set `codeStateRestored = false`, and must restore conversation state.
+- Completed `restore_code_only` must restore code state and must set `conversationStateRestored = false`.
+- Completed `restore_conversation_only` must restore conversation state and must set `codeStateRestored = false`.
+- Completed `restore_code_and_conversation` must restore both code and conversation state.
 - `preservedEventLogRef` is required so rewind does not erase pre-rewind history.
 
 ## Work Item Event Contract

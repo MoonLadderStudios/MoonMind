@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from moonmind.schemas import CLAUDE_REWIND_MODES as EXPORTED_CLAUDE_REWIND_MODES
 from moonmind.schemas.managed_session_models import (
     CLAUDE_CHECKPOINT_CAPTURE_MODES,
     CLAUDE_CHECKPOINT_RETENTION_STATES,
@@ -72,6 +73,7 @@ def test_documented_checkpoint_triggers_and_capture_modes_are_exported() -> None
         "restore_code_only",
         "summarize_from_here",
     )
+    assert EXPORTED_CLAUDE_REWIND_MODES == CLAUDE_REWIND_MODES
 
 
 @pytest.mark.parametrize(
@@ -133,6 +135,17 @@ def test_checkpoint_index_requires_active_cursor_to_be_listed() -> None:
         )
 
 
+def test_checkpoint_index_allows_empty_fresh_session_results() -> None:
+    index = ClaudeCheckpointIndex(
+        sessionId="claude-session-1",
+        checkpoints=[],
+        generatedAt=NOW,
+    )
+
+    assert index.checkpoints == ()
+    assert index.active_checkpoint_id is None
+
+
 def test_checkpoint_metadata_rejects_large_payloads() -> None:
     with pytest.raises(ValidationError):
         _checkpoint(metadata={"payload": "x" * 9000})
@@ -178,6 +191,79 @@ def test_rewind_result_preserves_lineage_and_event_log_reference() -> None:
 
     assert result.rewound_from_checkpoint_id == "checkpoint-2"
     assert result.preserved_event_log_ref == "artifact://events/pre-rewind"
+
+
+def test_rewind_result_defers_restore_invariants_until_completed() -> None:
+    started = ClaudeRewindResult(
+        resultId="rewind-result-started",
+        sessionId="claude-session-1",
+        requestId="rewind-request-1",
+        sourceCheckpointId="checkpoint-1",
+        previousActiveCheckpointId="checkpoint-2",
+        activeCheckpointId="checkpoint-1",
+        mode="restore_code_and_conversation",
+        status="started",
+        rewoundFromCheckpointId="checkpoint-2",
+        preservedEventLogRef="artifact://events/pre-rewind",
+        codeStateRestored=False,
+        conversationStateRestored=False,
+        createdAt=NOW,
+    )
+
+    assert started.status == "started"
+
+
+@pytest.mark.parametrize(
+    ("mode", "code_restored", "conversation_restored", "message"),
+    [
+        (
+            "summarize_from_here",
+            False,
+            False,
+            "must restore conversation state",
+        ),
+        ("restore_code_only", False, False, "must restore code state"),
+        (
+            "restore_conversation_only",
+            False,
+            False,
+            "must restore conversation state",
+        ),
+        (
+            "restore_code_and_conversation",
+            True,
+            False,
+            "must restore code and conversation state",
+        ),
+    ],
+)
+def test_completed_rewind_result_requires_requested_state_to_be_restored(
+    mode: str,
+    code_restored: bool,
+    conversation_restored: bool,
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        ClaudeRewindResult(
+            resultId=f"rewind-result-{mode}",
+            sessionId="claude-session-1",
+            requestId="rewind-request-1",
+            sourceCheckpointId="checkpoint-1",
+            previousActiveCheckpointId="checkpoint-2",
+            activeCheckpointId="checkpoint-1",
+            mode=mode,
+            status="completed",
+            rewoundFromCheckpointId="checkpoint-2",
+            preservedEventLogRef="artifact://events/pre-rewind",
+            summaryRef=(
+                "artifact://summaries/from-checkpoint-1"
+                if mode == "summarize_from_here"
+                else None
+            ),
+            codeStateRestored=code_restored,
+            conversationStateRestored=conversation_restored,
+            createdAt=NOW,
+        )
 
 
 def test_summarize_from_here_requires_summary_ref_and_never_restores_code() -> None:

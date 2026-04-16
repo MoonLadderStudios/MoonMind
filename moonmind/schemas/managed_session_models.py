@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -389,6 +389,7 @@ CLAUDE_REWIND_MODES: tuple[ClaudeRewindMode, ...] = (
     "restore_code_only",
     "summarize_from_here",
 )
+assert set(CLAUDE_REWIND_MODES) == set(get_args(ClaudeRewindMode))
 CLAUDE_CHECKPOINT_WORK_EVENT_NAMES: tuple[
     ClaudeCheckpointWorkEventName, ...
 ] = (
@@ -1490,7 +1491,7 @@ class ClaudeCheckpointIndex(BaseModel):
     active_checkpoint_id: NonBlankStr | None = Field(
         None, alias="activeCheckpointId"
     )
-    checkpoints: tuple[ClaudeCheckpoint, ...] = Field(..., min_length=1)
+    checkpoints: tuple[ClaudeCheckpoint, ...] = Field(...)
     generated_at: datetime = Field(..., alias="generatedAt")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -1580,15 +1581,30 @@ class ClaudeRewindResult(BaseModel):
     def _validate_invariants(self) -> "ClaudeRewindResult":
         if self.created_at.tzinfo is None:
             self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.status != "completed":
+            return self
         if self.mode == "summarize_from_here":
             if self.summary_ref is None:
                 raise ValueError("summarize_from_here requires summaryRef")
             if self.code_state_restored:
                 raise ValueError("summarize_from_here cannot restore code state")
+            if not self.conversation_state_restored:
+                raise ValueError(
+                    "summarize_from_here must restore conversation state"
+                )
         if self.mode == "restore_code_only" and self.conversation_state_restored:
             raise ValueError("restore_code_only cannot restore conversation state")
+        if self.mode == "restore_code_only" and not self.code_state_restored:
+            raise ValueError("restore_code_only must restore code state")
         if self.mode == "restore_conversation_only" and self.code_state_restored:
             raise ValueError("restore_conversation_only cannot restore code state")
+        if (
+            self.mode == "restore_conversation_only"
+            and not self.conversation_state_restored
+        ):
+            raise ValueError(
+                "restore_conversation_only must restore conversation state"
+            )
         if (
             self.mode == "restore_code_and_conversation"
             and not (self.code_state_restored and self.conversation_state_restored)
