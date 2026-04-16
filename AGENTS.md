@@ -177,6 +177,7 @@ Key diagnostics:
 - Existing Temporal workflow history, Search Attributes, Memo, and existing execution/projection records; no new persistent database tables planned (179-merge-gate)
 - Python 3.12 + Pydantic v2, existing MoonMind schema validation helpers (185-claude-policy-envelope)
 - No new persistent storage; this story defines compact runtime contracts and deterministic outputs that can later be persisted by the managed-session store (185-claude-policy-envelope)
+- No new persistent storage; this story defines compact runtime contracts and deterministic outputs that can later be persisted by the managed-session store or export sinks (191-claude-governance-telemetry)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
