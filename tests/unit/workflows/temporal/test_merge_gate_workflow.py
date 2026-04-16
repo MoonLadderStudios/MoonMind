@@ -92,4 +92,6 @@ def test_build_resolver_run_request_uses_pr_resolver_and_publish_none() -> None:
     assert request["initialParameters"]["task"]["publish"]["mode"] == "none"
     assert request["initialParameters"]["task"]["tool"]["name"] == "pr-resolver"
     assert request["initialParameters"]["task"]["tool"]["type"] == "skill"
+    assert request["initialParameters"]["task"]["tool"]["version"] == "1.0"
+    assert request["initialParameters"]["publishMode"] == "none"
     assert request["initialParameters"]["task"]["skill"]["args"]["pr"] == "341"

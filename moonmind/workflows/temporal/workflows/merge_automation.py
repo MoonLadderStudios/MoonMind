@@ -36,7 +36,15 @@ STATE_MERGED = "merged"
 STATE_ALREADY_MERGED = "already_merged"
 STATE_FAILED = "failed"
 DISPOSITION_REENTER_GATE = "reenter_gate"
+DISPOSITION_MERGED = "merged"
 DISPOSITION_ALREADY_MERGED = "already_merged"
+DISPOSITION_MANUAL_REVIEW = "manual_review"
+DISPOSITION_FAILED = "failed"
+SUCCESS_DISPOSITIONS = frozenset({DISPOSITION_MERGED, DISPOSITION_ALREADY_MERGED})
+NON_SUCCESS_DISPOSITIONS = frozenset({DISPOSITION_MANUAL_REVIEW, DISPOSITION_FAILED})
+ALLOWED_DISPOSITIONS = SUCCESS_DISPOSITIONS | NON_SUCCESS_DISPOSITIONS | {
+    DISPOSITION_REENTER_GATE
+}
 
 
 @workflow.defn(name=WORKFLOW_NAME)
@@ -115,6 +123,28 @@ class MoonMindMergeAutomationWorkflow:
         self._input.pull_request.head_sha = head_sha
         return True
 
+    def _failed_resolver_summary(
+        self,
+        *,
+        summary: str,
+        blocker_kind: str,
+    ) -> dict[str, Any]:
+        self._status = STATE_FAILED
+        self._blockers = [
+            ReadinessBlockerModel.model_validate(
+                {
+                    "kind": blocker_kind,
+                    "summary": summary,
+                    "retryable": False,
+                    "source": "pr-resolver",
+                }
+            )
+        ]
+        result = self._summary_payload()
+        result["summary"] = summary
+        self._publish_visibility()
+        return result
+
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._input = MergeGateStartInput.model_validate(payload)
@@ -175,9 +205,30 @@ class MoonMindMergeAutomationWorkflow:
                     else ""
                 ).strip()
                 resolver_disposition = self._resolver_disposition(resolver_result)
+                if resolver_status != "success":
+                    return self._failed_resolver_summary(
+                        summary="pr-resolver child run did not complete successfully.",
+                        blocker_kind=DISPOSITION_FAILED,
+                    )
+                if not resolver_disposition:
+                    return self._failed_resolver_summary(
+                        summary=(
+                            "pr-resolver child result missing "
+                            "mergeAutomationDisposition."
+                        ),
+                        blocker_kind="resolver_disposition_invalid",
+                    )
+                if resolver_disposition not in ALLOWED_DISPOSITIONS:
+                    return self._failed_resolver_summary(
+                        summary=(
+                            "pr-resolver child result has unsupported "
+                            "mergeAutomationDisposition: "
+                            f"{resolver_disposition}"
+                        ),
+                        blocker_kind="resolver_disposition_invalid",
+                    )
                 if (
-                    resolver_status == "success"
-                    and resolver_disposition == DISPOSITION_REENTER_GATE
+                    resolver_disposition == DISPOSITION_REENTER_GATE
                 ):
                     self._refresh_tracked_head_sha_on_next_evaluation = (
                         not self._refresh_tracked_head_sha(resolver_result)
@@ -185,20 +236,26 @@ class MoonMindMergeAutomationWorkflow:
                     self._status = STATE_WAITING
                     self._publish_visibility()
                     continue
-                if (
-                    resolver_status == "success"
-                    and resolver_disposition == DISPOSITION_ALREADY_MERGED
-                ):
+                if resolver_disposition == DISPOSITION_ALREADY_MERGED:
                     self._status = STATE_ALREADY_MERGED
-                else:
-                    self._status = (
-                        STATE_MERGED if resolver_status == "success" else STATE_FAILED
+                    summary = self._summary_payload()
+                    self._publish_visibility()
+                    return summary
+                if resolver_disposition == DISPOSITION_MERGED:
+                    self._status = STATE_MERGED
+                    summary = self._summary_payload()
+                    self._publish_visibility()
+                    return summary
+                if resolver_disposition == DISPOSITION_MANUAL_REVIEW:
+                    return self._failed_resolver_summary(
+                        summary="pr-resolver requested manual review.",
+                        blocker_kind=DISPOSITION_MANUAL_REVIEW,
                     )
-                summary = self._summary_payload()
-                if self._status == STATE_FAILED:
-                    summary["summary"] = "pr-resolver child run did not complete successfully."
-                self._publish_visibility()
-                return summary
+                if resolver_disposition == DISPOSITION_FAILED:
+                    return self._failed_resolver_summary(
+                        summary="pr-resolver reported failure.",
+                        blocker_kind=DISPOSITION_FAILED,
+                    )
 
             if any(blocker.kind in TERMINAL_BLOCKER_KINDS for blocker in self._blockers):
                 self._status = STATE_BLOCKED
