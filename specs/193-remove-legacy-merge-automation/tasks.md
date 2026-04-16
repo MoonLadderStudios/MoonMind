@@ -11,7 +11,7 @@
 
 - Unit tests: `./tools/test_unit.sh tests/unit/workflows/temporal/test_merge_gate_workflow.py tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py`
 - Integration tests: workflow-boundary coverage in the same focused pytest command; compose-backed integration is not required because no external service contract changes
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -58,7 +58,7 @@
 
 - [X] T014 Run `./tools/test_unit.sh` for final unit verification covering SC-004
 - [X] T015 Preserve MM-364 evidence in `specs/193-remove-legacy-merge-automation/verification.md` covering FR-007 and SC-005
-- [X] T016 Run `/speckit.verify` by auditing `spec.md`, `plan.md`, `tasks.md`, code, tests, and grep evidence; record the verdict in `specs/193-remove-legacy-merge-automation/verification.md`
+- [X] T016 Run `/moonspec-verify` by auditing `spec.md`, `plan.md`, `tasks.md`, code, tests, and grep evidence; record the verdict in `specs/193-remove-legacy-merge-automation/verification.md`
 
 ## Dependencies & Execution Order
 
