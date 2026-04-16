@@ -14,6 +14,7 @@ from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
+    TemporalExecutionCanonicalRecord,
     TemporalArtifact,
     TemporalArtifactEncryption,
     TemporalArtifactLink,
@@ -803,6 +804,16 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                     )
                 ).scalars().all()
                 assert len(links) == 1
+                canonical = await session.get(
+                    TemporalExecutionCanonicalRecord,
+                    body["workflowId"],
+                )
+                assert canonical is not None
+                assert (
+                    canonical.memo["task_input_snapshot_ref"]
+                    == snapshot["artifactRef"]
+                )
+                assert snapshot["artifactRef"] in canonical.artifact_refs
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine

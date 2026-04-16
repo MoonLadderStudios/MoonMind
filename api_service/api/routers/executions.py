@@ -1744,7 +1744,16 @@ async def _persist_original_task_input_snapshot(
     source_workflow_id: str | None = None,
     source_run_id: str | None = None,
 ) -> str:
-    if not isinstance(record, TemporalExecutionRecord):
+    if not isinstance(
+        record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)
+    ):
+        return ""
+    canonical_record = (
+        record
+        if isinstance(record, TemporalExecutionCanonicalRecord)
+        else await session.get(TemporalExecutionCanonicalRecord, record.workflow_id)
+    )
+    if canonical_record is None:
         return ""
     snapshot_payload = _build_original_task_input_snapshot_payload(
         source_kind=source_kind,
@@ -1764,9 +1773,9 @@ async def _persist_original_task_input_snapshot(
         size_bytes=len(body),
         retention_class=TemporalArtifactRetentionClass.LONG,
         link={
-            "namespace": record.namespace,
-            "workflow_id": record.workflow_id,
-            "run_id": record.run_id,
+            "namespace": canonical_record.namespace,
+            "workflow_id": canonical_record.workflow_id,
+            "run_id": canonical_record.run_id,
             "link_type": _TASK_INPUT_SNAPSHOT_LINK_TYPE,
             "label": "Original task input snapshot",
         },
@@ -1786,18 +1795,20 @@ async def _persist_original_task_input_snapshot(
         payload=body,
         content_type=_TASK_INPUT_SNAPSHOT_CONTENT_TYPE,
     )
-    await session.refresh(record)
-    memo = dict(record.memo or {})
-    memo["task_input_snapshot_ref"] = completed.artifact_id
-    memo["task_input_snapshot_version"] = _TASK_INPUT_SNAPSHOT_VERSION
-    memo["task_input_snapshot_source_kind"] = source_kind
-    record.memo = memo
-    refs = list(record.artifact_refs or [])
-    if completed.artifact_id not in refs:
-        refs.append(completed.artifact_id)
-        record.artifact_refs = refs
-    await session.commit()
-    await session.refresh(record)
+
+    records_to_update = [canonical_record]
+    if record is not canonical_record:
+        records_to_update.append(record)
+    for target_record in records_to_update:
+        memo = dict(target_record.memo or {})
+        memo["task_input_snapshot_ref"] = completed.artifact_id
+        memo["task_input_snapshot_version"] = _TASK_INPUT_SNAPSHOT_VERSION
+        memo["task_input_snapshot_source_kind"] = source_kind
+        target_record.memo = memo
+        refs = list(target_record.artifact_refs or [])
+        if completed.artifact_id not in refs:
+            refs.append(completed.artifact_id)
+            target_record.artifact_refs = refs
     return completed.artifact_id
 
 
@@ -2072,7 +2083,7 @@ async def _create_execution_from_task_request(
             },
         ) from exc
 
-    await _persist_original_task_input_snapshot(
+    snapshot_ref = await _persist_original_task_input_snapshot(
         session=session,
         record=record,
         user=user,
@@ -2080,7 +2091,10 @@ async def _create_execution_from_task_request(
         task_payload=task_payload,
         source_kind="create",
     )
-    return _serialize_execution(record, user=user)
+    execution = _serialize_execution(record, user=user)
+    if snapshot_ref:
+        await session.commit()
+    return execution
 
 
 async def _create_execution_from_manifest_request(
@@ -2873,12 +2887,13 @@ async def update_execution(
         str(update_result.get("workflow_id") or "").strip() or record.workflow_id
     )
     refreshed_record = await service.describe_execution(response_workflow_id)
+    snapshot_ref = ""
     if is_task_editing_update:
         snapshot_payload, snapshot_task = _snapshot_source_payload_from_parameters(
             dict(getattr(refreshed_record, "parameters", None) or {})
         )
         if snapshot_task:
-            await _persist_original_task_input_snapshot(
+            snapshot_ref = await _persist_original_task_input_snapshot(
                 session=session,
                 record=refreshed_record,
                 user=user,
@@ -2923,14 +2938,19 @@ async def update_execution(
             canonical_identifier=canonical_workflow_id,
         )
 
+    execution = _serialize_execution(refreshed_record, user=user)
+    refreshed_at = _compatibility_refreshed_at(refreshed_record)
+    if snapshot_ref:
+        await session.commit()
+
     return UpdateExecutionResponse(
         **update_result,
-        execution=_serialize_execution(refreshed_record, user=user),
+        execution=execution,
         refresh=ExecutionRefreshEnvelope(
             patched_execution=True,
             list_stale=True,
             refetch_suggested=True,
-            refreshed_at=_compatibility_refreshed_at(refreshed_record),
+            refreshed_at=refreshed_at,
         ),
     )
 
@@ -3261,8 +3281,9 @@ async def rerun_execution(
     snapshot_payload, snapshot_task = _snapshot_source_payload_from_parameters(
         dict(initial_params)
     )
+    snapshot_ref = ""
     if snapshot_task:
-        await _persist_original_task_input_snapshot(
+        snapshot_ref = await _persist_original_task_input_snapshot(
             session=session,
             record=record,
             user=user,
@@ -3281,7 +3302,10 @@ async def rerun_execution(
             canonical_identifier=canonical_workflow_id,
         )
 
-    return _serialize_execution(record, user=user)
+    execution = _serialize_execution(record, user=user)
+    if snapshot_ref:
+        await session.commit()
+    return execution
 
 
 __all__ = ["router"]
