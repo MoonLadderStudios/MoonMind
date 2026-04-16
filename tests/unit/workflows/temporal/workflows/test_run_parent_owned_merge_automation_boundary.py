@@ -183,6 +183,14 @@ async def test_parent_owned_merge_automation_invalid_child_status_fails_determin
         "execute_child_workflow",
         fake_execute_child_workflow,
     )
+    memo_statuses: list[str | None] = []
+    original_update_memo = workflow._update_memo
+
+    def record_memo_update() -> None:
+        memo_statuses.append(workflow._publish_context.get("mergeAutomationStatus"))
+        original_update_memo()
+
+    monkeypatch.setattr(workflow, "_update_memo", record_memo_update)
 
     with pytest.raises(ValueError, match=expected_reason):
         await workflow._maybe_start_merge_gate(
@@ -196,6 +204,7 @@ async def test_parent_owned_merge_automation_invalid_child_status_fails_determin
     assert workflow._awaiting_external is False
     assert workflow._publish_context["mergeAutomationStatus"] == "failed"
     assert workflow._publish_context["mergeAutomationSummary"] == expected_reason
+    assert memo_statuses == ["awaiting_child", "failed"]
 
 
 @pytest.mark.asyncio

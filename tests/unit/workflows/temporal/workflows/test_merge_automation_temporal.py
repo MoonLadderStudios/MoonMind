@@ -236,12 +236,16 @@ async def test_merge_automation_cancellation_while_resolver_active_sets_canceled
         lambda _attrs: None,
     )
 
-    with pytest.raises(CancelledError):
-        await workflow.run(_payload())
+    result = await workflow.run(_payload())
 
     assert workflow.summary()["status"] == "canceled"
     assert (
         workflow.summary()["summary"]
+        == "Merge automation canceled while resolver child was active."
+    )
+    assert result["status"] == "canceled"
+    assert (
+        result["summary"]
         == "Merge automation canceled while resolver child was active."
     )
 

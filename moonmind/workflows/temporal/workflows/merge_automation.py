@@ -221,7 +221,7 @@ class MoonMindMergeAutomationWorkflow:
                         "Merge automation canceled while resolver child was active."
                     )
                     self._publish_visibility()
-                    raise
+                    return self._summary_payload()
                 resolver_status = str(
                     (resolver_result or {}).get("status")
                     if isinstance(resolver_result, Mapping)

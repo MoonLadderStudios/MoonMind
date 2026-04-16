@@ -2353,6 +2353,8 @@ class MoonMindRunWorkflow:
             parameters=parameters,
             pull_request_url=pull_request_url,
         )
+        if self._cancel_requested:
+            return
 
         if self._integration:
             await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)
@@ -3347,13 +3349,14 @@ class MoonMindRunWorkflow:
         self._publish_context["mergeAutomationResult"] = (
             dict(child_result) if isinstance(child_result, Mapping) else child_result
         )
-        self._publish_context["mergeAutomationStatus"] = self._coerce_text(
+        child_status = self._coerce_text(
             self._get_from_result(child_result, "status"),
             max_chars=40,
         ) or "unknown"
-        self._update_memo()
-        self._update_search_attributes()
         if self._merge_automation_child_canceled(child_result):
+            self._publish_context["mergeAutomationStatus"] = child_status
+            self._update_memo()
+            self._update_search_attributes()
             self._cancel_requested = True
             self._close_status = CLOSE_STATUS_CANCELED
             self._set_state(
@@ -3366,9 +3369,14 @@ class MoonMindRunWorkflow:
             if not self._merge_automation_child_status_valid(child_result):
                 self._publish_context["mergeAutomationStatus"] = "failed"
                 self._publish_context["mergeAutomationSummary"] = reason
-                self._update_memo()
-                self._update_search_attributes()
+            else:
+                self._publish_context["mergeAutomationStatus"] = child_status
+            self._update_memo()
+            self._update_search_attributes()
             raise ValueError(reason)
+        self._publish_context["mergeAutomationStatus"] = child_status
+        self._update_memo()
+        self._update_search_attributes()
 
     def _build_agent_execution_request(
         self,
