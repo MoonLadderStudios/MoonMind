@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -80,6 +81,30 @@ def _oauth_session_response(
         created_at=session.created_at,
         profile_summary=_provider_profile_summary(profile),
     )
+
+
+async def _get_profile_for_session(
+    db: AsyncSession,
+    session: ManagedAgentOAuthSession,
+    *,
+    current_user: User,
+) -> ManagedAgentProviderProfile | None:
+    if not session.profile_id:
+        return None
+    user_id = getattr(current_user, "id", None)
+    visibility_clause = ManagedAgentProviderProfile.owner_user_id.is_(None)
+    if user_id is not None:
+        visibility_clause = or_(
+            visibility_clause,
+            ManagedAgentProviderProfile.owner_user_id == user_id,
+        )
+    result = await db.execute(
+        select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.profile_id == session.profile_id,
+            visibility_clause,
+        )
+    )
+    return result.scalars().first()
 
 
 async def _expire_stale_active_sessions(
@@ -221,12 +246,7 @@ async def get_oauth_session(
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    profile_result = await db.execute(
-        select(ManagedAgentProviderProfile).where(
-            ManagedAgentProviderProfile.profile_id == session.profile_id
-        )
-    )
-    profile = profile_result.scalars().first()
+    profile = await _get_profile_for_session(db, session, current_user=current_user)
     return _oauth_session_response(session, profile=profile)
 
 @router.post("/{session_id}/cancel")
@@ -521,10 +541,9 @@ async def reconnect_oauth_session(
             new_session_id,
         )
 
-    profile_result = await db.execute(
-        select(ManagedAgentProviderProfile).where(
-            ManagedAgentProviderProfile.profile_id == new_session.profile_id
-        )
+    profile = await _get_profile_for_session(
+        db,
+        new_session,
+        current_user=current_user,
     )
-    profile = profile_result.scalars().first()
     return _oauth_session_response(new_session, profile=profile)

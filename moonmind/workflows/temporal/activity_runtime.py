@@ -3225,11 +3225,15 @@ class TemporalAgentRuntimeActivities:
                 self._sanitize_operator_summary(redact_sensitive_text(str(exc)))
                 or "managed session launch failed"
             )
-            detail = redact_sensitive_text(detail)
             raise TemporalActivityRuntimeError(
                 "agent_runtime.launch_session failed: "
                 f"component=managed_session_controller reason={detail}"
             ) from exc
+        response = self._validate_session_response(
+            response,
+            activity_type="agent_runtime.launch_session",
+            model_type=CodexManagedSessionHandle,
+        )
         response = response.model_copy(
             update={
                 "metadata": {
@@ -3246,11 +3250,7 @@ class TemporalAgentRuntimeActivities:
                 }
             }
         )
-        return self._validate_session_response(
-            response,
-            activity_type="agent_runtime.launch_session",
-            model_type=CodexManagedSessionHandle,
-        )
+        return response
 
     async def agent_runtime_load_session_snapshot(
         self,
