@@ -815,6 +815,20 @@ function isResolverSkill(skillId: string): boolean {
   return PR_RESOLVER_SKILLS.has(skillId.trim().toLowerCase());
 }
 
+function resolveEffectiveSkillId(
+  primarySkillId: string,
+  appliedTemplates: AppliedTemplateState[],
+): string {
+  if (hasExplicitSkillSelection(primarySkillId)) {
+    return primarySkillId;
+  }
+  if (appliedTemplates.length > 0) {
+    const lastTemplate = appliedTemplates[appliedTemplates.length - 1];
+    return lastTemplate?.slug ?? primarySkillId;
+  }
+  return primarySkillId;
+}
+
 function shouldShowSkillArgs(step: StepState | null | undefined): boolean {
   return hasExplicitSkillSelection(String(step?.skillId || ""));
 }
@@ -2522,6 +2536,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
+  const effectiveSkillId = useMemo(
+    () =>
+      resolveEffectiveSkillId(
+        String(steps[0]?.skillId || "").trim() || "auto",
+        appliedTemplates,
+      ),
+    [appliedTemplates, steps],
+  );
 
   useEffect(() => {
     if (
@@ -2535,7 +2557,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const mergeAutomationAvailable =
     pageMode.mode === "create" &&
     publishMode.trim().toLowerCase() === "pr" &&
-    !isResolverSkill(String(steps[0]?.skillId || ""));
+    !isResolverSkill(effectiveSkillId);
 
   useEffect(() => {
     if (!mergeAutomationAvailable && mergeAutomationEnabled) {
@@ -3995,37 +4017,31 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         : cleaned;
     })();
 
-    // Determine skill: use template slug when a preset is applied without explicit skill selection
-    const effectiveSkillId = ((): string => {
-      if (hasExplicitSkillSelection(primarySkillId)) {
-        return primarySkillId;
-      }
-      if (appliedTemplates.length > 0) {
-        const lastTemplate = appliedTemplates[appliedTemplates.length - 1];
-        return lastTemplate?.slug ?? primarySkillId;
-      }
-      return primarySkillId;
-    })();
+    // Determine skill: use template slug when a preset is applied without explicit skill selection.
+    const effectiveSubmissionSkillId = resolveEffectiveSkillId(
+      primarySkillId,
+      appliedTemplates,
+    );
 
     // Only include task-level agent skill selectors when we have an explicit skill or a template slug.
     const taskSkillSelectors =
       hasExplicitSkillSelection(primarySkillId) || appliedTemplates.length > 0
-        ? { include: [{ name: effectiveSkillId }] }
+        ? { include: [{ name: effectiveSubmissionSkillId }] }
         : undefined;
 
     // Address: Gemini r3034477068 — keep tool/skill objects in sync with effectiveSkillId
-    const resolvedTool = effectiveSkillId !== primarySkillId
-      ? { ...normalizedTaskTool, name: effectiveSkillId }
+    const resolvedTool = effectiveSubmissionSkillId !== primarySkillId
+      ? { ...normalizedTaskTool, name: effectiveSubmissionSkillId }
       : normalizedTaskTool;
-    const resolvedSkill = effectiveSkillId !== primarySkillId
-      ? { ...primaryStepSkill, id: effectiveSkillId }
+    const resolvedSkill = effectiveSubmissionSkillId !== primarySkillId
+      ? { ...primaryStepSkill, id: effectiveSubmissionSkillId }
       : primaryStepSkill;
 
     const shouldSubmitMergeAutomation =
       mergeAutomationEnabled &&
       pageMode.mode === "create" &&
       normalizedPublishMode === "pr" &&
-      !isResolverSkill(effectiveSkillId);
+      !isResolverSkill(effectiveSubmissionSkillId);
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsWithAttachments,

@@ -7,7 +7,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
@@ -263,6 +263,14 @@ describe("Task Create Entrypoint", () => {
                   latestVersion: "2.0.0",
                   version: "2.0.0",
                 },
+                {
+                  slug: "pr-resolver",
+                  scope: "global",
+                  title: "PR Resolver",
+                  description: "Resolve pull request checks and feedback.",
+                  latestVersion: "1.0.0",
+                  version: "1.0.0",
+                },
               ],
             }),
           } as Response);
@@ -310,6 +318,20 @@ describe("Task Create Entrypoint", () => {
                   required: true,
                 },
               ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates/pr-resolver?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              slug: "pr-resolver",
+              scope: "global",
+              title: "PR Resolver",
+              description: "Resolve pull request checks and feedback.",
+              latestVersion: "1.0.0",
+              version: "1.0.0",
+              inputs: [],
             }),
           } as Response);
         }
@@ -372,6 +394,29 @@ describe("Task Create Entrypoint", () => {
               appliedTemplate: {
                 slug: "objective-demo",
                 version: "2.0.0",
+              },
+              warnings: [],
+            }),
+          } as Response);
+        }
+        if (
+          url.startsWith(
+            "/api/task-step-templates/pr-resolver:expand?scope=global",
+          )
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:pr-resolver:1.0.0:01",
+                  title: "Resolve PR",
+                  instructions: "Resolve the current branch PR.",
+                },
+              ],
+              appliedTemplate: {
+                slug: "pr-resolver",
+                version: "1.0.0",
               },
               warnings: [],
             }),
@@ -3383,7 +3428,7 @@ describe("Task Create Entrypoint", () => {
     expect(payload.mergeAutomation).toEqual({ enabled: true });
   });
 
-  it("omits merge automation when unavailable or disabled", async () => {
+  it("omits merge automation when publish mode is unavailable", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -3401,12 +3446,12 @@ describe("Task Create Entrypoint", () => {
       );
     });
 
-    let payload = latestCreateRequest().payload as Record<string, unknown>;
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
     expect(payload.publishMode).toBe("branch");
     expect(payload).not.toHaveProperty("mergeAutomation");
+  });
 
-    cleanup();
-    fetchSpy.mockClear();
+  it("omits merge automation when a resolver skill is selected", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
@@ -3438,10 +3483,49 @@ describe("Task Create Entrypoint", () => {
       );
     });
 
-    payload = latestCreateRequest().payload as Record<string, unknown>;
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
     const task = payload.task as Record<string, unknown>;
     expect(task.publish).toMatchObject({ mode: "none" });
     expect(payload).not.toHaveProperty("mergeAutomation");
+  });
+
+  it("hides merge automation when the effective template skill is a resolver", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByLabelText("Enable merge automation")).toBeTruthy();
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "PR Resolver (Global)",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::pr-resolver" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    await screen.findByDisplayValue("Resolve the current branch PR.");
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(payload.publishMode).toBe("pr");
+    expect(payload).not.toHaveProperty("mergeAutomation");
+    expect(task.skills).toEqual({ include: [{ name: "pr-resolver" }] });
   });
 
   it("submits deferred pr-resolver tasks with object-shaped skill selectors", async () => {
