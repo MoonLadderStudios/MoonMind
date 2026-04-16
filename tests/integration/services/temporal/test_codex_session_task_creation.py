@@ -332,6 +332,86 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
 
 
 @pytest.mark.asyncio
+async def test_codex_session_launch_command_uses_workspace_and_explicit_auth_target(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-parent",
+        sessionId="sess-parent:codex_cli",
+        threadId="thread-parent",
+        workspacePath=str(workspace_root / "task-parent" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-parent" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-parent" / "artifacts"),
+        codexHomePath=str(workspace_root / "task-parent" / ".moonmind" / "codex-home"),
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={"MANAGED_AUTH_VOLUME_PATH": "/home/app/.codex-auth"},
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        del input_text, env
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-session-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-session-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://ctr-session-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    run_command = next(
+        command for command in commands if command[:2] == ("docker", "run")
+    )
+    run_env = _run_command_env(run_command)
+
+    assert f"type=volume,src=agent_workspaces,dst={workspace_root}" in run_command
+    assert "type=volume,src=codex_auth_volume,dst=/home/app/.codex-auth" in run_command
+    assert (
+        f"type=volume,src=codex_auth_volume,dst={request.codex_home_path}"
+        not in run_command
+    )
+    assert run_env["MOONMIND_SESSION_WORKSPACE_PATH"] == request.workspace_path
+    assert (
+        run_env["MOONMIND_SESSION_WORKSPACE_STATE_PATH"]
+        == request.session_workspace_path
+    )
+    assert (
+        run_env["MOONMIND_SESSION_ARTIFACT_SPOOL_PATH"]
+        == request.artifact_spool_path
+    )
+    assert run_env["MOONMIND_SESSION_CODEX_HOME_PATH"] == request.codex_home_path
+
+
+@pytest.mark.asyncio
 async def test_codex_session_workspace_git_metadata_is_managed_user_writable(
     tmp_path: Path,
 ) -> None:

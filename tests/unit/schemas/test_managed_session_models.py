@@ -186,6 +186,54 @@ def test_launch_codex_managed_session_request_rejects_local_control_mode() -> No
         )
 
 
+def test_launch_codex_managed_session_request_requires_absolute_paths() -> None:
+    with pytest.raises(ValidationError, match="workspacePath must be an absolute path"):
+        LaunchCodexManagedSessionRequest(
+            taskRunId="task-123",
+            sessionId="sess-123",
+            threadId="thread-1",
+            workspacePath="relative/repo",
+            sessionWorkspacePath="/work/task/session",
+            artifactSpoolPath="/work/task/artifacts",
+            codexHomePath="/work/task/codex-home",
+            imageRef="moonmind:latest",
+        )
+
+
+def test_launch_codex_managed_session_request_rejects_invalid_auth_target() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="environment.MANAGED_AUTH_VOLUME_PATH must be an absolute path",
+    ):
+        LaunchCodexManagedSessionRequest(
+            taskRunId="task-123",
+            sessionId="sess-123",
+            threadId="thread-1",
+            workspacePath="/work/task/repo",
+            sessionWorkspacePath="/work/task/session",
+            artifactSpoolPath="/work/task/artifacts",
+            codexHomePath="/work/task/codex-home",
+            imageRef="moonmind:latest",
+            environment={"MANAGED_AUTH_VOLUME_PATH": "relative/auth"},
+        )
+
+    with pytest.raises(
+        ValidationError,
+        match="environment.MANAGED_AUTH_VOLUME_PATH must not equal codexHomePath",
+    ):
+        LaunchCodexManagedSessionRequest(
+            taskRunId="task-123",
+            sessionId="sess-123",
+            threadId="thread-1",
+            workspacePath="/work/task/repo",
+            sessionWorkspacePath="/work/task/session",
+            artifactSpoolPath="/work/task/artifacts",
+            codexHomePath="/work/task/codex-home",
+            imageRef="moonmind:latest",
+            environment={"MANAGED_AUTH_VOLUME_PATH": "/work/task/codex-home"},
+        )
+
+
 def test_codex_managed_session_clear_request_requires_new_thread() -> None:
     with pytest.raises(ValidationError, match="must differ from threadId"):
         CodexManagedSessionClearRequest(
