@@ -1,6 +1,6 @@
 slug: moonspec-orchestrate
 title: MoonSpec Orchestrate
-description: Run the full Moon Spec lifecycle from a feature request or design through specification, planning, alignment, implementation, and verification.
+description: Run the full Moon Spec lifecycle from a preselected single-story request or active feature context through specification, planning, alignment, implementation, and verification.
 scope: global
 version: 1.0.0
 tags:
@@ -37,9 +37,9 @@ inputs:
     required: false
     default: ""
 steps:
-  - title: Classify request and resume point
+  - title: Create or select Moon Spec
     instructions: |-
-      Use this request as the canonical Moon Spec orchestration input:
+      Use this preselected single-story request or active feature context as the canonical Moon Spec orchestration input:
       {{ inputs.feature_request }}
 
       Additional constraints:
@@ -50,25 +50,13 @@ steps:
       If the request is "Implement Docs/<path>.md", treat it as runtime intent and use the document as source requirements.
       Source design path (optional): {{ inputs.source_design_path }}.
 
-      Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
-      Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
-    skill:
-      id: auto
-      args: {}
-  - title: Create or select Moon Spec
-    instructions: |-
-      For a single-story request, run moonspec-specify unless an active spec.md already passes the specify gate.
-      For a broad technical or declarative design, run moonspec-breakdown first, then select the recommended first generated spec unless the user asked to process all specs.
+      Before running moonspec-specify, validate that the input is already exactly one independently testable story or an active feature directory with an existing one-story spec.md.
+      If the input is a broad design, names multiple stories/features, asks to split or implement all stories, or otherwise cannot be bounded to one independently testable story without selection, stop immediately and report that MoonSpec Orchestrate requires a preselected single story and that the input must be routed through moonspec-breakdown or another upstream selector first.
+      Run moonspec-specify unless an active spec.md already passes the specify gate.
+      Do not classify this input into a different workflow and do not run moonspec-breakdown from this preset; any story splitting must already be complete before MoonSpec Orchestrate starts.
       Preserve the original request or source design in spec.md so final verification can compare against it.
     skill:
       id: moonspec-specify
-      args: {}
-  - title: Split broad designs when needed
-    instructions: |-
-      Run moonspec-breakdown only when the input is a broad technical or declarative design with multiple independently testable stories.
-      Keep each generated spec isolated and process specs in dependency order when multiple specs are requested.
-    skill:
-      id: auto
       args: {}
   - title: Plan selected spec
     instructions: |-
@@ -115,8 +103,8 @@ steps:
   - title: Return orchestration report and defer publish actions
     instructions: |-
       Return a concise MoonSpec Orchestration report with:
-      - Feature path or generated spec list
-      - Stage outcomes for Specify/Breakdown, Plan, Tasks, Align, Implement, and Verify
+      - Feature path
+      - Stage outcomes for Specify, Plan, Tasks, Align, Implement, and Verify
       - Files changed
       - Tests run and status
       - Remaining risks
