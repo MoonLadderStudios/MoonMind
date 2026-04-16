@@ -85,11 +85,11 @@ Exercise OAuth session success, cancel, expire, and disabled-bridge paths with m
 
 ## Source Design Requirements
 
-- **DESIGN-REQ-010**: Never place raw credential contents in workflow history, logs, artifacts, or UI responses. Source: `docs/ManagedAgents/OAuthTerminal.md` 4. Volume Targeting Rules; 8. Verification; 9. Security Model. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004.
-- **DESIGN-REQ-015**: Use transport-neutral OAuth statuses and allow session_transport = none while the interactive bridge is disabled. Source: `docs/ManagedAgents/OAuthTerminal.md` 5.3 Session transport state. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004.
-- **DESIGN-REQ-016**: Register or update Provider Profiles after OAuth verification, preserving Codex OAuth fields and slot policy. Source: `docs/ManagedAgents/OAuthTerminal.md` 6. Provider Profile Registration. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004.
-- **DESIGN-REQ-018**: Verify credentials at both the OAuth/profile boundary and the managed-session launch boundary without leaking credential contents. Source: `docs/ManagedAgents/OAuthTerminal.md` 8. Verification. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004.
-- **DESIGN-REQ-020**: Preserve ownership boundaries among OAuth terminal code, Provider Profile code, managed-session controller code, Codex session runtime code, and Docker workload orchestration. Source: `docs/ManagedAgents/OAuthTerminal.md` 11. Required Boundaries. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004.
+- **DESIGN-REQ-010**: Never place raw credential contents in workflow history, logs, artifacts, or UI responses. Source: `docs/ManagedAgents/OAuthTerminal.md` 4. Volume Targeting Rules; 8. Verification; 9. Security Model. Scope: in scope. Maps to FR-003, FR-004, FR-005.
+- **DESIGN-REQ-015**: Use transport-neutral OAuth statuses and allow session_transport = none while the interactive bridge is disabled. Source: `docs/ManagedAgents/OAuthTerminal.md` 5.3 Session transport state. Scope: in scope. Maps to FR-001, FR-002.
+- **DESIGN-REQ-016**: Register or update Provider Profiles after OAuth verification, preserving Codex OAuth fields and slot policy. Source: `docs/ManagedAgents/OAuthTerminal.md` 6. Provider Profile Registration. Scope: in scope. Maps to FR-003.
+- **DESIGN-REQ-018**: Verify credentials at both the OAuth/profile boundary and the managed-session launch boundary without leaking credential contents. Source: `docs/ManagedAgents/OAuthTerminal.md` 8. Verification. Scope: in scope. Maps to FR-003, FR-004, FR-005.
+- **DESIGN-REQ-020**: Preserve ownership boundaries among OAuth terminal code, Provider Profile code, managed-session controller code, Codex session runtime code, and Docker workload orchestration. Source: `docs/ManagedAgents/OAuthTerminal.md` 11. Required Boundaries. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004, FR-005.
 - **DESIGN-REQ-001**: OAuth credential enrollment and targeting. Scope: out of scope for this isolated story; covered by STORY-001, STORY-004.
 - **DESIGN-REQ-002**: Codex-focused managed-session scope. Scope: out of scope for this isolated story; covered by STORY-001.
 - **DESIGN-REQ-003**: Durable Codex auth volume. Scope: out of scope for this isolated story; covered by STORY-001.
