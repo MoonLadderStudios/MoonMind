@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [X] No [NEEDS CLARIFICATION] markers remain
+- [X] No active [NEEDS CLARIFICATION] markers remain outside the preserved Jira brief input
 - [X] Exactly one user story is defined
 - [X] Requirements are testable and unambiguous
 - [X] Runtime intent describes system behavior rather than docs-only changes, unless docs-only was explicitly requested
