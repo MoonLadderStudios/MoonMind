@@ -627,9 +627,35 @@ class GitHubService:
                 ],
             }
 
-        approved = any(str(review.get("state") or "").upper() == "APPROVED" for review in reviews)
-        if approved:
+        latest_review_states: dict[str, str] = {}
+        review_items = [
+            (str(review.get("submitted_at") or ""), index, review)
+            for index, review in enumerate(reviews)
+            if isinstance(review, dict)
+        ]
+        for _submitted_at, index, review in sorted(review_items):
+            user = review.get("user") if isinstance(review.get("user"), dict) else {}
+            reviewer = str(user.get("login") or review.get("user") or index)
+            latest_review_states[reviewer] = str(review.get("state") or "").upper()
+
+        approved = any(state == "APPROVED" for state in latest_review_states.values())
+        changes_requested = any(
+            state == "CHANGES_REQUESTED" for state in latest_review_states.values()
+        )
+        if approved and not changes_requested:
             return {"complete": True, "blockers": []}
+        if changes_requested:
+            return {
+                "complete": False,
+                "blockers": [
+                    {
+                        "kind": "automated_review_pending",
+                        "summary": "Automated review has requested changes.",
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            }
         return {
             "complete": False,
             "blockers": [

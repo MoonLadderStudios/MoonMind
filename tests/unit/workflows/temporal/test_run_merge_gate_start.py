@@ -65,3 +65,27 @@ def test_build_merge_gate_start_payload_from_published_pr() -> None:
     assert payload["jiraIssueKey"] == "MM-341"
     assert payload["policy"]["mergeMethod"] == "squash"
 
+
+def test_build_merge_gate_start_payload_requires_real_head_sha() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters={
+            "publishMode": "pr",
+            "task": {
+                "publish": {
+                    "mergeAutomation": {
+                        "enabled": True,
+                        "mergeMethod": "squash",
+                    }
+                }
+            },
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/341",
+        head_sha=None,
+        parent_workflow_id="mm:parent",
+        parent_run_id="run-1",
+    )
+
+    assert payload is None

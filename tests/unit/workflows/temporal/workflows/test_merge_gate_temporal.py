@@ -28,11 +28,27 @@ def _start_input() -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_merge_gate_waits_with_sanitized_blockers(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_merge_gate_rechecks_after_wait_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     workflow = MoonMindMergeGateWorkflow()
+    evaluations = 0
 
     async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal evaluations
         assert activity_type == "merge_gate.evaluate_readiness"
+        evaluations += 1
+        if evaluations == 2:
+            return {
+                "headSha": "abc123",
+                "ready": False,
+                "blockers": [
+                    {
+                        "kind": "pull_request_closed",
+                        "summary": "Pull request is closed.",
+                        "retryable": False,
+                        "source": "github",
+                    }
+                ],
+            }
         return {
             "headSha": "abc123",
             "ready": False,
@@ -57,11 +73,10 @@ async def test_merge_gate_waits_with_sanitized_blockers(monkeypatch: pytest.Monk
 
     result = await workflow.run(_start_input())
 
-    assert result["status"] == "waiting"
+    assert result["status"] == "blocked"
     summary = workflow.summary()
-    assert summary["status"] == "waiting"
-    assert summary["blockers"][0]["kind"] == "checks_running"
-    assert "token=" not in summary["blockers"][0]["summary"]
+    assert summary["status"] == "blocked"
+    assert evaluations == 2
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,6 @@ from temporalio.workflow import ActivityCancellationType
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.temporal_models import (
-        MergeGatePolicyModel,
         MergeGateStartInput,
         PullRequestRefModel,
         ReadinessBlockerModel,
@@ -310,68 +309,70 @@ class MoonMindMergeGateWorkflow:
         self._status = STATE_WAITING
         self._publish_visibility()
 
-        evaluation = await workflow.execute_activity(
-            "merge_gate.evaluate_readiness",
-            self._input.model_dump(by_alias=True, mode="json"),
-            start_to_close_timeout=timedelta(minutes=2),
-            task_queue=INTEGRATIONS_TASK_QUEUE,
-            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
-            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-        )
-        evidence = classify_readiness(
-            evaluation if isinstance(evaluation, Mapping) else {},
-            tracked_head_sha=self._input.pull_request.head_sha,
-        )
-        self._blockers = list(evidence.blockers)
-        if evidence.ready:
-            self._status = STATE_OPEN
-            resolver_request = build_resolver_run_request(
-                parent_workflow_id=str(self._input.parent["workflowId"]),
-                pull_request=self._input.pull_request,
-                jira_issue_key=self._input.jira_issue_key,
-                merge_method=self._input.policy.merge_method,
-            )
-            resolver_payload = {
-                "parentWorkflowId": self._input.parent["workflowId"],
-                "pullRequest": self._input.pull_request.model_dump(
-                    by_alias=True,
-                    mode="json",
-                ),
-                "jiraIssueKey": self._input.jira_issue_key,
-                "mergeMethod": self._input.policy.merge_method,
-                "idempotencyKey": deterministic_resolver_idempotency_key(
-                    parent_workflow_id=str(self._input.parent["workflowId"]),
-                    repo=self._input.pull_request.repo,
-                    pr_number=self._input.pull_request.number,
-                    head_sha=self._input.pull_request.head_sha,
-                ),
-                "runInput": resolver_request,
-            }
-            result = await workflow.execute_activity(
-                "merge_gate.create_resolver_run",
-                resolver_payload,
+        while True:
+            evaluation = await workflow.execute_activity(
+                "merge_gate.evaluate_readiness",
+                self._input.model_dump(by_alias=True, mode="json"),
                 start_to_close_timeout=timedelta(minutes=2),
                 task_queue=INTEGRATIONS_TASK_QUEUE,
                 retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
-            self._resolver_run = ResolverRunRefModel.model_validate(result)
-            self._status = STATE_COMPLETED
-            self._publish_visibility()
-            return self._summary_payload()
-
-        if any(blocker.kind in TERMINAL_BLOCKER_KINDS for blocker in self._blockers):
-            self._status = STATE_BLOCKED
-            self._publish_visibility()
-            return self._summary_payload()
-
-        self._status = STATE_WAITING
-        self._publish_visibility()
-        try:
-            await workflow.wait_condition(
-                lambda: self._external_event_count > 0,
-                timeout=timedelta(minutes=5),
+            evidence = classify_readiness(
+                evaluation if isinstance(evaluation, Mapping) else {},
+                tracked_head_sha=self._input.pull_request.head_sha,
             )
-        except Exception:
-            pass
-        return self._summary_payload()
+            self._blockers = list(evidence.blockers)
+            if evidence.ready:
+                self._status = STATE_OPEN
+                resolver_request = build_resolver_run_request(
+                    parent_workflow_id=str(self._input.parent["workflowId"]),
+                    pull_request=self._input.pull_request,
+                    jira_issue_key=self._input.jira_issue_key,
+                    merge_method=self._input.policy.merge_method,
+                )
+                resolver_payload = {
+                    "parentWorkflowId": self._input.parent["workflowId"],
+                    "pullRequest": self._input.pull_request.model_dump(
+                        by_alias=True,
+                        mode="json",
+                    ),
+                    "jiraIssueKey": self._input.jira_issue_key,
+                    "mergeMethod": self._input.policy.merge_method,
+                    "idempotencyKey": deterministic_resolver_idempotency_key(
+                        parent_workflow_id=str(self._input.parent["workflowId"]),
+                        repo=self._input.pull_request.repo,
+                        pr_number=self._input.pull_request.number,
+                        head_sha=self._input.pull_request.head_sha,
+                    ),
+                    "runInput": resolver_request,
+                }
+                result = await workflow.execute_activity(
+                    "merge_gate.create_resolver_run",
+                    resolver_payload,
+                    start_to_close_timeout=timedelta(minutes=2),
+                    task_queue=INTEGRATIONS_TASK_QUEUE,
+                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                )
+                self._resolver_run = ResolverRunRefModel.model_validate(result)
+                self._status = STATE_COMPLETED
+                self._publish_visibility()
+                return self._summary_payload()
+
+            if any(blocker.kind in TERMINAL_BLOCKER_KINDS for blocker in self._blockers):
+                self._status = STATE_BLOCKED
+                self._publish_visibility()
+                return self._summary_payload()
+
+            self._status = STATE_WAITING
+            self._publish_visibility()
+            try:
+                await workflow.wait_condition(
+                    lambda: self._external_event_count > 0,
+                    timeout=timedelta(minutes=5),
+                )
+            except Exception:
+                # Timeout/cancellation from the wait is intentionally tolerated;
+                # the next loop iteration refreshes readiness from provider state.
+                pass

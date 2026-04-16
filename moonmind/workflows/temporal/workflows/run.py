@@ -3117,8 +3117,9 @@ class MoonMindRunWorkflow:
         normalized_head_sha = (
             self._coerce_text(head_sha, max_chars=80)
             or self._coerce_text(self._publish_context.get("headSha"), max_chars=80)
-            or "unknown"
         )
+        if not normalized_head_sha:
+            return None
         pr_number = int(parsed["number"])
         return {
             "workflowType": "MoonMind.MergeGate",
