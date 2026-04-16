@@ -53,6 +53,9 @@ _JIRA_BREAKDOWN_SLUG = "jira-breakdown"
 _JIRA_BREAKDOWN_PROJECT_INPUT = "jira_project_key"
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
+_STEP_RESERVED_KEYS = frozenset(
+    {"id", "title", "slug", "instructions", "skill", "skills", "annotations"}
+)
 logger = logging.getLogger(__name__)
 
 
@@ -762,6 +765,14 @@ class TaskTemplateCatalogService:
                         f"Step {index} annotations must be an object when provided."
                     )
                 step_payload["annotations"] = dict(annotations)
+            step_payload.update(
+                {
+                    str(key).strip(): value
+                    for key, value in raw_step.items()
+                    if str(key).strip()
+                    and str(key).strip() not in _STEP_RESERVED_KEYS
+                }
+            )
             validated.append(step_payload)
         return validated
 
@@ -853,6 +864,14 @@ class TaskTemplateCatalogService:
                 step_payload["title"] = title
             if isinstance(rendered.get("skill"), dict):
                 step_payload["skill"] = rendered["skill"]
+            step_payload.update(
+                {
+                    str(key).strip(): value
+                    for key, value in rendered.items()
+                    if str(key).strip()
+                    and str(key).strip() not in _STEP_RESERVED_KEYS
+                }
+            )
             resolved_steps.append(step_payload)
 
         template_caps = _normalize_capabilities(

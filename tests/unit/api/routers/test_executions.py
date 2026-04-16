@@ -746,6 +746,8 @@ def test_create_task_shaped_execution_preserves_story_output_contract(
                         "jira": {
                             "projectKey": "MM",
                             "issueTypeId": "10001",
+                            "issueTypeName": "Story",
+                            "dependencyMode": "linear_blocker_chain",
                             "labels": ["moonmind"],
                         },
                     },
@@ -761,6 +763,8 @@ def test_create_task_shaped_execution_preserves_story_output_contract(
         "jira": {
             "projectKey": "MM",
             "issueTypeId": "10001",
+            "issueTypeName": "Story",
+            "dependencyMode": "linear_blocker_chain",
             "labels": ["moonmind"],
         },
     }

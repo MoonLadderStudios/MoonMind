@@ -206,6 +206,117 @@ async def test_oauth_session_response_redacts_secret_like_failure_reason(
 
 
 @pytest.mark.asyncio
+async def test_oauth_session_response_includes_safe_provider_profile_summary(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_profilesummary1"
+    profile_id = "codex-cli-profile-summary"
+    raw_secret = "sk-test-profile-summary-secret"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="OpenAI",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                account_label="codex account",
+                secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
+                env_template={"OPENAI_API_KEY": raw_secret},
+                enabled=True,
+                is_default=True,
+            )
+        )
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                account_label="codex account",
+                status=OAuthSessionStatus.FAILED,
+                requested_by_user_id="None",
+                failure_reason=f"token={raw_secret} in /home/app/.codex/auth.json",
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/oauth-sessions/{session_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert raw_secret not in response.text
+    assert "/home/app/.codex/auth.json" not in response.text
+    assert payload["failure_reason"] == "token=[REDACTED] in [REDACTED_AUTH_PATH]"
+    assert payload["profile_summary"] == {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "provider_label": "OpenAI",
+        "credential_source": "oauth_volume",
+        "runtime_materialization_mode": "oauth_home",
+        "account_label": "codex account",
+        "enabled": True,
+        "is_default": True,
+        "rate_limit_policy": "backoff",
+    }
+    assert "secret_refs" not in payload["profile_summary"]
+    assert "env_template" not in payload["profile_summary"]
+    assert "volume_ref" not in payload["profile_summary"]
+    assert "volume_mount_path" not in payload["profile_summary"]
+
+
+@pytest.mark.asyncio
+async def test_oauth_session_response_omits_profile_summary_for_other_owner(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_profilesummary2"
+    profile_id = "codex-cli-profile-other-owner"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="Other Owner",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                account_label="other owner account",
+                owner_user_id=uuid.uuid4(),
+            )
+        )
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.SUCCEEDED,
+                requested_by_user_id="None",
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/oauth-sessions/{session_id}")
+
+    assert response.status_code == 200
+    assert response.json()["profile_summary"] is None
+    assert "Other Owner" not in response.text
+    assert "other owner account" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_create_codex_oauth_session_uses_configured_volume_defaults(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:

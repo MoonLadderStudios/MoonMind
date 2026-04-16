@@ -7,6 +7,8 @@
 - `stories`, `storyBreakdown`, `story_breakdown`, or `storyBreakdownJson`
 - `storyOutput.jira.projectKey` or `projectKey`
 - `storyOutput.jira.issueTypeId` or `issueTypeId`
+- `storyOutput.jira.issueTypeName` or `issueTypeName` when the issue type id
+  should be resolved through the trusted Jira metadata surface
 - optional `storyBreakdownPath`
 - optional `workflowId` or equivalent marker source
 
@@ -22,6 +24,14 @@ Supported values:
 
 - `none`
 - `linear_blocker_chain`
+
+Source references:
+
+- When `storyBreakdownPath` is present, every story must have
+  `sourceReference.path`, or the breakdown payload must provide
+  `source.referencePath` / `source.path`.
+- Missing source references fail before Jira mutation and return fallback
+  metadata when fallback is enabled.
 
 Validation:
 

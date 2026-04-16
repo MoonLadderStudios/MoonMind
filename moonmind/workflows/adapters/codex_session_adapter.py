@@ -963,6 +963,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             passthroughEnvKeys=launch_context.passthrough_env_keys,
             clearEnvKeys=profile.get("clear_env_keys") or [],
             secretRefs=profile.get("secret_refs") or {},
+            volumeRef=profile.get("volume_ref"),
+            volumeMountPath=profile.get("volume_mount_path"),
         )
 
     async def _current_locator(
