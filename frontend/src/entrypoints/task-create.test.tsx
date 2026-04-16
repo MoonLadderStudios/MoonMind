@@ -203,6 +203,16 @@ describe("Task Create Entrypoint", () => {
     return renderWithClient(<TaskCreatePage payload={payload} />);
   }
 
+  function latestCreateRequest(): Record<string, unknown> {
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    return JSON.parse(String(executionCall?.[1]?.body)) as Record<
+      string,
+      unknown
+    >;
+  }
+
   beforeEach(() => {
     window.history.pushState({}, "Task Create", "/tasks/new");
     window.sessionStorage.clear();
@@ -253,6 +263,14 @@ describe("Task Create Entrypoint", () => {
                   latestVersion: "2.0.0",
                   version: "2.0.0",
                 },
+                {
+                  slug: "pr-resolver",
+                  scope: "global",
+                  title: "PR Resolver",
+                  description: "Resolve pull request checks and feedback.",
+                  latestVersion: "1.0.0",
+                  version: "1.0.0",
+                },
               ],
             }),
           } as Response);
@@ -300,6 +318,20 @@ describe("Task Create Entrypoint", () => {
                   required: true,
                 },
               ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/task-step-templates/pr-resolver?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              slug: "pr-resolver",
+              scope: "global",
+              title: "PR Resolver",
+              description: "Resolve pull request checks and feedback.",
+              latestVersion: "1.0.0",
+              version: "1.0.0",
+              inputs: [],
             }),
           } as Response);
         }
@@ -362,6 +394,29 @@ describe("Task Create Entrypoint", () => {
               appliedTemplate: {
                 slug: "objective-demo",
                 version: "2.0.0",
+              },
+              warnings: [],
+            }),
+          } as Response);
+        }
+        if (
+          url.startsWith(
+            "/api/task-step-templates/pr-resolver:expand?scope=global",
+          )
+        ) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              steps: [
+                {
+                  id: "tpl:pr-resolver:1.0.0:01",
+                  title: "Resolve PR",
+                  instructions: "Resolve the current branch PR.",
+                },
+              ],
+              appliedTemplate: {
+                slug: "pr-resolver",
+                version: "1.0.0",
               },
               warnings: [],
             }),
@@ -3318,6 +3373,159 @@ describe("Task Create Entrypoint", () => {
     expect(request.payload.task.publish).toMatchObject({
       mode: "none",
     });
+  });
+
+  it("shows merge automation only for ordinary pr-publishing tasks", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByLabelText("Enable merge automation"),
+    ).toBeTruthy();
+    expect(screen.getByText(/uses pr-resolver/i)).toBeTruthy();
+    expect(screen.queryByText(/direct auto-merge/i)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "branch" },
+    });
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+    });
+
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "none" },
+    });
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+    });
+
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "pr" },
+    });
+    expect(await screen.findByLabelText("Enable merge automation")).toBeTruthy();
+  });
+
+  it("submits merge automation with the existing pr publish contracts", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Implement MM-365." },
+    });
+    fireEvent.click(await screen.findByLabelText("Enable merge automation"));
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const request = latestCreateRequest();
+    const payload = request.payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(payload.publishMode).toBe("pr");
+    expect(task.publish).toMatchObject({ mode: "pr" });
+    expect(payload.mergeAutomation).toEqual({ enabled: true });
+  });
+
+  it("omits merge automation when publish mode is unavailable", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Implement without merge automation." },
+    });
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "branch" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.publishMode).toBe("branch");
+    expect(payload).not.toHaveProperty("mergeAutomation");
+  });
+
+  it("omits merge automation when a resolver skill is selected", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    fireEvent.click(await screen.findByLabelText("Enable merge automation"));
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "pr-resolver" },
+      },
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+    });
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText("Instructions"),
+      {
+        target: { value: "Resolve the current branch PR." },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(task.publish).toMatchObject({ mode: "none" });
+    expect(payload).not.toHaveProperty("mergeAutomation");
+  });
+
+  it("hides merge automation when the effective template skill is a resolver", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByLabelText("Enable merge automation")).toBeTruthy();
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "PR Resolver (Global)",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::pr-resolver" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    await screen.findByDisplayValue("Resolve the current branch PR.");
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(payload.publishMode).toBe("pr");
+    expect(payload).not.toHaveProperty("mergeAutomation");
+    expect(task.skills).toEqual({ include: [{ name: "pr-resolver" }] });
   });
 
   it("submits deferred pr-resolver tasks with object-shaped skill selectors", async () => {

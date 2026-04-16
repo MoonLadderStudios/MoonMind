@@ -815,6 +815,20 @@ function isResolverSkill(skillId: string): boolean {
   return PR_RESOLVER_SKILLS.has(skillId.trim().toLowerCase());
 }
 
+function resolveEffectiveSkillId(
+  primarySkillId: string,
+  appliedTemplates: AppliedTemplateState[],
+): string {
+  if (hasExplicitSkillSelection(primarySkillId)) {
+    return primarySkillId;
+  }
+  if (appliedTemplates.length > 0) {
+    const lastTemplate = appliedTemplates[appliedTemplates.length - 1];
+    return lastTemplate?.slug ?? primarySkillId;
+  }
+  return primarySkillId;
+}
+
 function shouldShowSkillArgs(step: StepState | null | undefined): boolean {
   return hasExplicitSkillSelection(String(step?.skillId || ""));
 }
@@ -1795,6 +1809,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [startingBranch, setStartingBranch] = useState("");
   const [targetBranch, setTargetBranch] = useState("");
   const [publishMode, setPublishMode] = useState(defaultPublishMode);
+  const [mergeAutomationEnabled, setMergeAutomationEnabled] = useState(false);
   const [priority, setPriority] = useState(0);
   const [maxAttempts, setMaxAttempts] = useState(3);
   const [proposeTasks, setProposeTasks] = useState(() =>
@@ -2521,6 +2536,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
+  const effectiveSkillId = useMemo(
+    () =>
+      resolveEffectiveSkillId(
+        String(steps[0]?.skillId || "").trim() || "auto",
+        appliedTemplates,
+      ),
+    [appliedTemplates, steps],
+  );
 
   useEffect(() => {
     if (
@@ -2530,6 +2553,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setPublishMode("none");
     }
   }, [pageMode.mode, selectedPreset?.slug]);
+
+  const mergeAutomationAvailable =
+    pageMode.mode === "create" &&
+    publishMode.trim().toLowerCase() === "pr" &&
+    !isResolverSkill(effectiveSkillId);
+
+  useEffect(() => {
+    if (!mergeAutomationAvailable && mergeAutomationEnabled) {
+      setMergeAutomationEnabled(false);
+    }
+  }, [mergeAutomationAvailable, mergeAutomationEnabled]);
 
   const availableDependencyOptions = useMemo(
     () =>
@@ -3983,31 +4017,31 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         : cleaned;
     })();
 
-    // Determine skill: use template slug when a preset is applied without explicit skill selection
-    const effectiveSkillId = ((): string => {
-      if (hasExplicitSkillSelection(primarySkillId)) {
-        return primarySkillId;
-      }
-      if (appliedTemplates.length > 0) {
-        const lastTemplate = appliedTemplates[appliedTemplates.length - 1];
-        return lastTemplate?.slug ?? primarySkillId;
-      }
-      return primarySkillId;
-    })();
+    // Determine skill: use template slug when a preset is applied without explicit skill selection.
+    const effectiveSubmissionSkillId = resolveEffectiveSkillId(
+      primarySkillId,
+      appliedTemplates,
+    );
 
     // Only include task-level agent skill selectors when we have an explicit skill or a template slug.
     const taskSkillSelectors =
       hasExplicitSkillSelection(primarySkillId) || appliedTemplates.length > 0
-        ? { include: [{ name: effectiveSkillId }] }
+        ? { include: [{ name: effectiveSubmissionSkillId }] }
         : undefined;
 
     // Address: Gemini r3034477068 — keep tool/skill objects in sync with effectiveSkillId
-    const resolvedTool = effectiveSkillId !== primarySkillId
-      ? { ...normalizedTaskTool, name: effectiveSkillId }
+    const resolvedTool = effectiveSubmissionSkillId !== primarySkillId
+      ? { ...normalizedTaskTool, name: effectiveSubmissionSkillId }
       : normalizedTaskTool;
-    const resolvedSkill = effectiveSkillId !== primarySkillId
-      ? { ...primaryStepSkill, id: effectiveSkillId }
+    const resolvedSkill = effectiveSubmissionSkillId !== primarySkillId
+      ? { ...primaryStepSkill, id: effectiveSubmissionSkillId }
       : primaryStepSkill;
+
+    const shouldSubmitMergeAutomation =
+      mergeAutomationEnabled &&
+      pageMode.mode === "create" &&
+      normalizedPublishMode === "pr" &&
+      !isResolverSkill(effectiveSubmissionSkillId);
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsWithAttachments,
@@ -4060,6 +4094,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           ? { requiredCapabilities: mergedCapabilities }
           : {}),
         targetRuntime: normalizedRuntime,
+        publishMode: normalizedPublishMode,
+        ...(shouldSubmitMergeAutomation
+          ? { mergeAutomation: { enabled: true } }
+          : {}),
         task: taskPayload,
       },
     };
@@ -5025,6 +5063,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             <option value="none">none</option>
           </select>
         </label>
+
+        {mergeAutomationAvailable ? (
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              name="mergeAutomationEnabled"
+              aria-label="Enable merge automation"
+              checked={mergeAutomationEnabled}
+              onChange={(event) =>
+                setMergeAutomationEnabled(event.target.checked)
+              }
+            />
+            Enable merge automation
+            <span className="small">
+              Uses pr-resolver after the PR readiness gate opens; it does not
+              bypass resolver handling.
+            </span>
+          </label>
+        ) : null}
 
         <div className="grid-2" data-runtime-visibility="worker">
           <label>

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
+from moonmind.workflows.temporal.activity_runtime import _ACTIVITY_HANDLER_ATTRS
+from moonmind.workflows.temporal.workflows import merge_gate
 from moonmind.workflows.temporal.workflows.merge_gate import (
     build_resolver_run_request,
     classify_readiness,
@@ -17,6 +20,20 @@ def _pull_request() -> dict[str, object]:
         "headBranch": "feature",
         "baseBranch": "main",
     }
+
+
+def test_merge_gate_module_does_not_define_legacy_workflow_class() -> None:
+    assert not hasattr(merge_gate, "MoonMindMergeAutomationWorkflow")
+
+
+def test_legacy_resolver_run_activity_is_not_registered() -> None:
+    activity_types = {
+        entry.activity_type for entry in build_default_activity_catalog().activities
+    }
+
+    assert "merge_automation.evaluate_readiness" in activity_types
+    assert "merge_automation.create_resolver_run" not in activity_types
+    assert "merge_automation.create_resolver_run" not in _ACTIVITY_HANDLER_ATTRS
 
 
 def test_classify_readiness_marks_stale_revision_terminal() -> None:

@@ -31,7 +31,7 @@ OAUTH_PROVIDERS: dict[str, OAuthProviderSpec] = {
         default_mount_path_env="CODEX_VOLUME_PATH",
         provider_id="openai",
         provider_label="OpenAI",
-        bootstrap_command=["true"],
+        bootstrap_command=["codex", "login"],
         success_check="codex_config_exists",
         account_label_prefix="Codex",
     ),
@@ -86,6 +86,26 @@ def get_provider_default(runtime_id: str, key: str) -> str | None:
     if key == "session_transport":
         return spec["session_transport"]
     return None
+
+
+def get_provider_bootstrap_command(runtime_id: str) -> tuple[str, ...]:
+    """Return a validated provider bootstrap command for OAuth enrollment."""
+    spec = get_provider(runtime_id)
+    if spec is None:
+        raise ValueError(f"Unsupported OAuth runtime: {runtime_id}")
+
+    command = spec.get("bootstrap_command")
+    if not isinstance(command, list):
+        raise ValueError(
+            f"OAuth provider '{runtime_id}' bootstrap command is not configured"
+        )
+
+    normalized = tuple(str(part).strip() for part in command)
+    if not normalized or any(not part for part in normalized):
+        raise ValueError(
+            f"OAuth provider '{runtime_id}' bootstrap command is not configured"
+        )
+    return normalized
 
 
 def supported_runtime_ids() -> list[str]:
