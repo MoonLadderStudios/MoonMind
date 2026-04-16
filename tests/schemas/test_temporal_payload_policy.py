@@ -9,7 +9,10 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionTurnResponse,
 )
 from moonmind.schemas.temporal_models import IntegrationCallbackRequest
-from moonmind.schemas.temporal_payload_policy import MAX_TEMPORAL_METADATA_STRING_CHARS
+from moonmind.schemas.temporal_payload_policy import (
+    MAX_TEMPORAL_METADATA_STRING_CHARS,
+    compact_temporal_ref_metadata,
+)
 from moonmind.schemas.temporal_signal_contracts import ExternalEventSignal
 
 
@@ -23,6 +26,19 @@ def test_agent_run_result_metadata_requires_artifact_ref_for_large_text() -> Non
         AgentRunResult(
             metadata={"transcript": "x" * (MAX_TEMPORAL_METADATA_STRING_CHARS + 1)}
         )
+
+
+def test_compact_temporal_ref_metadata_replaces_inline_content_with_diagnostics() -> None:
+    metadata = compact_temporal_ref_metadata(
+        "instructionRef",
+        "Implement this feature\n" + ("details " * 2000),
+    )
+
+    assert metadata["instructionRefOmitted"] is True
+    assert metadata["instructionRefLengthChars"] > MAX_TEMPORAL_METADATA_STRING_CHARS
+    assert len(metadata["instructionRefSha256"]) == 64
+    assert "instructionRef" not in metadata
+    AgentRunResult(metadata=metadata)
 
 
 def test_managed_session_turn_response_metadata_allows_compact_artifact_refs() -> None:

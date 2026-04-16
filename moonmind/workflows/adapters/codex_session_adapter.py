@@ -38,6 +38,7 @@ from moonmind.schemas.managed_session_models import (
     TerminateCodexManagedSessionRequest,
     canonical_codex_managed_runtime_id,
 )
+from moonmind.schemas.temporal_payload_policy import compact_temporal_ref_metadata
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ManagedProfileLaunchContext,
@@ -103,6 +104,19 @@ _JIRA_CREATED_ISSUE_KEYS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 logger = logging.getLogger(__name__)
+
+
+def _result_ref_metadata(
+    *,
+    instruction_ref: str | None,
+    resolved_skillset_ref: str | None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    metadata.update(compact_temporal_ref_metadata("instructionRef", instruction_ref))
+    metadata.update(
+        compact_temporal_ref_metadata("resolvedSkillsetRef", resolved_skillset_ref)
+    )
+    return metadata
 
 
 def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
@@ -280,10 +294,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         initial_result = AgentRunResult(
             outputRefs=[],
             summary=None,
-            metadata={
-                "instructionRef": original_instruction_ref,
-                "resolvedSkillsetRef": original_skillset_ref,
-            },
+            metadata=_result_ref_metadata(
+                instruction_ref=original_instruction_ref,
+                resolved_skillset_ref=original_skillset_ref,
+            ),
         )
         self._save_run_state(
             run_id=run_id,
@@ -415,8 +429,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     outputRefs=output_refs,
                     summary=assistant_text,
                     metadata={
-                        "instructionRef": original_instruction_ref,
-                        "resolvedSkillsetRef": original_skillset_ref,
+                        **_result_ref_metadata(
+                            instruction_ref=original_instruction_ref,
+                            resolved_skillset_ref=original_skillset_ref,
+                        ),
                         "sessionSummary": summary.model_dump(mode="json", by_alias=True),
                         "sessionArtifacts": publication.model_dump(mode="json", by_alias=True),
                         "turnId": turn_id,
@@ -1231,10 +1247,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             summary,
             default=default_summary,
         )
-        metadata: dict[str, Any] = {
-            "instructionRef": instruction_ref,
-            "resolvedSkillsetRef": resolved_skillset_ref,
-        }
+        metadata = _result_ref_metadata(
+            instruction_ref=instruction_ref,
+            resolved_skillset_ref=resolved_skillset_ref,
+        )
         if profile_id:
             metadata["profileId"] = profile_id
         if turn_id:

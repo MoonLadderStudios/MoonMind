@@ -2,11 +2,44 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
 MAX_TEMPORAL_METADATA_STRING_CHARS = 8192
 MAX_TEMPORAL_METADATA_BYTES = 16 * 1024
+MAX_TEMPORAL_METADATA_REF_CHARS = 1024
+
+
+def compact_temporal_ref_metadata(
+    field_name: str,
+    value: Any,
+    *,
+    max_chars: int = MAX_TEMPORAL_METADATA_REF_CHARS,
+) -> dict[str, Any]:
+    """Return compact metadata for a value that should be a reference.
+
+    Runtime request fields sometimes carry inline user content even when the
+    contract name says "ref". Workflow result metadata must not echo those large
+    values back into history, so non-compact values are represented by stable
+    diagnostics instead of the original text.
+    """
+
+    normalized = str(value or "").strip()
+    if not normalized:
+        return {}
+    if (
+        len(normalized) <= max_chars
+        and "\n" not in normalized
+        and "\r" not in normalized
+    ):
+        return {field_name: normalized}
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return {
+        f"{field_name}Omitted": True,
+        f"{field_name}Sha256": digest,
+        f"{field_name}LengthChars": len(normalized),
+    }
 
 
 def validate_compact_temporal_mapping(
