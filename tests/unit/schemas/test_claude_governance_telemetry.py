@@ -136,6 +136,40 @@ def test_event_envelope_rejects_missing_required_identity() -> None:
         )
 
 
+def test_event_envelope_allows_non_session_scoped_identities() -> None:
+    policy_event = ClaudeEventEnvelope(
+        eventId="event-policy-compiled",
+        eventFamily="policy",
+        eventName="policy.compiled",
+        policyEnvelopeId="policy-1",
+        occurredAt=NOW,
+    )
+    group_event = ClaudeEventEnvelope(
+        eventId="event-team-created",
+        eventFamily="child_work",
+        eventName="team.group.created",
+        sessionGroupId="group-1",
+        occurredAt=NOW,
+    )
+
+    assert policy_event.session_id is None
+    assert policy_event.policy_envelope_id == "policy-1"
+    assert group_event.session_id is None
+    assert group_event.session_group_id == "group-1"
+
+
+def test_event_envelope_metadata_is_payload_light() -> None:
+    with pytest.raises(ValidationError, match="payload-light"):
+        ClaudeEventEnvelope(
+            eventId="event-session-started",
+            eventFamily="session",
+            eventName="session.started",
+            sessionId="session-1",
+            occurredAt=NOW,
+            metadata={"checkpointPayload": {"raw": "runtime-local payload"}},
+        )
+
+
 def test_storage_evidence_is_payload_light_by_default() -> None:
     evidence = ClaudeStorageEvidence(
         evidenceId="storage-1",
@@ -185,6 +219,15 @@ def test_retention_evidence_requires_policy_controlled_complete_classes() -> Non
     with pytest.raises(ValidationError, match="required retention classes"):
         ClaudeRetentionEvidence(
             retentionId="retention-missing",
+            sessionId="session-1",
+            classes=_required_retention_classes()[:-1],
+            policyRef="policy://retention/default",
+            createdAt=NOW,
+        )
+
+    with pytest.raises(ValidationError, match="missing required retention classes"):
+        ClaudeRetentionEvidence(
+            retentionId="retention-missing-detail",
             sessionId="session-1",
             classes=_required_retention_classes()[:-1],
             policyRef="policy://retention/default",

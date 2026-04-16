@@ -715,6 +715,14 @@ CLAUDE_EVENT_NAMES_BY_FAMILY: dict[ClaudeEventFamily, tuple[str, ...]] = {
     "decision": CLAUDE_DECISION_EVENT_NAMES,
     "child_work": CLAUDE_CHILD_WORK_EVENT_NAMES,
 }
+_CLAUDE_EVENT_FAMILY_REQUIRED_IDS: dict[ClaudeEventFamily, str] = {
+    "session": "session_id",
+    "surface": "surface_id",
+    "policy": "policy_envelope_id",
+    "turn": "turn_id",
+    "work": "work_item_id",
+    "decision": "turn_id",
+}
 _CLAUDE_CONTEXT_GUIDANCE_KINDS: frozenset[ClaudeContextSourceKind] = frozenset(
     {
         "managed_claude_md",
@@ -2766,7 +2774,7 @@ class ClaudeEventEnvelope(BaseModel):
     @field_validator("metadata", mode="after")
     @classmethod
     def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
-        return validate_compact_temporal_mapping(value, field_name="metadata")
+        return _validate_payload_light_metadata(value, field_name="metadata")
 
     @model_validator(mode="after")
     def _validate_event_shape(self) -> "ClaudeEventEnvelope":
@@ -2778,26 +2786,15 @@ class ClaudeEventEnvelope(BaseModel):
             )
         if self.occurred_at.tzinfo is None:
             self.occurred_at = self.occurred_at.replace(tzinfo=UTC)
-        if self.event_family in {
-            "session",
-            "surface",
-            "policy",
-            "turn",
-            "work",
-            "decision",
-            "child_work",
-        } and not self.session_id:
-            raise ValueError("sessionId is required for Claude event envelopes")
-        if self.event_family == "surface" and not self.surface_id:
-            raise ValueError("surfaceId is required for surface events")
-        if self.event_family == "policy" and not self.policy_envelope_id:
-            raise ValueError("policyEnvelopeId is required for policy events")
-        if self.event_family == "turn" and not self.turn_id:
-            raise ValueError("turnId is required for turn events")
-        if self.event_family == "work" and not self.work_item_id:
-            raise ValueError("workItemId is required for work events")
-        if self.event_family == "decision" and not self.turn_id:
-            raise ValueError("turnId is required for decision events")
+        if field_name := _CLAUDE_EVENT_FAMILY_REQUIRED_IDS.get(
+            self.event_family
+        ):
+            if not getattr(self, field_name):
+                field = type(self).model_fields[field_name]
+                alias = field.alias or field_name
+                raise ValueError(
+                    f"{alias} is required for {self.event_family} events"
+                )
         if self.event_family == "child_work":
             if self.event_name.startswith("team.") and not self.session_group_id:
                 raise ValueError("sessionGroupId is required for team events")
@@ -2876,8 +2873,19 @@ class ClaudeRetentionEvidence(BaseModel):
         names = tuple(item.class_name for item in self.classes)
         if len(set(names)) != len(names):
             raise ValueError("retention classes must be unique")
-        if set(names) != set(CLAUDE_REQUIRED_RETENTION_CLASSES):
-            raise ValueError("all required retention classes must be present")
+        required = set(CLAUDE_REQUIRED_RETENTION_CLASSES)
+        present = set(names)
+        if required != present:
+            error_messages: list[str] = []
+            if missing := sorted(required - present):
+                error_messages.append(
+                    f"missing required retention classes: {missing}"
+                )
+            if unexpected := sorted(present - required):
+                error_messages.append(
+                    f"unexpected retention classes found: {unexpected}"
+                )
+            raise ValueError("; ".join(error_messages))
         return self
 
 
