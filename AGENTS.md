@@ -173,6 +173,8 @@ Key diagnostics:
 - No new persistent storage; review findings are produced as deterministic validation output and test evidence (176-temporal-type-gates)
 - Python 3.12 + YAML seed templates + Pydantic v2, FastAPI/MCP tool registry, `httpx`, existing Jira integration service, Temporal story-output tool handlers, task preset catalog (177-jira-chain-blockers)
 - No new persistent storage; deterministic outputs carry issue mappings and link results (177-jira-chain-blockers)
+- Python 3.12 + Temporal Python SDK, Pydantic v2, existing MoonMind workflow/activity catalog, existing GitHub/Jira trusted integration surfaces, pr-resolver skill (179-merge-gate)
+- Existing Temporal workflow history, Search Attributes, Memo, and existing execution/projection records; no new persistent database tables planned (179-merge-gate)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

@@ -2332,6 +2332,11 @@ class MoonMindRunWorkflow:
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
+        await self._maybe_start_merge_gate(
+            parameters=parameters,
+            pull_request_url=pull_request_url,
+        )
+
         if self._integration:
             await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)
 
@@ -2849,6 +2854,15 @@ class MoonMindRunWorkflow:
         pull_request_url = self._extract_pull_request_url(execution_result)
         if pull_request_url:
             self._publish_context["pullRequestUrl"] = pull_request_url
+        head_sha = self._coerce_text(
+            outputs.get("head_sha")
+            or outputs.get("headSha")
+            or outputs.get("push_head_sha")
+            or outputs.get("pushHeadSha"),
+            max_chars=80,
+        )
+        if head_sha:
+            self._publish_context["headSha"] = head_sha
 
     @staticmethod
     def _node_selected_skill(node: Mapping[str, Any]) -> str:
@@ -3010,6 +3024,161 @@ class MoonMindRunWorkflow:
             )
 
         return ("success", "Workflow completed successfully", False)
+
+    def _merge_automation_request(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        candidates: list[Any] = []
+        publish_payload = self._resolve_publish_payload(parameters)
+        task_payload = self._mapping_value(parameters, "task")
+        if isinstance(publish_payload, Mapping):
+            candidates.append(
+                publish_payload.get("mergeAutomation")
+                or publish_payload.get("merge_automation")
+            )
+        if isinstance(task_payload, Mapping):
+            candidates.append(
+                task_payload.get("mergeAutomation")
+                or task_payload.get("merge_automation")
+            )
+            task_publish = task_payload.get("publish")
+            if isinstance(task_publish, Mapping):
+                candidates.append(
+                    task_publish.get("mergeAutomation")
+                    or task_publish.get("merge_automation")
+                )
+        candidates.append(
+            parameters.get("mergeAutomation") or parameters.get("merge_automation")
+        )
+
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            if not _coerce_bool(candidate.get("enabled"), default=False):
+                continue
+            return {
+                "enabled": True,
+                "checks": self._coerce_text(candidate.get("checks"), max_chars=20)
+                or "required",
+                "automatedReview": self._coerce_text(
+                    candidate.get("automatedReview")
+                    or candidate.get("automated_review"),
+                    max_chars=20,
+                )
+                or "required",
+                "jiraStatus": self._coerce_text(
+                    candidate.get("jiraStatus") or candidate.get("jira_status"),
+                    max_chars=20,
+                )
+                or "optional",
+                "mergeMethod": self._coerce_text(
+                    candidate.get("mergeMethod") or candidate.get("merge_method"),
+                    max_chars=20,
+                )
+                or "squash",
+                "jiraIssueKey": self._coerce_text(
+                    candidate.get("jiraIssueKey") or candidate.get("jira_issue_key"),
+                    max_chars=40,
+                ),
+            }
+        return None
+
+    @staticmethod
+    def _parse_github_pull_request_url(url: str) -> dict[str, Any] | None:
+        match = re.match(
+            r"https://github\.com/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repo>[A-Za-z0-9_.-]+)/pull/(?P<number>\d+)",
+            str(url or "").strip(),
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        return {
+            "repo": f"{match.group('owner')}/{match.group('repo')}",
+            "number": int(match.group("number")),
+        }
+
+    def _build_merge_gate_start_payload(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+        pull_request_url: str,
+        head_sha: str | None,
+        parent_workflow_id: str,
+        parent_run_id: str | None,
+    ) -> dict[str, Any] | None:
+        request = self._merge_automation_request(parameters)
+        if request is None:
+            return None
+        parsed = self._parse_github_pull_request_url(pull_request_url)
+        if parsed is None:
+            return None
+        repo = self._repo or parsed["repo"]
+        normalized_head_sha = (
+            self._coerce_text(head_sha, max_chars=80)
+            or self._coerce_text(self._publish_context.get("headSha"), max_chars=80)
+        )
+        if not normalized_head_sha:
+            return None
+        pr_number = int(parsed["number"])
+        return {
+            "workflowType": "MoonMind.MergeGate",
+            "parent": {"workflowId": parent_workflow_id, "runId": parent_run_id},
+            "pullRequest": {
+                "repo": repo,
+                "number": pr_number,
+                "url": pull_request_url,
+                "headSha": normalized_head_sha,
+                "headBranch": self._coerce_text(
+                    self._publish_context.get("branch"),
+                    max_chars=120,
+                ),
+                "baseBranch": self._coerce_text(
+                    self._publish_context.get("baseRef"),
+                    max_chars=120,
+                ),
+            },
+            "jiraIssueKey": request.get("jiraIssueKey"),
+            "policy": {
+                "checks": request.get("checks") or "required",
+                "automatedReview": request.get("automatedReview") or "required",
+                "jiraStatus": request.get("jiraStatus") or "optional",
+                "mergeMethod": request.get("mergeMethod") or "squash",
+            },
+            "idempotencyKey": (
+                f"merge-gate:{parent_workflow_id}:{repo}:{pr_number}:{normalized_head_sha}"
+            ),
+        }
+
+    async def _maybe_start_merge_gate(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+        pull_request_url: str | None,
+    ) -> None:
+        if not pull_request_url:
+            return
+        info = workflow.info()
+        payload = self._build_merge_gate_start_payload(
+            parameters=parameters,
+            pull_request_url=pull_request_url,
+            head_sha=self._coerce_text(self._publish_context.get("headSha"), max_chars=80),
+            parent_workflow_id=info.workflow_id,
+            parent_run_id=info.run_id,
+        )
+        if payload is None:
+            return
+        workflow_id = str(payload["idempotencyKey"])
+        await workflow.start_child_workflow(
+            "MoonMind.MergeGate",
+            payload,
+            id=workflow_id,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            static_summary="Waiting for pull request merge readiness",
+            static_details=f"Merge gate for {pull_request_url}",
+        )
+        self._publish_context["mergeGateWorkflowId"] = workflow_id
+        self._update_memo()
 
     def _build_agent_execution_request(
         self,
