@@ -40,7 +40,9 @@ Run hermetic integration tests when Docker is available in the environment:
 
 - All documented decision stages validate and preserve canonical order.
 - All documented decision event names validate.
+- Policy first-match provenance is visible on policy DecisionPoint records.
 - Protected-path decisions cannot be serialized as automatic allow decisions.
+- Sandbox-substitution decisions are distinguishable from explicit allow-rule decisions.
 - Classifier decisions are distinct from user, policy, sandbox, hook, and runtime decisions.
 - Headless unresolved decisions deny or defer only.
 - HookAudit records validate documented source scopes, outcomes, and compact audit data.

@@ -39,10 +39,10 @@
 
 - Exercise a representative decision sequence in canonical stage order and assert related HookAudit and DecisionPoint records remain normalized.
 
-- [X] T005 [P] Add failing unit tests for decision stage order, decision events, and DecisionPoint wire shape covering FR-001, FR-002, FR-008, DESIGN-REQ-011, DESIGN-REQ-025, SC-001 in `tests/unit/schemas/test_claude_managed_session_models.py`.
-- [X] T006 [P] Add failing unit tests for protected-path, classifier, headless, and hook-tightened DecisionPoint invariants covering FR-004, FR-006, FR-007, FR-010, DESIGN-REQ-012, SC-002 in `tests/unit/schemas/test_claude_managed_session_models.py`.
+- [X] T005 [P] Add failing unit tests for decision stage order, decision events, DecisionPoint wire shape, and policy first-match provenance covering FR-001, FR-002, FR-003, FR-008, DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-025, SC-001 in `tests/unit/schemas/test_claude_managed_session_models.py`.
+- [X] T006 [P] Add failing unit tests for protected-path, sandbox-substitution, classifier, headless, and hook-tightened DecisionPoint invariants covering FR-004, FR-005, FR-006, FR-007, FR-010, DESIGN-REQ-012, SC-002 in `tests/unit/schemas/test_claude_managed_session_models.py`.
 - [X] T007 [P] Add failing unit tests for HookAudit validation covering FR-011, FR-012, FR-013, DESIGN-REQ-028, SC-003 in `tests/unit/schemas/test_claude_managed_session_models.py`.
-- [X] T008 [P] Add failing integration-style boundary tests for a representative end-to-end decision sequence covering all acceptance scenarios and SC-004 in `tests/integration/schemas/test_claude_decision_pipeline_boundary.py`.
+- [X] T008 [P] Add failing integration-style boundary tests for a representative end-to-end decision sequence and hook work-event validation covering all acceptance scenarios, FR-009, and SC-004 in `tests/integration/schemas/test_claude_decision_pipeline_boundary.py`.
 - [X] T009 Run focused tests and confirm the new tests fail before production implementation.
 - [X] T010 Implement Claude decision constants, type aliases, `ClaudeDecisionPoint`, and `ClaudeHookAudit` in `moonmind/schemas/managed_session_models.py`.
 - [X] T011 Export Claude decision and hook models, constants, and aliases from `moonmind/schemas/__init__.py`.

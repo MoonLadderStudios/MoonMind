@@ -390,6 +390,28 @@ def test_claude_decision_point_rejects_unknown_vocabulary(
         ClaudeDecisionPoint(**_decision_payload(**{field: value}))
 
 
+def test_policy_decision_records_first_match_provenance() -> None:
+    decision = ClaudeDecisionPoint(
+        **_decision_payload(
+            decisionId="decision-policy-first-match",
+            originStage="permission_rules",
+            outcome="asked",
+            provenanceSource="policy",
+            eventName="decision.asked",
+            metadata={
+                "rulePrecedence": ("deny", "ask", "allow"),
+                "winningRuleId": "ask-sensitive-network",
+                "firstMatch": True,
+            },
+        )
+    )
+
+    assert decision.provenance_source == "policy"
+    assert decision.metadata["rulePrecedence"] == ("deny", "ask", "allow")
+    assert decision.metadata["winningRuleId"] == "ask-sensitive-network"
+    assert decision.metadata["firstMatch"] is True
+
+
 def test_protected_path_decision_cannot_be_auto_allowed() -> None:
     decision = ClaudeDecisionPoint.protected_path(
         decision_id="decision-protected",
@@ -414,6 +436,37 @@ def test_protected_path_decision_cannot_be_auto_allowed() -> None:
             outcome="allowed",
             created_at=NOW,
         )
+
+
+def test_sandbox_substitution_is_distinct_from_explicit_allow_rule() -> None:
+    sandboxed = ClaudeDecisionPoint(
+        **_decision_payload(
+            decisionId="decision-sandbox",
+            originStage="sandbox_substitution",
+            outcome="resolved",
+            provenanceSource="sandbox",
+            eventName="decision.resolved",
+            metadata={"sandboxProfile": "read-only-bash"},
+        )
+    )
+    explicit_allow = ClaudeDecisionPoint(
+        **_decision_payload(
+            decisionId="decision-allow-rule",
+            originStage="permission_rules",
+            outcome="allowed",
+            provenanceSource="policy",
+            eventName="decision.allowed",
+            metadata={"winningRuleId": "allow-read"},
+        )
+    )
+
+    assert sandboxed.provenance_source == "sandbox"
+    assert sandboxed.origin_stage == "sandbox_substitution"
+    assert explicit_allow.provenance_source == "policy"
+    assert explicit_allow.origin_stage == "permission_rules"
+    assert sandboxed.model_dump(by_alias=True) != explicit_allow.model_dump(
+        by_alias=True
+    )
 
 
 def test_classifier_decision_is_distinct_from_user_and_policy_outcomes() -> None:
