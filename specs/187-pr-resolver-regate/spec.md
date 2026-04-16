@@ -54,7 +54,27 @@ Requirements
 
 Dependencies
 - STORY-001
-- STORY-002"
+- STORY-002
+
+Implementation Notes
+- Implement resolver execution as a child MoonMind.Run, not a direct pr-resolver skill invocation inside MoonMind.MergeAutomation.
+- Configure the resolver child with `initialParameters.publishMode` set exactly to `none`.
+- Configure the resolver child task tool as `{type: skill, name: pr-resolver, version: 1.0}`.
+- Define and consume explicit `mergeAutomationDisposition` values for at least `merged`, `already_merged`, `reenter_gate`, `manual_review`, and `failed`.
+- Treat `merged` and `already_merged` as successful merge automation completion dispositions.
+- Treat `reenter_gate` as a signal to repeat gate evaluation, increment the gate cycle, and require fresh readiness for the new head SHA rather than trusting prior external review or check signals.
+- Treat `manual_review` and `failed` as non-success merge automation outcomes with clear blockers or failure summaries.
+- Keep gate and resolver boundary tests aligned on shared logical blocker categories and head-SHA freshness rules.
+
+Source Design Coverage
+- DESIGN-REQ-005
+- DESIGN-REQ-014
+- DESIGN-REQ-016
+- DESIGN-REQ-019
+- DESIGN-REQ-020
+- DESIGN-REQ-021
+- DESIGN-REQ-022
+- DESIGN-REQ-029"
 
 ## User Story - Run Resolver Children And Re-Gate
 
