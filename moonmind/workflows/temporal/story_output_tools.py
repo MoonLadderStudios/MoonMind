@@ -182,7 +182,10 @@ def _story_description_with_source(
         )
     if not source_lines:
         return description
-    return (description + "\n\nSource Document\n" + "\n".join(source_lines)).strip()
+    source_block = "Source Reference\n" + "\n".join(source_lines)
+    if not description:
+        return source_block
+    return (source_block + "\n\n" + description).strip()
 
 
 def _truncate_jira_description(description: str) -> str:

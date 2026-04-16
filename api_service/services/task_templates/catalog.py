@@ -765,11 +765,14 @@ class TaskTemplateCatalogService:
                         f"Step {index} annotations must be an object when provided."
                     )
                 step_payload["annotations"] = dict(annotations)
-            for key, value in raw_step.items():
-                normalized_key = str(key).strip()
-                if not normalized_key or normalized_key in _STEP_RESERVED_KEYS:
-                    continue
-                step_payload[normalized_key] = value
+            step_payload.update(
+                {
+                    str(key).strip(): value
+                    for key, value in raw_step.items()
+                    if str(key).strip()
+                    and str(key).strip() not in _STEP_RESERVED_KEYS
+                }
+            )
             validated.append(step_payload)
         return validated
 
@@ -861,11 +864,14 @@ class TaskTemplateCatalogService:
                 step_payload["title"] = title
             if isinstance(rendered.get("skill"), dict):
                 step_payload["skill"] = rendered["skill"]
-            for key, value in rendered.items():
-                normalized_key = str(key).strip()
-                if not normalized_key or normalized_key in _STEP_RESERVED_KEYS:
-                    continue
-                step_payload[normalized_key] = value
+            step_payload.update(
+                {
+                    str(key).strip(): value
+                    for key, value in rendered.items()
+                    if str(key).strip()
+                    and str(key).strip() not in _STEP_RESERVED_KEYS
+                }
+            )
             resolved_steps.append(step_payload)
 
         template_caps = _normalize_capabilities(

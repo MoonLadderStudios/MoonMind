@@ -155,9 +155,53 @@ async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_
     assert result.outputs["storyOutput"]["status"] == "jira_created"
     request = service.requests[0]
     assert request.issue_type_id == "10005"
+    assert request.description.startswith(
+        "Source Reference\nSource Document: docs/Designs/RuntimeTypes.md"
+    )
     assert "Source Document: docs/Designs/RuntimeTypes.md" in request.description
     assert "Section 1" in request.description
     assert "DESIGN-REQ-001" in request.description
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_preserves_source_reference_when_description_truncates():
+    service = _FakeJiraService()
+    long_description = "x" * 40000
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "none",
+                },
+            },
+            "stories": [
+                {
+                    "summary": "Create a traced story",
+                    "description": long_description,
+                    "sourceReference": {
+                        "path": "docs/Designs/RuntimeTypes.md",
+                        "sections": ["Section 1"],
+                        "coverageIds": ["DESIGN-REQ-001"],
+                    },
+                }
+            ],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    request = service.requests[0]
+    assert len(request.description) == 32767
+    assert request.description.startswith(
+        "Source Reference\nSource Document: docs/Designs/RuntimeTypes.md"
+    )
+    assert "Section 1" in request.description
+    assert "DESIGN-REQ-001" in request.description
+    assert request.description.endswith("[Truncated by MoonMind before Jira export]")
 
 
 @pytest.mark.asyncio
