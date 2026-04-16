@@ -80,12 +80,15 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
             "jiraStatusAllowed": True,
         }
 
+    child_payloads: list[dict[str, Any]] = []
+
     async def fake_execute_child_workflow(
         workflow_type: str,
-        _payload: dict[str, Any],
+        payload: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
         assert workflow_type == "MoonMind.Run"
+        child_payloads.append(payload)
         child_workflow_ids.append(str(kwargs["id"]))
         return child_results.pop(0)
 
@@ -116,6 +119,215 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         "resolver:wf-parent:MoonLadderStudios/MoonMind:350:abc123:1",
         "resolver:wf-parent:MoonLadderStudios/MoonMind:350:def456:2",
     ]
+    assert child_payloads[0]["initialParameters"]["publishMode"] == "none"
+    assert child_payloads[0]["initialParameters"]["task"]["tool"] == {
+        "type": "skill",
+        "name": "pr-resolver",
+        "version": "1.0",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("disposition", "expected_status"),
+    [
+        ("merged", "merged"),
+        ("already_merged", "already_merged"),
+    ],
+)
+async def test_merge_automation_success_dispositions_complete_successfully(
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str,
+    expected_status: str,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.Run"
+        return {"status": "success", "mergeAutomationDisposition": disposition}
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert result["status"] == expected_status
+    assert result["blockers"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("disposition", "expected_summary"),
+    [
+        ("manual_review", "pr-resolver requested manual review."),
+        ("failed", "pr-resolver reported failure."),
+    ],
+)
+async def test_merge_automation_non_success_dispositions_fail(
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str,
+    expected_summary: str,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.Run"
+        return {
+            "status": "success",
+            "mergeAutomationDisposition": disposition,
+            "summary": "resolver details",
+        }
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert result["status"] == "failed"
+    assert result["summary"] == expected_summary
+    assert result["blockers"]
+    assert result["blockers"][0]["kind"] == disposition
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resolver_result", "expected_summary"),
+    [
+        ({"status": "success"}, "pr-resolver child result missing mergeAutomationDisposition."),
+        (
+            {"status": "success", "mergeAutomationDisposition": "surprising"},
+            "pr-resolver child result has unsupported mergeAutomationDisposition: surprising",
+        ),
+    ],
+)
+async def test_merge_automation_invalid_dispositions_fail_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+    resolver_result: dict[str, Any],
+    expected_summary: str,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.Run"
+        return resolver_result
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert result["status"] == "failed"
+    assert result["summary"] == expected_summary
+    assert result["blockers"]
+    assert result["blockers"][0]["kind"] == "resolver_disposition_invalid"
 
 
 @pytest.mark.asyncio

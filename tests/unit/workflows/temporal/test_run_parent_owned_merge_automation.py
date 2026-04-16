@@ -88,3 +88,20 @@ def test_parent_owned_merge_automation_failure_reason_includes_blocker() -> None
 
     assert "blocked" in reason
     assert "Required checks are failing." in reason
+
+
+def test_run_records_merge_automation_disposition_from_step_outputs() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_execution_context(
+        node_id="resolver",
+        execution_result={
+            "outputs": {
+                "mergeAutomationDisposition": "already_merged",
+                "headSha": "abc123",
+            }
+        },
+    )
+
+    assert workflow._merge_automation_disposition == "already_merged"
+    assert workflow._merge_automation_head_sha == "abc123"
