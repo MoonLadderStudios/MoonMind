@@ -190,6 +190,82 @@ async def test_controller_launches_container_and_returns_typed_handle(
 
 
 @pytest.mark.asyncio
+async def test_controller_record_keeps_auth_and_runtime_homes_out_of_artifact_refs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    workspace_root = tmp_path / "agent_jobs"
+    session_store = ManagedSessionStore(tmp_path / "session-store")
+    session_supervisor = AsyncMock()
+    session_supervisor.emit_session_event = Mock()
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-auth-evidence",
+        sessionId="sess-auth-evidence",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-auth-evidence" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-auth-evidence" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-auth-evidence" / "artifacts"),
+        codexHomePath=str(
+            workspace_root / "task-auth-evidence" / ".moonmind" / "codex-home"
+        ),
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={"MANAGED_AUTH_VOLUME_PATH": "/home/app/.codex-auth"},
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-auth-evidence\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-auth-evidence",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-auth-evidence",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        session_store=session_store,
+        session_supervisor=session_supervisor,
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    stored = session_store.load("sess-auth-evidence")
+    assert stored is not None
+    assert stored.published_artifact_refs() == ()
+    record_payload = stored.model_dump(mode="json", by_alias=True)
+    assert record_payload["artifactSpoolPath"].endswith(
+        "task-auth-evidence/artifacts"
+    )
+    assert "MANAGED_AUTH_VOLUME_PATH" not in json.dumps(record_payload)
+    assert ".codex-auth" not in json.dumps(record_payload)
+    assert "codex-home" not in json.dumps(stored.published_artifact_refs())
+
+
+@pytest.mark.asyncio
 async def test_controller_uses_request_moonmind_url_for_docker_network(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

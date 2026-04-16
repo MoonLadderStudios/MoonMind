@@ -9,6 +9,7 @@ from sqlalchemy.future import select
 from api_service.api.schemas_oauth_sessions import (
     CreateOAuthSessionRequest,
     OAuthSessionResponse,
+    ProviderProfileSummary,
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
@@ -42,7 +43,30 @@ def _oauth_default(runtime_id: str, key: str) -> str | None:
     return get_provider_default(runtime_id, key)
 
 
-def _oauth_session_response(session: ManagedAgentOAuthSession) -> OAuthSessionResponse:
+def _provider_profile_summary(
+    profile: ManagedAgentProviderProfile | None,
+) -> ProviderProfileSummary | None:
+    if profile is None:
+        return None
+    return ProviderProfileSummary(
+        profile_id=profile.profile_id,
+        runtime_id=profile.runtime_id,
+        provider_id=profile.provider_id,
+        provider_label=profile.provider_label,
+        credential_source=profile.credential_source.value,
+        runtime_materialization_mode=profile.runtime_materialization_mode.value,
+        account_label=profile.account_label,
+        enabled=profile.enabled,
+        is_default=profile.is_default,
+        rate_limit_policy=profile.rate_limit_policy.value,
+    )
+
+
+def _oauth_session_response(
+    session: ManagedAgentOAuthSession,
+    *,
+    profile: ManagedAgentProviderProfile | None = None,
+) -> OAuthSessionResponse:
     return OAuthSessionResponse(
         session_id=session.session_id,
         runtime_id=session.runtime_id,
@@ -54,6 +78,7 @@ def _oauth_session_response(session: ManagedAgentOAuthSession) -> OAuthSessionRe
         session_transport=session.session_transport,
         failure_reason=redact_sensitive_text(session.failure_reason),
         created_at=session.created_at,
+        profile_summary=_provider_profile_summary(profile),
     )
 
 
@@ -178,7 +203,7 @@ async def create_oauth_session(
             detail="Failed to start OAuth session workflow. Please retry.",
         ) from exc
 
-    return _oauth_session_response(new_session)
+    return _oauth_session_response(new_session, profile=existing_profile)
 
 @router.get("/{session_id}", response_model=OAuthSessionResponse)
 async def get_oauth_session(
@@ -195,8 +220,14 @@ async def get_oauth_session(
     session = result.scalars().first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        
-    return _oauth_session_response(session)
+
+    profile_result = await db.execute(
+        select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.profile_id == session.profile_id
+        )
+    )
+    profile = profile_result.scalars().first()
+    return _oauth_session_response(session, profile=profile)
 
 @router.post("/{session_id}/cancel")
 async def cancel_oauth_session(
@@ -490,4 +521,10 @@ async def reconnect_oauth_session(
             new_session_id,
         )
 
-    return _oauth_session_response(new_session)
+    profile_result = await db.execute(
+        select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.profile_id == new_session.profile_id
+        )
+    )
+    profile = profile_result.scalars().first()
+    return _oauth_session_response(new_session, profile=profile)

@@ -3165,6 +3165,42 @@ class TemporalAgentRuntimeActivities:
         )
         return request.model_copy(update={"environment": environment})
 
+    @staticmethod
+    def _managed_session_auth_diagnostics(
+        *,
+        request: LaunchCodexManagedSessionRequest,
+        profile: ManagedRuntimeProfile | None,
+        readiness: str,
+        validation_failure_reason: str | None = None,
+    ) -> dict[str, str]:
+        diagnostics: dict[str, str] = {
+            "component": "managed_session_controller",
+            "readiness": readiness,
+            "codexHomePath": request.codex_home_path,
+        }
+        if profile is not None:
+            optional_profile_fields = {
+                "profileRef": profile.profile_id,
+                "runtimeId": profile.runtime_id,
+                "providerId": profile.provider_id,
+                "credentialSource": profile.credential_source,
+                "runtimeMaterializationMode": profile.runtime_materialization_mode,
+                "volumeRef": profile.volume_ref,
+            }
+            for key, value in optional_profile_fields.items():
+                if value is not None and str(value).strip():
+                    diagnostics[key] = str(value).strip()
+        auth_mount_target = str(
+            request.environment.get("MANAGED_AUTH_VOLUME_PATH") or ""
+        ).strip()
+        if not auth_mount_target and profile is not None and profile.volume_mount_path:
+            auth_mount_target = str(profile.volume_mount_path).strip()
+        if auth_mount_target:
+            diagnostics["authMountTarget"] = auth_mount_target
+        if validation_failure_reason:
+            diagnostics["validationFailureReason"] = validation_failure_reason
+        return diagnostics
+
     async def agent_runtime_launch_session(
         self,
         request: Mapping[str, Any] | LaunchCodexManagedSessionRequest | None = None,
@@ -3183,10 +3219,33 @@ class TemporalAgentRuntimeActivities:
         try:
             response = await controller.launch_session(validated)
         except Exception as exc:
-            detail = self._sanitize_operator_summary(str(exc)) or "managed session launch failed"
+            from moonmind.utils.logging import redact_sensitive_text
+
+            detail = (
+                self._sanitize_operator_summary(redact_sensitive_text(str(exc)))
+                or "managed session launch failed"
+            )
+            detail = redact_sensitive_text(detail)
             raise TemporalActivityRuntimeError(
-                f"agent_runtime.launch_session failed: {detail}"
+                "agent_runtime.launch_session failed: "
+                f"component=managed_session_controller reason={detail}"
             ) from exc
+        response = response.model_copy(
+            update={
+                "metadata": {
+                    **response.metadata,
+                    "authDiagnostics": self._managed_session_auth_diagnostics(
+                        request=validated,
+                        profile=profile,
+                        readiness=(
+                            response.status
+                            if response.status != "failed"
+                            else "failed"
+                        ),
+                    ),
+                }
+            }
+        )
         return self._validate_session_response(
             response,
             activity_type="agent_runtime.launch_session",

@@ -6,6 +6,19 @@ from pydantic import BaseModel
 from api_service.db.models import ManagedAgentRateLimitPolicy, OAuthSessionStatus
 
 
+class ProviderProfileSummary(BaseModel):
+    profile_id: str
+    runtime_id: str
+    provider_id: str
+    provider_label: Optional[str] = None
+    credential_source: str
+    runtime_materialization_mode: str
+    account_label: Optional[str] = None
+    enabled: bool
+    is_default: bool
+    rate_limit_policy: str
+
+
 class CreateOAuthSessionRequest(BaseModel):
     runtime_id: str
     profile_id: str
@@ -30,3 +43,4 @@ class OAuthSessionResponse(BaseModel):
     session_transport: Optional[str] = None
     failure_reason: Optional[str] = None
     created_at: Optional[datetime] = None
+    profile_summary: Optional[ProviderProfileSummary] = None
