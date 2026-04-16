@@ -54,7 +54,7 @@ This also aligns with the Temporal-side lifecycle model: workflows orchestrate, 
 
 ## 5. Summary of the Strategy
 
-When `publish.mode = "pr"` and merge automation is enabled:
+When PR publishing is enabled (`publishMode = "pr"` in `MoonMind.Run` parameters) and merge automation is enabled:
 
 1. The original `MoonMind.Run` performs its normal implementation work.
 2. The publish step creates or updates the PR and emits a durable `PublishContext`.
@@ -67,7 +67,7 @@ When `publish.mode = "pr"` and merge automation is enabled:
 7. The resolver child run attempts to remediate and merge.
 8. If resolver pushes a new commit and external review/check signal must be re-established, control returns to the gate.
 9. The parent task reaches terminal success only when merge automation returns `merged` or `already_merged`.
-10. Any other terminal merge-automation outcome fails the parent task.
+10. Terminal `blocked`, `failed`, or `expired` outcomes fail the parent task; terminal `canceled` cancels the parent task so operator-initiated cancellation is not reported as failure.
 
 ---
 
@@ -95,7 +95,7 @@ MoonMind's lifecycle model already expects `MoonMind.Run` to mix direct activiti
 
 ### 6.3 Why the resolver itself is a child `MoonMind.Run`
 
-The current MoonMind execution model dispatches `tool.type = "skill"` via activity execution inside `MoonMind.Run`, while `agent_runtime` work dispatches through `MoonMind.AgentRun` child workflows. `pr-resolver` is currently a **skill**, not a standalone workflow type, and it owns git/PR mutations and requires `publish.mode = none`.
+The current MoonMind execution model dispatches `tool.type = "skill"` via activity execution inside `MoonMind.Run`, while `agent_runtime` work dispatches through `MoonMind.AgentRun` child workflows. `pr-resolver` is currently a **skill**, not a standalone workflow type, and it owns git/PR mutations and requires `publishMode = "none"`.
 
 Because of that, `MoonMind.MergeAutomation` SHOULD start a child **`MoonMind.Run`** for the resolver, rather than trying to execute the resolver skill directly inside the gate workflow. This reuses:
 
@@ -115,9 +115,9 @@ MoonMind.Run (root parent task)
   |- child: MoonMind.MergeAutomation
   |    |- gate wait / external events / Jira checks
   |    |- child: MoonMind.Run (resolver attempt 1)
-  |    |     `- executes tool=skill(pr-resolver), publish.mode=none
+  |    |     `- executes tool=skill(pr-resolver), publishMode=none
   |    `- child: MoonMind.Run (resolver attempt 2, if needed)
-  |          `- executes tool=skill(pr-resolver), publish.mode=none
+  |          `- executes tool=skill(pr-resolver), publishMode=none
   `- terminal completion only after MergeAutomation returns success
 ```
 
@@ -145,38 +145,34 @@ Workflow types should remain few and stable, but new types are appropriate when 
 
 ### 9.1 Parent input contract
 
-Merge automation is configured under PR publish settings:
+Merge automation is configured in the normalized `MoonMind.Run` parameters. API or template surfaces may collect this under a nested `task.publish` object, but worker-bound `MoonMind.Run` input MUST preserve the current top-level `publishMode` contract:
 
 ```json
 {
-  "task": {
-    "publish": {
-      "mode": "pr",
-      "mergeAutomation": {
-        "enabled": true,
-        "strategy": "child_workflow_resolver_v1",
-        "resolver": {
-          "skill": "pr-resolver",
-          "mergeMethod": "squash"
-        },
-        "gate": {
-          "github": {
-            "waitForExternalReviewSignal": true,
-            "requireRequiredChecksReportedOnHead": true,
-            "requireNoRunningChecks": true,
-            "reviewProviders": []
-          },
-          "jira": {
-            "enabled": false,
-            "issueKey": null,
-            "allowedStatuses": []
-          }
-        },
-        "timeouts": {
-          "fallbackPollSeconds": 120,
-          "expireAfterSeconds": 86400
-        }
+  "publishMode": "pr",
+  "mergeAutomation": {
+    "enabled": true,
+    "strategy": "child_workflow_resolver_v1",
+    "resolver": {
+      "skill": "pr-resolver",
+      "mergeMethod": "squash"
+    },
+    "gate": {
+      "github": {
+        "waitForExternalReviewSignal": true,
+        "requireStatusChecksReportedOnHead": true,
+        "requireNoRunningChecks": true,
+        "reviewProviders": []
+      },
+      "jira": {
+        "enabled": false,
+        "issueKey": null,
+        "allowedStatuses": []
       }
+    },
+    "timeouts": {
+      "fallbackPollSeconds": 120,
+      "expireAfterSeconds": 86400
     }
   }
 }
@@ -196,6 +192,10 @@ The publish step MUST emit a durable `PublishContext` containing at minimum:
 - optional `jiraIssueKey`
 
 This may be stored as an artifact ref plus compact memo-safe summary fields.
+The current `MoonMind.Run` publish state tracks a smaller PR summary, so this
+feature requires extending that state tracking to include the PR number, current
+head SHA, publication timestamp, and artifact ref before `MoonMind.MergeAutomation`
+can rely on those fields.
 
 ### 9.3 Parent state behavior
 
@@ -209,9 +209,8 @@ After PR publish succeeds and merge automation is enabled, the parent `MoonMind.
 The parent SHOULD use existing state vocabulary rather than inventing a new root state:
 
 - parent `mm_state`: `awaiting_external`
-- optional `mm_stage`: `merge_automation`
 
-This fits the current lifecycle model, which already includes `awaiting_external` for durable external waiting.
+This fits the current lifecycle model, which already includes `awaiting_external` for durable external waiting. If Mission Control later needs a dedicated `merge_automation` stage marker, the implementation MUST add it through the standard `MoonMind.Run` search-attribute update path rather than assuming `mm_stage` already carries that value.
 
 ---
 
@@ -356,7 +355,7 @@ When the gate opens, `MoonMind.MergeAutomation` starts a child **`MoonMind.Run`*
 That child run MUST set:
 
 - `task.tool = { type: "skill", name: "pr-resolver", version: "1.0" }`
-- `task.publish.mode = "none"`
+- top-level `initialParameters.publishMode = "none"`
 
 This is required because `pr-resolver` itself owns git push and merge behavior.
 
@@ -364,23 +363,24 @@ This is required because `pr-resolver` itself owns git push and merge behavior.
 
 ```json
 {
-  "repository": "owner/repo",
-  "targetRuntime": "codex",
-  "requiredCapabilities": ["git", "gh"],
-  "task": {
-    "instructions": "Resolve and merge PR #123 for parent workflow mm:parent.",
-    "tool": {
-      "type": "skill",
-      "name": "pr-resolver",
-      "version": "1.0"
-    },
-    "inputs": {
-      "repo": "owner/repo",
-      "pr": "123",
-      "mergeMethod": "squash"
-    },
-    "publish": {
-      "mode": "none"
+  "workflowType": "MoonMind.Run",
+  "initialParameters": {
+    "repository": "owner/repo",
+    "targetRuntime": "codex",
+    "requiredCapabilities": ["git", "gh"],
+    "publishMode": "none",
+    "task": {
+      "instructions": "Resolve and merge PR #123 for parent workflow mm:parent.",
+      "tool": {
+        "type": "skill",
+        "name": "pr-resolver",
+        "version": "1.0"
+      },
+      "inputs": {
+        "repo": "owner/repo",
+        "pr": "123",
+        "mergeMethod": "squash"
+      }
     }
   }
 }
@@ -596,8 +596,8 @@ This design is complete when:
 3. the parent does not complete until the merge-automation child completes,
 4. `MoonMind.MergeAutomation` waits on external signal completion rather than a fixed delay,
 5. `MoonMind.MergeAutomation` launches a child `MoonMind.Run` for `pr-resolver`,
-6. resolver child runs use `publish.mode = none`,
+6. resolver child runs use `publishMode = "none"`,
 7. a resolver-generated push can return control to the gate,
 8. downstream tasks depending on the parent task naturally wait for merge automation completion,
-9. non-success merge-automation terminal outcomes fail the parent task,
+9. non-success merge-automation terminal outcomes fail the parent task except `canceled`, which cancels the parent task,
 10. root and child artifacts expose enough state for Mission Control to explain why a task is waiting or failed.
