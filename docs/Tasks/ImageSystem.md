@@ -76,7 +76,7 @@ interface AttachmentManifestEntry {
   filename: string;
   contentType: string;
   sizeBytes: number;
-  targetKind: "task" | "step";
+  targetKind: "objective" | "step";
   stepRef?: string;
   stepOrdinal?: number;
   workspacePath: string;
@@ -225,7 +225,7 @@ Recommended artifact metadata keys:
 
 - `source: "task-create"`
 - `attachmentKind: "input"`
-- `targetKind: "task" | "step"`
+- `targetKind: "objective" | "step"`
 - `stepRef`
 - `stepOrdinal`
 - `originalFilename`
@@ -288,7 +288,7 @@ Rules:
 - prepare writes raw files into stable target-aware locations:
 
 ```text
-.moonmind/inputs/task/<artifactId>-<sanitized-filename>
+.moonmind/inputs/objective/<artifactId>-<sanitized-filename>
 .moonmind/inputs/steps/<stepRef>/<artifactId>-<sanitized-filename>
 ```
 
@@ -297,7 +297,7 @@ Rules:
 
 Rules:
 
-- objective-scoped attachments are materialized under `.moonmind/inputs/task/`
+- objective-scoped attachments are materialized under `.moonmind/inputs/objective/`
 - step-scoped attachments are materialized under `.moonmind/inputs/steps/<stepRef>/`
 - if a step has no explicit `id`, the control plane or prepare layer must assign a stable step reference for manifest and path purposes
 - partial materialization is a failure, not a best-effort success

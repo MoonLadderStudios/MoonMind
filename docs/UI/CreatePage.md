@@ -118,7 +118,7 @@ Representative browser model:
 
 ```ts
 type AttachmentTarget =
-  | { kind: "preset-objective" }
+  | { kind: "objective" }
   | { kind: "step"; stepLocalId: string };
 
 interface DraftAttachment {
@@ -145,6 +145,7 @@ interface StepDraft {
   templateStepId: string;
   templateInstructions: string;
   attachments: DraftAttachment[];
+  templateAttachments: DraftAttachment[];
 }
 
 interface TaskDraft {
@@ -252,6 +253,7 @@ Rules:
 - a template-expanded step remains template-bound only while its authored instructions and attachment set still match the template-authored step input contract
 - any manual edit to a template-bound step’s instructions detaches that step from template instruction identity
 - any manual edit to a template-bound step’s attachment set detaches that step from template input identity
+- `templateAttachments` stores the template-authored attachment set used for detachment comparisons
 - importing Jira text or Jira images into a template-bound step counts as a manual edit
 
 ---
