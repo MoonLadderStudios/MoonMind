@@ -14,6 +14,7 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
 from __future__ import annotations
 
 import logging
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
@@ -311,6 +312,7 @@ async def oauth_session_register_profile(
 ) -> dict[str, Any]:
     """Create or update provider profile from session data."""
     session_id = request.get("session_id", "")
+    verification = request.get("verification")
 
     if not session_id:
         raise ValueError("session_id is required")
@@ -333,6 +335,15 @@ async def oauth_session_register_profile(
         session_obj = result.scalars().first()
         if not session_obj:
             raise ValueError(f"Session {session_id} not found")
+
+        if isinstance(verification, Mapping) and not verification.get("verified"):
+            reason = str(verification.get("reason") or "unknown")
+            failure_reason = f"Volume verification failed: {reason}"
+            session_obj.status = OAuthSessionStatus.FAILED
+            session_obj.failure_reason = failure_reason
+            session_obj.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            raise ValueError(failure_reason)
 
         profile_result = await db.execute(
             select(ManagedAgentProviderProfile).where(

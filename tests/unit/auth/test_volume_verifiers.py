@@ -114,7 +114,11 @@ class TestVerifyVolumeCredentials:
             )
 
         assert result["verified"] is True
-        assert ".config/gemini/credentials.json" in result["found"]
+        assert result["status"] == "verified"
+        assert result["credentials_found_count"] == 1
+        assert result["credentials_missing_count"] == 1
+        assert "found" not in result
+        assert "missing" not in result
 
     @pytest.mark.asyncio
     async def test_codex_verification_checks_volume_root_when_mounted_as_codex_home(
@@ -142,7 +146,11 @@ class TestVerifyVolumeCredentials:
             )
 
         assert result["verified"] is True
-        assert "auth.json" in result["found"]
+        assert result["status"] == "verified"
+        assert result["credentials_found_count"] == 1
+        assert result["credentials_missing_count"] == 1
+        assert "found" not in result
+        assert "missing" not in result
         docker_args = exec_mock.call_args.args
         assert "-v" in docker_args
         assert "codex_auth_volume:/home/app/.codex:ro" in docker_args
@@ -171,4 +179,9 @@ class TestVerifyVolumeCredentials:
             )
 
         assert result["verified"] is False
+        assert result["status"] == "failed"
         assert result["reason"] == "no_credentials_found"
+        assert result["credentials_found_count"] == 0
+        assert result["credentials_missing_count"] == 2
+        assert "found" not in result
+        assert "missing" not in result

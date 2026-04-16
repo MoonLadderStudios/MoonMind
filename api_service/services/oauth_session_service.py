@@ -36,6 +36,7 @@ async def start_oauth_session_workflow(session_model: Any) -> None:
                 "profile_id": session_model.profile_id,
                 "volume_ref": session_model.volume_ref or "",
                 "volume_mount_path": session_model.volume_mount_path or "",
+                "session_transport": session_model.session_transport or "none",
                 "requested_by_user_id": session_model.requested_by_user_id or "",
                 "profile_settings": session_model.metadata_json or {},
             },

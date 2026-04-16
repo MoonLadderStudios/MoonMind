@@ -10,7 +10,7 @@ Alternatives considered: Creating new subsystems or compatibility wrappers was r
 
 Decision: Use focused pytest coverage through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/auth/test_oauth_session_activities.py tests/unit/auth/test_oauth_provider_registry.py tests/unit/auth/test_volume_verifiers.py`.
 Rationale: Unit tests can prove validation, serialization, redaction, policy, and state behavior without requiring Docker credentials or external providers.
-Alternatives considered: Provider verification tests were rejected for this planning phase because MM-318 requires deterministic local evidence first.
+Alternatives considered: Provider verification tests were rejected for this planning phase because MM-359 requires deterministic local evidence first.
 
 ## Integration Test Strategy
 
@@ -20,6 +20,6 @@ Alternatives considered: Skipping integration was rejected; only local execution
 
 ## Source Design Coverage
 
-Decision: Preserve in-scope source coverage IDs `DESIGN-REQ-010, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-018, DESIGN-REQ-020` and keep all other MM-318 stories out of scope for this spec.
+Decision: Preserve in-scope source coverage IDs `DESIGN-REQ-010, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-018, DESIGN-REQ-020` and keep other OAuthTerminal stories out of scope for this spec.
 Rationale: Each generated spec must remain a single independently testable story while still preserving traceability to the broad OAuthTerminal design.
 Alternatives considered: Combining stories was rejected because it would violate the one-story MoonSpec gate.

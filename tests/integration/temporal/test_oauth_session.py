@@ -293,3 +293,76 @@ async def test_oauth_session_workflow_rejects_codex_oauth_input_without_refs() -
             assert failures == [
                 "volume_ref and volume_mount_path are required for Codex OAuth sessions"
             ]
+
+
+async def test_oauth_session_workflow_none_transport_skips_bridge_and_records_statuses() -> None:
+    """OAuth sessions can use transport-neutral none mode without PTY bridge startup."""
+    status_updates: list[str] = []
+    register_payloads: list[dict] = []
+
+    @activity.defn(name="oauth_session.update_status")
+    async def record_update_status(request: dict) -> dict:
+        status_updates.append(request["status"])
+        return {}
+
+    @activity.defn(name="oauth_session.register_profile")
+    async def record_register_profile(request: dict) -> dict:
+        register_payloads.append(request)
+        return {"profile_id": "prof_123"}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                mock_ensure_volume,
+                record_update_status,
+                mock_verify_cli_fingerprint,
+                record_register_profile,
+                mock_stop_auth_runner,
+                mock_mark_failed,
+            ],
+        ), Worker(
+            env.client,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            workflows=[MoonMindOAuthSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOAuthSessionWorkflow.run,
+                {
+                    "session_id": "sess_none_transport",
+                    "runtime_id": "codex_cli",
+                    "volume_ref": "vol_123",
+                    "volume_mount_path": "/mnt/auth",
+                    "session_transport": "none",
+                },
+                id="oauth-session:sess_none_transport",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+
+            await handle.signal(MoonMindOAuthSessionWorkflow.finalize)
+            result = await handle.result()
+
+    assert result == {
+        "session_id": "sess_none_transport",
+        "status": "succeeded",
+        "failure_reason": None,
+    }
+    assert status_updates == [
+        "starting",
+        "bridge_ready",
+        "awaiting_user",
+        "verifying",
+        "registering_profile",
+        "succeeded",
+    ]
+    assert register_payloads == [
+        {
+            "session_id": "sess_none_transport",
+            "verification": {
+                "verified": True,
+                "fingerprint_verified": True,
+            },
+        }
+    ]

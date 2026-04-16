@@ -5,6 +5,7 @@ from __future__ import annotations
 from moonmind.workflows.temporal.runtime.providers.registry import (
     OAUTH_PROVIDERS,
     get_provider,
+    get_provider_default,
     supported_runtime_ids,
 )
 
@@ -71,6 +72,9 @@ class TestOAuthProviderRegistry:
             assert spec["session_transport"] == "none", (
                 f"Provider '{runtime_id}' should use none transport until a replacement exists"
             )
+
+    def test_session_transport_default_is_exposed_for_runtime_boundaries(self) -> None:
+        assert get_provider_default("codex_cli", "session_transport") == "none"
 
     def test_all_providers_use_oauth_mode(self) -> None:
         for runtime_id, spec in OAUTH_PROVIDERS.items():

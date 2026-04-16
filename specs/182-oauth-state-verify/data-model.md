@@ -23,6 +23,6 @@
 
 ## Cross-Cutting Rules
 
-- Preserve Jira issue key `MM-318` as traceability metadata in generated artifacts.
+- Preserve Jira issue key `MM-359` as traceability metadata in generated artifacts.
 - Never model raw credential contents, token values, private keys, environment dumps, or raw auth-volume listings as persisted or browser-visible fields.
 - Prefer compact refs and explicit status values over provider-shaped dictionaries.

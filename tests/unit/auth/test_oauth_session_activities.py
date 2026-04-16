@@ -221,6 +221,59 @@ async def test_register_profile_activity_rejects_codex_oauth_profile_without_ref
 
 
 @pytest.mark.asyncio
+async def test_register_profile_activity_rejects_failed_verification_metadata(
+    _oauth_activity_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "oas_activityfailedverify"
+    profile_id = "codex-activity-failed-verify"
+
+    async with _oauth_activity_session_factory() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.REGISTERING_PROFILE,
+                requested_by_user_id="not-a-uuid",
+                account_label="codex account",
+                metadata_json={
+                    "provider_id": "openai",
+                    "provider_label": "OpenAI",
+                },
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        lambda: _session_context(_oauth_activity_session_factory),
+    )
+
+    with pytest.raises(ValueError, match="Volume verification failed: no_credentials_found"):
+        await oauth_session_register_profile(
+            {
+                "session_id": session_id,
+                "verification": {
+                    "verified": False,
+                    "reason": "no_credentials_found",
+                    "status": "failed",
+                },
+            }
+        )
+
+    async with _oauth_activity_session_factory() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.status == OAuthSessionStatus.FAILED
+        assert row.failure_reason == "Volume verification failed: no_credentials_found"
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+
+@pytest.mark.asyncio
 async def test_update_terminal_session_persists_runner_metadata(
     _oauth_activity_session_factory,
     monkeypatch: pytest.MonkeyPatch,
