@@ -1,7 +1,7 @@
 # MoonSpec Verification Report
 
 **Feature**: Per-Run Codex Home Seeding  
-**Spec**: `/work/agent_jobs/mm:a5e84d30-1561-4a28-ad3f-fd2da9c5d754/repo/specs/181-codex-home-seeding/spec.md`  
+**Spec**: `specs/181-codex-home-seeding/spec.md`
 **Original Request Source**: `spec.md` Input, canonical Jira issue `MM-357` preset brief  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: MEDIUM
