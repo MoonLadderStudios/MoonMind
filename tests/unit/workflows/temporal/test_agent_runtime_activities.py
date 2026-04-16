@@ -1727,7 +1727,24 @@ async def test_agent_runtime_prepare_turn_instructions_injects_context(
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint() -> None:
+@pytest.mark.parametrize(
+    "skill_parameters",
+    [
+        {
+            "selectedSkill": "jira-issue-creator",
+        },
+        {
+            "metadata": {
+                "moonmind": {
+                    "selectedSkill": "jira-issue-creator",
+                },
+            },
+        },
+    ],
+)
+async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint(
+    skill_parameters: dict[str, Any],
+) -> None:
     activities = TemporalAgentRuntimeActivities()
 
     result = await activities.agent_runtime_prepare_turn_instructions(
@@ -1739,9 +1756,9 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint() -> 
                 "idempotencyKey": "idem-1",
                 "parameters": {
                     "instructions": "Create Jira stories from the breakdown.",
-                    "selectedSkill": "jira-issue-creator",
                     "publishMode": "none",
                     "storyBreakdownPath": "docs/tmp/story-breakdowns/demo/stories.json",
+                    **skill_parameters,
                 },
             },
         }

@@ -730,7 +730,16 @@ async def test_start_fails_jira_issue_creator_when_no_issues_created(
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
     request = _request(binding, workspace_path=str(workspace_path))
-    request.parameters["selectedSkill"] = "jira-issue-creator"
+    request.parameters["metadata"] = {
+        "moonmind": {
+            "selectedSkill": "jira-issue-creator",
+            "stepLedger": {
+                "logicalStepId": "tpl:jira-breakdown:1.0.0:02:demo",
+                "attempt": 1,
+                "scope": "step",
+            },
+        },
+    }
 
     with pytest.raises(CodexSessionRunFailedError) as exc_info:
         await adapter.start(request)
