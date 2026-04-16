@@ -23,7 +23,7 @@
 | FR-002 | `managed_agent_adapter.py` maps profile `volume_mount_path` to `MANAGED_AUTH_VOLUME_PATH`; `managed_session_controller.py` only mounts `codex_auth_volume` when that env value is present. | VERIFIED | Existing unit tests cover profile-derived auth target and no auth mount when absent. |
 | FR-003 | `managed_session_models.py` and `managed_session_controller.py` reject `MANAGED_AUTH_VOLUME_PATH` equal to `codexHomePath`. | VERIFIED | Added schema unit tests cover relative auth target and equality rejection. |
 | FR-004 | `managed_session_controller.py` emits reserved `MOONMIND_SESSION_*` env values and rejects caller overrides. | VERIFIED | Existing controller test covers override rejection; integration boundary test covers reserved values in launch command. |
-| FR-005 | `spec.md`, plan, tasks, contract, quickstart, checklist, and verification preserve `MM-356`. | VERIFIED | `rg` found no stale `MM-318` references in the feature directory. |
+| FR-005 | `spec.md`, plan, tasks, contract, quickstart, checklist, and verification preserve `MM-356`. | VERIFIED | Feature artifacts preserve the canonical Jira issue key and preset brief. |
 
 ## Acceptance Scenario Coverage
 
