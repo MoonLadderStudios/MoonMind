@@ -14,6 +14,7 @@ Design reference:
 from __future__ import annotations
 
 import logging
+import re
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
@@ -59,6 +60,17 @@ class OAuthSessionOutput(TypedDict):
 
 # Default session TTL — sessions auto-expire after this duration.
 _DEFAULT_SESSION_TTL_SECONDS = 1800  # 30 minutes
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)(token|password|secret|api[_-]?key)=\S+"
+)
+
+
+def _redact_workflow_failure(prefix: str, error: object) -> str:
+    """Return a bounded workflow-safe failure reason."""
+    message = str(error)
+    if _SECRET_ASSIGNMENT_PATTERN.search(message):
+        return f"{prefix}: redacted provider output"
+    return f"{prefix}: {message}"
 
 
 @workflow.defn(name=WORKFLOW_NAME)
@@ -239,11 +251,17 @@ class MoonMindOAuthSessionWorkflow:
                     ),
                 )
             except Exception as exc:
-                await self._mark_failed(f"Failed to start auth runner: {exc}")
+                failure_reason = _redact_workflow_failure(
+                    "Failed to start auth runner", exc
+                )
+                output_reason = _redact_workflow_failure(
+                    "Auth runner launch failed", exc
+                )
+                await self._mark_failed(failure_reason)
                 return OAuthSessionOutput(
                     session_id=self._session_id,
                     status="failed",
-                    failure_reason=f"Auth runner launch failed: {exc}",
+                    failure_reason=output_reason,
                 )
 
         # Step 4: Transition to bridge_ready then awaiting_user

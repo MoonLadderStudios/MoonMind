@@ -5,14 +5,27 @@ from collections import deque
 from dataclasses import dataclass, field
 import logging
 import os
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
 _MAX_RECORDED_TERMINAL_EVENTS = 256
+_MAX_STARTUP_ERROR_OUTPUT_CHARS = 600
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)(token|password|secret|api[_-]?key)=\S+"
+)
 
 
 class TerminalBridgeFrameError(ValueError):
     """Raised when a browser terminal frame is unsupported or unsafe."""
+
+
+def _redact_startup_output(output: bytes) -> str:
+    text = output.decode("utf-8", errors="replace").strip()
+    if not text:
+        return ""
+    redacted = _SECRET_ASSIGNMENT_PATTERN.sub("[REDACTED]", text)
+    return redacted[-_MAX_STARTUP_ERROR_OUTPUT_CHARS:]
 
 
 @dataclass
@@ -76,26 +89,26 @@ async def start_terminal_bridge_container(
     volume_ref: str,
     volume_mount_path: str,
     session_ttl: int,
+    bootstrap_command: tuple[str, ...] | list[str],
 ) -> dict[str, Any]:
     """Start an auth container that exposes a bridge for PTY websocket connections."""
-    
-    # In a real implementation, this would spin up a specialized docker 
-    # container that accepts a websocket connection to a PTY.
-    # For Phase 5, we satisfy the temporal workflow by returning connection metadata.
-    
+    command = tuple(str(part).strip() for part in bootstrap_command)
+    if not command or any(not part for part in command):
+        raise ValueError("provider bootstrap command is not configured")
+
     container_name = f"moonmind_auth_{session_id}"
     logger.info("Starting auth runner container %s for %s", container_name, session_id)
     
     runner_image = os.environ.get("MOONMIND_OAUTH_RUNNER_IMAGE", "alpine:3.19")
     try:
         proc = await asyncio.create_subprocess_exec(
-            "docker", "run", "-d", "--rm",
+            "docker", "run", "-d", "-i", "-t", "--rm",
             "--name", container_name,
             "--label", "moonmind.oauth_session=true",
             "--label", f"moonmind.oauth_session_id={session_id}",
             "--label", f"moonmind.runtime_id={runtime_id}",
             "-v", f"{volume_ref}:{volume_mount_path}",
-            runner_image, "sleep", str(session_ttl),
+            runner_image, *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -118,8 +131,10 @@ async def start_terminal_bridge_container(
         raise TimeoutError("Timed out while starting auth container")
 
     if proc.returncode != 0:
+        error_output = _redact_startup_output(stderr)
+        detail = f": {error_output}" if error_output else ""
         raise RuntimeError(
-            f"Failed to start auth container: {stderr.decode(errors='replace')}"
+            f"Failed to start auth container with exit code {proc.returncode}{detail}"
         )
         
     return {

@@ -21,9 +21,12 @@ from api_service.db.models import (
 from moonmind.workflows.temporal.activities import oauth_session_activities
 from moonmind.workflows.temporal.activities.oauth_session_activities import (
     oauth_session_register_profile,
+    oauth_session_start_auth_runner,
+    oauth_session_stop_auth_runner,
     oauth_session_update_terminal_session,
 )
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
+from moonmind.workflows.temporal.runtime.providers import registry as provider_registry
 from moonmind.workflows.temporal.workers import REGISTERED_TEMPORAL_WORKFLOW_TYPES
 
 
@@ -326,3 +329,80 @@ async def test_update_terminal_session_persists_runner_metadata(
         assert row.container_name == "moonmind_auth_oas_activityterminal1"
         assert row.session_transport == "moonmind_pty_ws"
         assert row.expires_at is not None
+
+
+@pytest.mark.asyncio
+async def test_start_auth_runner_resolves_provider_bootstrap_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def fake_start_terminal_bridge_container(**kwargs):
+        observed.update(kwargs)
+        return {
+            "container_name": "moonmind_auth_oas_activityrunner1",
+            "terminal_session_id": "term_oas_activityrunner1",
+            "terminal_bridge_id": "br_oas_activityrunner1",
+            "session_transport": "moonmind_pty_ws",
+        }
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.terminal_bridge.start_terminal_bridge_container",
+        fake_start_terminal_bridge_container,
+    )
+
+    result = await oauth_session_start_auth_runner(
+        {
+            "session_id": "oas_activityrunner1",
+            "runtime_id": "codex_cli",
+            "volume_ref": "codex_auth_volume",
+            "volume_mount_path": "/home/app/.codex",
+            "session_ttl": 120,
+        }
+    )
+
+    assert result["container_name"] == "moonmind_auth_oas_activityrunner1"
+    assert observed["bootstrap_command"] == ("codex", "login")
+    assert observed["volume_ref"] == "codex_auth_volume"
+    assert observed["volume_mount_path"] == "/home/app/.codex"
+
+
+@pytest.mark.asyncio
+async def test_start_auth_runner_rejects_missing_provider_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    providers = dict(provider_registry.OAUTH_PROVIDERS)
+    providers["codex_cli"] = dict(providers["codex_cli"], bootstrap_command=[])
+    monkeypatch.setattr(provider_registry, "OAUTH_PROVIDERS", providers)
+
+    with pytest.raises(ValueError, match="bootstrap command is not configured"):
+        await oauth_session_start_auth_runner(
+            {
+                "session_id": "oas_activityrunner_missing_command",
+                "runtime_id": "codex_cli",
+                "volume_ref": "codex_auth_volume",
+                "volume_mount_path": "/home/app/.codex",
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_stop_auth_runner_without_container_is_idempotent(
+    _oauth_activity_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        lambda: _session_context(_oauth_activity_session_factory),
+    )
+
+    result = await oauth_session_stop_auth_runner(
+        {"session_id": "oas_activityrunner_no_container"}
+    )
+
+    assert result == {
+        "session_id": "oas_activityrunner_no_container",
+        "stopped": False,
+        "reason": "no_container",
+    }

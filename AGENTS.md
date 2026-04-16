@@ -178,6 +178,8 @@ Key diagnostics:
 - Python 3.12 + Pydantic v2, existing MoonMind schema validation helpers (185-claude-policy-envelope)
 - No new persistent storage; this story defines compact runtime contracts and deterministic outputs that can later be persisted by the managed-session store (185-claude-policy-envelope)
 - No new persistent storage; this story defines compact runtime contracts and deterministic outputs that can later be persisted by the managed-session store or export sinks (191-claude-governance-telemetry)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing OAuth provider registry, existing OAuth session workflow/activity catalog, existing terminal bridge runtime helpers (192-oauth-runner-bootstrap-pty)
+- Existing OAuth session database row and workflow/activity payloads only; no new persistent storage (192-oauth-runner-bootstrap-pty)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
