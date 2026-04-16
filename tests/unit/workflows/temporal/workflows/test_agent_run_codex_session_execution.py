@@ -56,6 +56,7 @@ def _managed_session_request(
     *,
     parameters: dict[str, Any] | None = None,
     workspace_spec: dict[str, Any] | None = None,
+    instruction_ref: str = "artifact:instructions",
 ) -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="managed",
@@ -63,7 +64,7 @@ def _managed_session_request(
         executionProfileRef="codex-default",
         correlationId="corr-managed-1",
         idempotencyKey="idem-managed-1",
-        instructionRef="artifact:instructions",
+        instructionRef=instruction_ref,
         managedSession={
             "workflowId": "wf-task-1:session:codex_cli",
             "taskRunId": "wf-task-1",
@@ -96,6 +97,29 @@ async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_he
     assert isinstance(activity_input, AgentRuntimeFetchResultInput)
     assert activity_input.target_branch == "main"
     assert activity_input.head_branch is None
+
+
+async def test_managed_session_result_enrichment_omits_large_inline_instruction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    large_instruction = "Use this request as the canonical input:\n" + (
+        "Implement the workflow cleanup. " * 400
+    )
+    request = _managed_session_request(instruction_ref=large_instruction)
+
+    result = run._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(summary="done", metadata={}),
+    )
+
+    assert result is not None
+    assert result.metadata["instructionRefOmitted"] is True
+    assert result.metadata["instructionRefLengthChars"] == len(large_instruction.strip())
+    assert len(result.metadata["instructionRefSha256"]) == 64
+    assert "instructionRef" not in result.metadata
+    assert result.metadata["managedSession"]["taskRunId"] == "wf-task-1"
 
 
 async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(

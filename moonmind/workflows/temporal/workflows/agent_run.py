@@ -23,6 +23,7 @@ with workflow.unsafe.imports_passed_through():
         AgentRuntimeStatusInput,
         ExternalAgentRunInput,
     )
+    from moonmind.schemas.temporal_payload_policy import compact_temporal_ref_metadata
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import (
         ManagedAgentAdapter,
@@ -98,6 +99,16 @@ _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
     "timed-out": RunStatus.timed_out,
     "unknown": RunStatus.awaiting_callback,
 }
+
+
+def _setdefault_compact_ref_metadata(
+    metadata: dict[str, Any],
+    field_name: str,
+    value: Any,
+) -> None:
+    for key, compact_value in compact_temporal_ref_metadata(field_name, value).items():
+        metadata.setdefault(key, compact_value)
+
 
 # Default workflow-level execution timeouts
 DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600      # 1 hour
@@ -416,9 +427,17 @@ class MoonMindAgentRun:
                 by_alias=True,
             )
             if request.instruction_ref:
-                metadata.setdefault("instructionRef", request.instruction_ref)
+                _setdefault_compact_ref_metadata(
+                    metadata,
+                    "instructionRef",
+                    request.instruction_ref,
+                )
             if request.resolved_skillset_ref:
-                metadata.setdefault("resolvedSkillsetRef", request.resolved_skillset_ref)
+                _setdefault_compact_ref_metadata(
+                    metadata,
+                    "resolvedSkillsetRef",
+                    request.resolved_skillset_ref,
+                )
         elif request.agent_kind == "managed":
             task_run_id = str(self.run_id or "").strip()
 
