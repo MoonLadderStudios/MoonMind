@@ -228,9 +228,10 @@ class TerminalBridgeConnection:
     ) -> None:
         async for chunk in pty.output_chunks():
             self.output_event_count += 1
-            result = send_output(chunk)
-            if inspect.isawaitable(result):
-                await result
+            if inspect.iscoroutinefunction(send_output):
+                await send_output(chunk)
+            else:
+                send_output(chunk)
 
     def safe_metadata(self) -> dict[str, int]:
         metadata: dict[str, int] = {
