@@ -3089,17 +3089,18 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                     ) : null}
                     {runSummary.mergeAutomation.prUrl ? (
                       <Card label="PR Link">
-                        {normalizeGitHubPullRequestUrl(runSummary.mergeAutomation.prUrl) ? (
-                          <a
-                            href={normalizeGitHubPullRequestUrl(runSummary.mergeAutomation.prUrl) ?? undefined}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {normalizeGitHubPullRequestUrl(runSummary.mergeAutomation.prUrl)}
-                          </a>
-                        ) : (
-                          '—'
-                        )}
+                        {(() => {
+                          const normalizedUrl = normalizeGitHubPullRequestUrl(
+                            runSummary.mergeAutomation.prUrl,
+                          );
+                          return normalizedUrl ? (
+                            <a href={normalizedUrl} target="_blank" rel="noreferrer">
+                              {normalizedUrl}
+                            </a>
+                          ) : (
+                            '—'
+                          );
+                        })()}
                       </Card>
                     ) : null}
                     {runSummary.mergeAutomation.latestHeadSha ? (

@@ -53,6 +53,7 @@ NON_SUCCESS_DISPOSITIONS = frozenset({DISPOSITION_MANUAL_REVIEW, DISPOSITION_FAI
 ALLOWED_DISPOSITIONS = SUCCESS_DISPOSITIONS | NON_SUCCESS_DISPOSITIONS | {
     DISPOSITION_REENTER_GATE
 }
+MAX_PUBLISHED_ARTIFACT_REFS = 20
 
 
 @workflow.defn(name=WORKFLOW_NAME)
@@ -75,8 +76,12 @@ class MoonMindMergeAutomationWorkflow:
         pr = self._input.pull_request if self._input is not None else None
         artifact_refs = {
             "summary": self._summary_artifact_ref,
-            "gateSnapshots": list(self._gate_snapshot_artifact_refs),
-            "resolverAttempts": list(self._resolver_attempt_artifact_refs),
+            "gateSnapshots": self._published_artifact_refs(
+                self._gate_snapshot_artifact_refs
+            ),
+            "resolverAttempts": self._published_artifact_refs(
+                self._resolver_attempt_artifact_refs
+            ),
         }
         payload = {
             "status": self._status,
@@ -94,6 +99,21 @@ class MoonMindMergeAutomationWorkflow:
         if self._summary:
             payload["summary"] = self._summary
         return payload
+
+    @staticmethod
+    def _published_artifact_refs(refs: list[str]) -> list[str]:
+        return list(refs[-MAX_PUBLISHED_ARTIFACT_REFS:])
+
+    @staticmethod
+    def _artifact_id_from_ref(artifact_ref: Any) -> str:
+        if isinstance(artifact_ref, Mapping):
+            return str(
+                artifact_ref.get("artifact_id") or artifact_ref.get("artifactId") or ""
+            )
+        return str(
+            getattr(artifact_ref, "artifact_id", "")
+            or getattr(artifact_ref, "artifactId", "")
+        )
 
     def _principal(self) -> str:
         if self._input is None:
@@ -114,16 +134,7 @@ class MoonMindMergeAutomationWorkflow:
                 schedule_to_close_timeout=timedelta(seconds=120),
                 retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
             )
-            artifact_id = ""
-            if isinstance(artifact_ref, Mapping):
-                artifact_id = str(
-                    artifact_ref.get("artifact_id") or artifact_ref.get("artifactId") or ""
-                )
-            else:
-                artifact_id = str(
-                    getattr(artifact_ref, "artifact_id", "")
-                    or getattr(artifact_ref, "artifactId", "")
-                )
+            artifact_id = self._artifact_id_from_ref(artifact_ref)
             if not artifact_id:
                 return None
             await execute_typed_activity(
@@ -142,6 +153,8 @@ class MoonMindMergeAutomationWorkflow:
                 retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
             )
             return artifact_id
+        except CancelledError:
+            raise
         except Exception:
             return None
 
