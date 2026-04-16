@@ -44,6 +44,7 @@ class OAuthSessionInput(TypedDict, total=False):
     volume_mount_path: str
     requested_by_user_id: str
     profile_settings: dict[str, Any]
+    session_transport: str
 
 
 class OAuthSessionOutput(TypedDict):
@@ -143,9 +144,12 @@ class MoonMindOAuthSessionWorkflow:
         _profile_id = input_payload.get("profile_id", "")  # noqa: F841 — used in Phase 2
         volume_ref = input_payload.get("volume_ref", "")
         volume_mount_path = input_payload.get("volume_mount_path", "")
-        session_transport = str(
-            input_payload.get("session_transport") or "none"
-        ).strip() or "none"
+        raw_session_transport = input_payload.get("session_transport")
+        session_transport = (
+            "moonmind_pty_ws"
+            if raw_session_transport is None
+            else str(raw_session_transport).strip() or "none"
+        )
         session_ttl = _DEFAULT_SESSION_TTL_SECONDS
 
         if not self._session_id or not runtime_id:

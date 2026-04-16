@@ -51,11 +51,12 @@ def _verification_result(
     reason: str,
     found_count: int,
     missing_count: int,
+    status: str | None = None,
 ) -> dict[str, Any]:
     """Build compact, secret-free verification metadata."""
     return {
         "verified": verified,
-        "status": "verified" if verified else "failed",
+        "status": status or ("verified" if verified else "failed"),
         "runtime_id": runtime_id,
         "reason": reason,
         "credentials_found_count": found_count,
@@ -87,14 +88,14 @@ async def verify_volume_credentials(
             "No credential paths defined for runtime %s — skipping verification",
             runtime_id,
         )
-        return {
-            "verified": True,
-            "status": "skipped",
-            "runtime_id": runtime_id,
-            "reason": "no_credential_paths_defined",
-            "credentials_found_count": 0,
-            "credentials_missing_count": 0,
-        }
+        return _verification_result(
+            verified=True,
+            runtime_id=runtime_id,
+            reason="no_credential_paths_defined",
+            found_count=0,
+            missing_count=0,
+            status="skipped",
+        )
 
     if not volume_ref:
         return _verification_result(

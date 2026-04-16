@@ -8,6 +8,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio import exceptions
 
 from api_service.db.models import (
     Base,
@@ -253,7 +254,10 @@ async def test_register_profile_activity_rejects_failed_verification_metadata(
         lambda: _session_context(_oauth_activity_session_factory),
     )
 
-    with pytest.raises(ValueError, match="Volume verification failed: no_credentials_found"):
+    with pytest.raises(
+        exceptions.ApplicationError,
+        match="Volume verification failed: no_credentials_found",
+    ) as exc_info:
         await oauth_session_register_profile(
             {
                 "session_id": session_id,
@@ -265,11 +269,12 @@ async def test_register_profile_activity_rejects_failed_verification_metadata(
             }
         )
 
+    assert exc_info.value.non_retryable is True
     async with _oauth_activity_session_factory() as session:
         row = await session.get(ManagedAgentOAuthSession, session_id)
         assert row is not None
-        assert row.status == OAuthSessionStatus.FAILED
-        assert row.failure_reason == "Volume verification failed: no_credentials_found"
+        assert row.status == OAuthSessionStatus.REGISTERING_PROFILE
+        assert row.failure_reason is None
         assert await session.get(ManagedAgentProviderProfile, profile_id) is None
 
 

@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
 
-from temporalio import activity
+from temporalio import activity, exceptions
 
 from api_service.db.base import get_async_session_context
 from api_service.db.models import (
@@ -339,11 +339,10 @@ async def oauth_session_register_profile(
         if isinstance(verification, Mapping) and not verification.get("verified"):
             reason = str(verification.get("reason") or "unknown")
             failure_reason = f"Volume verification failed: {reason}"
-            session_obj.status = OAuthSessionStatus.FAILED
-            session_obj.failure_reason = failure_reason
-            session_obj.completed_at = datetime.now(timezone.utc)
-            await db.commit()
-            raise ValueError(failure_reason)
+            raise exceptions.ApplicationError(
+                failure_reason,
+                non_retryable=True,
+            )
 
         profile_result = await db.execute(
             select(ManagedAgentProviderProfile).where(

@@ -246,6 +246,73 @@ async def test_oauth_session_workflow_api_finalize_skips_verify_and_register() -
             assert register_calls == 0
 
 
+async def test_oauth_session_workflow_missing_transport_uses_legacy_bridge_default() -> None:
+    """Payloads started before session_transport existed keep the old command path."""
+    runner_payloads: list[dict] = []
+    terminal_payloads: list[dict] = []
+
+    @activity.defn(name="oauth_session.start_auth_runner")
+    async def record_start_auth_runner(request: dict) -> dict:
+        runner_payloads.append(request)
+        return {
+            "container_name": "mocked_container",
+            "terminal_session_id": "ts_123",
+            "terminal_bridge_id": "br_123",
+            "session_transport": "moonmind_pty_ws",
+        }
+
+    @activity.defn(name="oauth_session.update_terminal_session")
+    async def record_update_terminal_session(request: dict) -> dict:
+        terminal_payloads.append(request)
+        return {}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                mock_ensure_volume,
+                record_start_auth_runner,
+                record_update_terminal_session,
+                mock_update_status,
+                mock_verify_cli_fingerprint,
+                mock_register_profile,
+                mock_stop_auth_runner,
+            ],
+        ), Worker(
+            env.client,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            workflows=[MoonMindOAuthSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOAuthSessionWorkflow.run,
+                {
+                    "session_id": "sess_legacy_transport",
+                    "runtime_id": "codex_cli",
+                    "volume_ref": "vol_123",
+                    "volume_mount_path": "/mnt/auth",
+                },
+                id="oauth-session:sess_legacy_transport",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+
+            await handle.signal(MoonMindOAuthSessionWorkflow.finalize)
+            result = await handle.result()
+
+    assert result["status"] == "succeeded"
+    assert runner_payloads == [
+        {
+            "session_id": "sess_legacy_transport",
+            "runtime_id": "codex_cli",
+            "volume_ref": "vol_123",
+            "volume_mount_path": "/mnt/auth",
+            "session_ttl": 1800,
+        }
+    ]
+    assert terminal_payloads[0]["session_transport"] == "moonmind_pty_ws"
+
+
 async def test_oauth_session_workflow_rejects_codex_oauth_input_without_refs() -> None:
     """Codex OAuth sessions route missing refs through the failure activity path."""
     status_updates: list[str] = []

@@ -45,6 +45,7 @@ class TestVerifyVolumeCredentials:
             volume_ref="test_volume",
         )
         assert result["verified"] is True
+        assert result["status"] == "skipped"
         assert result["reason"] == "no_credential_paths_defined"
 
     @pytest.mark.asyncio
