@@ -113,7 +113,7 @@ async def test_terminal_bridge_streams_output_without_persisting_raw_output() ->
     pty = InMemoryPtyAdapter(
         output_chunks=[
             b"Paste code from browser\r\n",
-            b"token=sk-test-secret should not be metadata\r\n",
+            b"credential material should not be metadata\r\n",
         ]
     )
     sent: list[bytes] = []
@@ -123,7 +123,7 @@ async def test_terminal_bridge_streams_output_without_persisting_raw_output() ->
 
     assert sent == [
         b"Paste code from browser\r\n",
-        b"token=sk-test-secret should not be metadata\r\n",
+        b"credential material should not be metadata\r\n",
     ]
     assert bridge.output_event_count == 2
     assert list(bridge.output_events) == []
