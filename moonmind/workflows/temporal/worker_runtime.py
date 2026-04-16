@@ -235,6 +235,10 @@ _JIRA_STORY_OUTPUT_TOOLS = frozenset({"story.create_jira_issues"})
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
 
 
+def _requires_branch_publish_for_story_output(value: Any) -> bool:
+    return str(value or "").strip().lower() not in {"branch", "pr"}
+
+
 def _slug_for_story_breakdown(value: Any) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return slug[:48] or "story-breakdown"
@@ -699,8 +703,11 @@ def _build_runtime_planner():
                         selected_skill=effective_step_skill_name,
                     )
                 if step_tool_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
-                    if story_output_mode == "jira" and not step_node_inputs.get(
-                        "publishMode"
+                    if (
+                        story_output_mode == "jira"
+                        and _requires_branch_publish_for_story_output(
+                            step_node_inputs.get("publishMode")
+                        )
                     ):
                         step_node_inputs["publishMode"] = "branch"
                     step_node_inputs["instructions"] = (
@@ -737,8 +744,11 @@ def _build_runtime_planner():
             for idx in range(effective_step_count):
                 expanded_inputs = dict(node_inputs)
                 if selected_skill_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
-                    if story_output_mode == "jira" and not expanded_inputs.get(
-                        "publishMode"
+                    if (
+                        story_output_mode == "jira"
+                        and _requires_branch_publish_for_story_output(
+                            expanded_inputs.get("publishMode")
+                        )
                     ):
                         expanded_inputs["publishMode"] = "branch"
                     expanded_inputs["instructions"] = (
@@ -775,7 +785,12 @@ def _build_runtime_planner():
         else:
             node_id = str(task_payload.get("id") or "node-1").strip() or "node-1"
             if selected_skill_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
-                if story_output_mode == "jira" and not node_inputs.get("publishMode"):
+                if (
+                    story_output_mode == "jira"
+                    and _requires_branch_publish_for_story_output(
+                        node_inputs.get("publishMode")
+                    )
+                ):
                     node_inputs["publishMode"] = "branch"
                 node_inputs["instructions"] = _append_story_breakdown_instructions(
                     str(node_inputs.get("instructions") or ""),
@@ -839,8 +854,11 @@ def _build_runtime_planner():
                 and not _jira_agent_skill_selected(publish_selected_skill)
             ):
                 publish_inputs = publish_node["inputs"]
-                if story_output_mode == "jira" and not publish_inputs.get(
-                    "publishMode"
+                if (
+                    story_output_mode == "jira"
+                    and _requires_branch_publish_for_story_output(
+                        publish_inputs.get("publishMode")
+                    )
                 ):
                     publish_inputs["publishMode"] = "branch"
                 commit_suffix = (

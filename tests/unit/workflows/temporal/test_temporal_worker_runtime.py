@@ -357,6 +357,58 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     )
 
 
+def test_runtime_planner_uses_branch_handoff_for_jira_output_when_task_publish_none():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "title": "Jira Breakdown",
+                "instructions": "Break down docs/Design.md into Jira stories.",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "id": "breakdown",
+                        "tool": {"type": "skill", "name": "moonspec-breakdown"},
+                        "instructions": "Extract MoonSpec stories.",
+                    },
+                    {
+                        "id": "jira",
+                        "tool": {"type": "skill", "name": "story.create_jira_issues"},
+                        "instructions": "Create Jira issues from the generated breakdown.",
+                        "storyOutput": {
+                            "mode": "jira",
+                            "jira": {
+                                "projectKey": "MM",
+                                "issueTypeName": "Story",
+                                "dependencyMode": "linear_blocker_chain",
+                            },
+                        },
+                    },
+                ],
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    breakdown = plan["nodes"][0]
+    jira = plan["nodes"][1]
+
+    assert breakdown["inputs"]["storyOutput"]["mode"] == "jira"
+    assert breakdown["inputs"]["publishMode"] == "branch"
+    assert breakdown["inputs"]["targetBranch"].startswith("jira-breakdown-")
+    assert "commit your work" in breakdown["inputs"]["instructions"]
+    assert jira["inputs"]["publishMode"] == "none"
+    assert jira["inputs"]["storyOutput"]["mode"] == "jira"
+    assert jira["inputs"]["targetBranch"] == breakdown["inputs"]["targetBranch"]
+
+
 def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

@@ -64,6 +64,7 @@ export type TemporalSubmissionDraft = {
     skillRequiredCapabilities: string[];
     templateStepId: string;
     templateInstructions: string;
+    storyOutput?: Record<string, unknown>;
   }>;
   appliedTemplates: Array<{
     slug: string;
@@ -259,6 +260,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     step.template_step_id,
     id.startsWith('tpl:') ? id : '',
   );
+  const storyOutput = firstObjectValue(step.storyOutput, step.story_output);
   const result = {
     id,
     title: stringValue(step.title),
@@ -275,6 +277,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
       step.template_instructions,
       templateStepId ? instructions : '',
     ),
+    ...(Object.keys(storyOutput).length > 0 ? { storyOutput } : {}),
   };
 
   const hasContent =
@@ -285,7 +288,8 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     Object.keys(result.skillArgs).length > 0 ||
     result.skillRequiredCapabilities.length > 0 ||
     result.templateStepId ||
-    result.templateInstructions;
+    result.templateInstructions ||
+    Object.keys(storyOutput).length > 0;
   return hasContent ? result : null;
 }
 
