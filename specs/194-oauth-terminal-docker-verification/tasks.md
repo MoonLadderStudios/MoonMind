@@ -82,7 +82,7 @@
 - [ ] T015 Apply the smallest runtime or test harness fix needed for a Docker-backed managed Codex launch evidence gap in `moonmind/workflows/temporal/runtime/managed_session_controller.py`, `moonmind/workflows/temporal/runtime/codex_session_runtime.py`, or integration tests (FR-002 through FR-005)
 - [ ] T016 Apply the smallest runtime or test harness fix needed for a Docker-backed OAuth terminal runner/PTY bridge evidence gap in `moonmind/workflows/temporal/activities/oauth_session_activities.py`, `moonmind/workflows/temporal/runtime/terminal_bridge.py`, or integration tests (FR-006)
 - [ ] T017 Rerun focused unit and integration checks after any fix until the story evidence passes or a precise blocker remains (SC-001 through SC-003)
-- [ ] T018 Update `specs/175-launch-codex-auth-materialization/verification.md`, `specs/180-codex-volume-targeting/verification.md`, and `specs/183-oauth-terminal-flow/verification.md` only with passing Docker-backed evidence or the exact remaining blocker, preserving MM-363 traceability (FR-007, FR-008, FR-009, SC-004, SC-005)
+- [X] T018 Update `specs/175-launch-codex-auth-materialization/verification.md`, `specs/180-codex-volume-targeting/verification.md`, and `specs/183-oauth-terminal-flow/verification.md` only with passing Docker-backed evidence or the exact remaining blocker, preserving MM-363 traceability (FR-007, FR-008, FR-009, SC-004, SC-005)
 
 **Checkpoint**: The MM-363 story is complete only when Docker-backed evidence passes and affected verification reports are updated accordingly. In this managed-agent runtime, implementation is blocked by missing Docker socket access.
 
@@ -108,7 +108,7 @@
 
 ### Within The Story
 
-- T010 must run before report closure tasks T018.
+- T010 must run before report closure tasks T018 when Docker is available; T012 is the prerequisite for blocker-only report updates when Docker is unavailable.
 - T007-T009 are needed only when Docker-backed evidence identifies a unit-testable gap.
 - T015-T016 are needed only when integration evidence identifies product or harness gaps.
 - T018 must not change prior report verdicts without passing Docker-backed evidence.
