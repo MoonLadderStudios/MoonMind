@@ -175,6 +175,8 @@ Key diagnostics:
 - No new persistent storage; deterministic outputs carry issue mappings and link results (177-jira-chain-blockers)
 - Python 3.12 + Temporal Python SDK, Pydantic v2, existing MoonMind workflow/activity catalog, existing GitHub/Jira trusted integration surfaces, pr-resolver skill (179-merge-gate)
 - Existing Temporal workflow history, Search Attributes, Memo, and existing execution/projection records; no new persistent database tables planned (179-merge-gate)
+- Python 3.12 + Pydantic v2, existing MoonMind schema validation helpers (185-claude-policy-envelope)
+- No new persistent storage; this story defines compact runtime contracts and deterministic outputs that can later be persisted by the managed-session store (185-claude-policy-envelope)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

@@ -128,6 +128,163 @@ ClaudeSurfaceConnectionState = Literal[
     "detached",
 ]
 ClaudeSessionCreatedBy = Literal["user", "schedule", "channel", "sdk", "team_lead"]
+ClaudeProviderMode = Literal[
+    "anthropic_api",
+    "bedrock",
+    "vertex",
+    "foundry",
+    "custom_gateway",
+]
+ClaudeManagedSourceKind = Literal["none", "server_managed", "endpoint_managed"]
+ClaudePolicySourceKind = Literal[
+    "server_managed",
+    "endpoint_managed",
+    "local_project",
+    "shared_project",
+    "user",
+    "cli",
+]
+ClaudePolicyFetchState = Literal[
+    "not_applicable",
+    "cache_hit",
+    "fetched",
+    "fetch_failed",
+    "fail_closed",
+]
+ClaudePolicyTrustLevel = Literal[
+    "endpoint_enforced",
+    "server_managed_best_effort",
+    "unmanaged",
+]
+ClaudePermissionMode = Literal[
+    "default",
+    "acceptEdits",
+    "plan",
+    "auto",
+    "dontAsk",
+    "bypassPermissions",
+]
+ClaudePolicyHandshakeState = Literal[
+    "ready",
+    "security_dialog_required",
+    "security_dialog_accepted",
+    "security_dialog_rejected",
+    "fail_closed",
+    "blocked",
+]
+ClaudePolicyEventType = Literal[
+    "policy.fetch.started",
+    "policy.fetch.succeeded",
+    "policy.fetch.failed",
+    "policy.dialog.required",
+    "policy.dialog.accepted",
+    "policy.dialog.rejected",
+    "policy.compiled",
+    "policy.version.changed",
+]
+ClaudeDecisionStage = Literal[
+    "session_state_guard",
+    "pretool_hooks",
+    "permission_rules",
+    "protected_path_guard",
+    "permission_mode_baseline",
+    "sandbox_substitution",
+    "auto_mode_classifier",
+    "interactive_prompt_or_headless_resolution",
+    "runtime_execution",
+    "posttool_hooks",
+    "checkpoint_capture",
+]
+ClaudeDecisionProposalKind = Literal[
+    "tool",
+    "file",
+    "network",
+    "mcp",
+    "hook",
+    "classifier",
+    "prompt",
+    "runtime",
+    "checkpoint",
+]
+ClaudeDecisionOutcome = Literal[
+    "proposed",
+    "mutated",
+    "allowed",
+    "asked",
+    "denied",
+    "deferred",
+    "canceled",
+    "resolved",
+    "failed",
+    "executed",
+]
+ClaudeDecisionProvenanceSource = Literal[
+    "session_state",
+    "policy",
+    "hook",
+    "protected_path",
+    "permission_mode",
+    "sandbox",
+    "classifier",
+    "user",
+    "headless_policy",
+    "runtime",
+    "checkpoint",
+]
+ClaudeDecisionEventName = Literal[
+    "decision.proposed",
+    "decision.mutated",
+    "decision.allowed",
+    "decision.asked",
+    "decision.denied",
+    "decision.deferred",
+    "decision.canceled",
+    "decision.resolved",
+]
+ClaudeHookSourceScope = Literal["managed", "user", "project", "plugin", "sdk"]
+ClaudeHookOutcome = Literal[
+    "allow",
+    "deny",
+    "ask",
+    "mutate",
+    "error",
+    "noop",
+    "defer",
+]
+ClaudeHookWorkEventName = Literal[
+    "work.hook.started",
+    "work.hook.completed",
+    "work.hook.blocked",
+]
+
+CLAUDE_DECISION_STAGE_ORDER: tuple[ClaudeDecisionStage, ...] = (
+    "session_state_guard",
+    "pretool_hooks",
+    "permission_rules",
+    "protected_path_guard",
+    "permission_mode_baseline",
+    "sandbox_substitution",
+    "auto_mode_classifier",
+    "interactive_prompt_or_headless_resolution",
+    "runtime_execution",
+    "posttool_hooks",
+    "checkpoint_capture",
+)
+CLAUDE_DECISION_EVENT_NAMES: tuple[ClaudeDecisionEventName, ...] = (
+    "decision.proposed",
+    "decision.mutated",
+    "decision.allowed",
+    "decision.asked",
+    "decision.denied",
+    "decision.deferred",
+    "decision.canceled",
+    "decision.resolved",
+)
+CLAUDE_HOOK_WORK_EVENT_NAMES: tuple[ClaudeHookWorkEventName, ...] = (
+    "work.hook.started",
+    "work.hook.completed",
+    "work.hook.blocked",
+)
 
 CODEX_MANAGED_SESSION_CONTROL_ACTIONS: tuple[ManagedSessionControlAction, ...] = (
     "start_session",
@@ -1038,6 +1195,7 @@ class ClaudeManagedWorkItem(BaseModel):
     session_id: NonBlankStr = Field(..., alias="sessionId")
     kind: ClaudeWorkItemKind = Field(..., alias="kind")
     status: ClaudeWorkItemStatus = Field(..., alias="status")
+    event_name: ClaudeHookWorkEventName | None = Field(None, alias="eventName")
     payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
     started_at: datetime = Field(..., alias="startedAt")
     ended_at: datetime | None = Field(None, alias="endedAt")
@@ -1048,21 +1206,810 @@ class ClaudeManagedWorkItem(BaseModel):
         return validate_compact_temporal_mapping(value, field_name="payload")
 
     @model_validator(mode="after")
-    def _validate_datetimes(self) -> "ClaudeManagedWorkItem":
+    def _validate_invariants(self) -> "ClaudeManagedWorkItem":
         if self.started_at.tzinfo is None:
             self.started_at = self.started_at.replace(tzinfo=UTC)
         if self.ended_at is not None and self.ended_at.tzinfo is None:
             self.ended_at = self.ended_at.replace(tzinfo=UTC)
+        if self.event_name is not None and self.kind != "hook_call":
+            raise ValueError("Hook event names require hook_call work items")
         return self
+
+
+def _decision_event_for_outcome(
+    outcome: ClaudeDecisionOutcome,
+) -> ClaudeDecisionEventName:
+    if outcome == "allowed":
+        return "decision.allowed"
+    if outcome == "asked":
+        return "decision.asked"
+    if outcome == "denied":
+        return "decision.denied"
+    if outcome == "deferred":
+        return "decision.deferred"
+    if outcome == "canceled":
+        return "decision.canceled"
+    if outcome == "mutated":
+        return "decision.mutated"
+    if outcome == "proposed":
+        return "decision.proposed"
+    return "decision.resolved"
+
+
+class ClaudeDecisionPoint(BaseModel):
+    """Normalized decision-stage record for Claude managed sessions."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    decision_id: NonBlankStr = Field(..., alias="decisionId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    turn_id: NonBlankStr = Field(..., alias="turnId")
+    work_item_id: NonBlankStr | None = Field(None, alias="workItemId")
+    proposal_kind: ClaudeDecisionProposalKind = Field(..., alias="proposalKind")
+    origin_stage: ClaudeDecisionStage = Field(..., alias="originStage")
+    outcome: ClaudeDecisionOutcome = Field(..., alias="outcome")
+    provenance_source: ClaudeDecisionProvenanceSource = Field(
+        ..., alias="provenanceSource"
+    )
+    event_name: ClaudeDecisionEventName = Field(..., alias="eventName")
+    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_invariants(self) -> "ClaudeDecisionPoint":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if (
+            self.origin_stage == "protected_path_guard"
+            and self.outcome == "allowed"
+        ):
+            raise ValueError("Protected path decisions cannot be allowed")
+        if (
+            self.origin_stage == "protected_path_guard"
+            and self.provenance_source != "protected_path"
+        ):
+            raise ValueError(
+                "Protected path decisions must use protected_path provenance"
+            )
+        if self.provenance_source == "protected_path" and (
+            self.origin_stage != "protected_path_guard"
+            or self.outcome not in {"asked", "denied", "deferred"}
+        ):
+            raise ValueError(
+                "Protected path decisions must ask, deny, or defer at protected_path_guard"
+            )
+        if self.provenance_source == "classifier" and (
+            self.origin_stage != "auto_mode_classifier"
+        ):
+            raise ValueError(
+                "Classifier decisions must originate from auto_mode_classifier"
+            )
+        if self.provenance_source == "headless_policy" and (
+            self.origin_stage != "interactive_prompt_or_headless_resolution"
+            or self.outcome not in {"denied", "deferred"}
+        ):
+            raise ValueError("Headless decisions must deny or defer")
+        return self
+
+    @classmethod
+    def protected_path(
+        cls,
+        *,
+        decision_id: str,
+        session_id: str,
+        turn_id: str,
+        proposal_kind: ClaudeDecisionProposalKind,
+        outcome: Literal["asked", "denied", "deferred"],
+        created_at: datetime,
+        work_item_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ClaudeDecisionPoint":
+        if outcome == "allowed":
+            raise ValueError("Protected path decisions cannot be allowed")
+        return cls(
+            decisionId=decision_id,
+            sessionId=session_id,
+            turnId=turn_id,
+            workItemId=work_item_id,
+            proposalKind=proposal_kind,
+            originStage="protected_path_guard",
+            outcome=outcome,
+            provenanceSource="protected_path",
+            eventName=_decision_event_for_outcome(outcome),
+            metadata=metadata or {},
+            createdAt=created_at,
+        )
+
+    @classmethod
+    def classifier(
+        cls,
+        *,
+        decision_id: str,
+        session_id: str,
+        turn_id: str,
+        proposal_kind: ClaudeDecisionProposalKind,
+        outcome: ClaudeDecisionOutcome,
+        created_at: datetime,
+        work_item_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ClaudeDecisionPoint":
+        return cls(
+            decisionId=decision_id,
+            sessionId=session_id,
+            turnId=turn_id,
+            workItemId=work_item_id,
+            proposalKind=proposal_kind,
+            originStage="auto_mode_classifier",
+            outcome=outcome,
+            provenanceSource="classifier",
+            eventName=_decision_event_for_outcome(outcome),
+            metadata=metadata or {},
+            createdAt=created_at,
+        )
+
+    @classmethod
+    def headless_resolution(
+        cls,
+        *,
+        decision_id: str,
+        session_id: str,
+        turn_id: str,
+        proposal_kind: ClaudeDecisionProposalKind,
+        outcome: Literal["denied", "deferred"],
+        created_at: datetime,
+        work_item_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ClaudeDecisionPoint":
+        if outcome not in {"denied", "deferred"}:
+            raise ValueError("Headless decisions must deny or defer")
+        return cls(
+            decisionId=decision_id,
+            sessionId=session_id,
+            turnId=turn_id,
+            workItemId=work_item_id,
+            proposalKind=proposal_kind,
+            originStage="interactive_prompt_or_headless_resolution",
+            outcome=outcome,
+            provenanceSource="headless_policy",
+            eventName=_decision_event_for_outcome(outcome),
+            metadata=metadata or {},
+            createdAt=created_at,
+        )
+
+    @classmethod
+    def hook_tightened(
+        cls,
+        *,
+        decision_id: str,
+        session_id: str,
+        turn_id: str,
+        proposal_kind: ClaudeDecisionProposalKind,
+        origin_stage: Literal["pretool_hooks", "posttool_hooks"],
+        outcome: Literal["asked", "denied", "deferred", "mutated"],
+        created_at: datetime,
+        work_item_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ClaudeDecisionPoint":
+        if origin_stage not in {"pretool_hooks", "posttool_hooks"}:
+            raise ValueError(
+                "Hook decisions must originate from pretool_hooks or posttool_hooks"
+            )
+        next_metadata = dict(metadata or {})
+        next_metadata["hookTightened"] = True
+        return cls(
+            decisionId=decision_id,
+            sessionId=session_id,
+            turnId=turn_id,
+            workItemId=work_item_id,
+            proposalKind=proposal_kind,
+            originStage=origin_stage,
+            outcome=outcome,
+            provenanceSource="hook",
+            eventName=_decision_event_for_outcome(outcome),
+            metadata=next_metadata,
+            createdAt=created_at,
+        )
+
+
+class ClaudeHookAudit(BaseModel):
+    """Normalized Claude hook execution audit record."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    audit_id: NonBlankStr = Field(..., alias="auditId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    turn_id: NonBlankStr = Field(..., alias="turnId")
+    decision_id: NonBlankStr | None = Field(None, alias="decisionId")
+    hook_name: NonBlankStr = Field(..., alias="hookName")
+    source_scope: ClaudeHookSourceScope = Field(..., alias="sourceScope")
+    event_type: NonBlankStr = Field(..., alias="eventType")
+    matcher: NonBlankStr = Field(..., alias="matcher")
+    outcome: ClaudeHookOutcome = Field(..., alias="outcome")
+    audit_data: dict[str, Any] = Field(default_factory=dict, alias="auditData")
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @field_validator("audit_data", mode="after")
+    @classmethod
+    def _validate_audit_data(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="auditData")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeHookAudit":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudePolicyPermissions(BaseModel):
+    """Compiled Claude permission controls."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    mode: ClaudePermissionMode = "default"
+    allow: tuple[str, ...] = ()
+    ask: tuple[str, ...] = ()
+    deny: tuple[str, ...] = ()
+    protected_paths: tuple[str, ...] = Field(
+        default=(), alias="protectedPaths"
+    )
+    auto_mode_enabled: bool = Field(False, alias="autoModeEnabled")
+    bypass_disabled: bool = Field(False, alias="bypassDisabled")
+    auto_disabled: bool = Field(False, alias="autoDisabled")
+
+
+class ClaudePolicySandbox(BaseModel):
+    """Compiled Claude sandbox controls."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    enabled: bool = False
+    filesystem_scope: dict[str, Any] = Field(
+        default_factory=dict, alias="filesystemScope"
+    )
+    network_scope: dict[str, Any] = Field(
+        default_factory=dict, alias="networkScope"
+    )
+
+    @field_validator("filesystem_scope", "network_scope", mode="after")
+    @classmethod
+    def _validate_scope(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="scope")
+
+
+class ClaudePolicyHooks(BaseModel):
+    """Compiled Claude hook controls."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    allow_managed_only: bool = Field(False, alias="allowManagedOnly")
+    registry_hash: str | None = Field(None, alias="registryHash")
+
+
+class ClaudePolicyMcp(BaseModel):
+    """Compiled Claude MCP controls."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    allowed_servers: tuple[str, ...] = Field(
+        default=(), alias="allowedServers"
+    )
+    denied_servers: tuple[str, ...] = Field(default=(), alias="deniedServers")
+    allow_managed_only: bool = Field(False, alias="allowManagedOnly")
+
+
+class ClaudePolicyMemory(BaseModel):
+    """Compiled Claude memory controls."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    include_auto_memory: bool = Field(True, alias="includeAutoMemory")
+    managed_claude_md_enabled: bool = Field(
+        False, alias="managedClaudeMdEnabled"
+    )
+    excludes: tuple[str, ...] = ()
+
+
+class ClaudePolicyBootstrapTemplate(BaseModel):
+    """Claude BootstrapPreferences represented as bootstrap templates only."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["bootstrap_template"] = "bootstrap_template"
+    name: NonBlankStr
+    value: Any
+
+
+class ClaudePolicySource(BaseModel):
+    """Candidate policy source for Claude managed policy resolution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    source_kind: ClaudePolicySourceKind = Field(..., alias="sourceKind")
+    settings: dict[str, Any] = Field(default_factory=dict)
+    fetch_state: ClaudePolicyFetchState = Field("fetched", alias="fetchState")
+    supported: bool = True
+    risky_controls: tuple[str, ...] = Field(
+        default=(), alias="riskyControls"
+    )
+    version: str | None = None
+
+    @field_validator("settings", mode="after")
+    @classmethod
+    def _validate_settings(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="settings")
+
+
+class ClaudePolicyEnvelope(BaseModel):
+    """Versioned effective policy attached to a Claude managed session."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    policy_envelope_id: NonBlankStr = Field(..., alias="policyEnvelopeId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    provider_mode: ClaudeProviderMode = Field(..., alias="providerMode")
+    managed_source_kind: ClaudeManagedSourceKind = Field(
+        ..., alias="managedSourceKind"
+    )
+    policy_fetch_state: ClaudePolicyFetchState = Field(
+        ..., alias="policyFetchState"
+    )
+    managed_source_version: str | None = Field(
+        None, alias="managedSourceVersion"
+    )
+    policy_trust_level: ClaudePolicyTrustLevel = Field(
+        ..., alias="policyTrustLevel"
+    )
+    permissions: ClaudePolicyPermissions = Field(
+        default_factory=ClaudePolicyPermissions
+    )
+    sandbox: ClaudePolicySandbox = Field(default_factory=ClaudePolicySandbox)
+    hooks: ClaudePolicyHooks = Field(default_factory=ClaudePolicyHooks)
+    mcp: ClaudePolicyMcp = Field(default_factory=ClaudePolicyMcp)
+    memory: ClaudePolicyMemory = Field(default_factory=ClaudePolicyMemory)
+    bootstrap_templates: tuple[ClaudePolicyBootstrapTemplate, ...] = Field(
+        default=(), alias="bootstrapTemplates"
+    )
+    security_dialog_required: bool = Field(
+        False, alias="securityDialogRequired"
+    )
+    version: int = Field(..., ge=1)
+    effective_settings: dict[str, Any] = Field(
+        default_factory=dict, alias="effectiveSettings"
+    )
+    observability_sources: tuple[ClaudePolicySourceKind, ...] = Field(
+        default=(), alias="observabilitySources"
+    )
+    admin_visibility: dict[str, Any] = Field(
+        default_factory=dict, alias="adminVisibility"
+    )
+    user_visibility: dict[str, Any] = Field(
+        default_factory=dict, alias="userVisibility"
+    )
+
+    @field_validator(
+        "effective_settings",
+        "admin_visibility",
+        "user_visibility",
+        mode="after",
+    )
+    @classmethod
+    def _validate_mapping(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="policy")
+
+
+class ClaudePolicyHandshake(BaseModel):
+    """Startup readiness after Claude policy resolution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    policy_envelope_id: NonBlankStr | None = Field(
+        None, alias="policyEnvelopeId"
+    )
+    state: ClaudePolicyHandshakeState
+    reason: str | None = None
+    interactive: bool
+
+
+class ClaudePolicyEvent(BaseModel):
+    """Append-only Claude policy lifecycle event."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    event_id: NonBlankStr = Field(..., alias="eventId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    policy_envelope_id: NonBlankStr | None = Field(
+        None, alias="policyEnvelopeId"
+    )
+    event_type: ClaudePolicyEventType = Field(..., alias="eventType")
+    occurred_at: datetime = Field(..., alias="occurredAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudePolicyEvent":
+        if self.occurred_at.tzinfo is None:
+            self.occurred_at = self.occurred_at.replace(tzinfo=UTC)
+        return self
+
+
+_MANAGED_SOURCE_ORDER: tuple[ClaudePolicySourceKind, ...] = (
+    "server_managed",
+    "endpoint_managed",
+)
+_LOWER_SCOPE_SOURCE_KINDS: frozenset[ClaudePolicySourceKind] = frozenset(
+    {"local_project", "shared_project", "user", "cli"}
+)
+
+
+def _selected_managed_source(
+    sources: tuple[ClaudePolicySource, ...],
+) -> ClaudePolicySource | None:
+    for source_kind in _MANAGED_SOURCE_ORDER:
+        for source in sources:
+            if (
+                source.source_kind == source_kind
+                and source.supported
+                and bool(source.settings)
+            ):
+                return source
+    return None
+
+
+def _fail_closed_managed_source(
+    sources: tuple[ClaudePolicySource, ...],
+) -> ClaudePolicySource | None:
+    server_source = next(
+        (
+            source
+            for source in sources
+            if source.source_kind == "server_managed" and source.supported
+        ),
+        None,
+    )
+    if server_source is not None:
+        if server_source.fetch_state == "fail_closed":
+            return server_source
+        if server_source.settings:
+            return None
+
+    endpoint_source = next(
+        (
+            source
+            for source in sources
+            if source.source_kind == "endpoint_managed" and source.supported
+        ),
+        None,
+    )
+    if (
+        endpoint_source is not None
+        and endpoint_source.fetch_state == "fail_closed"
+    ):
+        return endpoint_source
+    return None
+
+
+def _bootstrap_templates(
+    settings: dict[str, Any],
+) -> tuple[ClaudePolicyBootstrapTemplate, ...]:
+    raw_preferences = settings.get("bootstrapPreferences") or ()
+    templates: list[ClaudePolicyBootstrapTemplate] = []
+    if isinstance(raw_preferences, list | tuple):
+        for index, item in enumerate(raw_preferences):
+            if isinstance(item, dict):
+                name = item.get("name") or f"bootstrap-{index + 1}"
+                value = item.get("value")
+            else:
+                name = f"bootstrap-{index + 1}"
+                value = item
+            templates.append(
+                ClaudePolicyBootstrapTemplate(name=str(name), value=value)
+            )
+    return tuple(templates)
+
+
+def _effective_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in settings.items()
+        if key not in {"bootstrapPreferences", "managedDefaults"}
+    }
+
+
+def _policy_permissions(settings: dict[str, Any]) -> ClaudePolicyPermissions:
+    permissions = settings.get("permissions")
+    if isinstance(permissions, dict):
+        return ClaudePolicyPermissions.model_validate(permissions)
+    return ClaudePolicyPermissions()
+
+
+def _policy_sandbox(settings: dict[str, Any]) -> ClaudePolicySandbox:
+    sandbox = settings.get("sandbox")
+    if isinstance(sandbox, dict):
+        return ClaudePolicySandbox.model_validate(sandbox)
+    return ClaudePolicySandbox()
+
+
+def _policy_hooks(settings: dict[str, Any]) -> ClaudePolicyHooks:
+    hooks = settings.get("hooks")
+    if isinstance(hooks, dict):
+        return ClaudePolicyHooks.model_validate(hooks)
+    return ClaudePolicyHooks()
+
+
+def _policy_mcp(settings: dict[str, Any]) -> ClaudePolicyMcp:
+    mcp = settings.get("mcp")
+    if isinstance(mcp, dict):
+        return ClaudePolicyMcp.model_validate(mcp)
+    return ClaudePolicyMcp()
+
+
+def _policy_memory(settings: dict[str, Any]) -> ClaudePolicyMemory:
+    memory = settings.get("memory")
+    if isinstance(memory, dict):
+        return ClaudePolicyMemory.model_validate(memory)
+    return ClaudePolicyMemory()
+
+
+def _policy_trust_level(
+    managed_source_kind: ClaudeManagedSourceKind,
+) -> ClaudePolicyTrustLevel:
+    if managed_source_kind == "endpoint_managed":
+        return "endpoint_enforced"
+    if managed_source_kind == "server_managed":
+        return "server_managed_best_effort"
+    return "unmanaged"
+
+
+def _policy_event(
+    *,
+    policy_envelope_id: str | None,
+    session_id: str,
+    event_type: ClaudePolicyEventType,
+    occurred_at: datetime,
+    sequence: int,
+    metadata: dict[str, Any] | None = None,
+) -> ClaudePolicyEvent:
+    stable_id_part = policy_envelope_id or session_id
+    return ClaudePolicyEvent(
+        eventId=f"{stable_id_part}:{sequence}:{event_type}",
+        sessionId=session_id,
+        policyEnvelopeId=policy_envelope_id,
+        eventType=event_type,
+        occurredAt=occurred_at,
+        metadata=metadata or {},
+    )
+
+
+def resolve_claude_policy_envelope(
+    *,
+    session_id: str,
+    policy_envelope_id: str,
+    provider_mode: ClaudeProviderMode,
+    sources: tuple[ClaudePolicySource, ...],
+    version: int = 1,
+    interactive: bool = False,
+    fail_closed_on_refresh_failure: bool = False,
+    occurred_at: datetime | None = None,
+) -> tuple[
+    ClaudePolicyEnvelope | None,
+    ClaudePolicyHandshake,
+    tuple[ClaudePolicyEvent, ...],
+]:
+    """Resolve compact Claude policy fixture sources into an effective envelope."""
+
+    event_time = occurred_at or datetime.now(UTC)
+    events: list[ClaudePolicyEvent] = [
+        _policy_event(
+            policy_envelope_id=policy_envelope_id,
+            session_id=session_id,
+            event_type="policy.fetch.started",
+            occurred_at=event_time,
+            sequence=1,
+        )
+    ]
+
+    fail_closed_source = (
+        _fail_closed_managed_source(sources)
+        if fail_closed_on_refresh_failure
+        else None
+    )
+    if fail_closed_source is not None:
+        events.append(
+            _policy_event(
+                policy_envelope_id=None,
+                session_id=session_id,
+                event_type="policy.fetch.failed",
+                occurred_at=event_time,
+                sequence=2,
+                metadata={
+                    "fetchState": "fail_closed",
+                    "sourceKind": fail_closed_source.source_kind,
+                },
+            )
+        )
+        return (
+            None,
+            ClaudePolicyHandshake(
+                sessionId=session_id,
+                policyEnvelopeId=None,
+                state="fail_closed",
+                reason="Policy refresh failed in fail-closed mode.",
+                interactive=interactive,
+            ),
+            tuple(events),
+        )
+
+    selected_source = _selected_managed_source(sources)
+    managed_source_kind: ClaudeManagedSourceKind = (
+        selected_source.source_kind if selected_source is not None else "none"
+    )
+    settings = selected_source.settings if selected_source is not None else {}
+    fetch_state: ClaudePolicyFetchState = (
+        selected_source.fetch_state
+        if selected_source is not None
+        else "not_applicable"
+    )
+    source_version = selected_source.version if selected_source is not None else None
+    trust_level = _policy_trust_level(managed_source_kind)
+    risky_controls = selected_source.risky_controls if selected_source else ()
+    security_dialog_required = bool(risky_controls)
+    observability_sources = tuple(
+        source.source_kind
+        for source in sources
+        if source.source_kind in _LOWER_SCOPE_SOURCE_KINDS and source.settings
+    )
+
+    fetch_event_type: ClaudePolicyEventType = (
+        "policy.fetch.failed"
+        if fetch_state in {"fetch_failed", "fail_closed"}
+        else "policy.fetch.succeeded"
+    )
+    events.append(
+        _policy_event(
+            policy_envelope_id=policy_envelope_id,
+            session_id=session_id,
+            event_type=fetch_event_type,
+            occurred_at=event_time,
+            sequence=2,
+            metadata={"fetchState": fetch_state},
+        )
+    )
+
+    admin_visibility = {
+        "fetchState": fetch_state,
+        "managedSourceKind": managed_source_kind,
+        "policyTrustLevel": trust_level,
+        "observabilitySources": list(observability_sources),
+    }
+    user_visibility = {
+        "status": "managed" if managed_source_kind != "none" else "unmanaged"
+    }
+    envelope = ClaudePolicyEnvelope(
+        policyEnvelopeId=policy_envelope_id,
+        sessionId=session_id,
+        providerMode=provider_mode,
+        managedSourceKind=managed_source_kind,
+        policyFetchState=fetch_state,
+        managedSourceVersion=source_version,
+        policyTrustLevel=trust_level,
+        permissions=_policy_permissions(settings),
+        sandbox=_policy_sandbox(settings),
+        hooks=_policy_hooks(settings),
+        mcp=_policy_mcp(settings),
+        memory=_policy_memory(settings),
+        bootstrapTemplates=_bootstrap_templates(settings),
+        securityDialogRequired=security_dialog_required,
+        version=version,
+        effectiveSettings=_effective_settings(settings),
+        observabilitySources=observability_sources,
+        adminVisibility=admin_visibility,
+        userVisibility=user_visibility,
+    )
+
+    events.append(
+        _policy_event(
+            policy_envelope_id=policy_envelope_id,
+            session_id=session_id,
+            event_type="policy.compiled",
+            occurred_at=event_time,
+            sequence=3,
+        )
+    )
+    events.append(
+        _policy_event(
+            policy_envelope_id=policy_envelope_id,
+            session_id=session_id,
+            event_type="policy.version.changed",
+            occurred_at=event_time,
+            sequence=4,
+            metadata={"version": version},
+        )
+    )
+
+    if security_dialog_required:
+        handshake_state: ClaudePolicyHandshakeState = (
+            "security_dialog_required" if interactive else "blocked"
+        )
+        reason = (
+            "Risky managed controls require a security dialog."
+            if interactive
+            else "Risky managed controls require a security dialog in a non-interactive session."
+        )
+        events.append(
+            _policy_event(
+                policy_envelope_id=policy_envelope_id,
+                session_id=session_id,
+                event_type="policy.dialog.required",
+                occurred_at=event_time,
+                sequence=5,
+                metadata={"riskyControls": list(risky_controls)},
+            )
+        )
+    else:
+        handshake_state = "ready"
+        reason = None
+
+    return (
+        envelope,
+        ClaudePolicyHandshake(
+            sessionId=session_id,
+            policyEnvelopeId=policy_envelope_id,
+            state=handshake_state,
+            reason=reason,
+            interactive=interactive,
+        ),
+        tuple(events),
+    )
 
 
 __all__ = [
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
+    "CLAUDE_DECISION_EVENT_NAMES",
+    "CLAUDE_DECISION_STAGE_ORDER",
+    "CLAUDE_HOOK_WORK_EVENT_NAMES",
+    "ClaudeDecisionEventName",
+    "ClaudeDecisionOutcome",
+    "ClaudeDecisionPoint",
+    "ClaudeDecisionProposalKind",
+    "ClaudeDecisionProvenanceSource",
+    "ClaudeDecisionStage",
     "ClaudeExecutionOwner",
+    "ClaudeHookAudit",
+    "ClaudeHookOutcome",
+    "ClaudeHookSourceScope",
+    "ClaudeHookWorkEventName",
     "ClaudeManagedSession",
+    "ClaudeManagedSourceKind",
     "ClaudeManagedTurn",
     "ClaudeManagedWorkItem",
+    "ClaudePermissionMode",
+    "ClaudePolicyBootstrapTemplate",
+    "ClaudePolicyEnvelope",
+    "ClaudePolicyEvent",
+    "ClaudePolicyEventType",
+    "ClaudePolicyFetchState",
+    "ClaudePolicyHandshake",
+    "ClaudePolicyHandshakeState",
+    "ClaudePolicyHooks",
+    "ClaudePolicyMcp",
+    "ClaudePolicyMemory",
+    "ClaudePolicyPermissions",
+    "ClaudePolicySandbox",
+    "ClaudePolicySource",
+    "ClaudePolicySourceKind",
+    "ClaudePolicyTrustLevel",
     "ClaudeProjectionMode",
+    "ClaudeProviderMode",
     "ClaudeRuntimeFamily",
     "ClaudeSessionCreatedBy",
     "ClaudeSessionState",
@@ -1107,6 +2054,7 @@ __all__ = [
     "ManagedSessionRequestTrackingStatus",
     "ManagedSessionTurnStatus",
     "PublishCodexManagedSessionArtifactsRequest",
+    "resolve_claude_policy_envelope",
     "SendCodexManagedSessionTurnRequest",
     "SteerCodexManagedSessionTurnRequest",
     "TerminateCodexManagedSessionRequest",
