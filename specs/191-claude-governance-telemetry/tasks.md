@@ -10,6 +10,12 @@
 
 The original MM-349 Jira preset brief is preserved in `spec.md`. Tasks cover FR-001 through FR-029, acceptance scenarios 1-6, edge cases, SC-001 through SC-007, and DESIGN-REQ-019 through DESIGN-REQ-025, DESIGN-REQ-028, and DESIGN-REQ-029.
 
+Functional requirement coverage inventory:
+- FR-001, FR-002, FR-003, FR-004, FR-005: covered by T007, T011, T012, T013, T019, and T025.
+- FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014: covered by T005, T008, T011, T014, T019, and T025.
+- FR-015, FR-016, FR-017, FR-018, FR-019: covered by T009, T011, T015, T016, T019, T020, and T025.
+- FR-020, FR-021, FR-022, FR-023, FR-024, FR-025, FR-026, FR-027, FR-028, FR-029: covered by T006, T009, T010, T011, T016, T017, T019, T020, T022, and T025.
+
 ## Phase 1: Setup
 
 - [X] T001 Confirm active feature artifacts exist in `specs/191-claude-governance-telemetry/spec.md`, `specs/191-claude-governance-telemetry/plan.md`, `specs/191-claude-governance-telemetry/research.md`, `specs/191-claude-governance-telemetry/data-model.md`, `specs/191-claude-governance-telemetry/contracts/claude-governance-telemetry.md`, and `specs/191-claude-governance-telemetry/quickstart.md`
