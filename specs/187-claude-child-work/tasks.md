@@ -13,7 +13,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/schemas/test_claude_child_work.py`
 - Integration tests: `pytest tests/integration/schemas/test_claude_child_work_boundary.py -q`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -95,7 +95,7 @@
 - [X] T024 Run quickstart validation commands from specs/187-claude-child-work/quickstart.md and record results in specs/187-claude-child-work/tasks.md (SC-001 through SC-006)
 - [X] T025 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit verification or record exact blocker in specs/187-claude-child-work/tasks.md
 - [X] T026 Run `./tools/test_integration.sh` for hermetic integration CI when Docker is available or record exact Docker blocker in specs/187-claude-child-work/tasks.md
-- [X] T027 Run `/speckit.verify` against specs/187-claude-child-work/spec.md after implementation and tests pass
+- [X] T027 Run `/moonspec-verify` against specs/187-claude-child-work/spec.md after implementation and tests pass
 
 ---
 
@@ -113,7 +113,7 @@
 - Unit tests T010-T012 must be written and fail before T016-T020.
 - Integration test T014 must be written and fail before T016-T020.
 - Production code in T016-T020 must pass focused validation T021-T022 before full verification.
-- Final `/speckit.verify` task T027 runs after implementation and test evidence exists.
+- Final `/moonspec-verify` task T027 runs after implementation and test evidence exists.
 
 ### Parallel Opportunities
 
@@ -132,7 +132,7 @@
 4. Export the contract surface from both schema modules.
 5. Run focused unit and integration-style tests until green.
 6. Run full unit and hermetic integration verification where the environment allows.
-7. Run `/speckit.verify` and use its report as the final completion gate.
+7. Run `/moonspec-verify` and use its report as the final completion gate.
 
 ## Test Evidence
 
