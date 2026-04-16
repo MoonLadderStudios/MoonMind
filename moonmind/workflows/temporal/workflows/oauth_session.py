@@ -44,6 +44,7 @@ class OAuthSessionInput(TypedDict, total=False):
     volume_mount_path: str
     requested_by_user_id: str
     profile_settings: dict[str, Any]
+    session_transport: str
 
 
 class OAuthSessionOutput(TypedDict):
@@ -143,6 +144,12 @@ class MoonMindOAuthSessionWorkflow:
         _profile_id = input_payload.get("profile_id", "")  # noqa: F841 — used in Phase 2
         volume_ref = input_payload.get("volume_ref", "")
         volume_mount_path = input_payload.get("volume_mount_path", "")
+        raw_session_transport = input_payload.get("session_transport")
+        session_transport = (
+            "moonmind_pty_ws"
+            if raw_session_transport is None
+            else str(raw_session_transport).strip() or "none"
+        )
         session_ttl = _DEFAULT_SESSION_TTL_SECONDS
 
         if not self._session_id or not runtime_id:
@@ -187,56 +194,57 @@ class MoonMindOAuthSessionWorkflow:
                 failure_reason=f"Volume provisioning failed: {exc}",
             )
 
-        # Step 3: Launch auth runner (legacy browser OAuth — activity may fail)
-        try:
-            runner_result = await workflow.execute_activity(
-                "oauth_session.start_auth_runner",
-                {
-                    "session_id": self._session_id,
-                    "runtime_id": runtime_id,
-                    "volume_ref": volume_ref,
-                    "volume_mount_path": volume_mount_path,
-                    "session_ttl": session_ttl,
-                },
-                task_queue=ACTIVITY_TASK_QUEUE,
-                start_to_close_timeout=timedelta(seconds=120),
-                retry_policy=RetryPolicy(
-                    initial_interval=timedelta(seconds=3),
-                    maximum_attempts=2,
-                ),
-            )
-            self._container_name = runner_result.get("container_name", "")
-            terminal_session_id = runner_result.get("terminal_session_id", "")
-            terminal_bridge_id = runner_result.get("terminal_bridge_id", "")
-
-            # Store extracted terminal IDs in DB
-            await workflow.execute_activity(
-                "oauth_session.update_terminal_session",
-                {
-                    "session_id": self._session_id,
-                    "terminal_session_id": terminal_session_id,
-                    "terminal_bridge_id": terminal_bridge_id,
-                    "container_name": self._container_name,
-                    "session_transport": runner_result.get(
-                        "session_transport",
-                        "moonmind_pty_ws",
+        # Step 3: Launch auth runner only when an interactive transport is enabled.
+        if session_transport != "none":
+            try:
+                runner_result = await workflow.execute_activity(
+                    "oauth_session.start_auth_runner",
+                    {
+                        "session_id": self._session_id,
+                        "runtime_id": runtime_id,
+                        "volume_ref": volume_ref,
+                        "volume_mount_path": volume_mount_path,
+                        "session_ttl": session_ttl,
+                    },
+                    task_queue=ACTIVITY_TASK_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=120),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=3),
+                        maximum_attempts=2,
                     ),
-                    "expires_at": runner_result.get("expires_at"),
-                },
-                task_queue=ACTIVITY_TASK_QUEUE,
-                start_to_close_timeout=timedelta(seconds=15),
-                retry_policy=RetryPolicy(
-                    initial_interval=timedelta(seconds=1),
-                    maximum_attempts=3,
-                ),
-            )
-        except Exception as exc:
-            await self._mark_failed(f"Failed to start auth runner: {exc}")
-            return OAuthSessionOutput(
-                session_id=self._session_id,
-                status="failed",
-                failure_reason=f"Auth runner launch failed: {exc}",
-            )
+                )
+                self._container_name = runner_result.get("container_name", "")
+                terminal_session_id = runner_result.get("terminal_session_id", "")
+                terminal_bridge_id = runner_result.get("terminal_bridge_id", "")
+
+                # Store extracted terminal IDs in DB
+                await workflow.execute_activity(
+                    "oauth_session.update_terminal_session",
+                    {
+                        "session_id": self._session_id,
+                        "terminal_session_id": terminal_session_id,
+                        "terminal_bridge_id": terminal_bridge_id,
+                        "container_name": self._container_name,
+                        "session_transport": runner_result.get(
+                            "session_transport",
+                            session_transport,
+                        ),
+                        "expires_at": runner_result.get("expires_at"),
+                    },
+                    task_queue=ACTIVITY_TASK_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=15),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=1),
+                        maximum_attempts=3,
+                    ),
+                )
+            except Exception as exc:
+                await self._mark_failed(f"Failed to start auth runner: {exc}")
+                return OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="failed",
+                    failure_reason=f"Auth runner launch failed: {exc}",
+                )
 
         # Step 4: Transition to bridge_ready then awaiting_user
         await self._update_status("bridge_ready")
@@ -311,7 +319,10 @@ class MoonMindOAuthSessionWorkflow:
                 await self._update_status("registering_profile")
                 await workflow.execute_activity(
                     "oauth_session.register_profile",
-                    {"session_id": self._session_id},
+                    {
+                        "session_id": self._session_id,
+                        "verification": verify_result,
+                    },
                     task_queue=ACTIVITY_TASK_QUEUE,
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=RetryPolicy(

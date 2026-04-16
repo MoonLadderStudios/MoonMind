@@ -6,20 +6,43 @@
 **Input**:
 
 ```text
-Jira issue: MM-318 from MM board
-Summary: breakdown docs\ManagedAgents\OAuthTerminal.md
+Jira issue: MM-359 from MM project
+Summary: OAuth Session State and Verification Boundaries
 Issue type: Story
 Current Jira status: In Progress
 Jira project key: MM
 
-Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-318 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-359 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
 
-MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md
+MM-359: OAuth Session State and Verification Boundaries
 
-Selected generated story: STORY-005 OAuth Session State and Verification Boundaries
+MoonSpec Story ID: STORY-005
+Short Name: oauth-state-verify
+
+User Story
+As an operator, I can understand OAuth credential readiness through transport-neutral statuses and secret-free verification results at profile and launch boundaries.
+
+Acceptance Criteria
+- OAuth sessions progress through transport-neutral states including pending, starting, bridge_ready, awaiting_user, verifying, registering_profile, and terminal states.
+- session_transport = none is valid while PTY bridge is disabled and does not imply tmate semantics.
+- OAuth verification failure blocks profile registration and exposes a secret-free failure reason.
+- Managed-session launch verifies selected profile materialization before marking the session ready.
+- Persisted or returned verification output contains compact status/failure metadata only.
+
+Requirements
+- Use transport-neutral OAuth statuses.
+- Allow session_transport = none while the interactive bridge is disabled.
+- Verify durable auth volume credentials before Provider Profile registration.
+- Verify selected profile materialization at managed-session launch.
+- Keep verification outputs compact and secret-free.
+
+Independent Test
+Exercise OAuth session success, cancel, expire, and disabled-bridge paths with mocked volume verification and assert status transitions plus redacted verification outputs.
+
 Dependencies: STORY-001, STORY-002
-Breakdown JSON: docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json
 Source design: docs/ManagedAgents/OAuthTerminal.md
+Source Sections: 5.3 Session transport state; 6. Provider Profile Registration; 8. Verification; 9. Security Model; 11. Required Boundaries
+Coverage IDs: DESIGN-REQ-010, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-018, DESIGN-REQ-020
 ```
 
 ## User Story - OAuth Session State and Verification Boundaries
@@ -58,15 +81,15 @@ Exercise OAuth session success, cancel, expire, and disabled-bridge paths with m
 - **FR-003**: The system MUST verify durable auth volume credentials before Provider Profile registration.
 - **FR-004**: The system MUST verify selected profile materialization at managed-session launch.
 - **FR-005**: The system MUST keep verification outputs compact and secret-free.
-- **FR-006**: The spec artifacts MUST retain Jira issue key MM-318 and the original preset brief so final verification can compare against the originating Jira request.
+- **FR-006**: The spec artifacts MUST retain Jira issue key MM-359 and the original preset brief so final verification can compare against the originating Jira request.
 
 ## Source Design Requirements
 
-- **DESIGN-REQ-010**: Never place raw credential contents in workflow history, logs, artifacts, or UI responses. Source: `docs/ManagedAgents/OAuthTerminal.md` 4. Volume Targeting Rules; 8. Verification; 9. Security Model. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004.
-- **DESIGN-REQ-015**: Use transport-neutral OAuth statuses and allow session_transport = none while the interactive bridge is disabled. Source: `docs/ManagedAgents/OAuthTerminal.md` 5.3 Session transport state. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004.
-- **DESIGN-REQ-016**: Register or update Provider Profiles after OAuth verification, preserving Codex OAuth fields and slot policy. Source: `docs/ManagedAgents/OAuthTerminal.md` 6. Provider Profile Registration. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004.
-- **DESIGN-REQ-018**: Verify credentials at both the OAuth/profile boundary and the managed-session launch boundary without leaking credential contents. Source: `docs/ManagedAgents/OAuthTerminal.md` 8. Verification. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004.
-- **DESIGN-REQ-020**: Preserve ownership boundaries among OAuth terminal code, Provider Profile code, managed-session controller code, Codex session runtime code, and Docker workload orchestration. Source: `docs/ManagedAgents/OAuthTerminal.md` 11. Required Boundaries. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004.
+- **DESIGN-REQ-010**: Never place raw credential contents in workflow history, logs, artifacts, or UI responses. Source: `docs/ManagedAgents/OAuthTerminal.md` 4. Volume Targeting Rules; 8. Verification; 9. Security Model. Scope: in scope. Maps to FR-003, FR-004, FR-005.
+- **DESIGN-REQ-015**: Use transport-neutral OAuth statuses and allow session_transport = none while the interactive bridge is disabled. Source: `docs/ManagedAgents/OAuthTerminal.md` 5.3 Session transport state. Scope: in scope. Maps to FR-001, FR-002.
+- **DESIGN-REQ-016**: Register or update Provider Profiles after OAuth verification, preserving Codex OAuth fields and slot policy. Source: `docs/ManagedAgents/OAuthTerminal.md` 6. Provider Profile Registration. Scope: in scope. Maps to FR-003.
+- **DESIGN-REQ-018**: Verify credentials at both the OAuth/profile boundary and the managed-session launch boundary without leaking credential contents. Source: `docs/ManagedAgents/OAuthTerminal.md` 8. Verification. Scope: in scope. Maps to FR-003, FR-004, FR-005.
+- **DESIGN-REQ-020**: Preserve ownership boundaries among OAuth terminal code, Provider Profile code, managed-session controller code, Codex session runtime code, and Docker workload orchestration. Source: `docs/ManagedAgents/OAuthTerminal.md` 11. Required Boundaries. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004, FR-005.
 - **DESIGN-REQ-001**: OAuth credential enrollment and targeting. Scope: out of scope for this isolated story; covered by STORY-001, STORY-004.
 - **DESIGN-REQ-002**: Codex-focused managed-session scope. Scope: out of scope for this isolated story; covered by STORY-001.
 - **DESIGN-REQ-003**: Durable Codex auth volume. Scope: out of scope for this isolated story; covered by STORY-001.

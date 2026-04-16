@@ -44,6 +44,26 @@ PROVIDER_CREDENTIAL_PATHS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _verification_result(
+    *,
+    verified: bool,
+    runtime_id: str,
+    reason: str,
+    found_count: int,
+    missing_count: int,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """Build compact, secret-free verification metadata."""
+    return {
+        "verified": verified,
+        "status": status or ("verified" if verified else "failed"),
+        "runtime_id": runtime_id,
+        "reason": reason,
+        "credentials_found_count": found_count,
+        "credentials_missing_count": missing_count,
+    }
+
+
 async def verify_volume_credentials(
     runtime_id: str,
     volume_ref: str,
@@ -54,8 +74,9 @@ async def verify_volume_credentials(
     For MVP, this performs a ``docker run --rm`` with the volume mounted
     and checks for the existence of expected credential files.
 
-    Returns a dict with ``verified`` (bool), ``found`` (list of found
-    paths), and ``missing`` (list of missing paths).
+    Returns compact, secret-free metadata: ``verified`` (bool), ``status``,
+    ``reason``, and credential presence counts. It does not return credential
+    file paths or raw provider output.
 
     If Docker is unavailable or the volume doesn't exist, returns
     ``verified=False`` with appropriate diagnostics.
@@ -67,22 +88,23 @@ async def verify_volume_credentials(
             "No credential paths defined for runtime %s — skipping verification",
             runtime_id,
         )
-        return {
-            "verified": True,
-            "runtime_id": runtime_id,
-            "reason": "no_credential_paths_defined",
-            "found": [],
-            "missing": [],
-        }
+        return _verification_result(
+            verified=True,
+            runtime_id=runtime_id,
+            reason="no_credential_paths_defined",
+            found_count=0,
+            missing_count=0,
+            status="skipped",
+        )
 
     if not volume_ref:
-        return {
-            "verified": False,
-            "runtime_id": runtime_id,
-            "reason": "no_volume_ref",
-            "found": [],
-            "missing": list(credential_paths),
-        }
+        return _verification_result(
+            verified=False,
+            runtime_id=runtime_id,
+            reason="no_volume_ref",
+            found_count=0,
+            missing_count=len(credential_paths),
+        )
 
     mount_path = volume_mount_path or "/mnt/auth"
 
@@ -110,51 +132,51 @@ async def verify_volume_credentials(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(
+        stdout, _stderr = await asyncio.wait_for(
             process.communicate(), timeout=30
         )
     except FileNotFoundError:
         logger.warning("Docker not available for volume verification")
-        return {
-            "verified": False,
-            "runtime_id": runtime_id,
-            "reason": "docker_not_available",
-            "found": [],
-            "missing": list(credential_paths),
-        }
+        return _verification_result(
+            verified=False,
+            runtime_id=runtime_id,
+            reason="docker_not_available",
+            found_count=0,
+            missing_count=len(credential_paths),
+        )
     except asyncio.TimeoutError:
         logger.warning("Docker volume verification timed out")
-        return {
-            "verified": False,
-            "runtime_id": runtime_id,
-            "reason": "timeout",
-            "found": [],
-            "missing": list(credential_paths),
-        }
+        return _verification_result(
+            verified=False,
+            runtime_id=runtime_id,
+            reason="timeout",
+            found_count=0,
+            missing_count=len(credential_paths),
+        )
     except Exception as exc:
-        logger.warning("Volume verification failed: %s", exc)
-        return {
-            "verified": False,
-            "runtime_id": runtime_id,
-            "reason": f"error: {exc}",
-            "found": [],
-            "missing": list(credential_paths),
-        }
+        logger.warning(
+            "Volume verification failed with %s", type(exc).__name__
+        )
+        return _verification_result(
+            verified=False,
+            runtime_id=runtime_id,
+            reason="verification_error",
+            found_count=0,
+            missing_count=len(credential_paths),
+        )
 
     if process.returncode != 0:
-        stderr_text = stderr.decode("utf-8", errors="replace").strip()
         logger.warning(
-            "Volume verification docker run failed (exit %d): %s",
+            "Volume verification docker run failed (exit %d)",
             process.returncode,
-            stderr_text[:200],
         )
-        return {
-            "verified": False,
-            "runtime_id": runtime_id,
-            "reason": f"docker_exit_{process.returncode}",
-            "found": [],
-            "missing": list(credential_paths),
-        }
+        return _verification_result(
+            verified=False,
+            runtime_id=runtime_id,
+            reason=f"docker_exit_{process.returncode}",
+            found_count=0,
+            missing_count=len(credential_paths),
+        )
 
     # Parse output
     output_text = stdout.decode("utf-8", errors="replace")
@@ -179,10 +201,10 @@ async def verify_volume_credentials(
         len(missing),
     )
 
-    return {
-        "verified": verified,
-        "runtime_id": runtime_id,
-        "reason": "ok" if verified else "no_credentials_found",
-        "found": found,
-        "missing": missing,
-    }
+    return _verification_result(
+        verified=verified,
+        runtime_id=runtime_id,
+        reason="ok" if verified else "no_credentials_found",
+        found_count=len(found),
+        missing_count=len(missing),
+    )

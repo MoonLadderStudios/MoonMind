@@ -14,11 +14,12 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
 from __future__ import annotations
 
 import logging
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
 
-from temporalio import activity
+from temporalio import activity, exceptions
 
 from api_service.db.base import get_async_session_context
 from api_service.db.models import (
@@ -311,6 +312,7 @@ async def oauth_session_register_profile(
 ) -> dict[str, Any]:
     """Create or update provider profile from session data."""
     session_id = request.get("session_id", "")
+    verification = request.get("verification")
 
     if not session_id:
         raise ValueError("session_id is required")
@@ -333,6 +335,14 @@ async def oauth_session_register_profile(
         session_obj = result.scalars().first()
         if not session_obj:
             raise ValueError(f"Session {session_id} not found")
+
+        if isinstance(verification, Mapping) and not verification.get("verified"):
+            reason = str(verification.get("reason") or "unknown")
+            failure_reason = f"Volume verification failed: {reason}"
+            raise exceptions.ApplicationError(
+                failure_reason,
+                non_retryable=True,
+            )
 
         profile_result = await db.execute(
             select(ManagedAgentProviderProfile).where(

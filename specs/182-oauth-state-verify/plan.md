@@ -4,7 +4,7 @@
 
 ## Input
 
-Single-story feature specification from `specs/182-oauth-state-verify/spec.md` generated from Jira issue `MM-318` and the preserved preset brief `MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md`.
+Single-story feature specification from `specs/182-oauth-state-verify/spec.md` generated from Jira issue `MM-359` and the preserved preset brief `MM-359: OAuth Session State and Verification Boundaries`.
 
 ## Summary
 
@@ -20,7 +20,7 @@ This story implements transport-neutral OAuth status and secret-free verificatio
 - Target platform: MoonMind API service, Temporal worker/runtime services, managed Codex session containers, and Mission Control where applicable.
 - Project type: backend orchestration/runtime with optional browser surface for OAuth terminal flow.
 - Performance goals: validation and serialization must be deterministic and low-overhead relative to existing workflow/API calls.
-- Constraints: preserve `MM-318` traceability; keep raw credential contents out of workflow history, browser responses, logs, and artifacts; fail fast for unsupported or unsafe runtime values.
+- Constraints: preserve `MM-359` traceability; keep raw credential contents out of workflow history, browser responses, logs, and artifacts; fail fast for unsupported or unsafe runtime values.
 - Scale/scope: one independently testable story, dependencies: STORY-001, STORY-002.
 
 ## Constitution Check

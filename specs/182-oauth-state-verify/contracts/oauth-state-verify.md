@@ -2,11 +2,11 @@
 
 ## Story Boundary
 
-Source story: `STORY-005` from `docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json`.
+Source story: `STORY-005` from Jira preset brief `MM-359: OAuth Session State and Verification Boundaries`.
 
 ## Inputs
 
-- Jira traceability: `MM-318` and preset brief `MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md`.
+- Jira traceability: `MM-359` and preset brief `MM-359: OAuth Session State and Verification Boundaries`.
 - Source design coverage: DESIGN-REQ-010, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-018, DESIGN-REQ-020.
 - Dependency requirements: STORY-001, STORY-002.
 

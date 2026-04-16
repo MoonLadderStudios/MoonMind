@@ -83,6 +83,8 @@ def get_provider_default(runtime_id: str, key: str) -> str | None:
         return spec["provider_id"]
     if key == "provider_label":
         return spec["provider_label"]
+    if key == "session_transport":
+        return spec["session_transport"]
     return None
 
 

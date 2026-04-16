@@ -34,7 +34,7 @@ Expected result: hermetic integration coverage passes in a Docker-enabled enviro
 
 ## End-To-End Story Check
 
-1. Confirm `spec.md` preserves `MM-318` and the original preset brief.
+1. Confirm `spec.md` preserves `MM-359` and the original preset brief.
 2. Confirm `plan.md`, `research.md`, `data-model.md`, `contracts/`, and `quickstart.md` exist.
 3. Confirm unit and integration test strategies remain separate.
 4. After implementation, run `/moonspec-verify` equivalent against `specs/182-oauth-state-verify/spec.md`.
