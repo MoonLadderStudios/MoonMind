@@ -7,7 +7,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
@@ -201,6 +201,16 @@ describe("Task Create Entrypoint", () => {
       `/tasks/new?editExecutionId=${encodeURIComponent(executionId)}`,
     );
     return renderWithClient(<TaskCreatePage payload={payload} />);
+  }
+
+  function latestCreateRequest(): Record<string, unknown> {
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    return JSON.parse(String(executionCall?.[1]?.body)) as Record<
+      string,
+      unknown
+    >;
   }
 
   beforeEach(() => {
@@ -3318,6 +3328,120 @@ describe("Task Create Entrypoint", () => {
     expect(request.payload.task.publish).toMatchObject({
       mode: "none",
     });
+  });
+
+  it("shows merge automation only for ordinary pr-publishing tasks", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByLabelText("Enable merge automation"),
+    ).toBeTruthy();
+    expect(screen.getByText(/uses pr-resolver/i)).toBeTruthy();
+    expect(screen.queryByText(/direct auto-merge/i)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "branch" },
+    });
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+    });
+
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "none" },
+    });
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+    });
+
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "pr" },
+    });
+    expect(await screen.findByLabelText("Enable merge automation")).toBeTruthy();
+  });
+
+  it("submits merge automation with the existing pr publish contracts", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Implement MM-365." },
+    });
+    fireEvent.click(await screen.findByLabelText("Enable merge automation"));
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const request = latestCreateRequest();
+    const payload = request.payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(payload.publishMode).toBe("pr");
+    expect(task.publish).toMatchObject({ mode: "pr" });
+    expect(payload.mergeAutomation).toEqual({ enabled: true });
+  });
+
+  it("omits merge automation when unavailable or disabled", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Implement without merge automation." },
+    });
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "branch" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    let payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.publishMode).toBe("branch");
+    expect(payload).not.toHaveProperty("mergeAutomation");
+
+    cleanup();
+    fetchSpy.mockClear();
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    fireEvent.click(await screen.findByLabelText("Enable merge automation"));
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "pr-resolver" },
+      },
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+    });
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText("Instructions"),
+      {
+        target: { value: "Resolve the current branch PR." },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    payload = latestCreateRequest().payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(task.publish).toMatchObject({ mode: "none" });
+    expect(payload).not.toHaveProperty("mergeAutomation");
   });
 
   it("submits deferred pr-resolver tasks with object-shaped skill selectors", async () => {

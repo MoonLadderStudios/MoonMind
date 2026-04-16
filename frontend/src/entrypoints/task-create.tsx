@@ -1795,6 +1795,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [startingBranch, setStartingBranch] = useState("");
   const [targetBranch, setTargetBranch] = useState("");
   const [publishMode, setPublishMode] = useState(defaultPublishMode);
+  const [mergeAutomationEnabled, setMergeAutomationEnabled] = useState(false);
   const [priority, setPriority] = useState(0);
   const [maxAttempts, setMaxAttempts] = useState(3);
   const [proposeTasks, setProposeTasks] = useState(() =>
@@ -2530,6 +2531,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setPublishMode("none");
     }
   }, [pageMode.mode, selectedPreset?.slug]);
+
+  const mergeAutomationAvailable =
+    pageMode.mode === "create" &&
+    publishMode.trim().toLowerCase() === "pr" &&
+    !isResolverSkill(String(steps[0]?.skillId || ""));
+
+  useEffect(() => {
+    if (!mergeAutomationAvailable && mergeAutomationEnabled) {
+      setMergeAutomationEnabled(false);
+    }
+  }, [mergeAutomationAvailable, mergeAutomationEnabled]);
 
   const availableDependencyOptions = useMemo(
     () =>
@@ -4009,6 +4021,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ? { ...primaryStepSkill, id: effectiveSkillId }
       : primaryStepSkill;
 
+    const shouldSubmitMergeAutomation =
+      mergeAutomationEnabled &&
+      pageMode.mode === "create" &&
+      normalizedPublishMode === "pr" &&
+      !isResolverSkill(effectiveSkillId);
+
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsWithAttachments,
       tool: resolvedTool,
@@ -4060,6 +4078,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           ? { requiredCapabilities: mergedCapabilities }
           : {}),
         targetRuntime: normalizedRuntime,
+        publishMode: normalizedPublishMode,
+        ...(shouldSubmitMergeAutomation
+          ? { mergeAutomation: { enabled: true } }
+          : {}),
         task: taskPayload,
       },
     };
@@ -5025,6 +5047,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             <option value="none">none</option>
           </select>
         </label>
+
+        {mergeAutomationAvailable ? (
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              name="mergeAutomationEnabled"
+              aria-label="Enable merge automation"
+              checked={mergeAutomationEnabled}
+              onChange={(event) =>
+                setMergeAutomationEnabled(event.target.checked)
+              }
+            />
+            Enable merge automation
+            <span className="small">
+              Uses pr-resolver after the PR readiness gate opens; it does not
+              bypass resolver handling.
+            </span>
+          </label>
+        ) : null}
 
         <div className="grid-2" data-runtime-visibility="worker">
           <label>
