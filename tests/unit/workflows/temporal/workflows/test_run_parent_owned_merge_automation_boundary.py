@@ -208,6 +208,52 @@ async def test_parent_owned_merge_automation_invalid_child_status_fails_determin
 
 
 @pytest.mark.asyncio
+async def test_parent_owned_merge_automation_never_publishes_unsupported_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_workflow_context(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_context["branch"] = "feature"
+    workflow._publish_context["baseRef"] = "main"
+    workflow._publish_context["headSha"] = "abc123"
+    published_statuses: list[str | None] = []
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        return {"status": "completed"}
+
+    def record_visibility() -> None:
+        published_statuses.append(workflow._publish_context.get("mergeAutomationStatus"))
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(workflow, "_update_memo", record_visibility)
+    monkeypatch.setattr(workflow, "_update_search_attributes", record_visibility)
+
+    with pytest.raises(
+        ValueError,
+        match="merge automation failed: unsupported terminal status completed",
+    ):
+        await workflow._maybe_start_merge_gate(
+            parameters={
+                "publishMode": "pr",
+                "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-353"},
+            },
+            pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/353",
+        )
+
+    assert "completed" not in published_statuses
+    assert published_statuses[-1] == "failed"
+
+
+@pytest.mark.asyncio
 async def test_parent_owned_merge_automation_duplicate_retry_preserves_one_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
