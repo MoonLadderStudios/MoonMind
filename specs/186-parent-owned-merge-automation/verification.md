@@ -4,15 +4,16 @@
 **Spec**: `/work/agent_jobs/mm:1af0b0eb-221a-4181-8105-c06c84273aef/repo/specs/186-parent-owned-merge-automation/spec.md`  
 **Original Request Source**: `spec.md` Input, MM-350 Jira preset brief  
 **Verdict**: ADDITIONAL_WORK_NEEDED  
-**Confidence**: MEDIUM
+**Confidence**: HIGH for unit/workflow-boundary behavior; MEDIUM overall because hermetic integration could not run in this workspace.
 
 ## Test Results
 
 | Suite | Command | Result | Notes |
 |-------|---------|--------|-------|
-| Focused unit/workflow-boundary | `./tools/test_unit.sh tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_run_merge_gate_start.py` | PASS | 24 Python tests passed; frontend unit suite also passed as part of runner. |
-| Full unit | `./tools/test_unit.sh` | PASS | 3265 Python tests passed, 1 xpassed, 16 subtests passed; frontend Vitest suite passed 222 tests. |
-| Hermetic integration | `./tools/test_integration.sh` | NOT RUN | Blocked by managed workspace environment: Docker socket unavailable at `/var/run/docker.sock`. |
+| Resolver remediation red check | `./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py` | FAIL, THEN PASS | Red check first failed because `MoonMind.MergeAutomation` input still validated as `MoonMind.MergeGate`; after implementation the focused test passed. |
+| Focused unit/workflow-boundary | `./tools/test_unit.sh tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_run_merge_gate_start.py tests/unit/workflows/temporal/test_merge_gate_models.py` | PASS | 29 Python tests passed; frontend unit suite also passed as part of runner. |
+| Full unit | `./tools/test_unit.sh` | PASS | 3266 Python tests passed, 1 xpassed, 16 subtests passed; frontend Vitest suite passed 222 tests. |
+| Hermetic integration | `./tools/test_integration.sh` | BLOCKED | Docker socket unavailable: `dial unix /var/run/docker.sock: connect: no such file or directory`. |
 
 ## Requirement Coverage
 
@@ -22,8 +23,8 @@
 | FR-002, FR-008, FR-010 | `moonmind/workflows/temporal/workflows/run.py:3101`; `tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py:23` | VERIFIED | Parent builds `MoonMind.MergeAutomation` payload and deterministic `merge-automation:` idempotency key from PR context. |
 | FR-003, FR-004, FR-005, FR-011 | `moonmind/workflows/temporal/workflows/run.py:3153`; `moonmind/workflows/temporal/workflows/run.py:3176`; `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py:28` | VERIFIED | Parent sets `awaiting_external`, awaits child, records result, accepts only `merged`/`already_merged`, and raises for non-success outcomes. |
 | FR-006, FR-007 | `moonmind/workflows/temporal/workflows/run.py:3200`; no new top-level task creation in parent path | VERIFIED | Parent executes a child workflow and remains the completion owner. |
-| FR-012 | `moonmind/workflows/temporal/workflows/merge_automation.py:86` | PARTIAL | New child workflow waits for readiness and runs resolver as child `MoonMind.Run`; re-enter-after-remediation behavior is not yet independently covered. |
-| FR-014 | `tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py`; `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` | PARTIAL | Focused workflow-boundary coverage exists, including duplicate-start prevention; compose-backed integration was blocked by environment. |
+| FR-012 | `moonmind/workflows/temporal/workflows/merge_automation.py`; `tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py` | VERIFIED | New child workflow waits for readiness, runs resolver as child `MoonMind.Run`, and re-enters readiness after resolver remediation requests another gate cycle. |
+| FR-014 | `tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py`; `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py`; `tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py` | PARTIAL | Focused workflow-boundary coverage exists, including duplicate-start prevention and resolver re-gating; compose-backed integration was blocked by environment. |
 
 ## Acceptance Scenario Coverage
 
@@ -42,7 +43,7 @@
 |------|----------|--------|-------|
 | DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003 | `run.py` child execution and result handling; focused tests | VERIFIED | Parent owns and awaits merge automation before success. |
 | DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008 | `run.py` payload construction and metadata; focused tests | VERIFIED | Top-level publish mode, compact PR payload, and waiting metadata are covered. |
-| DESIGN-REQ-009 | `merge_automation.py` resolver child execution | PARTIAL | Resolver child execution exists; post-remediation re-gating needs more tests. |
+| DESIGN-REQ-009 | `merge_automation.py` resolver child execution; `test_merge_automation_temporal.py` | VERIFIED | Resolver child execution and post-remediation re-gating are covered. |
 | DESIGN-REQ-028 | `run.py` uses child workflow execution, not fixed-delay or top-level follow-up creation | VERIFIED | Parent path does not create a detached task. |
 | DESIGN-REQ-029 | `docs/Tasks/TaskPublishing.md`; parent publish context result metadata | VERIFIED | Operator-facing doc and run summary context reflect parent-owned merge automation. |
 
@@ -51,18 +52,16 @@
 - PASS for using the MM-350 Jira preset brief as the canonical input.
 - PASS for runtime implementation mode.
 - PASS for starting and awaiting a parent-owned `MoonMind.MergeAutomation` child from the parent.
-- PARTIAL for final verification because hermetic integration could not run and resolver remediation re-gating coverage remains advisable.
+- PARTIAL for final verification because hermetic integration could not run in this managed workspace.
 
 ## Gaps
 
 - Hermetic integration verification could not run because Docker is unavailable in this managed workspace.
-- Resolver re-enter-after-remediation behavior is implemented only through the child workflow shape and existing readiness loop; it needs focused tests if this path is considered in-scope for MM-350 completion.
 
 ## Remaining Work
 
 1. Run `./tools/test_integration.sh` in an environment with Docker socket access.
-2. Add focused coverage for resolver remediation returning to readiness waiting if resolver result shapes support that signal.
 
 ## Decision
 
-The core runtime implementation and unit/workflow-boundary evidence are in place, but final MoonSpec verdict remains `ADDITIONAL_WORK_NEEDED` until integration and replay/remediation coverage gaps are closed.
+The core runtime implementation and unit/workflow-boundary evidence are in place, including resolver remediation re-gating. The final MoonSpec verdict remains `ADDITIONAL_WORK_NEEDED` only because the required hermetic integration command cannot run without Docker socket access in this managed workspace.

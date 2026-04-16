@@ -35,6 +35,8 @@ STATE_BLOCKED = "blocked"
 STATE_MERGED = "merged"
 STATE_ALREADY_MERGED = "already_merged"
 STATE_FAILED = "failed"
+DISPOSITION_REENTER_GATE = "reenter_gate"
+DISPOSITION_ALREADY_MERGED = "already_merged"
 
 
 @workflow.defn(name=WORKFLOW_NAME)
@@ -83,6 +85,12 @@ class MoonMindMergeAutomationWorkflow:
     def summary(self) -> dict[str, Any]:
         return self._summary_payload()
 
+    @staticmethod
+    def _resolver_disposition(resolver_result: Any) -> str:
+        if not isinstance(resolver_result, Mapping):
+            return ""
+        return str(resolver_result.get("mergeAutomationDisposition") or "").strip()
+
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._input = MergeGateStartInput.model_validate(payload)
@@ -118,6 +126,9 @@ class MoonMindMergeAutomationWorkflow:
                     pr_number=self._input.pull_request.number,
                     head_sha=self._input.pull_request.head_sha,
                 )
+                resolver_workflow_id = (
+                    f"{resolver_workflow_id}:{len(self._resolver_child_workflow_ids) + 1}"
+                )
                 self._resolver_child_workflow_ids.append(resolver_workflow_id)
                 resolver_result = await workflow.execute_child_workflow(
                     "MoonMind.Run",
@@ -132,9 +143,23 @@ class MoonMindMergeAutomationWorkflow:
                     if isinstance(resolver_result, Mapping)
                     else ""
                 ).strip()
-                self._status = (
-                    STATE_MERGED if resolver_status == "success" else STATE_FAILED
-                )
+                resolver_disposition = self._resolver_disposition(resolver_result)
+                if (
+                    resolver_status == "success"
+                    and resolver_disposition == DISPOSITION_REENTER_GATE
+                ):
+                    self._status = STATE_WAITING
+                    self._publish_visibility()
+                    continue
+                if (
+                    resolver_status == "success"
+                    and resolver_disposition == DISPOSITION_ALREADY_MERGED
+                ):
+                    self._status = STATE_ALREADY_MERGED
+                else:
+                    self._status = (
+                        STATE_MERGED if resolver_status == "success" else STATE_FAILED
+                    )
                 summary = self._summary_payload()
                 if self._status == STATE_FAILED:
                     summary["summary"] = "pr-resolver child run did not complete successfully."

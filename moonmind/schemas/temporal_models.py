@@ -176,11 +176,14 @@ class ResolverRunRefModel(BaseModel):
 
 
 class MergeGateStartInput(BaseModel):
-    """Start input for ``MoonMind.MergeGate``."""
+    """Start input for merge readiness workflows."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    workflow_type: Literal["MoonMind.MergeGate"] = Field(..., alias="workflowType")
+    workflow_type: Literal["MoonMind.MergeGate", "MoonMind.MergeAutomation"] = Field(
+        ...,
+        alias="workflowType",
+    )
     parent: dict[str, Any] = Field(..., alias="parent")
     pull_request: PullRequestRefModel = Field(..., alias="pullRequest")
     jira_issue_key: str | None = Field(None, alias="jiraIssueKey")
