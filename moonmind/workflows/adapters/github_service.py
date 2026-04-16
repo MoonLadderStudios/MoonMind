@@ -44,6 +44,23 @@ class MergePRResult(BaseModel):
     summary: str = Field(..., alias="summary")
 
 
+class PullRequestReadinessResult(BaseModel):
+    """Compact readiness evidence for one pull request revision."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    head_sha: str = Field(..., alias="headSha")
+    ready: bool = Field(False, alias="ready")
+    pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
+    checks_complete: bool | None = Field(None, alias="checksComplete")
+    checks_passing: bool | None = Field(None, alias="checksPassing")
+    automated_review_complete: bool | None = Field(
+        None, alias="automatedReviewComplete"
+    )
+    policy_allowed: bool | None = Field(True, alias="policyAllowed")
+    blockers: list[dict[str, Any]] = Field(default_factory=list, alias="blockers")
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -348,9 +365,287 @@ class GitHubService:
                     f" {exc.__class__.__name__}"
                 )
 
+    async def evaluate_pull_request_readiness(
+        self,
+        *,
+        repo: str,
+        pr_number: int,
+        head_sha: str,
+        policy: dict[str, Any] | None = None,
+        github_token: str | None = None,
+    ) -> PullRequestReadinessResult:
+        """Evaluate GitHub readiness for a tracked pull request revision."""
+
+        token, resolution_error = await self.resolve_github_token(github_token)
+        if not token:
+            return PullRequestReadinessResult(
+                headSha=head_sha,
+                ready=False,
+                pullRequestOpen=None,
+                checksComplete=None,
+                checksPassing=None,
+                automatedReviewComplete=None,
+                policyAllowed=True,
+                blockers=[
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": resolution_error
+                        or self._missing_auth_summary("evaluate PR readiness"),
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            )
+
+        policy = dict(policy or {})
+        checks_required = policy.get("checks", "required") == "required"
+        review_required = policy.get("automatedReview", "required") == "required"
+        headers = self._github_headers(token)
+        blockers: list[dict[str, Any]] = []
+        observed_head_sha = head_sha
+        pr_open: bool | None = None
+        checks_complete: bool | None = None
+        checks_passing: bool | None = None
+        automated_review_complete: bool | None = None
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                pr_response = await client.get(
+                    f"https://api.github.com/repos/{repo}/pulls/{pr_number}",
+                    headers=headers,
+                )
+                pr_response.raise_for_status()
+                pr_data = pr_response.json()
+                pr_open = pr_data.get("state") == "open"
+                head = pr_data.get("head") if isinstance(pr_data, dict) else {}
+                if isinstance(head, dict):
+                    observed_head_sha = str(head.get("sha") or head_sha)
+            except httpx.HTTPStatusError as exc:
+                blockers.append(
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub pull request state could not be fetched "
+                            f"(HTTP {exc.response.status_code})."
+                        ),
+                        "retryable": exc.response.status_code >= 500,
+                        "source": "github",
+                    }
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                blockers.append(
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub pull request state request failed: "
+                            f"{exc.__class__.__name__}."
+                        ),
+                        "retryable": True,
+                        "source": "github",
+                    }
+                )
+
+            if pr_open is False:
+                blockers.append(
+                    {
+                        "kind": "pull_request_closed",
+                        "summary": "Pull request is closed.",
+                        "retryable": False,
+                        "source": "github",
+                    }
+                )
+
+            if checks_required and not blockers:
+                check_evidence = await self._evaluate_github_checks(
+                    client=client,
+                    repo=repo,
+                    head_sha=observed_head_sha,
+                    headers=headers,
+                )
+                checks_complete = check_evidence["complete"]
+                checks_passing = check_evidence["passing"]
+                blockers.extend(check_evidence["blockers"])
+
+            if review_required and not blockers:
+                review_evidence = await self._evaluate_automated_review(
+                    client=client,
+                    repo=repo,
+                    pr_number=pr_number,
+                    headers=headers,
+                )
+                automated_review_complete = review_evidence["complete"]
+                blockers.extend(review_evidence["blockers"])
+
+        return PullRequestReadinessResult(
+            headSha=observed_head_sha,
+            ready=not blockers,
+            pullRequestOpen=pr_open,
+            checksComplete=checks_complete,
+            checksPassing=checks_passing,
+            automatedReviewComplete=automated_review_complete,
+            policyAllowed=True,
+            blockers=blockers,
+        )
+
+    async def _evaluate_github_checks(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        repo: str,
+        head_sha: str,
+        headers: dict[str, str],
+    ) -> dict[str, Any]:
+        blockers: list[dict[str, Any]] = []
+        try:
+            status_response = await client.get(
+                f"https://api.github.com/repos/{repo}/commits/{head_sha}/status",
+                headers=headers,
+            )
+            status_response.raise_for_status()
+            status_data = status_response.json()
+            status_state = str(status_data.get("state") or "").lower()
+
+            checks_response = await client.get(
+                f"https://api.github.com/repos/{repo}/commits/{head_sha}/check-runs",
+                headers=headers,
+            )
+            checks_response.raise_for_status()
+            checks_data = checks_response.json()
+            check_runs = checks_data.get("check_runs") or []
+        except httpx.HTTPStatusError as exc:
+            return {
+                "complete": None,
+                "passing": None,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub check state could not be fetched "
+                            f"(HTTP {exc.response.status_code})."
+                        ),
+                        "retryable": exc.response.status_code >= 500,
+                        "source": "github",
+                    }
+                ],
+            }
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return {
+                "complete": None,
+                "passing": None,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub check state request failed: "
+                            f"{exc.__class__.__name__}."
+                        ),
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            }
+
+        pending_runs = [
+            run
+            for run in check_runs
+            if str(run.get("status") or "").lower() != "completed"
+        ]
+        failed_runs = [
+            run
+            for run in check_runs
+            if str(run.get("conclusion") or "").lower()
+            not in {"", "success", "neutral", "skipped"}
+        ]
+        if status_state in {"pending", "expected"} or pending_runs:
+            blockers.append(
+                {
+                    "kind": "checks_running",
+                    "summary": "Required checks are still running.",
+                    "retryable": True,
+                    "source": "github",
+                }
+            )
+        elif status_state in {"failure", "error"} or failed_runs:
+            blockers.append(
+                {
+                    "kind": "checks_failed",
+                    "summary": "Required checks are failing.",
+                    "retryable": True,
+                    "source": "github",
+                }
+            )
+
+        return {
+            "complete": not any(b["kind"] == "checks_running" for b in blockers),
+            "passing": not blockers,
+            "blockers": blockers,
+        }
+
+    async def _evaluate_automated_review(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        repo: str,
+        pr_number: int,
+        headers: dict[str, str],
+    ) -> dict[str, Any]:
+        try:
+            response = await client.get(
+                f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews",
+                headers=headers,
+            )
+            response.raise_for_status()
+            reviews = response.json()
+        except httpx.HTTPStatusError as exc:
+            return {
+                "complete": None,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub review state could not be fetched "
+                            f"(HTTP {exc.response.status_code})."
+                        ),
+                        "retryable": exc.response.status_code >= 500,
+                        "source": "github",
+                    }
+                ],
+            }
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return {
+                "complete": None,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub review state request failed: "
+                            f"{exc.__class__.__name__}."
+                        ),
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            }
+
+        approved = any(str(review.get("state") or "").upper() == "APPROVED" for review in reviews)
+        if approved:
+            return {"complete": True, "blockers": []}
+        return {
+            "complete": False,
+            "blockers": [
+                {
+                    "kind": "automated_review_pending",
+                    "summary": "Automated review has not completed.",
+                    "retryable": True,
+                    "source": "github",
+                }
+            ],
+        }
+
 
 __all__ = [
     "CreatePRResult",
     "GitHubService",
     "MergePRResult",
+    "PullRequestReadinessResult",
 ]

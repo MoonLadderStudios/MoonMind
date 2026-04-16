@@ -437,6 +437,8 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     # General-purpose repo operations (provider-agnostic)
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.merge_pr": ("integrations", "repo_merge_pr"),
+    "merge_gate.evaluate_readiness": ("integrations", "merge_gate_evaluate_readiness"),
+    "merge_gate.create_resolver_run": ("integrations", "merge_gate_create_resolver_run"),
     "agent_runtime.build_launch_context": (
         "agent_runtime",
         "agent_runtime_build_launch_context",
@@ -1951,6 +1953,148 @@ class TemporalIntegrationActivities:
     async def repo_merge_pr(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import repo_merge_pr_activity
         return await repo_merge_pr_activity(payload)
+
+    async def merge_gate_evaluate_readiness(self, payload, /, **kwargs):
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        if not isinstance(payload, Mapping):
+            return {
+                "headSha": "",
+                "ready": False,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": "Merge-gate readiness payload is invalid.",
+                        "retryable": False,
+                        "source": "policy",
+                    }
+                ],
+                "policyAllowed": False,
+            }
+
+        pull_request = payload.get("pullRequest") or {}
+        policy = payload.get("policy") or {}
+        if not isinstance(pull_request, Mapping):
+            pull_request = {}
+        if not isinstance(policy, Mapping):
+            policy = {}
+
+        readiness = await GitHubService().evaluate_pull_request_readiness(
+            repo=str(pull_request.get("repo") or ""),
+            pr_number=int(pull_request.get("number") or 0),
+            head_sha=str(pull_request.get("headSha") or ""),
+            policy=dict(policy),
+            github_token=payload.get("githubToken"),
+        )
+        evidence = readiness.model_dump(by_alias=True)
+
+        jira_issue_key = str(payload.get("jiraIssueKey") or "").strip()
+        if policy.get("jiraStatus") == "required":
+            jira_allowed, jira_blocker = await self._merge_gate_jira_status_allowed(
+                jira_issue_key
+            )
+            evidence["jiraStatusAllowed"] = jira_allowed
+            if jira_blocker is not None:
+                evidence.setdefault("blockers", []).append(jira_blocker)
+                evidence["ready"] = False
+        else:
+            evidence["jiraStatusAllowed"] = True
+
+        return evidence
+
+    async def _merge_gate_jira_status_allowed(
+        self,
+        issue_key: str,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        if not issue_key:
+            return (
+                False,
+                {
+                    "kind": "jira_status_pending",
+                    "summary": "Required Jira issue key is missing.",
+                    "retryable": False,
+                    "source": "jira",
+                },
+            )
+        try:
+            from moonmind.integrations.jira.models import GetIssueRequest
+            from moonmind.integrations.jira.tool import JiraToolService
+
+            issue = await JiraToolService().get_issue(
+                GetIssueRequest(issueKey=issue_key, fields=["status"])
+            )
+        except Exception:
+            return (
+                False,
+                {
+                    "kind": "external_state_unavailable",
+                    "summary": "Jira status could not be fetched.",
+                    "retryable": True,
+                    "source": "jira",
+                },
+            )
+        status = ((issue or {}).get("fields") or {}).get("status") or {}
+        category = status.get("statusCategory") or {}
+        category_key = str(category.get("key") or "").strip().lower()
+        if category_key == "done":
+            return True, None
+        return (
+            False,
+            {
+                "kind": "jira_status_pending",
+                "summary": "Jira status is not yet allowed for merge automation.",
+                "retryable": True,
+                "source": "jira",
+            },
+        )
+
+    async def merge_gate_create_resolver_run(self, payload, /, **kwargs):
+        import hashlib
+
+        key = ""
+        run_input: Mapping[str, Any] | None = None
+        if isinstance(payload, Mapping):
+            key = str(payload.get("idempotencyKey") or "").strip()
+            run_payload = payload.get("runInput") or payload.get("run_input")
+            if isinstance(run_payload, Mapping):
+                run_input = run_payload
+        suffix = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16] if key else "resolver"
+        workflow_id = f"merge-gate-resolver-{suffix}"
+        if run_input is not None:
+            try:
+                from moonmind.config.settings import settings
+                from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
+                from moonmind.workflows.temporal.client import get_temporal_client
+
+                client = await get_temporal_client(
+                    settings.temporal.address,
+                    settings.temporal.namespace,
+                )
+                handle = await client.start_workflow(
+                    "MoonMind.Run",
+                    dict(run_input),
+                    id=workflow_id,
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                )
+                return {
+                    "workflowId": workflow_id,
+                    "runId": getattr(handle, "first_execution_run_id", None),
+                    "created": True,
+                }
+            except Exception as exc:
+                message = str(exc).lower()
+                if "already" not in message or "start" not in message:
+                    raise
+                return {
+                    "workflowId": workflow_id,
+                    "runId": None,
+                    "created": False,
+                }
+        return {
+            "workflowId": workflow_id,
+            "runId": None,
+            "created": True,
+        }
 
     async def integration_jules_send_message(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_send_message_activity

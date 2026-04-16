@@ -11,6 +11,7 @@ from moonmind.workflows.adapters.github_service import (
     CreatePRResult,
     GitHubService,
     MergePRResult,
+    PullRequestReadinessResult,
 )
 
 
@@ -28,6 +29,15 @@ def _mock_response(status_code: int, json_body: dict) -> httpx.Response:
     )
 
 
+def _mock_get_response(status_code: int, json_body: dict | list) -> httpx.Response:
+    """Build a mock httpx GET response."""
+    return httpx.Response(
+        status_code,
+        json=json_body,
+        request=httpx.Request("GET", "https://api.github.com/test"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # create_pull_request
 # ---------------------------------------------------------------------------
@@ -36,7 +46,7 @@ def _mock_response(status_code: int, json_body: dict) -> httpx.Response:
 @pytest.mark.asyncio
 async def test_create_pr_success(monkeypatch):
     """Successful PR creation returns created=True and the URL."""
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake_token")
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
 
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(
@@ -118,7 +128,7 @@ async def test_create_pr_uses_secret_ref_when_env_missing(monkeypatch):
 @pytest.mark.asyncio
 async def test_create_pr_http_error(monkeypatch):
     """HTTP 422 from GitHub should return created=False."""
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake_token")
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
 
     mock_resp = _mock_response(422, {"message": "Validation Failed"})
     mock_client = AsyncMock()
@@ -146,7 +156,7 @@ async def test_create_pr_http_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_merge_pr_success(monkeypatch):
     """Successful merge returns merged=True and SHA."""
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake_token")
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
 
     mock_client = AsyncMock()
     mock_client.put = AsyncMock(
@@ -203,3 +213,87 @@ def test_parse_valid_url():
 
 def test_parse_invalid_url():
     assert GitHubService.parse_github_pr_url("https://example.com/foo") is None
+
+
+# ---------------------------------------------------------------------------
+# evaluate_pull_request_readiness
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_waits_for_running_checks(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
+            _mock_get_response(200, {"state": "pending"}),
+            _mock_get_response(
+                200,
+                {
+                    "check_runs": [
+                        {"status": "in_progress", "conclusion": None},
+                    ]
+                },
+            ),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "disabled"},
+        )
+
+    assert isinstance(result, PullRequestReadinessResult)
+    assert result.ready is False
+    assert result.checks_complete is False
+    assert result.blockers[0]["kind"] == "checks_running"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_opens_after_checks_and_review(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
+            _mock_get_response(200, {"state": "success"}),
+            _mock_get_response(
+                200,
+                {
+                    "check_runs": [
+                        {"status": "completed", "conclusion": "success"},
+                    ]
+                },
+            ),
+            _mock_get_response(200, [{"state": "APPROVED"}]),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "required"},
+        )
+
+    assert result.ready is True
+    assert result.blockers == []
+    assert result.checks_passing is True
+    assert result.automated_review_complete is True
