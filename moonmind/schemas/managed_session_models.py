@@ -1152,11 +1152,13 @@ class ClaudeManagedWorkItem(BaseModel):
         return validate_compact_temporal_mapping(value, field_name="payload")
 
     @model_validator(mode="after")
-    def _validate_datetimes(self) -> "ClaudeManagedWorkItem":
+    def _validate_invariants(self) -> "ClaudeManagedWorkItem":
         if self.started_at.tzinfo is None:
             self.started_at = self.started_at.replace(tzinfo=UTC)
         if self.ended_at is not None and self.ended_at.tzinfo is None:
             self.ended_at = self.ended_at.replace(tzinfo=UTC)
+        if self.event_name is not None and self.kind != "hook_call":
+            raise ValueError("Hook event names require hook_call work items")
         return self
 
 
@@ -1213,6 +1215,13 @@ class ClaudeDecisionPoint(BaseModel):
             and self.outcome == "allowed"
         ):
             raise ValueError("Protected path decisions cannot be allowed")
+        if (
+            self.origin_stage == "protected_path_guard"
+            and self.provenance_source != "protected_path"
+        ):
+            raise ValueError(
+                "Protected path decisions must use protected_path provenance"
+            )
         if self.provenance_source == "protected_path" and (
             self.origin_stage != "protected_path_guard"
             or self.outcome not in {"asked", "denied", "deferred"}

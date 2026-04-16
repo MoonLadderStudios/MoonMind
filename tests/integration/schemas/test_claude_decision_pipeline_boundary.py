@@ -27,9 +27,15 @@ def test_claude_decision_boundary_preserves_stage_order_and_hook_audit() -> None
             turnId="turn-1",
             proposalKind="tool",
             originStage=stage,
-            outcome="resolved",
-            provenanceSource="runtime" if stage == "runtime_execution" else "policy",
-            eventName="decision.resolved",
+            outcome="denied" if stage == "protected_path_guard" else "resolved",
+            provenanceSource="runtime"
+            if stage == "runtime_execution"
+            else "protected_path"
+            if stage == "protected_path_guard"
+            else "policy",
+            eventName="decision.denied"
+            if stage == "protected_path_guard"
+            else "decision.resolved",
             metadata={"stageIndex": index},
             createdAt=NOW,
         )

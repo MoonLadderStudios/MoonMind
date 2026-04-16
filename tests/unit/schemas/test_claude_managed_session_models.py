@@ -282,6 +282,33 @@ def test_claude_work_item_lifecycle_datetimes_are_utc_aware() -> None:
     assert work_item.ended_at == naive_ended.replace(tzinfo=UTC)
 
 
+def test_claude_work_item_hook_event_names_require_hook_call_kind() -> None:
+    hook_work_item = ClaudeManagedWorkItem(
+        itemId="item-hook-1",
+        turnId="turn-1",
+        sessionId="claude-session-1",
+        kind="hook_call",
+        status="completed",
+        eventName="work.hook.completed",
+        payload={},
+        startedAt=NOW,
+    )
+
+    assert hook_work_item.event_name == "work.hook.completed"
+
+    with pytest.raises(ValueError, match="Hook event names require hook_call"):
+        ClaudeManagedWorkItem(
+            itemId="item-tool-1",
+            turnId="turn-1",
+            sessionId="claude-session-1",
+            kind="tool_call",
+            status="completed",
+            eventName="work.hook.completed",
+            payload={},
+            startedAt=NOW,
+        )
+
+
 def _decision_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "decisionId": "decision-1",
@@ -319,11 +346,15 @@ def test_claude_decision_stage_order_matches_documented_pipeline() -> None:
             **_decision_payload(
                 decisionId=f"decision-{index}",
                 originStage=stage,
-                outcome="resolved",
+                outcome="denied" if stage == "protected_path_guard" else "resolved",
                 provenanceSource="runtime"
                 if stage == "runtime_execution"
+                else "protected_path"
+                if stage == "protected_path_guard"
                 else "policy",
-                eventName="decision.resolved",
+                eventName="decision.denied"
+                if stage == "protected_path_guard"
+                else "decision.resolved",
             )
         )
         for index, stage in enumerate(CLAUDE_DECISION_STAGE_ORDER, start=1)
@@ -435,6 +466,20 @@ def test_protected_path_decision_cannot_be_auto_allowed() -> None:
             proposal_kind="file",
             outcome="allowed",
             created_at=NOW,
+        )
+
+
+def test_protected_path_guard_requires_protected_path_provenance() -> None:
+    with pytest.raises(ValueError, match="protected_path provenance"):
+        ClaudeDecisionPoint(
+            **_decision_payload(
+                decisionId="decision-protected-policy",
+                proposalKind="file",
+                originStage="protected_path_guard",
+                outcome="denied",
+                provenanceSource="policy",
+                eventName="decision.denied",
+            )
         )
 
 
