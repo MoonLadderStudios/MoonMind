@@ -29,9 +29,9 @@
 
 - [ ] T001 Confirm active feature artifacts and traceability references in specs/180-durable-task-edit-reconstruction/spec.md
 - [ ] T002 Confirm snapshot contract and reconstruction matrix in specs/180-durable-task-edit-reconstruction/contracts/original-task-input-snapshot.md
-- [ ] T003 [P] Add placeholder or section anchors for frontend reconstruction tests in frontend/src/entrypoints/task-create.test.tsx
-- [ ] T004 [P] Add placeholder or section anchors for API contract tests in tests/contract/test_temporal_execution_api.py
-- [ ] T005 [P] Add placeholder or section anchors for Temporal boundary tests in tests/unit/workflows/temporal/test_task_input_snapshot_boundary.py
+- [ ] T003 [P] Add a dedicated durable task input snapshot reconstruction describe block for upcoming frontend tests in frontend/src/entrypoints/task-create.test.tsx
+- [ ] T004 [P] Add a dedicated durable task input snapshot API contract test section for upcoming create/detail/update/rerun tests in tests/contract/test_temporal_execution_api.py
+- [ ] T005 [P] Create the Temporal boundary test module for compact snapshot refs in tests/unit/workflows/temporal/test_task_input_snapshot_boundary.py
 
 ---
 
