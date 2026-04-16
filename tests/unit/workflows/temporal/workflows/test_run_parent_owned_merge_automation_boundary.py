@@ -17,6 +17,7 @@ def _patch_workflow_context(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -150,3 +151,54 @@ async def test_parent_owned_merge_automation_duplicate_retry_preserves_one_child
 
     assert len(calls) == 1
     assert workflow._publish_context["mergeAutomationWorkflowId"] == calls[0]
+
+
+@pytest.mark.asyncio
+async def test_parent_owned_merge_automation_preserves_legacy_merge_gate_start_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_workflow_context(monkeypatch)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_context["branch"] = "feature"
+    workflow._publish_context["baseRef"] = "main"
+    workflow._publish_context["headSha"] = "abc123"
+    calls: list[dict[str, Any]] = []
+
+    async def fake_start_child_workflow(
+        workflow_type: str,
+        payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> object:
+        calls.append({"workflow_type": workflow_type, "payload": payload, "kwargs": kwargs})
+        return object()
+
+    async def fake_execute_child_workflow(*_args: Any, **_kwargs: Any) -> object:
+        raise AssertionError("legacy replay path should not execute the new child workflow")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "start_child_workflow",
+        fake_start_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+
+    await workflow._maybe_start_merge_gate(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-350"},
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+    )
+
+    assert calls[0]["workflow_type"] == "MoonMind.MergeGate"
+    assert calls[0]["payload"]["workflowType"] == "MoonMind.MergeGate"
+    assert calls[0]["payload"]["idempotencyKey"].startswith("merge-gate:")
+    assert calls[0]["kwargs"]["id"] == calls[0]["payload"]["idempotencyKey"]
+    assert workflow._awaiting_external is False
+    assert workflow._publish_context["mergeAutomationStatus"] == "started"

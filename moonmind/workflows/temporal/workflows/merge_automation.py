@@ -49,6 +49,7 @@ class MoonMindMergeAutomationWorkflow:
         self._blockers: list[ReadinessBlockerModel] = []
         self._resolver_child_workflow_ids: list[str] = []
         self._external_event_count = 0
+        self._refresh_tracked_head_sha_on_next_evaluation = False
 
     def _summary_payload(self) -> dict[str, Any]:
         pr = self._input.pull_request if self._input is not None else None
@@ -91,6 +92,29 @@ class MoonMindMergeAutomationWorkflow:
             return ""
         return str(resolver_result.get("mergeAutomationDisposition") or "").strip()
 
+    @staticmethod
+    def _head_sha_from_mapping(payload: Mapping[str, Any]) -> str:
+        for key in ("headSha", "head_sha", "latestHeadSha", "latest_head_sha"):
+            candidate = str(payload.get(key) or "").strip()
+            if candidate:
+                return candidate
+        for key in ("pullRequest", "pull_request", "mergeGate", "merge_gate"):
+            nested = payload.get(key)
+            if isinstance(nested, Mapping):
+                candidate = MoonMindMergeAutomationWorkflow._head_sha_from_mapping(nested)
+                if candidate:
+                    return candidate
+        return ""
+
+    def _refresh_tracked_head_sha(self, payload: Any) -> bool:
+        if self._input is None or not isinstance(payload, Mapping):
+            return False
+        head_sha = self._head_sha_from_mapping(payload)
+        if not head_sha:
+            return False
+        self._input.pull_request.head_sha = head_sha
+        return True
+
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._input = MergeGateStartInput.model_validate(payload)
@@ -110,6 +134,13 @@ class MoonMindMergeAutomationWorkflow:
                 evaluation if isinstance(evaluation, Mapping) else {},
                 tracked_head_sha=self._input.pull_request.head_sha,
             )
+            if self._refresh_tracked_head_sha_on_next_evaluation:
+                self._refresh_tracked_head_sha_on_next_evaluation = False
+                if self._refresh_tracked_head_sha(evaluation):
+                    evidence = classify_readiness(
+                        evaluation if isinstance(evaluation, Mapping) else {},
+                        tracked_head_sha=self._input.pull_request.head_sha,
+                    )
             self._blockers = list(evidence.blockers)
             if evidence.ready:
                 self._status = STATE_EXECUTING
@@ -148,6 +179,9 @@ class MoonMindMergeAutomationWorkflow:
                     resolver_status == "success"
                     and resolver_disposition == DISPOSITION_REENTER_GATE
                 ):
+                    self._refresh_tracked_head_sha_on_next_evaluation = (
+                        not self._refresh_tracked_head_sha(resolver_result)
+                    )
                     self._status = STATE_WAITING
                     self._publish_visibility()
                     continue
@@ -178,5 +212,6 @@ class MoonMindMergeAutomationWorkflow:
                     lambda: self._external_event_count > 0,
                     timeout=timedelta(minutes=5),
                 )
-            except Exception:
+            except TimeoutError:
+                # Expected fallback poll wake-up when no external signal arrives.
                 pass

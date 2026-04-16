@@ -158,6 +158,7 @@ RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
+RUN_PARENT_OWNED_MERGE_AUTOMATION_PATCH = "run-parent-owned-merge-automation-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
@@ -3154,6 +3155,19 @@ class MoonMindRunWorkflow:
         status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
         return status in {"merged", "already_merged"}
 
+    @staticmethod
+    def _legacy_merge_gate_start_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+        legacy_payload = dict(payload)
+        legacy_payload["workflowType"] = "MoonMind.MergeGate"
+        idempotency_key = str(legacy_payload.get("idempotencyKey") or "")
+        if idempotency_key.startswith("merge-automation:"):
+            legacy_payload["idempotencyKey"] = idempotency_key.replace(
+                "merge-automation:",
+                "merge-gate:",
+                1,
+            )
+        return legacy_payload
+
     def _merge_automation_failure_reason(self, result: Any) -> str:
         status = self._coerce_text(self._get_from_result(result, "status"), max_chars=40)
         blockers = self._get_from_result(result, "blockers")
@@ -3203,14 +3217,36 @@ class MoonMindRunWorkflow:
         self._update_search_attributes()
         self._update_memo()
         try:
-            child_result = await workflow.execute_child_workflow(
-                "MoonMind.MergeAutomation",
-                payload,
-                id=workflow_id,
-                task_queue=WORKFLOW_TASK_QUEUE,
-                static_summary="Waiting for pull request merge readiness",
-                static_details=f"Merge automation for {pull_request_url}",
-            )
+            if workflow.patched(RUN_PARENT_OWNED_MERGE_AUTOMATION_PATCH):
+                child_result = await workflow.execute_child_workflow(
+                    "MoonMind.MergeAutomation",
+                    payload,
+                    id=workflow_id,
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                    static_summary="Waiting for pull request merge readiness",
+                    static_details=f"Merge automation for {pull_request_url}",
+                )
+            else:
+                legacy_payload = self._legacy_merge_gate_start_payload(payload)
+                legacy_workflow_id = str(legacy_payload["idempotencyKey"])
+                await workflow.start_child_workflow(
+                    "MoonMind.MergeGate",
+                    legacy_payload,
+                    id=legacy_workflow_id,
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                    static_summary="Waiting for pull request merge readiness",
+                    static_details=f"Merge gate for {pull_request_url}",
+                )
+                self._awaiting_external = False
+                self._publish_context["mergeAutomationWorkflowId"] = legacy_workflow_id
+                self._publish_context["mergeAutomationResult"] = {
+                    "status": "started",
+                    "workflowId": legacy_workflow_id,
+                }
+                self._publish_context["mergeAutomationStatus"] = "started"
+                self._update_memo()
+                self._update_search_attributes()
+                return
         except Exception:
             self._awaiting_external = False
             self._publish_context["mergeAutomationStatus"] = "failed"

@@ -44,6 +44,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         {
             "status": "success",
             "mergeAutomationDisposition": "reenter_gate",
+            "headSha": "def456",
         },
         {
             "status": "success",
@@ -60,8 +61,9 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         nonlocal readiness_calls
         assert activity_type == "merge_gate.evaluate_readiness"
         readiness_calls += 1
+        head_sha = "abc123" if readiness_calls == 1 else "def456"
         return {
-            "headSha": "abc123",
+            "headSha": head_sha,
             "ready": True,
             "pullRequestOpen": True,
             "policyAllowed": True,
@@ -105,5 +107,107 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
     assert result["cycles"] == 2
     assert child_workflow_ids == [
         "resolver:wf-parent:MoonLadderStudios/MoonMind:350:abc123:1",
-        "resolver:wf-parent:MoonLadderStudios/MoonMind:350:abc123:2",
+        "resolver:wf-parent:MoonLadderStudios/MoonMind:350:def456:2",
     ]
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_ignores_wait_condition_timeout_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    readiness_calls = 0
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        nonlocal readiness_calls
+        assert activity_type == "merge_gate.evaluate_readiness"
+        readiness_calls += 1
+        if readiness_calls == 1:
+            return {
+                "headSha": "abc123",
+                "ready": False,
+                "pullRequestOpen": True,
+                "policyAllowed": True,
+                "checksComplete": False,
+            }
+        return {
+            "headSha": "abc123",
+            "ready": False,
+            "pullRequestOpen": False,
+            "policyAllowed": True,
+        }
+
+    async def fake_wait_condition(*_args: Any, **_kwargs: Any) -> None:
+        raise TimeoutError
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert readiness_calls == 2
+    assert result["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_propagates_unexpected_wait_condition_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "merge_gate.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": False,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": False,
+        }
+
+    async def fake_wait_condition(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("unexpected workflow wait failure")
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected workflow wait failure"):
+        await workflow.run(_payload())
