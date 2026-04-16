@@ -372,7 +372,6 @@ class MoonMindMergeGateWorkflow:
                     lambda: self._external_event_count > 0,
                     timeout=timedelta(minutes=5),
                 )
-            except Exception:
-                # Timeout/cancellation from the wait is intentionally tolerated;
-                # the next loop iteration refreshes readiness from provider state.
+            except TimeoutError:
+                # Expected fallback poll wake-up when no external signal arrives.
                 pass
