@@ -42,3 +42,10 @@
 ## Remaining Work
 
 - Run `./tools/test_integration.sh` in a Docker-enabled environment and confirm `tests/integration/temporal/test_oauth_session.py` coverage for the OAuth workflow plus terminal bridge lifecycle.
+
+## MM-363 Docker Verification Attempt
+
+- Attempted under `specs/194-oauth-terminal-docker-verification` on 2026-04-16.
+- Command: `./tools/test_integration.sh`
+- Result: BLOCKED before tests ran because Docker could not connect to `unix:///var/run/docker.sock`; the socket is absent in this managed-agent container.
+- Decision: Preserve ADDITIONAL_WORK_NEEDED. No Docker-backed auth runner or PTY bridge lifecycle evidence was produced.
