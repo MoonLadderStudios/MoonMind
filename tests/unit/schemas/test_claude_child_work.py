@@ -211,6 +211,15 @@ def test_child_work_event_requires_shape_specific_identifiers() -> None:
             occurredAt=NOW,
         )
 
+    with pytest.raises(ValidationError, match="turnId"):
+        ClaudeChildWorkEvent(
+            eventId="event-child-started",
+            sessionId="claude-session-parent",
+            childContextId="child-subagent-1",
+            eventName="child.subagent.started",
+            occurredAt=NOW,
+        )
+
     with pytest.raises(ValidationError, match="sessionGroupId"):
         ClaudeChildWorkEvent(
             eventId="event-team-started",

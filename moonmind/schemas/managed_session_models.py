@@ -1616,8 +1616,11 @@ class ClaudeChildWorkEvent(BaseModel):
 
     @model_validator(mode="after")
     def _validate_event_shape(self) -> "ClaudeChildWorkEvent":
-        if self.event_name.startswith("child.") and not self.child_context_id:
-            raise ValueError("childContextId is required for subagent events")
+        if self.event_name.startswith("child."):
+            if not self.child_context_id:
+                raise ValueError("childContextId is required for subagent events")
+            if not self.turn_id:
+                raise ValueError("turnId is required for subagent events")
         if self.event_name.startswith("team.") and not self.session_group_id:
             raise ValueError("sessionGroupId is required for team events")
         if self.event_name == "team.message.sent" and not self.peer_session_id:
