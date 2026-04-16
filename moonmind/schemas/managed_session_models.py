@@ -419,6 +419,121 @@ ClaudeChildWorkEventName = Literal[
     "team.member.completed",
     "team.group.completed",
 ]
+ClaudeEventSubscriptionType = Literal["session", "group", "org_policy"]
+ClaudeEventFamily = Literal[
+    "session",
+    "surface",
+    "policy",
+    "turn",
+    "work",
+    "decision",
+    "child_work",
+]
+ClaudeSessionEventName = Literal[
+    "session.created",
+    "session.started",
+    "session.active",
+    "session.waiting",
+    "session.compacting",
+    "session.rewinding",
+    "session.archived",
+    "session.ended",
+    "session.failed",
+]
+ClaudeTurnEventName = Literal[
+    "turn.submitted",
+    "turn.gathering_context",
+    "turn.pending_decision",
+    "turn.executing",
+    "turn.verifying",
+    "turn.interrupted",
+    "turn.completed",
+    "turn.failed",
+]
+ClaudeWorkEventName = Literal[
+    "work.context.loaded",
+    "work.tool.requested",
+    "work.tool.executed",
+    "work.tool.failed",
+    "work.hook.started",
+    "work.hook.completed",
+    "work.hook.blocked",
+    "work.checkpoint.created",
+    "work.compaction.started",
+    "work.compaction.completed",
+    "work.rewind.started",
+    "work.rewind.completed",
+]
+ClaudeCentralStoreKind = Literal[
+    "session_registry",
+    "event_log",
+    "policy_store",
+    "context_index",
+    "checkpoint_index",
+    "artifact_index",
+    "usage_store",
+]
+ClaudeStoredEvidenceKind = Literal[
+    "metadata",
+    "event_envelope",
+    "policy_version",
+    "usage_counter",
+    "artifact_pointer",
+    "retention_metadata",
+    "telemetry_summary",
+    "governance_summary",
+]
+ClaudeRuntimeLocalPayloadKind = Literal[
+    "transcript",
+    "full_file_read",
+    "checkpoint_payload",
+    "local_cache",
+]
+ClaudeRetentionClassName = Literal[
+    "hot_session_metadata",
+    "hot_event_log",
+    "usage_rollups",
+    "audit_event_metadata",
+    "checkpoint_payloads",
+]
+ClaudeTelemetryMetricName = Literal[
+    "managed_sessions_active",
+    "managed_turn_duration_ms",
+    "managed_decisions_total",
+    "managed_hooks_total",
+    "managed_checkpoints_total",
+    "managed_compactions_total",
+    "managed_subagent_total",
+    "managed_team_sessions_total",
+    "managed_policy_fetch_failures_total",
+    "managed_surface_reconnects_total",
+    "managed_usage_tokens",
+]
+ClaudeTelemetrySpanName = Literal[
+    "session.bootstrap",
+    "policy.resolve",
+    "turn.process",
+    "decision.resolve",
+    "hook.execute",
+    "tool.execute",
+    "checkpoint.capture",
+    "session.compact",
+    "checkpoint.restore",
+    "subagent.run",
+    "team.session.run",
+]
+ClaudeUsageTokenDirection = Literal["input", "output", "total"]
+ClaudeGovernanceControlLayer = Literal[
+    "managed_settings_source_resolution",
+    "permission_rules",
+    "permission_mode",
+    "protected_paths",
+    "sandboxing",
+    "hooks",
+    "classifier_auto_mode",
+    "interactive_dialogs",
+    "runtime_isolation",
+]
 
 CLAUDE_DECISION_STAGE_ORDER: tuple[ClaudeDecisionStage, ...] = (
     "session_state_guard",
@@ -515,6 +630,83 @@ CLAUDE_CHILD_WORK_EVENT_NAMES: tuple[ClaudeChildWorkEventName, ...] = (
     "team.member.completed",
     "team.group.completed",
 )
+CLAUDE_EVENT_FAMILIES: tuple[ClaudeEventFamily, ...] = (
+    "session",
+    "surface",
+    "policy",
+    "turn",
+    "work",
+    "decision",
+    "child_work",
+)
+CLAUDE_SESSION_EVENT_NAMES: tuple[ClaudeSessionEventName, ...] = (
+    "session.created",
+    "session.started",
+    "session.active",
+    "session.waiting",
+    "session.compacting",
+    "session.rewinding",
+    "session.archived",
+    "session.ended",
+    "session.failed",
+)
+CLAUDE_TURN_EVENT_NAMES: tuple[ClaudeTurnEventName, ...] = (
+    "turn.submitted",
+    "turn.gathering_context",
+    "turn.pending_decision",
+    "turn.executing",
+    "turn.verifying",
+    "turn.interrupted",
+    "turn.completed",
+    "turn.failed",
+)
+CLAUDE_WORK_EVENT_NAMES: tuple[ClaudeWorkEventName, ...] = (
+    "work.context.loaded",
+    "work.tool.requested",
+    "work.tool.executed",
+    "work.tool.failed",
+    "work.hook.started",
+    "work.hook.completed",
+    "work.hook.blocked",
+    "work.checkpoint.created",
+    "work.compaction.started",
+    "work.compaction.completed",
+    "work.rewind.started",
+    "work.rewind.completed",
+)
+CLAUDE_REQUIRED_RETENTION_CLASSES: tuple[ClaudeRetentionClassName, ...] = (
+    "hot_session_metadata",
+    "hot_event_log",
+    "usage_rollups",
+    "audit_event_metadata",
+    "checkpoint_payloads",
+)
+CLAUDE_TELEMETRY_METRIC_NAMES: tuple[ClaudeTelemetryMetricName, ...] = (
+    "managed_sessions_active",
+    "managed_turn_duration_ms",
+    "managed_decisions_total",
+    "managed_hooks_total",
+    "managed_checkpoints_total",
+    "managed_compactions_total",
+    "managed_subagent_total",
+    "managed_team_sessions_total",
+    "managed_policy_fetch_failures_total",
+    "managed_surface_reconnects_total",
+    "managed_usage_tokens",
+)
+CLAUDE_TELEMETRY_SPAN_NAMES: tuple[ClaudeTelemetrySpanName, ...] = (
+    "session.bootstrap",
+    "policy.resolve",
+    "turn.process",
+    "decision.resolve",
+    "hook.execute",
+    "tool.execute",
+    "checkpoint.capture",
+    "session.compact",
+    "checkpoint.restore",
+    "subagent.run",
+    "team.session.run",
+)
 CLAUDE_SURFACE_LIFECYCLE_EVENT_NAMES: tuple[
     ClaudeSurfaceLifecycleEventName, ...
 ] = (
@@ -526,6 +718,23 @@ CLAUDE_SURFACE_LIFECYCLE_EVENT_NAMES: tuple[
     "surface.resumed",
     "surface.handoff.created",
 )
+CLAUDE_EVENT_NAMES_BY_FAMILY: dict[ClaudeEventFamily, tuple[str, ...]] = {
+    "session": CLAUDE_SESSION_EVENT_NAMES,
+    "surface": CLAUDE_SURFACE_LIFECYCLE_EVENT_NAMES,
+    "policy": tuple(get_args(ClaudePolicyEventType)),
+    "turn": CLAUDE_TURN_EVENT_NAMES,
+    "work": CLAUDE_WORK_EVENT_NAMES,
+    "decision": CLAUDE_DECISION_EVENT_NAMES,
+    "child_work": CLAUDE_CHILD_WORK_EVENT_NAMES,
+}
+_CLAUDE_EVENT_FAMILY_REQUIRED_IDS: dict[ClaudeEventFamily, str] = {
+    "session": "session_id",
+    "surface": "surface_id",
+    "policy": "policy_envelope_id",
+    "turn": "turn_id",
+    "work": "work_item_id",
+    "decision": "turn_id",
+}
 _CLAUDE_CONTEXT_GUIDANCE_KINDS: frozenset[ClaudeContextSourceKind] = frozenset(
     {
         "managed_claude_md",
@@ -2511,6 +2720,711 @@ class ClaudeChildWorkFixtureFlow(BaseModel):
     events: tuple[ClaudeChildWorkEvent, ...]
 
 
+_PAYLOAD_LIGHT_FORBIDDEN_KEYS: frozenset[str] = frozenset(
+    {
+        "sourcecode",
+        "source_code",
+        "transcript",
+        "fullfileread",
+        "full_file_read",
+        "checkpointpayload",
+        "checkpoint_payload",
+        "localcache",
+        "local_cache",
+    }
+)
+
+
+def _validate_payload_light_metadata(
+    value: dict[str, Any],
+    *,
+    field_name: str,
+) -> dict[str, Any]:
+    compact = validate_compact_temporal_mapping(value, field_name=field_name)
+    _reject_payload_light_keys(compact, path=field_name)
+    return compact
+
+
+def _reject_payload_light_keys(value: Any, *, path: str) -> None:
+    if isinstance(value, dict):
+        for raw_key, nested in value.items():
+            key = str(raw_key)
+            normalized = key.replace("-", "_").replace(" ", "_").lower()
+            compact = normalized.replace("_", "")
+            if (
+                normalized in _PAYLOAD_LIGHT_FORBIDDEN_KEYS
+                or compact in _PAYLOAD_LIGHT_FORBIDDEN_KEYS
+            ):
+                raise ValueError(
+                    f"{path} must remain payload-light; key {key!r} embeds "
+                    "runtime-local payload content"
+                )
+            _reject_payload_light_keys(nested, path=f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            _reject_payload_light_keys(nested, path=f"{path}[{index}]")
+
+
+class ClaudeEventSubscription(BaseModel):
+    """Bounded subscription request for Claude evidence streams."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    subscription_id: NonBlankStr = Field(..., alias="subscriptionId")
+    subscription_type: ClaudeEventSubscriptionType = Field(
+        ..., alias="subscriptionType"
+    )
+    scope_id: NonBlankStr = Field(..., alias="scopeId")
+    event_families: tuple[ClaudeEventFamily, ...] = Field(
+        ..., alias="eventFamilies", min_length=1
+    )
+    created_at: datetime = Field(..., alias="createdAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeEventSubscription":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeEventEnvelope(BaseModel):
+    """Append-only normalized event envelope for Claude governance telemetry."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    event_id: NonBlankStr = Field(..., alias="eventId")
+    event_family: ClaudeEventFamily = Field(..., alias="eventFamily")
+    event_name: NonBlankStr = Field(..., alias="eventName")
+    session_id: NonBlankStr | None = Field(None, alias="sessionId")
+    session_group_id: NonBlankStr | None = Field(None, alias="sessionGroupId")
+    policy_envelope_id: NonBlankStr | None = Field(
+        None, alias="policyEnvelopeId"
+    )
+    turn_id: NonBlankStr | None = Field(None, alias="turnId")
+    work_item_id: NonBlankStr | None = Field(None, alias="workItemId")
+    child_context_id: NonBlankStr | None = Field(None, alias="childContextId")
+    surface_id: NonBlankStr | None = Field(None, alias="surfaceId")
+    occurred_at: datetime = Field(..., alias="occurredAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_payload_light_metadata(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_event_shape(self) -> "ClaudeEventEnvelope":
+        allowed = CLAUDE_EVENT_NAMES_BY_FAMILY[self.event_family]
+        if self.event_name not in allowed:
+            raise ValueError(
+                f"eventName {self.event_name!r} is not valid for "
+                f"eventFamily {self.event_family!r}"
+            )
+        if self.occurred_at.tzinfo is None:
+            self.occurred_at = self.occurred_at.replace(tzinfo=UTC)
+        if field_name := _CLAUDE_EVENT_FAMILY_REQUIRED_IDS.get(
+            self.event_family
+        ):
+            if not getattr(self, field_name):
+                field = type(self).model_fields[field_name]
+                alias = field.alias or field_name
+                raise ValueError(
+                    f"{alias} is required for {self.event_family} events"
+                )
+        if self.event_family == "child_work":
+            if self.event_name.startswith("team.") and not self.session_group_id:
+                raise ValueError("sessionGroupId is required for team events")
+            if self.event_name.startswith("child.") and not self.child_context_id:
+                raise ValueError("childContextId is required for child events")
+        return self
+
+
+class ClaudeStorageEvidence(BaseModel):
+    """Payload-light evidence describing Claude central and runtime-local stores."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    evidence_id: NonBlankStr = Field(..., alias="evidenceId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    central_store: ClaudeCentralStoreKind = Field(..., alias="centralStore")
+    stored_kinds: tuple[ClaudeStoredEvidenceKind, ...] = Field(
+        ..., alias="storedKinds", min_length=1
+    )
+    artifact_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="artifactRefs"
+    )
+    runtime_local_payload_kinds: tuple[ClaudeRuntimeLocalPayloadKind, ...] = Field(
+        default=(), alias="runtimeLocalPayloadKinds"
+    )
+    payload_light: bool = Field(True, alias="payloadLight")
+    created_at: datetime = Field(..., alias="createdAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_evidence(self) -> "ClaudeStorageEvidence":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.payload_light:
+            self.metadata = _validate_payload_light_metadata(
+                self.metadata, field_name="metadata"
+            )
+        else:
+            self.metadata = validate_compact_temporal_mapping(
+                self.metadata, field_name="metadata"
+            )
+        return self
+
+
+class ClaudeRetentionClass(BaseModel):
+    """One policy-controlled Claude retention class."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    class_name: ClaudeRetentionClassName = Field(..., alias="className")
+    retention_value: NonBlankStr = Field(..., alias="retentionValue")
+    policy_controlled: bool = Field(..., alias="policyControlled")
+
+    @model_validator(mode="after")
+    def _validate_policy_controlled(self) -> "ClaudeRetentionClass":
+        if not self.policy_controlled:
+            raise ValueError("retention classes must be policy-controlled")
+        return self
+
+
+class ClaudeRetentionEvidence(BaseModel):
+    """Policy-controlled retention evidence for Claude governance telemetry."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    retention_id: NonBlankStr = Field(..., alias="retentionId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    classes: tuple[ClaudeRetentionClass, ...] = Field(..., min_length=1)
+    policy_ref: HandoffSeedArtifactRef = Field(..., alias="policyRef")
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @model_validator(mode="after")
+    def _validate_classes(self) -> "ClaudeRetentionEvidence":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        names = tuple(item.class_name for item in self.classes)
+        if len(set(names)) != len(names):
+            raise ValueError("retention classes must be unique")
+        required = set(CLAUDE_REQUIRED_RETENTION_CLASSES)
+        present = set(names)
+        if required != present:
+            error_messages: list[str] = []
+            if missing := sorted(required - present):
+                error_messages.append(
+                    f"missing required retention classes: {missing}"
+                )
+            if unexpected := sorted(present - required):
+                error_messages.append(
+                    f"unexpected retention classes found: {unexpected}"
+                )
+            raise ValueError("; ".join(error_messages))
+        return self
+
+
+class ClaudeTelemetryMetric(BaseModel):
+    """Normalized Claude OpenTelemetry metric in the shared schema."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    metric_name: ClaudeTelemetryMetricName = Field(..., alias="metricName")
+    value: float
+    dimensions: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("dimensions", mode="after")
+    @classmethod
+    def _validate_dimensions(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="dimensions")
+
+
+class ClaudeTelemetrySpan(BaseModel):
+    """Normalized Claude OpenTelemetry trace span."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    span_name: ClaudeTelemetrySpanName = Field(..., alias="spanName")
+    duration_ms: int = Field(..., alias="durationMs", ge=0)
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("attributes", mode="after")
+    @classmethod
+    def _validate_attributes(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="attributes")
+
+
+class ClaudeTelemetryEvidence(BaseModel):
+    """Normalized telemetry evidence derived from Claude observations."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    telemetry_id: NonBlankStr = Field(..., alias="telemetryId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    metrics: tuple[ClaudeTelemetryMetric, ...] = ()
+    event_envelopes: tuple[ClaudeEventEnvelope, ...] = Field(
+        default=(), alias="eventEnvelopes"
+    )
+    trace_spans: tuple[ClaudeTelemetrySpan, ...] = Field(
+        default=(), alias="traceSpans"
+    )
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeTelemetryEvidence":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeUsageRollup(BaseModel):
+    """Usage rollup across Claude governance dimensions."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    usage_rollup_id: NonBlankStr = Field(..., alias="usageRollupId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    session_group_id: NonBlankStr | None = Field(None, alias="sessionGroupId")
+    user_id: NonBlankStr = Field(..., alias="userId")
+    workspace_id: NonBlankStr = Field(..., alias="workspaceId")
+    runtime_family: ClaudeRuntimeFamily = Field(..., alias="runtimeFamily")
+    provider_mode: ClaudeProviderMode = Field(..., alias="providerMode")
+    token_direction: ClaudeUsageTokenDirection = Field(..., alias="tokenDirection")
+    token_count: int = Field(..., alias="tokenCount", ge=0)
+    child_context_id: NonBlankStr | None = Field(None, alias="childContextId")
+    team_member_session_id: NonBlankStr | None = Field(
+        None, alias="teamMemberSessionId"
+    )
+    included_in_parent_rollup: bool = Field(
+        False, alias="includedInParentRollup"
+    )
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @model_validator(mode="after")
+    def _validate_rollup(self) -> "ClaudeUsageRollup":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.child_context_id and self.team_member_session_id:
+            raise ValueError(
+                "childContextId and teamMemberSessionId cannot both be set"
+            )
+        if self.included_in_parent_rollup and not (
+            self.child_context_id or self.team_member_session_id
+        ):
+            raise ValueError(
+                "includedInParentRollup requires child or team rollup and "
+                "cannot mark an independent parent rollup"
+            )
+        return self
+
+
+class ClaudeGovernanceEvidence(BaseModel):
+    """Auditor-facing governance evidence for one Claude managed session."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    governance_id: NonBlankStr = Field(..., alias="governanceId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    policy_trust_level: ClaudePolicyTrustLevel = Field(..., alias="policyTrustLevel")
+    provider_mode: ClaudeProviderMode = Field(..., alias="providerMode")
+    execution_security_mode: ClaudeExecutionSecurityMode = Field(
+        ..., alias="executionSecurityMode"
+    )
+    control_layers: tuple[ClaudeGovernanceControlLayer, ...] = Field(
+        default=(), alias="controlLayers"
+    )
+    protected_path_policy: NonBlankStr | None = Field(
+        None, alias="protectedPathPolicy"
+    )
+    hook_audits: tuple[ClaudeHookAudit, ...] = Field(default=(), alias="hookAudits")
+    storage_evidence_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="storageEvidenceRefs"
+    )
+    retention_evidence_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="retentionEvidenceRefs"
+    )
+    telemetry_evidence_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="telemetryEvidenceRefs"
+    )
+    usage_rollup_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="usageRollupRefs"
+    )
+    created_at: datetime = Field(..., alias="createdAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_governance(self) -> "ClaudeGovernanceEvidence":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if "protected_paths" in self.control_layers and not self.protected_path_policy:
+            raise ValueError(
+                "protectedPathPolicy is required when protected_paths are governed"
+            )
+        return self
+
+
+class ClaudeComplianceExportView(BaseModel):
+    """Compliance export view over bounded governance telemetry evidence."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    export_id: NonBlankStr = Field(..., alias="exportId")
+    governance: ClaudeGovernanceEvidence
+    storage_summary_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="storageSummaryRefs"
+    )
+    retention_summary_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="retentionSummaryRefs"
+    )
+    telemetry_summary_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="telemetrySummaryRefs"
+    )
+    usage_summary_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="usageSummaryRefs"
+    )
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeComplianceExportView":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeProviderDashboardSummary(BaseModel):
+    """Provider-mode-aware dashboard summary derived from governance evidence."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    dashboard_id: NonBlankStr = Field(..., alias="dashboardId")
+    provider_mode: ClaudeProviderMode = Field(..., alias="providerMode")
+    policy_trust_levels: tuple[ClaudePolicyTrustLevel, ...] = Field(
+        default=(), alias="policyTrustLevels"
+    )
+    execution_security_modes: tuple[ClaudeExecutionSecurityMode, ...] = Field(
+        default=(), alias="executionSecurityModes"
+    )
+    telemetry_evidence_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="telemetryEvidenceRefs"
+    )
+    usage_rollup_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="usageRollupRefs"
+    )
+    governance_evidence_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
+        default=(), alias="governanceEvidenceRefs"
+    )
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeProviderDashboardSummary":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeGovernanceTelemetryFixtureFlow(BaseModel):
+    """Deterministic provider-free fixture flow for MM-349 boundaries."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    subscription: ClaudeEventSubscription
+    events: tuple[ClaudeEventEnvelope, ...]
+    storage_evidence: ClaudeStorageEvidence = Field(..., alias="storageEvidence")
+    retention_evidence: ClaudeRetentionEvidence = Field(..., alias="retentionEvidence")
+    telemetry_evidence: ClaudeTelemetryEvidence = Field(..., alias="telemetryEvidence")
+    usage_rollups: tuple[ClaudeUsageRollup, ...] = Field(..., alias="usageRollups")
+    governance_evidence: ClaudeGovernanceEvidence = Field(
+        ..., alias="governanceEvidence"
+    )
+    compliance_export: ClaudeComplianceExportView = Field(..., alias="complianceExport")
+    dashboard_summary: ClaudeProviderDashboardSummary = Field(
+        ..., alias="dashboardSummary"
+    )
+
+
+def build_claude_governance_telemetry_fixture_flow(
+    *,
+    session_id: str,
+    session_group_id: str,
+    user_id: str,
+    workspace_id: str,
+    policy_envelope_id: str,
+    created_at: datetime,
+) -> ClaudeGovernanceTelemetryFixtureFlow:
+    """Build a deterministic governance telemetry flow for boundary tests."""
+
+    subscription = ClaudeEventSubscription(
+        subscriptionId=f"{session_id}:subscription",
+        subscriptionType="session",
+        scopeId=session_id,
+        eventFamilies=CLAUDE_EVENT_FAMILIES,
+        createdAt=created_at,
+    )
+    events = (
+        ClaudeEventEnvelope(
+            eventId="event-session-active",
+            eventFamily="session",
+            eventName="session.active",
+            sessionId=session_id,
+            occurredAt=created_at,
+        ),
+        ClaudeEventEnvelope(
+            eventId="event-surface-reconnected",
+            eventFamily="surface",
+            eventName="surface.connected",
+            sessionId=session_id,
+            surfaceId="surface-web",
+            occurredAt=created_at,
+        ),
+        ClaudeEventEnvelope(
+            eventId="event-policy-compiled",
+            eventFamily="policy",
+            eventName="policy.compiled",
+            sessionId=session_id,
+            policyEnvelopeId=policy_envelope_id,
+            occurredAt=created_at,
+        ),
+        ClaudeEventEnvelope(
+            eventId="event-turn-executing",
+            eventFamily="turn",
+            eventName="turn.executing",
+            sessionId=session_id,
+            turnId="turn-1",
+            occurredAt=created_at,
+        ),
+        ClaudeEventEnvelope(
+            eventId="event-work-checkpoint",
+            eventFamily="work",
+            eventName="work.checkpoint.created",
+            sessionId=session_id,
+            workItemId="work-checkpoint-1",
+            occurredAt=created_at,
+        ),
+        ClaudeEventEnvelope(
+            eventId="event-decision-allowed",
+            eventFamily="decision",
+            eventName="decision.allowed",
+            sessionId=session_id,
+            turnId="turn-1",
+            occurredAt=created_at,
+        ),
+        ClaudeEventEnvelope(
+            eventId="event-team-message",
+            eventFamily="child_work",
+            eventName="team.message.sent",
+            sessionId=session_id,
+            sessionGroupId=session_group_id,
+            occurredAt=created_at,
+        ),
+    )
+    storage_evidence = ClaudeStorageEvidence(
+        evidenceId="storage-1",
+        sessionId=session_id,
+        centralStore="event_log",
+        storedKinds=(
+            "metadata",
+            "event_envelope",
+            "artifact_pointer",
+            "telemetry_summary",
+            "governance_summary",
+        ),
+        artifactRefs=(f"artifact://{session_id}/audit",),
+        runtimeLocalPayloadKinds=(
+            "transcript",
+            "full_file_read",
+            "checkpoint_payload",
+            "local_cache",
+        ),
+        payloadLight=True,
+        createdAt=created_at,
+        metadata={"summaryRef": f"artifact://{session_id}/summary"},
+    )
+    retention_evidence = ClaudeRetentionEvidence(
+        retentionId="retention-1",
+        sessionId=session_id,
+        classes=(
+            ClaudeRetentionClass(
+                className="hot_session_metadata",
+                retentionValue="30d",
+                policyControlled=True,
+            ),
+            ClaudeRetentionClass(
+                className="hot_event_log",
+                retentionValue="30d",
+                policyControlled=True,
+            ),
+            ClaudeRetentionClass(
+                className="usage_rollups",
+                retentionValue="90d",
+                policyControlled=True,
+            ),
+            ClaudeRetentionClass(
+                className="audit_event_metadata",
+                retentionValue="org_policy",
+                policyControlled=True,
+            ),
+            ClaudeRetentionClass(
+                className="checkpoint_payloads",
+                retentionValue="runtime_local_default",
+                policyControlled=True,
+            ),
+        ),
+        policyRef="policy://retention/default",
+        createdAt=created_at,
+    )
+    telemetry_evidence = ClaudeTelemetryEvidence(
+        telemetryId="telemetry-1",
+        sessionId=session_id,
+        metrics=(
+            ClaudeTelemetryMetric(
+                metricName="managed_sessions_active",
+                value=1,
+                dimensions={"runtimeKind": "claude_code"},
+            ),
+            ClaudeTelemetryMetric(
+                metricName="managed_usage_tokens",
+                value=42,
+                dimensions={"provider": "anthropic_api", "direction": "total"},
+            ),
+        ),
+        eventEnvelopes=(events[0],),
+        traceSpans=(
+            ClaudeTelemetrySpan(
+                spanName="session.bootstrap",
+                durationMs=10,
+                attributes={"provider": "anthropic_api"},
+            ),
+            ClaudeTelemetrySpan(
+                spanName="turn.process",
+                durationMs=32,
+                attributes={"sessionKind": "managed"},
+            ),
+        ),
+        createdAt=created_at,
+    )
+    usage_rollups = (
+        ClaudeUsageRollup(
+            usageRollupId="usage-input",
+            sessionId=session_id,
+            sessionGroupId=session_group_id,
+            userId=user_id,
+            workspaceId=workspace_id,
+            runtimeFamily="claude_code",
+            providerMode="anthropic_api",
+            tokenDirection="input",
+            tokenCount=20,
+            childContextId="child-1",
+            includedInParentRollup=True,
+            createdAt=created_at,
+        ),
+        ClaudeUsageRollup(
+            usageRollupId="usage-output",
+            sessionId=session_id,
+            sessionGroupId=session_group_id,
+            userId=user_id,
+            workspaceId=workspace_id,
+            runtimeFamily="claude_code",
+            providerMode="anthropic_api",
+            tokenDirection="output",
+            tokenCount=22,
+            teamMemberSessionId="team-member-1",
+            includedInParentRollup=True,
+            createdAt=created_at,
+        ),
+        ClaudeUsageRollup(
+            usageRollupId="usage-total",
+            sessionId=session_id,
+            sessionGroupId=session_group_id,
+            userId=user_id,
+            workspaceId=workspace_id,
+            runtimeFamily="claude_code",
+            providerMode="anthropic_api",
+            tokenDirection="total",
+            tokenCount=42,
+            createdAt=created_at,
+        ),
+    )
+    hook_audit = ClaudeHookAudit(
+        auditId="hook-audit-1",
+        sessionId=session_id,
+        turnId="turn-1",
+        hookName="audit-write",
+        sourceScope="managed",
+        eventType="PreToolUse",
+        matcher="Write",
+        outcome="allow",
+        createdAt=created_at,
+    )
+    governance_evidence = ClaudeGovernanceEvidence(
+        governanceId="governance-1",
+        sessionId=session_id,
+        policyTrustLevel="endpoint_enforced",
+        providerMode="anthropic_api",
+        executionSecurityMode="remote_control_projection",
+        controlLayers=(
+            "managed_settings_source_resolution",
+            "permission_rules",
+            "permission_mode",
+            "protected_paths",
+            "sandboxing",
+            "hooks",
+            "classifier_auto_mode",
+            "interactive_dialogs",
+            "runtime_isolation",
+        ),
+        protectedPathPolicy="protected paths require explicit operator approval",
+        hookAudits=(hook_audit,),
+        storageEvidenceRefs=("storage-1",),
+        retentionEvidenceRefs=("retention-1",),
+        telemetryEvidenceRefs=("telemetry-1",),
+        usageRollupRefs=("usage-input", "usage-output", "usage-total"),
+        createdAt=created_at,
+    )
+    compliance_export = ClaudeComplianceExportView(
+        exportId="export-1",
+        governance=governance_evidence,
+        storageSummaryRefs=("storage-1",),
+        retentionSummaryRefs=("retention-1",),
+        telemetrySummaryRefs=("telemetry-1",),
+        usageSummaryRefs=("usage-input", "usage-output", "usage-total"),
+        createdAt=created_at,
+    )
+    dashboard_summary = ClaudeProviderDashboardSummary(
+        dashboardId="dashboard-1",
+        providerMode="anthropic_api",
+        policyTrustLevels=("endpoint_enforced",),
+        executionSecurityModes=("remote_control_projection",),
+        telemetryEvidenceRefs=("telemetry-1",),
+        usageRollupRefs=("usage-input", "usage-output", "usage-total"),
+        governanceEvidenceRefs=("governance-1",),
+        createdAt=created_at,
+    )
+    return ClaudeGovernanceTelemetryFixtureFlow(
+        subscription=subscription,
+        events=events,
+        storageEvidence=storage_evidence,
+        retentionEvidence=retention_evidence,
+        telemetryEvidence=telemetry_evidence,
+        usageRollups=usage_rollups,
+        governanceEvidence=governance_evidence,
+        complianceExport=compliance_export,
+        dashboardSummary=dashboard_summary,
+    )
+
+
 def validate_claude_team_message_membership(
     *,
     message: ClaudeTeamMessage,
@@ -3556,8 +4470,16 @@ __all__ = [
     "CLAUDE_CONTEXT_STARTUP_KINDS",
     "CLAUDE_DECISION_EVENT_NAMES",
     "CLAUDE_DECISION_STAGE_ORDER",
+    "CLAUDE_EVENT_FAMILIES",
+    "CLAUDE_EVENT_NAMES_BY_FAMILY",
     "CLAUDE_HOOK_WORK_EVENT_NAMES",
+    "CLAUDE_REQUIRED_RETENTION_CLASSES",
     "CLAUDE_SURFACE_LIFECYCLE_EVENT_NAMES",
+    "CLAUDE_TELEMETRY_METRIC_NAMES",
+    "CLAUDE_TELEMETRY_SPAN_NAMES",
+    "CLAUDE_TURN_EVENT_NAMES",
+    "CLAUDE_WORK_EVENT_NAMES",
+    "ClaudeCentralStoreKind",
     "ClaudeChildContext",
     "ClaudeChildContextCommunication",
     "ClaudeChildContextLifecycleOwner",
@@ -3590,8 +4512,16 @@ __all__ = [
     "ClaudeDecisionProposalKind",
     "ClaudeDecisionProvenanceSource",
     "ClaudeDecisionStage",
+    "ClaudeEventEnvelope",
+    "ClaudeEventFamily",
+    "ClaudeEventSubscription",
+    "ClaudeEventSubscriptionType",
     "ClaudeExecutionOwner",
     "ClaudeExecutionSecurityMode",
+    "ClaudeComplianceExportView",
+    "ClaudeGovernanceControlLayer",
+    "ClaudeGovernanceEvidence",
+    "ClaudeGovernanceTelemetryFixtureFlow",
     "ClaudeHookAudit",
     "ClaudeHookOutcome",
     "ClaudeHookSourceScope",
@@ -3619,6 +4549,10 @@ __all__ = [
     "ClaudePolicyTrustLevel",
     "ClaudeProjectionMode",
     "ClaudeProviderMode",
+    "ClaudeProviderDashboardSummary",
+    "ClaudeRetentionClass",
+    "ClaudeRetentionClassName",
+    "ClaudeRetentionEvidence",
     "ClaudeRuntimeFamily",
     "ClaudeRewindMode",
     "ClaudeRewindRequest",
@@ -3628,6 +4562,9 @@ __all__ = [
     "ClaudeSessionGroup",
     "ClaudeSessionGroupStatus",
     "ClaudeSessionState",
+    "ClaudeSessionEventName",
+    "ClaudeStorageEvidence",
+    "ClaudeStoredEvidenceKind",
     "ClaudeSurfaceBinding",
     "ClaudeSurfaceCapability",
     "ClaudeSurfaceConnectionState",
@@ -3635,12 +4572,22 @@ __all__ = [
     "ClaudeSurfaceKind",
     "ClaudeSurfaceLifecycleEvent",
     "ClaudeSurfaceLifecycleEventName",
+    "ClaudeTelemetryEvidence",
+    "ClaudeTelemetryMetric",
+    "ClaudeTelemetryMetricName",
+    "ClaudeTelemetrySpan",
+    "ClaudeTelemetrySpanName",
     "ClaudeTeamMemberRole",
     "ClaudeTeamMemberSession",
     "ClaudeTeamMemberStatus",
     "ClaudeTeamMessage",
     "ClaudeTurnInputOrigin",
+    "ClaudeTurnEventName",
     "ClaudeTurnState",
+    "ClaudeUsageRollup",
+    "ClaudeUsageTokenDirection",
+    "ClaudeRuntimeLocalPayloadKind",
+    "ClaudeWorkEventName",
     "ClaudeWorkItemKind",
     "ClaudeWorkItemStatus",
     "CodexManagedSessionArtifactsPublication",
@@ -3678,6 +4625,7 @@ __all__ = [
     "ManagedSessionTurnStatus",
     "PublishCodexManagedSessionArtifactsRequest",
     "build_claude_child_work_fixture_flow",
+    "build_claude_governance_telemetry_fixture_flow",
     "build_claude_surface_handoff_fixture_flow",
     "claude_checkpoint_capture_decision",
     "claude_default_reinjection_policy",
