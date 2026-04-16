@@ -39,7 +39,7 @@ Removed legacy activity:
 Validation:
 
 ```bash
-rg -n "merge_automation\\.create_resolver_run" moonmind tests docs/Tasks
+rg -n "merge_automation\\.create_resolver_run" moonmind docs/Tasks
 ```
 
-Expected live result: no matches outside historical specs or generated MM-364 verification notes.
+Expected live result: no matches in production code or canonical task documentation. Tests may retain negative assertions that prove the legacy activity remains absent.

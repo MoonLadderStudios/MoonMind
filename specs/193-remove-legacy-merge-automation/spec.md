@@ -73,7 +73,7 @@ Out of Scope
 1. **Given** the repository is loaded by a Temporal worker, **When** workflow classes are registered, **Then** `MoonMind.MergeAutomation` resolves only to `moonmind/workflows/temporal/workflows/merge_automation.py`.
 2. **Given** the active merge automation workflow needs readiness classification or resolver request construction, **When** those helpers are imported from `merge_gate.py`, **Then** the helpers remain available without importing a second workflow class.
 3. **Given** merge automation reaches a ready PR state, **When** the active workflow launches remediation, **Then** it starts child workflow `MoonMind.Run` with the `pr-resolver` skill and `publishMode=none`.
-4. **Given** repository references are searched, **When** `merge_automation.create_resolver_run` is grepped, **Then** no live activity catalog, runtime binding, workflow, or test path depends on that legacy activity.
+4. **Given** repository references are searched, **When** `merge_automation.create_resolver_run` is grepped, **Then** no live activity catalog, runtime binding, workflow, or test path depends on that legacy activity; any remaining test references are negative assertions proving the legacy path is absent.
 5. **Given** merge automation documentation is reviewed, **When** it describes the active execution path, **Then** it does not imply both legacy and active workflow implementations are registered.
 
 ### Edge Cases
@@ -95,7 +95,7 @@ Out of Scope
 - **FR-001**: The system MUST expose exactly one registered `MoonMind.MergeAutomation` workflow implementation, and that implementation MUST be the active workflow in `moonmind/workflows/temporal/workflows/merge_automation.py`.
 - **FR-002**: The system MUST remove the duplicate legacy `MoonMindMergeAutomationWorkflow` class from `moonmind/workflows/temporal/workflows/merge_gate.py` while preserving helper functions used by the active workflow.
 - **FR-003**: The system MUST keep active merge automation resolver launches as child `MoonMind.Run` executions using `pr-resolver` with `publishMode=none`.
-- **FR-004**: The system MUST remove the unreachable `merge_automation.create_resolver_run` activity path from workflow code, activity catalog/runtime registration, and tests when the active workflow no longer calls it.
+- **FR-004**: The system MUST remove the unreachable `merge_automation.create_resolver_run` activity path from workflow code, activity catalog/runtime registration, and tests that exercised the deleted path when the active workflow no longer calls it.
 - **FR-005**: Tests MUST validate the active workflow path and helper behavior rather than importing or exercising the deleted legacy workflow class.
 - **FR-006**: Documentation or implementation notes MUST not imply that both legacy and active merge automation workflow paths are active.
 - **FR-007**: MoonSpec artifacts, verification evidence, commit text, and pull request metadata for this work MUST retain Jira issue key `MM-364` and the original Jira preset brief.
@@ -105,7 +105,7 @@ Out of Scope
 ### Measurable Outcomes
 
 - **SC-001**: Repository search finds only one `class MoonMindMergeAutomationWorkflow` definition and it is in `merge_automation.py`.
-- **SC-002**: Repository search finds no live `merge_automation.create_resolver_run` references outside historical specs or generated verification notes.
+- **SC-002**: Repository search finds no live production or canonical-doc `merge_automation.create_resolver_run` references; any remaining test references are negative assertions, not dependencies on the deleted activity.
 - **SC-003**: Focused unit tests for merge automation helper behavior and active workflow boundary behavior pass.
 - **SC-004**: `./tools/test_unit.sh` passes or reports only an environment blocker unrelated to MM-364.
 - **SC-005**: Final verification can compare implementation evidence against the preserved `MM-364` Jira preset brief.

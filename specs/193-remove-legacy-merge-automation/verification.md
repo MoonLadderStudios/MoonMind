@@ -19,7 +19,7 @@
 | FR-001 | `rg -n "class MoonMindMergeAutomationWorkflow" moonmind/workflows/temporal/workflows` returns only `merge_automation.py`. | VERIFIED |
 | FR-002 | `merge_gate.py` now contains helper functions only; focused helper tests pass. | VERIFIED |
 | FR-003 | `test_merge_automation_reenters_gate_after_resolver_remediation` asserts child `MoonMind.Run`, `pr-resolver`, tool version `1.0`, and `publishMode=none`. | VERIFIED |
-| FR-004 | Activity catalog, runtime dispatch map, runtime handler, and workflow code no longer contain a live `merge_automation.create_resolver_run` path. | VERIFIED |
+| FR-004 | Activity catalog, runtime dispatch map, runtime handler, workflow code, and deleted legacy workflow tests no longer contain a live `merge_automation.create_resolver_run` path. | VERIFIED |
 | FR-005 | Legacy workflow tests were deleted; focused tests validate helper behavior and active workflow behavior. | VERIFIED |
 | FR-006 | `docs/Tasks/PrMergeAutomation.md` grep review found no legacy activity/path references requiring updates. | VERIFIED |
 | FR-007 | MM-364 is preserved in the input artifact, spec, tasks, and this verification record. | VERIFIED |
@@ -32,7 +32,12 @@ moonmind/workflows/temporal/workflows/merge_automation.py:60:class MoonMindMerge
 ```
 
 ```text
-$ rg -n "merge_automation\\.create_resolver_run" moonmind tests docs/Tasks
+$ rg -n "merge_automation\\.create_resolver_run" moonmind docs/Tasks
+<no matches>
+```
+
+```text
+$ rg -n "merge_automation\\.create_resolver_run" tests
 tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py:161:        assert activity_type != "merge_automation.create_resolver_run"
 tests/unit/workflows/temporal/test_merge_gate_workflow.py:35:    assert "merge_automation.create_resolver_run" not in activity_types
 tests/unit/workflows/temporal/test_merge_gate_workflow.py:36:    assert "merge_automation.create_resolver_run" not in _ACTIVITY_HANDLER_ATTRS

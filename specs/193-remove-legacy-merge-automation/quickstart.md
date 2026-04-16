@@ -8,10 +8,10 @@
    rg -n "class MoonMindMergeAutomationWorkflow" moonmind/workflows/temporal/workflows
    ```
 
-2. Confirm the legacy resolver-run activity path is gone from live code and tests:
+2. Confirm the legacy resolver-run activity path is gone from live code and canonical task documentation:
 
    ```bash
-   rg -n "merge_automation\\.create_resolver_run" moonmind tests docs/Tasks
+   rg -n "merge_automation\\.create_resolver_run" moonmind docs/Tasks
    ```
 
 3. Run focused unit and workflow-boundary tests:
