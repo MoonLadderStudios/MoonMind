@@ -77,6 +77,13 @@ ClaudeSurfaceKind = Literal[
 ]
 ClaudeProjectionMode = Literal["primary", "remote_projection", "handoff"]
 ClaudeSurfaceProjectionMode = Literal["primary", "remote_projection"]
+ClaudeSurfaceCapability = Literal[
+    "approvals",
+    "diff_review",
+    "notifications",
+    "qr_connect",
+    "keyboard_control",
+]
 ClaudeSessionState = Literal[
     "creating",
     "starting",
@@ -126,6 +133,20 @@ ClaudeSurfaceConnectionState = Literal[
     "disconnected",
     "reconnecting",
     "detached",
+]
+ClaudeSurfaceLifecycleEventName = Literal[
+    "surface.attached",
+    "surface.connected",
+    "surface.disconnected",
+    "surface.reconnecting",
+    "surface.detached",
+    "surface.resumed",
+    "surface.handoff.created",
+]
+ClaudeExecutionSecurityMode = Literal[
+    "local_execution",
+    "remote_control_projection",
+    "cloud_execution",
 ]
 ClaudeSessionCreatedBy = Literal["user", "schedule", "channel", "sdk", "team_lead"]
 ClaudeProviderMode = Literal[
@@ -463,6 +484,17 @@ CLAUDE_CHILD_WORK_EVENT_NAMES: tuple[ClaudeChildWorkEventName, ...] = (
     "team.message.sent",
     "team.member.completed",
     "team.group.completed",
+)
+CLAUDE_SURFACE_LIFECYCLE_EVENT_NAMES: tuple[
+    ClaudeSurfaceLifecycleEventName, ...
+] = (
+    "surface.attached",
+    "surface.connected",
+    "surface.disconnected",
+    "surface.reconnecting",
+    "surface.detached",
+    "surface.resumed",
+    "surface.handoff.created",
 )
 _CLAUDE_CONTEXT_GUIDANCE_KINDS: frozenset[ClaudeContextSourceKind] = frozenset(
     {
@@ -1257,6 +1289,14 @@ class ClaudeSurfaceBinding(BaseModel):
         "connected", alias="connectionState"
     )
     interactive: bool = Field(..., alias="interactive")
+    capabilities: tuple[ClaudeSurfaceCapability, ...] = ()
+    last_seen_at: datetime | None = Field(None, alias="lastSeenAt")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeSurfaceBinding":
+        if self.last_seen_at is not None and self.last_seen_at.tzinfo is None:
+            self.last_seen_at = self.last_seen_at.replace(tzinfo=UTC)
+        return self
 
 
 class ClaudeManagedSession(BaseModel):
@@ -1281,6 +1321,9 @@ class ClaudeManagedSession(BaseModel):
     handoff_from_session_id: NonBlankStr | None = Field(
         None, alias="handoffFromSessionId"
     )
+    handoff_seed_artifact_refs: tuple[NonBlankStr, ...] = Field(
+        default=(), alias="handoffSeedArtifactRefs"
+    )
     session_group_id: NonBlankStr | None = Field(None, alias="sessionGroupId")
     created_by: ClaudeSessionCreatedBy = Field(..., alias="createdBy")
     created_at: datetime = Field(..., alias="createdAt")
@@ -1294,14 +1337,69 @@ class ClaudeManagedSession(BaseModel):
         return validate_compact_temporal_mapping(value, field_name="extensions")
 
     @model_validator(mode="after")
-    def _validate_datetimes(self) -> "ClaudeManagedSession":
+    def _validate_invariants(self) -> "ClaudeManagedSession":
         if self.created_at.tzinfo is None:
             self.created_at = self.created_at.replace(tzinfo=UTC)
         if self.updated_at.tzinfo is None:
             self.updated_at = self.updated_at.replace(tzinfo=UTC)
         if self.ended_at is not None and self.ended_at.tzinfo is None:
             self.ended_at = self.ended_at.replace(tzinfo=UTC)
+        primary_bindings = [
+            binding
+            for binding in self.surface_bindings
+            if binding.projection_mode == "primary"
+        ]
+        if len(primary_bindings) > 1:
+            raise ValueError("Claude session can have only one primary surface")
+        if self.projection_mode == "handoff":
+            if self.execution_owner != "anthropic_cloud_vm":
+                raise ValueError("handoff sessions must use anthropic_cloud_vm")
+            if self.handoff_from_session_id is None:
+                raise ValueError("handoff sessions require handoffFromSessionId")
+        elif self.handoff_seed_artifact_refs:
+            raise ValueError("handoffSeedArtifactRefs require handoff projection")
         return self
+
+    def with_surface_binding(
+        self,
+        *,
+        surface_id: str,
+        surface_kind: ClaudeSurfaceKind,
+        projection_mode: ClaudeSurfaceProjectionMode,
+        interactive: bool,
+        updated_at: datetime,
+        connection_state: ClaudeSurfaceConnectionState = "connected",
+        capabilities: tuple[ClaudeSurfaceCapability, ...] = (),
+        last_seen_at: datetime | None = None,
+    ) -> "ClaudeManagedSession":
+        """Return a copy with an added or replaced surface binding."""
+
+        next_surface_id = require_non_blank(surface_id, field_name="surfaceId")
+        binding = ClaudeSurfaceBinding(
+            surfaceId=next_surface_id,
+            surfaceKind=surface_kind,
+            projectionMode=projection_mode,
+            connectionState=connection_state,
+            interactive=interactive,
+            capabilities=capabilities,
+            lastSeenAt=last_seen_at,
+        )
+        existing_without_surface = tuple(
+            existing
+            for existing in self.surface_bindings
+            if existing.surface_id != next_surface_id
+        )
+        if projection_mode == "primary":
+            for existing in existing_without_surface:
+                if existing.projection_mode == "primary":
+                    raise ValueError("Claude session can have only one primary surface")
+        return self.model_copy(
+            deep=True,
+            update={
+                "surface_bindings": (*existing_without_surface, binding),
+                "updated_at": updated_at,
+            },
+        )
 
     def with_remote_projection(
         self,
@@ -1313,19 +1411,85 @@ class ClaudeManagedSession(BaseModel):
     ) -> "ClaudeManagedSession":
         """Return a copy with an added Remote Control projection surface."""
 
-        binding = ClaudeSurfaceBinding(
-            surfaceId=surface_id,
-            surfaceKind=surface_kind,
-            projectionMode="remote_projection",
-            connectionState="connected",
+        return self.with_surface_binding(
+            surface_id=surface_id,
+            surface_kind=surface_kind,
+            projection_mode="remote_projection",
             interactive=interactive,
+            updated_at=updated_at,
+            connection_state="connected",
+            last_seen_at=updated_at,
         )
+
+    def with_surface_connection_state(
+        self,
+        *,
+        surface_id: str,
+        connection_state: ClaudeSurfaceConnectionState,
+        updated_at: datetime,
+    ) -> "ClaudeManagedSession":
+        """Return a copy with one surface binding's connection state updated."""
+
+        next_surface_id = require_non_blank(surface_id, field_name="surfaceId")
+        next_bindings: list[ClaudeSurfaceBinding] = []
+        found = False
+        for binding in self.surface_bindings:
+            if binding.surface_id != next_surface_id:
+                next_bindings.append(binding)
+                continue
+            found = True
+            next_bindings.append(
+                binding.model_copy(
+                    deep=True,
+                    update={
+                        "connection_state": connection_state,
+                        "last_seen_at": updated_at,
+                    },
+                )
+            )
+        if not found:
+            raise ValueError(f"surfaceId {next_surface_id!r} is not attached")
         return self.model_copy(
             deep=True,
             update={
-                "surface_bindings": (*self.surface_bindings, binding),
+                "surface_bindings": tuple(next_bindings),
                 "updated_at": updated_at,
-            }
+            },
+        )
+
+    def resume_on_surface(
+        self,
+        *,
+        surface_id: str,
+        surface_kind: ClaudeSurfaceKind,
+        interactive: bool,
+        updated_at: datetime,
+        capabilities: tuple[ClaudeSurfaceCapability, ...] = (),
+    ) -> "ClaudeManagedSession":
+        """Return a copy resumed on a new primary surface without handoff."""
+
+        non_primary = tuple(
+            binding
+            for binding in self.surface_bindings
+            if binding.projection_mode != "primary"
+        )
+        resumed = self.model_copy(
+            deep=True,
+            update={
+                "surface_bindings": non_primary,
+                "primary_surface": surface_kind,
+                "updated_at": updated_at,
+            },
+        )
+        return resumed.with_surface_binding(
+            surface_id=surface_id,
+            surface_kind=surface_kind,
+            projection_mode="primary",
+            interactive=interactive,
+            updated_at=updated_at,
+            connection_state="connected",
+            capabilities=capabilities,
+            last_seen_at=updated_at,
         )
 
     def cloud_handoff(
@@ -1335,6 +1499,7 @@ class ClaudeManagedSession(BaseModel):
         primary_surface: ClaudeSurfaceKind,
         created_by: ClaudeSessionCreatedBy,
         created_at: datetime,
+        seed_artifact_refs: tuple[str, ...] = (),
     ) -> "ClaudeManagedSession":
         """Create a distinct cloud-owned session with lineage to this session."""
 
@@ -1351,10 +1516,224 @@ class ClaudeManagedSession(BaseModel):
             projectionMode="handoff",
             surfaceBindings=(),
             handoffFromSessionId=self.session_id,
+            handoffSeedArtifactRefs=seed_artifact_refs,
             createdBy=created_by,
             createdAt=created_at,
             updatedAt=created_at,
         )
+
+
+class ClaudeSurfaceLifecycleEvent(BaseModel):
+    """Normalized event for Claude surface lifecycle and handoff activity."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    event_id: NonBlankStr = Field(..., alias="eventId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    surface_id: NonBlankStr | None = Field(None, alias="surfaceId")
+    event_name: ClaudeSurfaceLifecycleEventName = Field(..., alias="eventName")
+    source_session_id: NonBlankStr | None = Field(None, alias="sourceSessionId")
+    destination_session_id: NonBlankStr | None = Field(
+        None, alias="destinationSessionId"
+    )
+    handoff_seed_artifact_refs: tuple[NonBlankStr, ...] = Field(
+        default=(), alias="handoffSeedArtifactRefs"
+    )
+    occurred_at: datetime = Field(..., alias="occurredAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_event_shape(self) -> "ClaudeSurfaceLifecycleEvent":
+        if self.occurred_at.tzinfo is None:
+            self.occurred_at = self.occurred_at.replace(tzinfo=UTC)
+        if self.event_name == "surface.handoff.created":
+            if self.source_session_id is None:
+                raise ValueError(
+                    "sourceSessionId is required for surface.handoff.created"
+                )
+            if self.destination_session_id is None:
+                raise ValueError(
+                    "destinationSessionId is required for surface.handoff.created"
+                )
+            return self
+        if self.surface_id is None:
+            raise ValueError("surfaceId is required for surface lifecycle events")
+        if (
+            self.source_session_id is not None
+            or self.destination_session_id is not None
+        ):
+            raise ValueError("handoff lineage fields require surface.handoff.created")
+        if self.handoff_seed_artifact_refs:
+            raise ValueError(
+                "handoffSeedArtifactRefs require surface.handoff.created"
+            )
+        return self
+
+
+class ClaudeSurfaceHandoffFixtureFlow(BaseModel):
+    """Deterministic provider-free fixture flow for MM-348 boundaries."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    source_session: ClaudeManagedSession = Field(..., alias="sourceSession")
+    projected_session: ClaudeManagedSession = Field(..., alias="projectedSession")
+    disconnected_session: ClaudeManagedSession = Field(
+        ..., alias="disconnectedSession"
+    )
+    reconnected_session: ClaudeManagedSession = Field(..., alias="reconnectedSession")
+    resumed_session: ClaudeManagedSession = Field(..., alias="resumedSession")
+    cloud_session: ClaudeManagedSession = Field(..., alias="cloudSession")
+    events: tuple[ClaudeSurfaceLifecycleEvent, ...]
+
+
+def classify_claude_execution_security_mode(
+    session: ClaudeManagedSession,
+) -> ClaudeExecutionSecurityMode:
+    """Classify execution locality for security and compliance reporting."""
+
+    if session.execution_owner == "anthropic_cloud_vm":
+        return "cloud_execution"
+    if any(
+        binding.projection_mode == "remote_projection"
+        for binding in session.surface_bindings
+    ):
+        return "remote_control_projection"
+    return "local_execution"
+
+
+def build_claude_surface_handoff_fixture_flow(
+    *,
+    source_session_id: str,
+    terminal_surface_id: str,
+    web_surface_id: str,
+    resumed_surface_id: str,
+    cloud_session_id: str,
+    created_at: datetime,
+    seed_artifact_refs: tuple[str, ...],
+) -> ClaudeSurfaceHandoffFixtureFlow:
+    """Build a deterministic multi-surface and handoff flow for boundary tests."""
+
+    source_session = ClaudeManagedSession(
+        sessionId=source_session_id,
+        executionOwner="local_process",
+        state="active",
+        primarySurface="terminal",
+        projectionMode="primary",
+        createdBy="user",
+        createdAt=created_at,
+        updatedAt=created_at,
+    ).with_surface_binding(
+        surface_id=terminal_surface_id,
+        surface_kind="terminal",
+        projection_mode="primary",
+        interactive=True,
+        capabilities=("approvals", "diff_review"),
+        updated_at=created_at,
+        last_seen_at=created_at,
+    )
+    projected_session = source_session.with_remote_projection(
+        surface_id=web_surface_id,
+        surface_kind="web",
+        interactive=True,
+        updated_at=created_at,
+    )
+    disconnected_session = projected_session.with_surface_connection_state(
+        surface_id=web_surface_id,
+        connection_state="disconnected",
+        updated_at=created_at,
+    )
+    reconnecting_session = disconnected_session.with_surface_connection_state(
+        surface_id=web_surface_id,
+        connection_state="reconnecting",
+        updated_at=created_at,
+    )
+    reconnected_session = reconnecting_session.with_surface_connection_state(
+        surface_id=web_surface_id,
+        connection_state="connected",
+        updated_at=created_at,
+    )
+    resumed_session = reconnected_session.resume_on_surface(
+        surface_id=resumed_surface_id,
+        surface_kind="desktop",
+        interactive=True,
+        capabilities=("approvals", "keyboard_control"),
+        updated_at=created_at,
+    )
+    cloud_session = resumed_session.cloud_handoff(
+        session_id=cloud_session_id,
+        primary_surface="web",
+        created_by="user",
+        created_at=created_at,
+        seed_artifact_refs=seed_artifact_refs,
+    )
+    events = (
+        ClaudeSurfaceLifecycleEvent(
+            eventId=f"{terminal_surface_id}:attached",
+            sessionId=source_session_id,
+            surfaceId=terminal_surface_id,
+            eventName="surface.attached",
+            occurredAt=created_at,
+        ),
+        ClaudeSurfaceLifecycleEvent(
+            eventId=f"{web_surface_id}:attached",
+            sessionId=source_session_id,
+            surfaceId=web_surface_id,
+            eventName="surface.attached",
+            occurredAt=created_at,
+            metadata={"projectionMode": "remote_projection"},
+        ),
+        ClaudeSurfaceLifecycleEvent(
+            eventId=f"{web_surface_id}:disconnected",
+            sessionId=source_session_id,
+            surfaceId=web_surface_id,
+            eventName="surface.disconnected",
+            occurredAt=created_at,
+        ),
+        ClaudeSurfaceLifecycleEvent(
+            eventId=f"{web_surface_id}:reconnecting",
+            sessionId=source_session_id,
+            surfaceId=web_surface_id,
+            eventName="surface.reconnecting",
+            occurredAt=created_at,
+        ),
+        ClaudeSurfaceLifecycleEvent(
+            eventId=f"{web_surface_id}:connected",
+            sessionId=source_session_id,
+            surfaceId=web_surface_id,
+            eventName="surface.connected",
+            occurredAt=created_at,
+        ),
+        ClaudeSurfaceLifecycleEvent(
+            eventId=f"{resumed_surface_id}:resumed",
+            sessionId=source_session_id,
+            surfaceId=resumed_surface_id,
+            eventName="surface.resumed",
+            occurredAt=created_at,
+        ),
+        ClaudeSurfaceLifecycleEvent(
+            eventId=f"{cloud_session_id}:handoff",
+            sessionId=cloud_session_id,
+            eventName="surface.handoff.created",
+            sourceSessionId=source_session_id,
+            destinationSessionId=cloud_session_id,
+            handoffSeedArtifactRefs=seed_artifact_refs,
+            occurredAt=created_at,
+        ),
+    )
+    return ClaudeSurfaceHandoffFixtureFlow(
+        sourceSession=source_session,
+        projectedSession=projected_session,
+        disconnectedSession=disconnected_session,
+        reconnectedSession=reconnected_session,
+        resumedSession=resumed_session,
+        cloudSession=cloud_session,
+        events=events,
+    )
 
 
 class ClaudeManagedTurn(BaseModel):
@@ -3092,6 +3471,7 @@ __all__ = [
     "CLAUDE_DECISION_EVENT_NAMES",
     "CLAUDE_DECISION_STAGE_ORDER",
     "CLAUDE_HOOK_WORK_EVENT_NAMES",
+    "CLAUDE_SURFACE_LIFECYCLE_EVENT_NAMES",
     "ClaudeChildContext",
     "ClaudeChildContextCommunication",
     "ClaudeChildContextLifecycleOwner",
@@ -3125,6 +3505,7 @@ __all__ = [
     "ClaudeDecisionProvenanceSource",
     "ClaudeDecisionStage",
     "ClaudeExecutionOwner",
+    "ClaudeExecutionSecurityMode",
     "ClaudeHookAudit",
     "ClaudeHookOutcome",
     "ClaudeHookSourceScope",
@@ -3162,8 +3543,12 @@ __all__ = [
     "ClaudeSessionGroupStatus",
     "ClaudeSessionState",
     "ClaudeSurfaceBinding",
+    "ClaudeSurfaceCapability",
     "ClaudeSurfaceConnectionState",
+    "ClaudeSurfaceHandoffFixtureFlow",
     "ClaudeSurfaceKind",
+    "ClaudeSurfaceLifecycleEvent",
+    "ClaudeSurfaceLifecycleEventName",
     "ClaudeTeamMemberRole",
     "ClaudeTeamMemberSession",
     "ClaudeTeamMemberStatus",
@@ -3207,8 +3592,10 @@ __all__ = [
     "ManagedSessionTurnStatus",
     "PublishCodexManagedSessionArtifactsRequest",
     "build_claude_child_work_fixture_flow",
+    "build_claude_surface_handoff_fixture_flow",
     "claude_checkpoint_capture_decision",
     "claude_default_reinjection_policy",
+    "classify_claude_execution_security_mode",
     "compact_claude_context_snapshot",
     "create_claude_checkpoint_work_item",
     "create_claude_rewind_work_items",
