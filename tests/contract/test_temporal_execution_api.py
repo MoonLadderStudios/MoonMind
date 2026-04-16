@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -15,6 +16,7 @@ from api_service.db.models import (
     Base,
     TemporalArtifact,
     TemporalArtifactEncryption,
+    TemporalArtifactLink,
     TemporalArtifactRedactionLevel,
     TemporalArtifactRetentionClass,
     TemporalArtifactStatus,
@@ -22,6 +24,7 @@ from api_service.db.models import (
     TemporalArtifactUploadMode,
 )
 from api_service.main import app
+from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 CURRENT_USER_DEP = get_current_user()
@@ -693,7 +696,9 @@ async def test_projection_orphaned_rows_repair_from_canonical_public_routes(tmp_
 
 
 @pytest.mark.asyncio
-async def test_task_shaped_create_returns_temporal_identity_and_redirect(tmp_path):
+async def test_task_shaped_create_returns_temporal_identity_and_redirect(
+    tmp_path, monkeypatch
+):
     original_db_url = db_base.DATABASE_URL
     original_engine = db_base.engine
     original_session_maker = db_base.async_session_maker
@@ -703,6 +708,12 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(tmp_pat
     db_base.engine = create_async_engine(db_url, future=True)
     db_base.async_session_maker = sessionmaker(
         db_base.engine, class_=AsyncSession, expire_on_commit=False
+    )
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        settings.workflow,
+        "temporal_artifact_root",
+        str(tmp_path / "artifacts"),
     )
 
     async with db_base.engine.begin() as conn:
@@ -754,10 +765,44 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(tmp_pat
             assert body["redirectPath"] == f"/tasks/{body['taskId']}?source=temporal"
             assert body["searchAttributes"]["mm_repo"] == "MoonLadderStudios/MoonMind"
             assert body["memo"]["input_ref"] == input_artifact_ref
+            snapshot = body["taskInputSnapshot"]
+            assert snapshot["available"] is True
+            assert snapshot["snapshotVersion"] == 1
+            assert snapshot["sourceKind"] == "create"
+            assert snapshot["reconstructionMode"] == "authoritative"
+            assert snapshot["artifactRef"]
             assert (
                 body["memo"]["summary"]
                 == "Implement Temporal submit redirect coverage."
             )
+
+            async with db_base.async_session_maker() as session:
+                artifact = await session.get(
+                    TemporalArtifact,
+                    snapshot["artifactRef"],
+                )
+                assert artifact is not None
+                assert (
+                    artifact.content_type
+                    == "application/vnd.moonmind.task-input-snapshot+json;version=1"
+                )
+                assert artifact.retention_class is TemporalArtifactRetentionClass.LONG
+                assert (
+                    artifact.metadata_json["artifact_class"]
+                    == "input.original_snapshot"
+                )
+                assert artifact.metadata_json["snapshot_version"] == 1
+                assert artifact.metadata_json["source_kind"] == "create"
+                links = (
+                    await session.execute(
+                        select(TemporalArtifactLink).where(
+                            TemporalArtifactLink.artifact_id == snapshot["artifactRef"],
+                            TemporalArtifactLink.workflow_id == body["workflowId"],
+                            TemporalArtifactLink.link_type == "input.original_snapshot",
+                        )
+                    )
+                ).scalars().all()
+                assert len(links) == 1
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
