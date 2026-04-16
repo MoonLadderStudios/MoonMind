@@ -22,6 +22,8 @@ const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
+const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
+const SPECKIT_ORCHESTRATE_PRESET_SLUG = "speckit-orchestrate";
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
 const JIRA_LAST_PROJECT_SESSION_KEY =
   "moonmind.task-create.jira.last-project-key";
@@ -913,20 +915,16 @@ function scopeLabel(scope: TemplateScope): string {
 export function preferredTemplate(items: TemplateOption[]): TemplateOption | null {
   const preferredSlugs = [
     JIRA_ORCHESTRATE_PRESET_SLUG,
-    "moonspec-orchestrate",
-    "speckit-orchestrate",
+    MOONSPEC_ORCHESTRATE_PRESET_SLUG,
+    SPECKIT_ORCHESTRATE_PRESET_SLUG,
   ];
 
   for (const slug of preferredSlugs) {
-    const preferredGlobal = items.find(
-      (item) => item.slug === slug && item.scope === "global",
-    );
-    if (preferredGlobal) {
-      return preferredGlobal;
-    }
-    const preferredAny = items.find((item) => item.slug === slug);
-    if (preferredAny) {
-      return preferredAny;
+    const preferred =
+      items.find((item) => item.slug === slug && item.scope === "global") ||
+      items.find((item) => item.slug === slug);
+    if (preferred) {
+      return preferred;
     }
   }
 
