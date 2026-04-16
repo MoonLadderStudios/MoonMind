@@ -10,8 +10,8 @@
 
 | Suite | Command | Result | Notes |
 |-------|---------|--------|-------|
-| Focused unit/workflow-boundary | `./tools/test_unit.sh tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_run_merge_gate_start.py` | PASS | 23 Python tests passed; frontend unit suite also passed as part of runner. |
-| Full unit | `./tools/test_unit.sh` | PASS | 3264 Python tests passed, 1 xpassed, 16 subtests passed; frontend Vitest suite passed 222 tests. |
+| Focused unit/workflow-boundary | `./tools/test_unit.sh tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_run_merge_gate_start.py` | PASS | 24 Python tests passed; frontend unit suite also passed as part of runner. |
+| Full unit | `./tools/test_unit.sh` | PASS | 3265 Python tests passed, 1 xpassed, 16 subtests passed; frontend Vitest suite passed 222 tests. |
 | Hermetic integration | `./tools/test_integration.sh` | NOT RUN | Blocked by managed workspace environment: Docker socket unavailable at `/var/run/docker.sock`. |
 
 ## Requirement Coverage
@@ -23,7 +23,7 @@
 | FR-003, FR-004, FR-005, FR-011 | `moonmind/workflows/temporal/workflows/run.py:3153`; `moonmind/workflows/temporal/workflows/run.py:3176`; `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py:28` | VERIFIED | Parent sets `awaiting_external`, awaits child, records result, accepts only `merged`/`already_merged`, and raises for non-success outcomes. |
 | FR-006, FR-007 | `moonmind/workflows/temporal/workflows/run.py:3200`; no new top-level task creation in parent path | VERIFIED | Parent executes a child workflow and remains the completion owner. |
 | FR-012 | `moonmind/workflows/temporal/workflows/merge_automation.py:86` | PARTIAL | New child workflow waits for readiness and runs resolver as child `MoonMind.Run`; re-enter-after-remediation behavior is not yet independently covered. |
-| FR-014 | `tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py`; `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` | PARTIAL | Focused and workflow-boundary unit coverage exists; compose-backed integration was blocked by environment. |
+| FR-014 | `tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py`; `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` | PARTIAL | Focused workflow-boundary coverage exists, including duplicate-start prevention; compose-backed integration was blocked by environment. |
 
 ## Acceptance Scenario Coverage
 
@@ -33,7 +33,7 @@
 | 2. Parent remains waiting while child active | `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py:40` | VERIFIED | Stub asserts `_awaiting_external` is true while child is executing. |
 | 3. Successful child permits parent success | `tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py:60`; boundary success test | VERIFIED | Success outcome is accepted and parent waiting flag is cleared. |
 | 4. Non-success child prevents parent success | `tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py:67`; `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py:72` | VERIFIED | Blocked/failed/expired/canceled/completed are not accepted as parent success. |
-| 5. Retry/replay duplicate child prevention | `tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py:23` | PARTIAL | Deterministic child id is covered; replay-style duplicate-start behavior needs deeper Temporal boundary coverage. |
+| 5. Retry/replay duplicate child prevention | `tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py:23`; `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` | VERIFIED | Deterministic child id and duplicate retry preservation of one child workflow execution are covered. |
 | 6. Disabled merge automation preserves publish behavior | `tests/unit/workflows/temporal/test_run_merge_gate_start.py` | VERIFIED | Disabled-by-default behavior is covered. |
 
 ## Constitution And Source Design Coverage
@@ -51,19 +51,17 @@
 - PASS for using the MM-350 Jira preset brief as the canonical input.
 - PASS for runtime implementation mode.
 - PASS for starting and awaiting a parent-owned `MoonMind.MergeAutomation` child from the parent.
-- PARTIAL for final verification because hermetic integration could not run and deeper replay/duplicate child-start coverage remains advisable.
+- PARTIAL for final verification because hermetic integration could not run and resolver remediation re-gating coverage remains advisable.
 
 ## Gaps
 
 - Hermetic integration verification could not run because Docker is unavailable in this managed workspace.
-- Replay-style duplicate-start coverage is partial; current tests prove deterministic identity but not an actual replay/idempotent child-start history.
 - Resolver re-enter-after-remediation behavior is implemented only through the child workflow shape and existing readiness loop; it needs focused tests if this path is considered in-scope for MM-350 completion.
 
 ## Remaining Work
 
 1. Run `./tools/test_integration.sh` in an environment with Docker socket access.
-2. Add a replay-style or Temporal boundary regression for duplicate child-start prevention under replay.
-3. Add focused coverage for resolver remediation returning to readiness waiting if resolver result shapes support that signal.
+2. Add focused coverage for resolver remediation returning to readiness waiting if resolver result shapes support that signal.
 
 ## Decision
 

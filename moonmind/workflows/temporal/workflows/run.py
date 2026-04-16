@@ -3192,6 +3192,11 @@ class MoonMindRunWorkflow:
         if payload is None:
             return
         workflow_id = str(payload["idempotencyKey"])
+        if (
+            self._publish_context.get("mergeAutomationWorkflowId") == workflow_id
+            and self._publish_context.get("mergeAutomationResult") is not None
+        ):
+            return
         self._awaiting_external = True
         self._publish_context["mergeAutomationWorkflowId"] = workflow_id
         self._publish_context["mergeAutomationStatus"] = "awaiting_child"

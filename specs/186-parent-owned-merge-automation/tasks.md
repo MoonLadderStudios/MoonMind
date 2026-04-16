@@ -60,7 +60,7 @@
 - [X] T013 [P] Add failing workflow-boundary test for enabled merge automation starting and awaiting one child in `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` covering acceptance scenario 1, FR-002, FR-003, SC-001, SC-002
 - [X] T014 [P] Add failing workflow-boundary test for successful child outcome allowing parent success in `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` covering acceptance scenario 3, FR-004, FR-006, SC-003
 - [X] T015 [P] Add failing workflow-boundary test for blocked or failed child outcome preventing parent success in `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` covering acceptance scenario 4, FR-005, SC-004
-- [ ] T016 [P] Add failing workflow-boundary test for duplicate replay or retry preserving one child workflow id in `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` covering acceptance scenario 5, FR-008, SC-005
+- [X] T016 [P] Add failing workflow-boundary test for duplicate replay or retry preserving one child workflow id in `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` covering acceptance scenario 5, FR-008, SC-005
 - [X] T017 [P] Add failing workflow-boundary test for disabled merge automation preserving existing PR publish behavior in `tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` covering acceptance scenario 6, FR-013
 - [X] T018 Run `./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py` to confirm T013-T017 fail for the expected missing parent-await behavior
 

@@ -107,3 +107,46 @@ async def test_parent_owned_merge_automation_blocks_parent_success_on_child_fail
 
     assert workflow._awaiting_external is False
     assert workflow._publish_context["mergeAutomationStatus"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_parent_owned_merge_automation_duplicate_retry_preserves_one_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_workflow_context(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_context["branch"] = "feature"
+    workflow._publish_context["baseRef"] = "main"
+    workflow._publish_context["headSha"] = "abc123"
+    calls: list[str] = []
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        calls.append(str(kwargs["id"]))
+        return {"status": "merged", "prNumber": 350}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    parameters = {
+        "publishMode": "pr",
+        "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-350"},
+    }
+
+    await workflow._maybe_start_merge_gate(
+        parameters=parameters,
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+    )
+    await workflow._maybe_start_merge_gate(
+        parameters=parameters,
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+    )
+
+    assert len(calls) == 1
+    assert workflow._publish_context["mergeAutomationWorkflowId"] == calls[0]
