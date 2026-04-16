@@ -9,7 +9,7 @@
 
 - Unit/UI focused tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py --ui-args frontend/src/entrypoints/task-detail.test.tsx`
 - Full unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -32,6 +32,9 @@
 
 - [X] T004 Add failing workflow tests in `tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py` proving summary, gate snapshot, and resolver attempt artifact refs are written and returned (FR-005, SC-002, DESIGN-REQ-027).
 - [X] T005 Add failing parent summary tests in `tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py` proving `mergeAutomation` run summary projection contains enabled, status, PR, child workflow, resolver ids, cycles, blockers, and artifact refs (FR-006, FR-007, SC-003).
+
+### Integration Tests
+
 - [X] T006 Add failing UI tests in `frontend/src/entrypoints/task-detail.test.tsx` proving Mission Control renders merge automation status, blockers, PR link, head SHA, cycles, child workflow links, and artifact refs without dependency/schedule surfaces (FR-002, FR-003, FR-004, FR-008, SC-001, SC-004).
 - [X] T007 Run the focused test command and confirm the new tests fail for missing visibility/artifact behavior.
 
@@ -46,7 +49,7 @@
 ## Phase 4: Polish And Verification
 
 - [X] T013 Run full unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`.
-- [X] T014 Run `/speckit.verify` and record the result in `specs/189-merge-automation-visibility/verification.md`.
+- [X] T014 Run `/moonspec-verify` and record the result in `specs/189-merge-automation-visibility/verification.md`.
 
 ## Dependencies & Execution Order
 
