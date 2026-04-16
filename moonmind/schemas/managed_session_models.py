@@ -1305,7 +1305,7 @@ def claude_default_reinjection_policy(
         "nested_claude_md": "on_demand",
         "path_rule": "on_demand",
         "invoked_skill_body": "budgeted",
-        "runtime_summary": "always",
+        "runtime_summary": "on_demand",
         "transcript_summary": "always",
     }
     return policies[kind]
@@ -1421,6 +1421,7 @@ def compact_claude_context_snapshot(
     next_turn_id = turn_id if turn_id is not None else snapshot.turn_id
     retained_segments = tuple(
         segment.model_copy(
+            deep=True,
             update={
                 "loaded_at": "post_compaction",
             }

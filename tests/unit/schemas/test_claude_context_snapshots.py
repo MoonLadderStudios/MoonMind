@@ -103,6 +103,7 @@ def test_reinjection_policy_is_required_and_defaults_match_design() -> None:
     assert claude_default_reinjection_policy("system_prompt") == "always"
     assert claude_default_reinjection_policy("file_read") == "never"
     assert claude_default_reinjection_policy("nested_claude_md") == "on_demand"
+    assert claude_default_reinjection_policy("runtime_summary") == "on_demand"
     assert claude_default_reinjection_policy("skill_description") == "startup_refresh"
     assert claude_default_reinjection_policy("invoked_skill_body") == "budgeted"
     assert claude_default_reinjection_policy("hook_injected_context") == "configurable"
@@ -217,3 +218,37 @@ def test_compaction_creates_new_epoch_without_mutating_original_snapshot() -> No
         "work.compaction.started",
         "work.compaction.completed",
     )
+
+
+def test_compaction_deep_copies_retained_segment_metadata() -> None:
+    original = ClaudeContextSnapshot(
+        snapshotId="snapshot-epoch-0",
+        sessionId="claude-session-1",
+        turnId="turn-1",
+        compactionEpoch=0,
+        segments=[
+            ClaudeContextSegment(
+                segmentId="segment-system",
+                kind="system_prompt",
+                sourceRef="runtime://system",
+                loadedAt="startup",
+                reinjectionPolicy="always",
+                guidanceRole="neutral",
+                metadata={"annotations": {"source": "startup"}},
+            ),
+        ],
+        createdAt=NOW,
+    )
+
+    result = compact_claude_context_snapshot(
+        snapshot=original,
+        snapshot_id="snapshot-epoch-1",
+        work_item_id="work-compaction-1",
+        created_at=NOW,
+    )
+
+    result.snapshot.segments[0].metadata["annotations"]["source"] = "compacted"
+
+    assert original.segments[0].metadata == {
+        "annotations": {"source": "startup"}
+    }
