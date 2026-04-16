@@ -49,9 +49,19 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         seeded_skill_ids = [
             step["skill"]["id"] for step in template.latest_version.steps
         ]
-        assert "moonspec-specify" in seeded_skill_ids
-        assert "moonspec-align" in seeded_skill_ids
-        assert "moonspec-verify" in seeded_skill_ids
+        assert seeded_skill_ids == [
+            "moonspec-specify",
+            "moonspec-plan",
+            "moonspec-tasks",
+            "moonspec-align",
+            "moonspec-implement",
+            "moonspec-verify",
+            "auto",
+        ]
+        seeded_step_titles = [step["title"] for step in template.latest_version.steps]
+        assert "Classify request and resume point" not in seeded_step_titles
+        assert "Split broad designs when needed" not in seeded_step_titles
+        assert seeded_step_titles[0] == "Create or select Moon Spec"
         assert "moonspec-breakdown" not in seeded_skill_ids
         assert "speckit-analyze" not in seeded_skill_ids
         tasks_step = next(
