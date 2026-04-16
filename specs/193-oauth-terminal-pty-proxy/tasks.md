@@ -44,7 +44,7 @@
 
 - [X] T018 [P] Review `specs/193-oauth-terminal-pty-proxy/contracts/oauth-terminal-pty-proxy.md` against implemented WebSocket behavior and update only if implementation differs for FR-001 through FR-006.
 - [X] T019 [P] Review `specs/193-oauth-terminal-pty-proxy/quickstart.md` against executed commands and update validation notes.
-- [X] T020 Run `/speckit.verify` equivalent and write `specs/193-oauth-terminal-pty-proxy/verification.md` with final verdict and DESIGN-REQ coverage.
+- [X] T020 Run `/moonspec-verify` equivalent and write `specs/193-oauth-terminal-pty-proxy/verification.md` with final verdict and DESIGN-REQ coverage.
 
 ## Execution Evidence
 
@@ -60,7 +60,7 @@
 3. Unit and integration test tasks T005-T008 precede red-first confirmation T009-T010.
 4. Implementation tasks T011-T014 start only after red-first confirmation.
 5. Validation tasks T015-T017 complete before polish and final verification.
-6. Final verification T020 is last.
+6. Final `/moonspec-verify` work in T020 is last.
 
 ## Parallel Opportunities
 
