@@ -49,7 +49,7 @@ If Docker is unavailable in a managed-agent workspace, report that integration v
 
 ## Verification Gate
 
-Run `/speckit.verify` equivalent for `specs/186-parent-owned-merge-automation/spec.md` and confirm:
+Run `/moonspec-verify` for `specs/186-parent-owned-merge-automation/spec.md` and confirm:
 - Jira issue MM-350 remains referenced in spec, tasks, verification, commit text, and pull request metadata.
 - Every in-scope `DESIGN-REQ-*` maps to implementation and tests.
 - Parent-owned child workflow semantics supersede detached completion semantics for this story.
