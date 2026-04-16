@@ -68,7 +68,7 @@ Current core workflow types:
 - `MoonMind.AgentSession`
 - `MoonMind.ManagedSessionReconcile`
 - `MoonMind.OAuthSession`
-- `MoonMind.MergeGate`
+- `MoonMind.MergeAutomation`
 
 Rules:
 
@@ -117,7 +117,7 @@ Rules:
 | `MoonMind.AgentSession` | Own one task-scoped managed runtime session container, including launch, turn routing, clear/reset epoch changes, status, summary refs, and teardown | Codex managed-session workflow input today; future neutral managed-session input when more runtimes adopt the plane | session handle/state, continuity refs, control/reset refs | minutes → hours |
 | `MoonMind.ManagedSessionReconcile` | Periodically reconcile managed-session supervision records and container state outside any one task step | reconciliation policy and runtime scope | reconciliation summary and cleanup actions | seconds → minutes per run |
 | `MoonMind.OAuthSession` | Manage browser-initiated OAuth or terminal-auth session lifecycle for managed runtimes | session config, runtime/provider context | auth/session status, profile registration side effects | minutes |
-| `MoonMind.MergeGate` | Wait for external pull request readiness after a published implementation run, then launch one resolver follow-up run when policy allows | parent run ref, compact pull request ref, optional Jira issue key, merge readiness policy | blocker summary, resolver run ref, terminal gate status | minutes → hours |
+| `MoonMind.MergeAutomation` | Wait for external pull request readiness after a published implementation run, then launch one resolver follow-up run when policy allows | parent run ref, compact pull request ref, optional Jira issue key, merge readiness policy | blocker summary, resolver run ref, terminal gate status | minutes → hours |
 
 > Note: We intentionally do **not** model “Codex workflow,” “Gemini workflow,” “Jules workflow,” or “worker/system/manifest” as a top-level taxonomy. Provider/runtime choice is an execution concern, not a root orchestration category.
 

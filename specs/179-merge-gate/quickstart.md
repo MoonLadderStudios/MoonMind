@@ -2,7 +2,7 @@
 
 ## Preconditions
 
-- Active feature: `specs/179-merge-gate`
+- Active feature: `specs/179-merge-automation`
 - Jira source: `MM-341`
 - Merge automation is enabled only for test requests that explicitly opt in.
 - GitHub/Jira readiness checks in automated tests use fakes or activity stubs unless running manual provider verification.
@@ -50,8 +50,8 @@ When compose services are available, run the required hermetic integration suite
 
 Expected integration evidence:
 
-- Workflow registration includes `MoonMind.MergeGate`.
-- Activity routing and task queue assignment can execute merge-gate activities with local fakes.
+- Workflow registration includes `MoonMind.MergeAutomation`.
+- Activity routing and task queue assignment can execute merge-automation activities with local fakes.
 - Projection or detail surfaces can distinguish completed parent runs, waiting gates, and resolver follow-ups without exposing raw provider payloads.
 
 ## End-to-End Story Check

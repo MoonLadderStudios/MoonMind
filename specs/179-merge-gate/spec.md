@@ -1,6 +1,6 @@
 # Feature Specification: Merge Gate
 
-**Feature Branch**: `179-merge-gate`
+**Feature Branch**: `179-merge-automation`
 **Created**: 2026-04-16
 **Status**: Draft
 **Input**: MM-341: Merge Gate
@@ -26,19 +26,19 @@ MM-341: Merge Gate
 
 Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-341 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
 
-Implement merge-gate automation by adding a dedicated Temporal workflow boundary that waits for external PR readiness signals after a normal implementation task publishes a pull request, then creates a separate pr-resolver follow-up MoonMind execution when the gate opens.
+Implement merge-automation automation by adding a dedicated Temporal workflow boundary that waits for external PR readiness signals after a normal implementation task publishes a pull request, then creates a separate pr-resolver follow-up MoonMind execution when the gate opens.
 
 The intended workflow split is:
 
 - Parent task workflow: `MoonMind.Run` for the original user task that performs coding work and publishes the pull request.
-- Merge gate workflow: a new workflow such as `MoonMind.MergeGate` that waits on GitHub and optional Jira state, records blockers, and decides when a follow-up should start.
+- Merge gate workflow: a new workflow such as `MoonMind.MergeAutomation` that waits on GitHub and optional Jira state, records blockers, and decides when a follow-up should start.
 - Resolver task workflow: a second `MoonMind.Run` for the pr-resolver follow-up task, because skill invocation is normally executed as part of a MoonMind.Run execution.
 
 The flow must not become one giant workflow. It should operate as:
 
 ```text
 MoonMind.Run (parent task)
-  -> starts MoonMind.MergeGate
+  -> starts MoonMind.MergeAutomation
        -> later creates MoonMind.Run (pr-resolver follow-up)
 ```
 
@@ -72,7 +72,7 @@ Add the merge gate workflow as a separate long-lived Temporal workflow:
 
 Create the resolver follow-up as a separate `MoonMind.Run`:
 
-- Invoke the pr-resolver skill with repository, PR, merge method or policy, and the relevant merge-gate context.
+- Invoke the pr-resolver skill with repository, PR, merge method or policy, and the relevant merge-automation context.
 - Keep publish mode `none` so the resolver owns remediation and merge behavior without creating another publish step.
 - Allow pr-resolver to classify the PR state, merge immediately, remediate comments or CI failures, stop blocked for manual review, exhaust attempts, or fail with a clear reason.
 
@@ -82,7 +82,7 @@ Do not implement this as one parent workflow that stays running until merge auto
 - Merge gate: waiting for external readiness conditions.
 - Resolver run: attempting merge or remediation.
 
-Verification should include workflow-boundary coverage for parent-to-gate startup, merge-gate blocker persistence, gate-open resolver creation, duplicate-launch prevention on retry or replay, and resolver-side reuse of gate evaluation after remediation pushes.
+Verification should include workflow-boundary coverage for parent-to-gate startup, merge-automation blocker persistence, gate-open resolver creation, duplicate-launch prevention on retry or replay, and resolver-side reuse of gate evaluation after remediation pushes.
 ````
 
 **Implementation Intent**: Runtime implementation. Required deliverables include production behavior changes plus validation tests.
@@ -136,7 +136,7 @@ Verification should include workflow-boundary coverage for parent-to-gate startu
 - **FR-008**: The merge gate MUST prevent duplicate resolver follow-up runs across retries, replays, duplicate events, and repeated readiness evaluations.
 - **FR-009**: Resolver follow-up runs MUST carry enough pull request and policy context for pr-resolver to classify, remediate, merge, or stop blocked without relying on the completed parent implementation run.
 - **FR-010**: If pr-resolver changes the pull request revision, the resolver path MUST apply the same readiness rules as a transient wait condition rather than creating another top-level merge gate.
-- **FR-011**: Operators MUST be able to see implementation run completion, merge-gate waiting or completion, and resolver follow-up progress as separate lifecycle states.
+- **FR-011**: Operators MUST be able to see implementation run completion, merge-automation waiting or completion, and resolver follow-up progress as separate lifecycle states.
 - **FR-012**: System MUST fail or block with an operator-readable reason instead of launching pr-resolver when the pull request is closed, the tracked revision is stale, readiness cannot be confirmed, or automation is denied by policy.
 
 ### Key Entities
