@@ -55,7 +55,7 @@
 - [X] T015 Review `specs/179-claude-session-core/spec.md`, `plan.md`, `data-model.md`, `contracts/claude-managed-session-core.md`, and `tasks.md` for traceability drift after implementation.
 - [X] T016 Run `./tools/test_unit.sh` for required final unit verification.
 - [X] T017 Run `./tools/test_integration.sh` when Docker is available, or record the exact blocker if Docker is unavailable. Blocked in this managed container because `/var/run/docker.sock` is unavailable.
-- [X] T018 Run final `/speckit.verify` equivalent against `specs/179-claude-session-core/spec.md` and record whether MM-342 is fully implemented.
+- [X] T018 Run final `/moonspec-verify` equivalent against `specs/179-claude-session-core/spec.md` and record whether MM-342 is fully implemented.
 
 ## Dependencies And Execution Order
 
