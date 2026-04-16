@@ -3,6 +3,7 @@
 import asyncio
 from collections import deque
 from dataclasses import dataclass, field
+import inspect
 import logging
 import os
 import shlex
@@ -122,10 +123,7 @@ class DockerExecPtyAdapter:
             data = await loop.sock_recv(self._raw_sock, 4096)
             if not data:
                 break
-            if isinstance(data, bytes):
-                yield data
-            else:
-                yield str(data).encode("utf-8")
+            yield data
 
     async def close(self) -> None:
         if self._raw_sock is not None:
@@ -218,7 +216,7 @@ class TerminalBridgeConnection:
         async for chunk in pty.output_chunks():
             self.output_event_count += 1
             result = send_output(chunk)
-            if result is not None:
+            if inspect.isawaitable(result):
                 await result
 
     def safe_metadata(self) -> dict[str, int]:

@@ -1,4 +1,5 @@
 import asyncio
+import codecs
 import json
 import logging
 import hashlib
@@ -57,6 +58,28 @@ _TERMINAL_ATTACH_STATUSES = (
 _oauth_terminal_pty_adapter_factory = create_docker_exec_pty_adapter
 
 
+def _make_terminal_output_sender(websocket: WebSocket):
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    async def _send_terminal_output(chunk: bytes) -> None:
+        text = decoder.decode(chunk)
+        if text:
+            await websocket.send_text(text)
+
+    return _send_terminal_output
+
+
+async def _close_for_pty_io_error(
+    websocket: WebSocket,
+) -> tuple[bool, str]:
+    logger.info("OAuth terminal PTY disconnected during websocket I/O", exc_info=True)
+    await websocket.send_json(
+        {"type": "error", "detail": "OAuth terminal PTY disconnected."}
+    )
+    await websocket.close(code=1011)
+    return True, "pty_disconnected"
+
+
 async def _handle_oauth_terminal_ws_message(
     message,
     *,
@@ -68,7 +91,10 @@ async def _handle_oauth_terminal_ws_message(
         return True, "client_disconnected"
     if message.get("bytes") is not None:
         data = message["bytes"] or b""
-        await pty_adapter.write_bytes(data)
+        try:
+            await pty_adapter.write_bytes(data)
+        except OSError:
+            return await _close_for_pty_io_error(websocket)
         bridge.input_event_count += 1
         await websocket.send_json({"type": "input_ack", "bytes": len(data)})
         return False, None
@@ -83,7 +109,10 @@ async def _handle_oauth_terminal_ws_message(
         frame = json.loads(text)
     except json.JSONDecodeError:
         data = text.encode("utf-8")
-        await pty_adapter.write_bytes(data)
+        try:
+            await pty_adapter.write_bytes(data)
+        except OSError:
+            return await _close_for_pty_io_error(websocket)
         bridge.input_event_count += 1
         await websocket.send_json({"type": "input_ack", "bytes": len(data)})
         return False, None
@@ -99,6 +128,8 @@ async def _handle_oauth_terminal_ws_message(
         await websocket.send_json({"type": "error", "detail": str(exc)})
         await websocket.close(code=4400)
         return True, str(exc)
+    except OSError:
+        return await _close_for_pty_io_error(websocket)
     await websocket.send_json(response)
     if response.get("type") == "close_ack":
         await websocket.close(code=1000)
@@ -122,11 +153,11 @@ async def _persist_oauth_terminal_close_metadata(
         if session_obj:
             metadata = dict(session_obj.metadata_json or {})
             metadata["terminal_close_reason"] = close_reason
-            metadata["terminal_disconnected_at"] = datetime.now(timezone.utc).isoformat()
+            metadata["terminal_disconnected_at"] = _utcnow().isoformat()
             if bridge is not None:
                 metadata.update(bridge.safe_metadata())
             session_obj.metadata_json = metadata
-            session_obj.disconnected_at = datetime.now(timezone.utc)
+            session_obj.disconnected_at = _utcnow()
             await db.commit()
 
 
@@ -483,9 +514,9 @@ async def oauth_terminal_websocket(
             return
 
         metadata["terminal_attach_token_used"] = True
-        metadata["terminal_connected_at"] = datetime.now(timezone.utc).isoformat()
+        metadata["terminal_connected_at"] = _utcnow().isoformat()
         session_obj.metadata_json = metadata
-        session_obj.connected_at = datetime.now(timezone.utc)
+        session_obj.connected_at = _utcnow()
         await db.commit()
         bridge = TerminalBridgeConnection(
             session_id=session_obj.session_id,
@@ -499,40 +530,35 @@ async def oauth_terminal_websocket(
 
     await websocket.accept()
     try:
-        await pty_adapter.connect()
-    except Exception:
-        close_reason = "pty_connect_failed"
-        logger.warning(
-            "Failed to connect OAuth terminal PTY for session %s",
-            session_id,
-            exc_info=True,
-        )
+        try:
+            await pty_adapter.connect()
+        except Exception:
+            close_reason = "pty_connect_failed"
+            logger.warning(
+                "Failed to connect OAuth terminal PTY for session %s",
+                session_id,
+                exc_info=True,
+            )
+            await websocket.send_json(
+                {"type": "error", "detail": "OAuth terminal bridge is not ready."}
+            )
+            await websocket.close(code=1011)
+            return
+
         await websocket.send_json(
-            {"type": "error", "detail": "OAuth terminal bridge is not ready."}
+            {
+                "type": "ready",
+                "session_id": session_id,
+                "transport": "moonmind_pty_ws",
+            }
         )
-        await websocket.close(code=1011)
-        await _persist_oauth_terminal_close_metadata(
-            session_id,
-            close_reason=close_reason,
-            bridge=bridge,
+
+        output_task = asyncio.create_task(
+            bridge.stream_pty_output(
+                pty_adapter,
+                _make_terminal_output_sender(websocket),
+            )
         )
-        return
-
-    await websocket.send_json(
-        {
-            "type": "ready",
-            "session_id": session_id,
-            "transport": "moonmind_pty_ws",
-        }
-    )
-
-    async def _send_terminal_output(chunk: bytes) -> None:
-        await websocket.send_text(chunk.decode("utf-8", errors="replace"))
-
-    output_task = asyncio.create_task(
-        bridge.stream_pty_output(pty_adapter, _send_terminal_output)
-    )
-    try:
         while True:
             message = await websocket.receive()
             should_close, message_close_reason = await _handle_oauth_terminal_ws_message(
@@ -553,6 +579,7 @@ async def oauth_terminal_websocket(
             try:
                 await output_task
             except asyncio.CancelledError:
+                # Cancellation is expected while shutting down the terminal bridge.
                 pass
             except Exception:
                 logger.debug("OAuth terminal output task failed", exc_info=True)

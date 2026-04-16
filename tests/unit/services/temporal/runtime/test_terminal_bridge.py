@@ -127,3 +127,23 @@ async def test_terminal_bridge_streams_output_without_persisting_raw_output() ->
     ]
     assert bridge.output_event_count == 2
     assert list(bridge.output_events) == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_bridge_streams_output_to_async_callback() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminal_output_async",
+        terminal_bridge_id="br_oas_terminal_output_async",
+        owner_user_id="user-1",
+    )
+    pty = InMemoryPtyAdapter(output_chunks=[b"first", b"second"])
+    sent: list[bytes] = []
+
+    async def send_output(chunk: bytes) -> None:
+        sent.append(chunk)
+
+    await pty.connect()
+    await bridge.stream_pty_output(pty, send_output)
+
+    assert sent == [b"first", b"second"]
+    assert bridge.output_event_count == 2

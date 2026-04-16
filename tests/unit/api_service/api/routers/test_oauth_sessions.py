@@ -22,7 +22,10 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
 )
 from api_service.main import app
-from api_service.api.routers.oauth_sessions import _handle_oauth_terminal_ws_message
+from api_service.api.routers.oauth_sessions import (
+    _handle_oauth_terminal_ws_message,
+    _make_terminal_output_sender,
+)
 from moonmind.workflows.temporal.runtime.terminal_bridge import (
     InMemoryPtyAdapter,
     TerminalBridgeConnection,
@@ -549,13 +552,22 @@ async def test_oauth_terminal_attach_rejects_expired_session(
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.sent_json: list[dict[str, object]] = []
+        self.sent_text: list[str] = []
         self.closed: list[int] = []
 
     async def send_json(self, payload: dict[str, object]) -> None:
         self.sent_json.append(payload)
 
+    async def send_text(self, payload: str) -> None:
+        self.sent_text.append(payload)
+
     async def close(self, code: int) -> None:
         self.closed.append(code)
+
+
+class _FailingWritePtyAdapter(InMemoryPtyAdapter):
+    async def write_bytes(self, data: bytes) -> None:
+        raise BrokenPipeError("auth runner exited")
 
 
 @pytest.mark.asyncio
@@ -611,6 +623,41 @@ async def test_oauth_terminal_message_handler_proxies_to_pty_with_safe_metadata(
         "terminal_last_rows": 30,
     }
     assert "codex login" not in str(metadata)
+
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_message_handler_closes_on_pty_write_failure() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminalwsbroken1",
+        terminal_bridge_id="br_oas_terminalwsbroken1",
+        owner_user_id="None",
+    )
+    websocket = _FakeWebSocket()
+
+    should_close, close_reason = await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"input","data":"codex login\\n"}'},
+        bridge=bridge,
+        pty_adapter=_FailingWritePtyAdapter(),
+        websocket=websocket,
+    )
+
+    assert should_close is True
+    assert close_reason == "pty_disconnected"
+    assert websocket.sent_json == [
+        {"type": "error", "detail": "OAuth terminal PTY disconnected."}
+    ]
+    assert websocket.closed == [1011]
+
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_output_sender_preserves_split_utf8_sequences() -> None:
+    websocket = _FakeWebSocket()
+    send_terminal_output = _make_terminal_output_sender(websocket)
+
+    await send_terminal_output("Auth code: ".encode("utf-8") + b"\xe2")
+    await send_terminal_output(b"\x82\xac\r\n")
+
+    assert websocket.sent_text == ["Auth code: ", "€\r\n"]
 
 
 @pytest.mark.asyncio
