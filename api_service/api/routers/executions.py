@@ -1439,7 +1439,7 @@ def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
     jira_payload = _coerce_mapping(story_output.get("jira"))
     if jira_payload:
         normalized_jira: dict[str, Any] = {}
-        for key in ("projectKey", "issueTypeId"):
+        for key in ("projectKey", "issueTypeId", "issueTypeName", "dependencyMode"):
             value = jira_payload.get(key)
             if isinstance(value, str) and value.strip():
                 normalized_jira[key] = value.strip()
