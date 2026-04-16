@@ -4,15 +4,33 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any, Literal, get_args
+from typing import Annotated, Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from moonmind.schemas._validation import NonBlankStr, require_non_blank
 from moonmind.schemas.temporal_payload_policy import (
+    MAX_TEMPORAL_METADATA_REF_CHARS,
     MAX_TEMPORAL_METADATA_STRING_CHARS,
     validate_compact_temporal_mapping,
 )
+
+
+HandoffSeedArtifactRef = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=MAX_TEMPORAL_METADATA_REF_CHARS,
+    ),
+]
 
 
 ManagedSessionControlAction = Literal[
@@ -1321,7 +1339,7 @@ class ClaudeManagedSession(BaseModel):
     handoff_from_session_id: NonBlankStr | None = Field(
         None, alias="handoffFromSessionId"
     )
-    handoff_seed_artifact_refs: tuple[NonBlankStr, ...] = Field(
+    handoff_seed_artifact_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
         default=(), alias="handoffSeedArtifactRefs"
     )
     session_group_id: NonBlankStr | None = Field(None, alias="sessionGroupId")
@@ -1351,13 +1369,20 @@ class ClaudeManagedSession(BaseModel):
         ]
         if len(primary_bindings) > 1:
             raise ValueError("Claude session can have only one primary surface")
+        if (
+            primary_bindings
+            and primary_bindings[0].surface_kind != self.primary_surface
+        ):
+            raise ValueError(
+                "primarySurface must match the primary surface binding kind"
+            )
         if self.projection_mode == "handoff":
             if self.execution_owner != "anthropic_cloud_vm":
                 raise ValueError("handoff sessions must use anthropic_cloud_vm")
             if self.handoff_from_session_id is None:
                 raise ValueError("handoff sessions require handoffFromSessionId")
-        elif self.handoff_seed_artifact_refs:
-            raise ValueError("handoffSeedArtifactRefs require handoff projection")
+        elif self.handoff_seed_artifact_refs or self.handoff_from_session_id:
+            raise ValueError("handoff lineage fields require handoff projection")
         return self
 
     def with_surface_binding(
@@ -1384,6 +1409,19 @@ class ClaudeManagedSession(BaseModel):
             capabilities=capabilities,
             lastSeenAt=last_seen_at,
         )
+        existing_same_surface = tuple(
+            existing
+            for existing in self.surface_bindings
+            if existing.surface_id == next_surface_id
+        )
+        if (
+            projection_mode != "primary"
+            and any(
+                existing.projection_mode == "primary"
+                for existing in existing_same_surface
+            )
+        ):
+            raise ValueError("primary surface binding cannot become a projection")
         existing_without_surface = tuple(
             existing
             for existing in self.surface_bindings
@@ -1392,14 +1430,19 @@ class ClaudeManagedSession(BaseModel):
         if projection_mode == "primary":
             for existing in existing_without_surface:
                 if existing.projection_mode == "primary":
-                    raise ValueError("Claude session can have only one primary surface")
-        return self.model_copy(
-            deep=True,
-            update={
-                "surface_bindings": (*existing_without_surface, binding),
-                "updated_at": updated_at,
-            },
+                    raise ValueError(
+                        "Claude session can have only one primary surface"
+                    )
+        payload = self.model_dump(by_alias=True)
+        payload.update(
+            {
+                "surfaceBindings": (*existing_without_surface, binding),
+                "updatedAt": updated_at,
+            }
         )
+        if projection_mode == "primary":
+            payload["primarySurface"] = surface_kind
+        return type(self)(**payload)
 
     def with_remote_projection(
         self,
@@ -1536,7 +1579,7 @@ class ClaudeSurfaceLifecycleEvent(BaseModel):
     destination_session_id: NonBlankStr | None = Field(
         None, alias="destinationSessionId"
     )
-    handoff_seed_artifact_refs: tuple[NonBlankStr, ...] = Field(
+    handoff_seed_artifact_refs: tuple[HandoffSeedArtifactRef, ...] = Field(
         default=(), alias="handoffSeedArtifactRefs"
     )
     occurred_at: datetime = Field(..., alias="occurredAt")

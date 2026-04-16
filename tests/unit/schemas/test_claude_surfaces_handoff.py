@@ -76,6 +76,50 @@ def test_session_allows_one_primary_surface_and_multiple_projections() -> None:
         )
 
 
+def test_primary_binding_kind_must_match_session_primary_surface() -> None:
+    with pytest.raises(ValidationError, match="primarySurface"):
+        _session(
+            primarySurface="terminal",
+            surfaceBindings=(
+                ClaudeSurfaceBinding(
+                    surfaceId="surface-web",
+                    surfaceKind="web",
+                    projectionMode="primary",
+                    interactive=True,
+                ),
+            ),
+        )
+
+
+def test_primary_binding_update_preserves_primary_invariants() -> None:
+    session = _session().with_surface_binding(
+        surface_id="surface-terminal",
+        surface_kind="terminal",
+        projection_mode="primary",
+        interactive=True,
+        updated_at=NOW,
+    )
+
+    updated_primary = session.with_surface_binding(
+        surface_id="surface-terminal",
+        surface_kind="desktop",
+        projection_mode="primary",
+        interactive=True,
+        updated_at=NOW,
+    )
+
+    assert updated_primary.primary_surface == "desktop"
+    assert updated_primary.surface_bindings[-1].surface_kind == "desktop"
+
+    with pytest.raises(ValueError, match="primary surface binding"):
+        session.with_remote_projection(
+            surface_id="surface-terminal",
+            surface_kind="web",
+            interactive=True,
+            updated_at=NOW,
+        )
+
+
 def test_surface_connection_updates_do_not_fail_session() -> None:
     session = _session().with_remote_projection(
         surface_id="surface-web",
@@ -183,6 +227,20 @@ def test_cloud_handoff_carries_bounded_seed_refs_and_security_mode() -> None:
             created_at=NOW,
             seed_artifact_refs=("   ",),
         )
+
+    with pytest.raises(ValidationError):
+        source.cloud_handoff(
+            session_id="claude-session-cloud-3",
+            primary_surface="web",
+            created_by="user",
+            created_at=NOW,
+            seed_artifact_refs=("artifact://" + "x" * 2_000,),
+        )
+
+
+def test_handoff_lineage_fields_require_handoff_projection() -> None:
+    with pytest.raises(ValidationError, match="handoff lineage fields"):
+        _session(handoffFromSessionId="claude-session-source")
 
 
 def test_surface_binding_rejects_unsupported_values() -> None:
