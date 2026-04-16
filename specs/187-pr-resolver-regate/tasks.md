@@ -13,7 +13,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_merge_gate_workflow.py tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py`
 - Integration tests: `./tools/test_integration.sh`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -79,7 +79,7 @@
 - [X] T022 [P] Review `docs/Tasks/PrMergeAutomation.md` and leave canonical docs unchanged unless implementation behavior contradicts the desired-state contract
 - [X] T023 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit verification
 - [X] T024 Run `./tools/test_integration.sh` for hermetic integration verification, or document the exact environment blocker if Docker is unavailable
-- [X] T025 Run `/speckit.verify` for `specs/187-pr-resolver-regate/spec.md` and record the result in `specs/187-pr-resolver-regate/verification.md`
+- [X] T025 Run `/moonspec-verify` for `specs/187-pr-resolver-regate/spec.md` and record the result in `specs/187-pr-resolver-regate/verification.md`
 
 ## Dependencies And Execution Order
 
