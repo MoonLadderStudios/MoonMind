@@ -58,6 +58,34 @@ async def test_stream_writes_file(streamer, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_stream_redacts_secret_like_values_from_artifacts_and_live_events(
+    streamer,
+):
+    log_streamer, storage = streamer
+    mock_publisher = Mock()
+    log_streamer.publisher = mock_publisher
+    reader = asyncio.StreamReader()
+    reader.feed_data(
+        b"GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz1234567890 token=abc123\n"
+    )
+    reader.feed_eof()
+
+    ref, content, events = await log_streamer.stream_to_artifact(
+        reader, run_id="run-redact", stream_name="stdout"
+    )
+
+    resolved = storage.resolve_storage_path(ref)
+    persisted = resolved.read_text(encoding="utf-8")
+    assert "ghp_" not in persisted
+    assert "abc123" not in persisted
+    assert "ghp_" not in content
+    assert events == []
+    published = mock_publisher.publish.call_args_list[0][0][0]
+    assert "ghp_" not in published.text
+    assert "abc123" not in published.text
+
+
+@pytest.mark.asyncio
 async def test_stream_empty(streamer, tmp_path):
     log_streamer, storage = streamer
     reader = asyncio.StreamReader()

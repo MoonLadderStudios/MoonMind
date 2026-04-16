@@ -190,6 +190,12 @@ class JiraClient:
                     request_id=request_id,
                     context=safe_context,
                 )
+                auth_error = await self._auth_error_if_credentials_rejected(
+                    action=action,
+                    response=response,
+                )
+                if auth_error is not None:
+                    raise auth_error
                 raise self._response_error(
                     action=action,
                     response=response,
@@ -218,6 +224,41 @@ class JiraClient:
         if "application/json" in content_type:
             return response.json()
         return response.text
+
+    async def _auth_error_if_credentials_rejected(
+        self,
+        *,
+        action: str,
+        response: httpx.Response,
+    ) -> JiraToolError | None:
+        """Disambiguate Jira 404s that are actually bad credentials.
+
+        Jira Cloud commonly returns 404 for issue/project reads when the caller
+        is anonymous or unauthorized. Probe the authenticated profile endpoint
+        before surfacing a misleading "not found" error.
+        """
+
+        if response.status_code not in {403, 404}:
+            return None
+        if action == "verify_connection" and response.request.url.path.endswith(
+            "/myself"
+        ):
+            return None
+        try:
+            auth_response = await self._client.request(
+                method="GET",
+                url=self._resolve_request_path("/myself"),
+            )
+        except (httpx.TransportError, httpx.TimeoutException):
+            return None
+        if auth_response.status_code in {401, 403}:
+            return JiraToolError(
+                "Jira credentials are invalid, expired, or use the wrong auth mode.",
+                code="jira_auth_failed",
+                status_code=401 if auth_response.status_code == 401 else 403,
+                action=action,
+            )
+        return None
 
     def _resolve_request_path(self, path: str) -> str:
         if not path.startswith("agile:"):

@@ -170,6 +170,78 @@ async def test_request_json_maps_auth_failures_to_sanitized_error() -> None:
     assert "secret-token" not in str(excinfo.value)
 
 
+async def test_request_json_maps_issue_404_to_auth_failure_when_myself_rejects() -> None:
+    connection = _build_connection()
+    seen_paths: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path.endswith("/myself"):
+            return httpx.Response(
+                401,
+                text="Client must be authenticated to access this resource.",
+                headers={"content-type": "text/plain"},
+            )
+        return httpx.Response(
+            404,
+            json={
+                "errorMessages": [
+                    "Issue does not exist or you do not have permission to see it."
+                ],
+                "errors": {},
+            },
+            headers={"content-type": "application/json"},
+        )
+
+    injected = _build_injected_client(connection, _handler)
+    client = JiraClient(connection=connection, client=injected)
+    try:
+        with pytest.raises(JiraToolError) as excinfo:
+            await client.request_json(
+                method="GET",
+                path="/issue/KANDY-2558",
+                action="get_issue",
+                context={"issueKey": "KANDY-2558"},
+            )
+    finally:
+        await injected.aclose()
+
+    assert excinfo.value.code == "jira_auth_failed"
+    assert seen_paths == ["/rest/api/3/issue/KANDY-2558", "/rest/api/3/myself"]
+
+
+async def test_request_json_preserves_issue_404_when_myself_succeeds() -> None:
+    connection = _build_connection()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/myself"):
+            return httpx.Response(
+                200,
+                json={"accountId": "acct-1"},
+                headers={"content-type": "application/json"},
+            )
+        return httpx.Response(
+            404,
+            json={"errorMessages": ["Issue does not exist."], "errors": {}},
+            headers={"content-type": "application/json"},
+        )
+
+    injected = _build_injected_client(connection, _handler)
+    client = JiraClient(connection=connection, client=injected)
+    try:
+        with pytest.raises(JiraToolError) as excinfo:
+            await client.request_json(
+                method="GET",
+                path="/issue/KANDY-2558",
+                action="get_issue",
+                context={"issueKey": "KANDY-2558"},
+            )
+    finally:
+        await injected.aclose()
+
+    assert excinfo.value.code == "jira_not_found"
+
+
 async def test_request_json_retries_retry_after_and_surfaces_rate_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

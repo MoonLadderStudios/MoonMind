@@ -27,10 +27,16 @@ Do not expect raw Jira credentials inside the managed agent shell. MoonMind inte
 If Jira content is not already available to the managed agent, first use MoonMind's trusted Jira MCP tool path when it is exposed to the runtime:
 
 1. List tools with `GET $MOONMIND_URL/mcp/tools`.
-2. Fetch the issue with `POST $MOONMIND_URL/mcp/tools/call` and JSON like `{"tool":"jira.get_issue","arguments":{"issueKey":"KANDY-2558"}}`.
-3. Use the sanitized tool result as the Jira source of truth.
+2. Verify Jira authentication with `POST $MOONMIND_URL/mcp/tools/call` and JSON like `{"tool":"jira.verify_connection","arguments":{}}`.
+3. If authentication succeeds, fetch the issue with `POST $MOONMIND_URL/mcp/tools/call` and JSON like `{"tool":"jira.get_issue","arguments":{"issueKey":"KANDY-2558"}}`.
+4. Use the sanitized tool result as the Jira source of truth.
 
-If `jira.get_issue` is unavailable, denied by policy, or the runtime does not expose `$MOONMIND_URL`, stop as blocked and report that the task must run a trusted Jira fetch/import step first. Do not scrape a private Atlassian browser page, infer hidden acceptance criteria from a branch name, or ask for `ATLASSIAN_API_KEY` in the agent environment.
+If `jira.verify_connection` reports `jira_auth_failed`, stop as blocked and report that MoonMind's trusted Jira credential is invalid, expired, or using the wrong auth mode. If `jira.get_issue` is unavailable, denied by policy, or the runtime does not expose `$MOONMIND_URL`, stop as blocked and report that the task must run a trusted Jira fetch/import step first. Do not scrape a private Atlassian browser page, infer hidden acceptance criteria from a branch name, or ask for `ATLASSIAN_API_KEY` in the agent environment.
+
+Never print raw environment variables while troubleshooting. Use targeted checks
+such as `test -n "$GITHUB_TOKEN"` or `gh auth status`; do not run `printenv`,
+`env`, `set`, or equivalent commands that can dump secret values into workflow
+logs.
 
 For MoonMind task plans, the correct shape is:
 

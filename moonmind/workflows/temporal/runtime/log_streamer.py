@@ -12,6 +12,7 @@ from typing import Any
 
 from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.observability.transport import SpoolLogPublisher
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.runtime.output_parser import (
     ParsedOutput,
     PlainTextOutputParser,
@@ -81,9 +82,12 @@ class RuntimeLogStreamer:
             if not chunk:
                 break
             
-            chunk_length = len(chunk)
-            chunks.append(chunk)
-            text_content = chunk.decode("utf-8", errors="replace")
+            text_content = redact_sensitive_text(
+                chunk.decode("utf-8", errors="replace")
+            )
+            sanitized_chunk = text_content.encode("utf-8")
+            chunk_length = len(sanitized_chunk)
+            chunks.append(sanitized_chunk)
             if chunk_callback is not None:
                 try:
                     callback_result = chunk_callback(stream_name, text_content)
