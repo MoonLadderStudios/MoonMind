@@ -4245,6 +4245,7 @@ export interface components {
             failure_reason?: string | null;
             /** Created At */
             created_at?: string | null;
+            profile_summary?: components["schemas"]["ProviderProfileSummary"] | null;
         };
         /**
          * OAuthSessionStatus
@@ -4490,6 +4491,29 @@ export interface components {
             created_at: string | null;
             /** Updated At */
             updated_at: string | null;
+        };
+        /** ProviderProfileSummary */
+        ProviderProfileSummary: {
+            /** Profile Id */
+            profile_id: string;
+            /** Runtime Id */
+            runtime_id: string;
+            /** Provider Id */
+            provider_id: string;
+            /** Provider Label */
+            provider_label?: string | null;
+            /** Credential Source */
+            credential_source: string;
+            /** Runtime Materialization Mode */
+            runtime_materialization_mode: string;
+            /** Account Label */
+            account_label?: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Is Default */
+            is_default: boolean;
+            /** Rate Limit Policy */
+            rate_limit_policy: string;
         };
         /** ProviderProfileUpdate */
         ProviderProfileUpdate: {

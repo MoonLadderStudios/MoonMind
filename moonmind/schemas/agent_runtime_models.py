@@ -483,6 +483,8 @@ class ManagedRuntimeProfile(BaseModel):
     passthrough_env_keys: list[str] = Field(default_factory=list, alias="passthroughEnvKeys")
     clear_env_keys: list[str] = Field(default_factory=list, alias="clearEnvKeys")
     secret_refs: dict[str, str | dict[str, str]] = Field(default_factory=dict, alias="secretRefs")
+    volume_ref: str | None = Field(None, alias="volumeRef")
+    volume_mount_path: str | None = Field(None, alias="volumeMountPath")
 
     @model_validator(mode="before")
     @classmethod
@@ -524,6 +526,16 @@ class ManagedRuntimeProfile(BaseModel):
             allowed_sensitive_keys=_ALLOWED_MANAGED_LAUNCH_METADATA_KEYS,
         ):
             raise ValueError("envOverrides must not contain raw credential keys")
+        if self.volume_ref is not None:
+            self.volume_ref = require_non_blank(
+                self.volume_ref,
+                field_name="volumeRef",
+            )
+        if self.volume_mount_path is not None:
+            self.volume_mount_path = require_non_blank(
+                self.volume_mount_path,
+                field_name="volumeMountPath",
+            )
 
         normalized_passthrough: list[str] = []
         seen: set[str] = set()
