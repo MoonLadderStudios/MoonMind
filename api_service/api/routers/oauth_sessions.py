@@ -57,6 +57,20 @@ def _hash_attach_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _oauth_session_is_expired(session: ManagedAgentOAuthSession) -> bool:
+    return session.expires_at is not None and _as_aware_utc(session.expires_at) <= _utcnow()
+
+
 def _oauth_default(runtime_id: str, key: str) -> str | None:
     return get_provider_default(runtime_id, key)
 
@@ -327,6 +341,11 @@ async def attach_oauth_terminal(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="OAuth terminal is not attachable in its current state.",
         )
+    if _oauth_session_is_expired(session_obj):
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="OAuth terminal session has expired.",
+        )
     if not session_obj.terminal_session_id or not session_obj.terminal_bridge_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -364,7 +383,7 @@ async def oauth_terminal_websocket(
         result = await db.execute(
             select(ManagedAgentOAuthSession).where(
                 ManagedAgentOAuthSession.session_id == session_id
-            )
+            ).with_for_update()
         )
         session_obj = result.scalars().first()
         metadata = dict(session_obj.metadata_json or {}) if session_obj else {}
@@ -373,6 +392,7 @@ async def oauth_terminal_websocket(
         if (
             not session_obj
             or session_obj.status not in _TERMINAL_ATTACH_STATUSES
+            or _oauth_session_is_expired(session_obj)
             or not expected_digest
             or token_used
             or not secrets.compare_digest(expected_digest, _hash_attach_token(token))
@@ -404,6 +424,13 @@ async def oauth_terminal_websocket(
     try:
         while True:
             frame = await websocket.receive_json()
+            if not isinstance(frame, dict):
+                close_reason = "invalid_frame_format"
+                await websocket.send_json(
+                    {"type": "error", "detail": "Frame must be a JSON object"}
+                )
+                await websocket.close(code=4400)
+                break
             try:
                 response = bridge.handle_frame(frame)
             except TerminalBridgeFrameError as exc:

@@ -1,12 +1,14 @@
 "Terminal PTY bridge startup and frame validation logic."
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass, field
 import logging
 import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_MAX_RECORDED_TERMINAL_EVENTS = 256
 
 
 class TerminalBridgeFrameError(ValueError):
@@ -20,16 +22,27 @@ class TerminalBridgeConnection:
     session_id: str
     terminal_bridge_id: str
     owner_user_id: str | None
-    resize_events: list[tuple[int, int]] = field(default_factory=list)
-    input_events: list[str] = field(default_factory=list)
+    resize_events: deque[tuple[int, int]] = field(
+        default_factory=lambda: deque(maxlen=_MAX_RECORDED_TERMINAL_EVENTS)
+    )
+    input_events: deque[str] = field(
+        default_factory=lambda: deque(maxlen=_MAX_RECORDED_TERMINAL_EVENTS)
+    )
     heartbeat_count: int = 0
-    output_events: list[str] = field(default_factory=list)
+    output_events: deque[str] = field(
+        default_factory=lambda: deque(maxlen=_MAX_RECORDED_TERMINAL_EVENTS)
+    )
 
     def handle_frame(self, frame: dict[str, Any]) -> dict[str, Any]:
         frame_type = str(frame.get("type", "")).strip()
         if frame_type == "resize":
-            cols = int(frame.get("cols", 0))
-            rows = int(frame.get("rows", 0))
+            try:
+                cols = int(frame.get("cols", 0))
+                rows = int(frame.get("rows", 0))
+            except (TypeError, ValueError) as exc:
+                raise TerminalBridgeFrameError(
+                    "resize dimensions must be integers"
+                ) from exc
             if cols <= 0 or rows <= 0 or cols > 500 or rows > 500:
                 raise TerminalBridgeFrameError("resize dimensions are out of range")
             self.resize_events.append((cols, rows))

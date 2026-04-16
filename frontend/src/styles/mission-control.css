@@ -1559,38 +1559,14 @@ button.secondary:hover {
   background: #111827;
   border-radius: 8px;
   color: #e5e7eb;
-  min-height: 280px;
+  height: min(62vh, 560px);
+  min-height: 320px;
   overflow: auto;
-  padding: 16px;
+  padding: 12px;
 }
 
-.oauth-terminal-surface pre,
-.oauth-terminal-surface p {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  margin: 0 0 8px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.oauth-terminal-input {
-  display: grid;
-  gap: 8px;
-}
-
-.oauth-terminal-input div {
-  display: flex;
-  gap: 8px;
-}
-
-.oauth-terminal-input input {
-  border: 1px solid var(--mm-border, #cbd5e1);
-  border-radius: 8px;
-  flex: 1;
-  padding: 10px 12px;
-}
-
-.oauth-terminal-input button {
-  border-radius: 8px;
+.oauth-terminal-xterm {
+  height: 100%;
 }
 
 .jira-provenance-chip {

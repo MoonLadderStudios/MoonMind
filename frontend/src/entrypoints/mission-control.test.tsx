@@ -4,6 +4,40 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { MissionControlApp } from './mission-control-app';
 
+vi.mock('@xterm/xterm', () => {
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+    private element: HTMLElement | null = null;
+    constructor(_options?: unknown) {}
+    loadAddon(_addon: unknown) {}
+    open(element: HTMLElement) {
+      this.element = element;
+      element.setAttribute('data-testid', 'oauth-xterm');
+    }
+    write(data: string) {
+      if (this.element) {
+        this.element.textContent = `${this.element.textContent ?? ''}${data}`;
+      }
+    }
+    writeln(data: string) {
+      this.write(`${data}\n`);
+    }
+    onData(_callback: (data: string) => void) {
+      return { dispose: vi.fn() };
+    }
+    dispose() {}
+  }
+
+  return { Terminal: MockTerminal };
+});
+
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class MockFitAddon {
+    fit() {}
+  },
+}));
+
 describe('Mission Control shared entry', () => {
   let fetchSpy: MockInstance;
   const originalWebSocket = window.WebSocket;

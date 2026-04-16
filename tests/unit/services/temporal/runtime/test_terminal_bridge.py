@@ -31,10 +31,36 @@ def test_terminal_bridge_handles_resize_input_output_and_heartbeat() -> None:
         "bytes": 13,
     }
     assert bridge.handle_frame({"type": "heartbeat"}) == {"type": "heartbeat_ack"}
-    assert bridge.resize_events == [(120, 36)]
-    assert bridge.input_events == ["codex login\n"]
-    assert bridge.output_events == ["Open browser\n"]
+    assert list(bridge.resize_events) == [(120, 36)]
+    assert list(bridge.input_events) == ["codex login\n"]
+    assert list(bridge.output_events) == ["Open browser\n"]
     assert bridge.heartbeat_count == 1
+
+
+def test_terminal_bridge_rejects_malformed_resize_dimensions() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminal_bad_resize",
+        terminal_bridge_id="br_oas_terminal_bad_resize",
+        owner_user_id="user-1",
+    )
+
+    with pytest.raises(TerminalBridgeFrameError, match="resize dimensions must be integers"):
+        bridge.handle_frame({"type": "resize", "cols": "wide", "rows": 36})
+
+
+def test_terminal_bridge_keeps_bounded_event_metadata() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminal_bounded",
+        terminal_bridge_id="br_oas_terminal_bounded",
+        owner_user_id="user-1",
+    )
+
+    for index in range(300):
+        bridge.handle_frame({"type": "input", "data": f"line-{index}\n"})
+
+    assert len(bridge.input_events) == 256
+    assert bridge.input_events[0] == "line-44\n"
+    assert bridge.input_events[-1] == "line-299\n"
 
 
 def test_terminal_bridge_rejects_generic_exec_frames() -> None:

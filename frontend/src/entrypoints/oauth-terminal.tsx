@@ -1,3 +1,6 @@
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -33,17 +36,90 @@ function websocketUrlFromAttach(websocketUrl: string): string {
 export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const sessionId = useMemo(() => readSessionId(payload), [payload]);
   const [status, setStatus] = useState('Preparing terminal');
-  const [terminalLines, setTerminalLines] = useState<string[]>([]);
-  const [input, setInput] = useState('');
+  const terminalElementRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    const terminalElement = terminalElementRef.current;
+    if (!terminalElement) {
+      return undefined;
+    }
+
+    const terminal = new Terminal({
+      convertEol: true,
+      cursorBlink: true,
+      fontFamily:
+        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+      fontSize: 14,
+      theme: {
+        background: '#111827',
+        foreground: '#e5e7eb',
+      },
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(terminalElement);
+    fitAddon.fit();
+    terminalRef.current = terminal;
+    fitAddonRef.current = fitAddon;
+
+    const sendResize = () => {
+      const socket = socketRef.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }),
+        );
+      }
+    };
+    const resizeListener = () => {
+      fitAddon.fit();
+      sendResize();
+    };
+    window.addEventListener('resize', resizeListener);
+
     if (!sessionId) {
       setStatus('Missing OAuth session');
-      return;
+      terminal.writeln('Missing OAuth session');
+      return () => {
+        window.removeEventListener('resize', resizeListener);
+        terminal.dispose();
+        terminalRef.current = null;
+        fitAddonRef.current = null;
+      };
     }
 
     let closed = false;
+    const inputDisposable = terminal.onData((data) => {
+      const socket = socketRef.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'input', data }));
+      }
+    });
+
+    const writeSocketMessage = (message: MessageEvent) => {
+      const rawData = String(message.data);
+      try {
+        const frame = JSON.parse(rawData) as unknown;
+        if (typeof frame === 'object' && frame !== null && 'type' in frame) {
+          const typedFrame = frame as { type?: unknown; data?: unknown; detail?: unknown };
+          if (typedFrame.type === 'output' && typeof typedFrame.data === 'string') {
+            terminal.write(typedFrame.data);
+            return;
+          }
+          if (typedFrame.type === 'error' && typeof typedFrame.detail === 'string') {
+            terminal.writeln(`\r\n${typedFrame.detail}`);
+            return;
+          }
+          return;
+        }
+      } catch {
+        // Raw PTY streams are text, not JSON protocol frames.
+      }
+      terminal.write(rawData);
+    };
+
     async function attach() {
       try {
         const response = await fetch(
@@ -62,11 +138,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         socket.onopen = () => {
           setStatus('Connected');
           socket.send(JSON.stringify({ type: 'heartbeat' }));
+          sendResize();
         };
-        socket.onmessage = (event) => {
-          const data = String(event.data);
-          setTerminalLines((lines) => [...lines, data]);
-        };
+        socket.onmessage = writeSocketMessage;
         socket.onclose = () => {
           setStatus('Closed');
         };
@@ -81,19 +155,15 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
     void attach();
     return () => {
       closed = true;
+      window.removeEventListener('resize', resizeListener);
+      inputDisposable.dispose();
       socketRef.current?.close();
       socketRef.current = null;
+      terminal.dispose();
+      terminalRef.current = null;
+      fitAddonRef.current = null;
     };
   }, [sessionId]);
-
-  const sendInput = () => {
-    const socket = socketRef.current;
-    if (!input || !socket || socket.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    socket.send(JSON.stringify({ type: 'input', data: input }));
-    setInput('');
-  };
 
   return (
     <main className="oauth-terminal-page">
@@ -105,30 +175,8 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         <span className="oauth-terminal-status">{status}</span>
       </header>
       <section className="oauth-terminal-surface" aria-label="OAuth terminal output">
-        {terminalLines.length > 0 ? (
-          terminalLines.map((line, index) => <pre key={`${index}-${line}`}>{line}</pre>)
-        ) : (
-          <p>Waiting for provider login output.</p>
-        )}
+        <div ref={terminalElementRef} className="oauth-terminal-xterm" />
       </section>
-      <form
-        className="oauth-terminal-input"
-        onSubmit={(event) => {
-          event.preventDefault();
-          sendInput();
-        }}
-      >
-        <label htmlFor="oauth-terminal-command">Terminal input</label>
-        <div>
-          <input
-            id="oauth-terminal-command"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            autoComplete="off"
-          />
-          <button type="submit">Send</button>
-        </div>
-      </form>
     </main>
   );
 }
