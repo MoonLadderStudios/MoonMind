@@ -9,7 +9,7 @@
 
 - Unit tests: `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
 - Integration tests: `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -45,7 +45,7 @@
 ## Phase 4: Polish And Verification
 
 - [X] T012 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for required unit verification.
-- [X] T013 Run `/speckit.verify` against `specs/192-edit-task-all-steps/spec.md` and record the verdict: FULLY_IMPLEMENTED.
+- [X] T013 Run `/moonspec-verify` against `specs/192-edit-task-all-steps/spec.md` and record the verdict: FULLY_IMPLEMENTED.
 
 ## Dependencies & Execution Order
 
