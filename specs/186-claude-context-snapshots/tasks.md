@@ -15,7 +15,7 @@
 - Integration tests: `pytest tests/integration/schemas/test_claude_context_snapshots_boundary.py -q`
 - Full unit verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - Hermetic integration verification: `./tools/test_integration.sh`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -92,7 +92,7 @@
 - [X] T019 [P] Review specs/186-claude-context-snapshots/quickstart.md against implemented commands and update only if command evidence or blockers changed
 - [X] T020 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final required unit verification and record the result in this task list
 - [X] T021 Run `./tools/test_integration.sh` when Docker is available, or record the exact Docker/socket blocker in this task list
-- [X] T022 Run `/speckit.verify` equivalent read-only verification against specs/186-claude-context-snapshots/spec.md after implementation and tests pass
+- [X] T022 Run `/moonspec-verify` equivalent read-only verification against specs/186-claude-context-snapshots/spec.md after implementation and tests pass
 
 ---
 
@@ -143,7 +143,7 @@ Task: "Add failing integration boundary test in tests/integration/schemas/test_c
 5. Export the new contract surface.
 6. Run focused tests until they pass.
 7. Run full unit verification and hermetic integration verification when available.
-8. Run final `/speckit.verify` equivalent against the MM-345 spec.
+8. Run final `/moonspec-verify` equivalent against the MM-345 spec.
 
 ---
 
