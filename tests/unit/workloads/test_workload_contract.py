@@ -225,6 +225,40 @@ def test_registry_rejects_auth_like_profile_mounts_even_when_read_only(
         RunnerProfileRegistry.load_file(registry_path, workspace_root=WORKSPACE_ROOT)
 
 
+def test_registry_allows_mount_names_with_auth_words_as_substrings(
+    tmp_path: Path,
+) -> None:
+    profile = _profile_payload(
+        optional_mounts=[
+            {
+                "type": "volume",
+                "source": "authoring_cache",
+                "target": "/work/authoring-cache",
+            },
+            {
+                "type": "volume",
+                "source": "build_secretary_cache",
+                "target": "/work/secretary-cache",
+            },
+            {
+                "type": "volume",
+                "source": "credentialed_tools_cache",
+                "target": "/work/credentialed-tools",
+            },
+        ]
+    )
+
+    registry = _registry(tmp_path, profile)
+    loaded_profile = registry.get("local-python")
+
+    assert loaded_profile is not None
+    assert [mount.source for mount in loaded_profile.optional_mounts] == [
+        "authoring_cache",
+        "build_secretary_cache",
+        "credentialed_tools_cache",
+    ]
+
+
 def test_registry_allows_explicit_credential_mount_declarations(
     tmp_path: Path,
 ) -> None:

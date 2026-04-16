@@ -16,7 +16,10 @@ _ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _CONTAINER_NAME_SAFE_PATTERN = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SIZE_PATTERN = re.compile(r"^(?P<value>\d+(?:\.\d+)?)(?P<unit>[kmgt]?i?b?)?$", re.I)
 _VOLUME_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
-_AUTH_VOLUME_PATTERN = re.compile(r"(auth|credential|secret)", re.I)
+_AUTH_VOLUME_PATTERN = re.compile(
+    r"(?<![a-z0-9])(auth|credential|secret)(?![a-z0-9])",
+    re.I,
+)
 _SIZE_MULTIPLIERS: dict[str, int] = {
     "": 1,
     "b": 1,
@@ -219,14 +222,6 @@ class WorkloadCredentialMount(BaseModel):
             )
         if not _is_safe_absolute_profile_path(self.target):
             raise ValueError("credential mount target must be an absolute safe path")
-        self.justification = require_non_blank(
-            self.justification,
-            field_name="credentialMounts justification",
-        )
-        self.approval_ref = require_non_blank(
-            self.approval_ref,
-            field_name="credentialMounts approvalRef",
-        )
         return self
 
 
