@@ -225,6 +225,54 @@ def test_registry_rejects_auth_like_profile_mounts_even_when_read_only(
         RunnerProfileRegistry.load_file(registry_path, workspace_root=WORKSPACE_ROOT)
 
 
+def test_registry_allows_explicit_credential_mount_declarations(
+    tmp_path: Path,
+) -> None:
+    profile = _profile_payload(
+        credential_mounts=[
+            {
+                "type": "volume",
+                "source": "codex_auth_volume",
+                "target": "/work/credential/codex",
+                "readOnly": True,
+                "justification": "OAuth enrollment repair workload reads verified CLI auth",
+                "approvalRef": "MM-318",
+            }
+        ]
+    )
+    registry = _registry(tmp_path, profile)
+
+    validated = registry.validate_request(_request())
+
+    assert validated.profile.credential_mounts[0].source == "codex_auth_volume"
+    assert validated.profile.credential_mounts[0].justification.startswith(
+        "OAuth enrollment repair"
+    )
+    assert validated.profile.credential_mounts[0].approval_ref == "MM-318"
+
+
+def test_registry_rejects_credential_mount_without_justification(
+    tmp_path: Path,
+) -> None:
+    profile = _profile_payload(
+        credential_mounts=[
+            {
+                "type": "volume",
+                "source": "codex_auth_volume",
+                "target": "/work/credential/codex",
+                "readOnly": True,
+                "justification": " ",
+                "approvalRef": "MM-318",
+            }
+        ]
+    )
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(json.dumps({"profiles": [profile]}), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="justification"):
+        RunnerProfileRegistry.load_file(registry_path, workspace_root=WORKSPACE_ROOT)
+
+
 def test_registry_rejects_workspace_paths_outside_workspace_root(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
@@ -374,6 +422,18 @@ def test_default_registry_contains_unreal_pilot_profile() -> None:
                         "type": "volume",
                         "source": "codex_auth_volume",
                         "target": "/home/codex/.codex",
+                    }
+                ]
+            },
+            "auth volumes",
+        ),
+        (
+            {
+                "required_mounts": [
+                    {
+                        "type": "volume",
+                        "source": "project_secret_volume",
+                        "target": "/work/secrets",
                     }
                 ]
             },

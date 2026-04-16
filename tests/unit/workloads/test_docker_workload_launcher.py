@@ -362,6 +362,34 @@ def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> 
     assert "/var/run/docker.sock" not in " ".join(run_args)
 
 
+def test_launcher_mounts_only_explicit_credential_declarations(
+    tmp_path: Path,
+) -> None:
+    profile = _profile_payload(
+        credential_mounts=[
+            {
+                "type": "volume",
+                "source": "codex_auth_volume",
+                "target": "/work/credential/codex",
+                "readOnly": True,
+                "justification": "OAuth enrollment repair workload reads verified CLI auth",
+                "approvalRef": "MM-318",
+            }
+        ]
+    )
+
+    run_args = DockerWorkloadLauncher().build_run_args(
+        _validated_request(tmp_path, profiles=[profile])
+    )
+
+    assert (
+        "type=volume,source=codex_auth_volume,target=/work/credential/codex,readonly"
+        in run_args
+    )
+    assert "OAuth enrollment repair" not in " ".join(run_args)
+    assert "approvalRef" not in " ".join(run_args)
+
+
 def test_launcher_rejects_artifacts_dir_outside_profile_mount(
     tmp_path: Path,
 ) -> None:
@@ -485,6 +513,8 @@ async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
     assert result.output_refs["runtime.stderr"] == result.stderr_ref
     assert result.output_refs["runtime.diagnostics"] == result.diagnostics_ref
     assert result.metadata["workload"]["stepId"] == "step-test"
+    assert result.metadata["workload"]["identityKind"] == "workload"
+    assert "managedSessionIdentity" not in result.metadata["workload"]
 
 
 @pytest.mark.asyncio

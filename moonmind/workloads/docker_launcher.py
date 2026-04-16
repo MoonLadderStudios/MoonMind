@@ -14,6 +14,7 @@ from typing import Mapping, Sequence
 from moonmind.schemas.workload_models import (
     RunnerProfile,
     ValidatedWorkloadRequest,
+    WorkloadCredentialMount,
     WorkloadMount,
     WorkloadResourceOverrides,
     WorkloadResult,
@@ -152,6 +153,17 @@ def _mount_arg(mount: WorkloadMount) -> str:
     return ",".join(parts)
 
 
+def _credential_mount_arg(mount: WorkloadCredentialMount) -> str:
+    parts = [
+        f"type={mount.type}",
+        f"source={mount.source}",
+        f"target={mount.target}",
+    ]
+    if mount.read_only:
+        parts.append("readonly")
+    return ",".join(parts)
+
+
 def _effective_resources(
     *,
     profile: RunnerProfile,
@@ -265,6 +277,7 @@ def _workload_metadata(
         "profileId": request.profile.id,
         "imageRef": request.profile.image,
         "containerName": request.container_name,
+        "identityKind": request.ownership.kind,
         "status": status,
         "exitCode": exit_code,
         "startedAt": _isoformat(started_at),
@@ -296,6 +309,7 @@ def _helper_metadata(
         "profileId": request.profile.id,
         "imageRef": request.profile.image,
         "containerName": request.container_name,
+        "identityKind": request.ownership.kind,
         "status": status,
         "startedAt": _isoformat(started_at),
         "completedAt": _isoformat(completed_at),
@@ -564,6 +578,8 @@ class DockerWorkloadLauncher:
             args.extend(["--label", f"{key}={value}"])
         for mount in (*profile.required_mounts, *profile.optional_mounts):
             args.extend(["--mount", _mount_arg(mount)])
+        for mount in profile.credential_mounts:
+            args.extend(["--mount", _credential_mount_arg(mount)])
         for key, value in workload.env_overrides.items():
             args.extend(["--env", f"{key}={value}"])
         for flag, value in _effective_resources(
@@ -614,6 +630,8 @@ class DockerWorkloadLauncher:
             args.extend(["--label", f"{key}={value}"])
         for mount in (*profile.required_mounts, *profile.optional_mounts):
             args.extend(["--mount", _mount_arg(mount)])
+        for mount in profile.credential_mounts:
+            args.extend(["--mount", _credential_mount_arg(mount)])
         for key, value in workload.env_overrides.items():
             args.extend(["--env", f"{key}={value}"])
         for flag, value in _effective_resources(
