@@ -15,7 +15,7 @@
 - Python focused tests: `./tools/test_unit.sh tests/contract/test_temporal_execution_api.py tests/unit/workflows/temporal`
 - Full unit verification: `./tools/test_unit.sh`
 - Hermetic integration verification: `./tools/test_integration.sh`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -107,7 +107,7 @@
 - [ ] T039 Run quickstart validation commands from specs/180-durable-task-edit-reconstruction/quickstart.md
 - [ ] T040 Run full unit verification with `./tools/test_unit.sh`
 - [ ] T041 Run hermetic integration verification with `./tools/test_integration.sh` when Docker Compose is available, or document the exact environment blocker in specs/180-durable-task-edit-reconstruction/verification.md
-- [ ] T042 Run `/speckit.verify` for specs/180-durable-task-edit-reconstruction after implementation and tests pass
+- [ ] T042 Run `/moonspec-verify` for specs/180-durable-task-edit-reconstruction after implementation and tests pass
 
 ---
 
