@@ -6,6 +6,7 @@ import pytest
 
 from moonmind.workflows.temporal.runtime import terminal_bridge
 from moonmind.workflows.temporal.runtime.terminal_bridge import (
+    InMemoryPtyAdapter,
     TerminalBridgeConnection,
     TerminalBridgeFrameError,
     start_terminal_bridge_container,
@@ -77,6 +78,80 @@ def test_terminal_bridge_rejects_generic_exec_frames() -> None:
 
     with pytest.raises(TerminalBridgeFrameError, match="generic Docker exec"):
         bridge.handle_frame({"type": "task_terminal", "session": "managed"})
+
+
+@pytest.mark.asyncio
+async def test_terminal_bridge_forwards_input_and_resize_to_pty_adapter() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminal_pty",
+        terminal_bridge_id="br_oas_terminal_pty",
+        owner_user_id="user-1",
+    )
+    pty = InMemoryPtyAdapter(output_chunks=[b"Open https://example.test/login\r\n"])
+
+    await pty.connect()
+    assert await bridge.handle_frame_for_pty(
+        {"type": "input", "data": "codex login\n"}, pty
+    ) == {"type": "input_ack", "bytes": 12}
+    assert await bridge.handle_frame_for_pty(
+        {"type": "resize", "cols": 132, "rows": 40}, pty
+    ) == {"type": "resize_ack", "cols": 132, "rows": 40}
+    assert await bridge.handle_frame_for_pty({"type": "heartbeat"}, pty) == {
+        "type": "heartbeat_ack"
+    }
+
+    assert pty.written == [b"codex login\n"]
+    assert pty.resizes == [(132, 40)]
+    assert bridge.input_event_count == 1
+    assert bridge.output_event_count == 0
+    assert bridge.heartbeat_count == 1
+    assert list(bridge.input_events) == ["codex login\n"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_bridge_streams_output_without_persisting_raw_output() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminal_output",
+        terminal_bridge_id="br_oas_terminal_output",
+        owner_user_id="user-1",
+    )
+    pty = InMemoryPtyAdapter(
+        output_chunks=[
+            b"Paste code from browser\r\n",
+            b"credential material should not be metadata\r\n",
+        ]
+    )
+    sent: list[bytes] = []
+
+    await pty.connect()
+    await bridge.stream_pty_output(pty, sent.append)
+
+    assert sent == [
+        b"Paste code from browser\r\n",
+        b"credential material should not be metadata\r\n",
+    ]
+    assert bridge.output_event_count == 2
+    assert list(bridge.output_events) == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_bridge_streams_output_to_async_callback() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminal_output_async",
+        terminal_bridge_id="br_oas_terminal_output_async",
+        owner_user_id="user-1",
+    )
+    pty = InMemoryPtyAdapter(output_chunks=[b"first", b"second"])
+    sent: list[bytes] = []
+
+    async def send_output(chunk: bytes) -> None:
+        sent.append(chunk)
+
+    await pty.connect()
+    await bridge.stream_pty_output(pty, send_output)
+
+    assert sent == [b"first", b"second"]
+    assert bridge.output_event_count == 2
 
 
 class _FakeProcess:

@@ -11,7 +11,7 @@
 
 **Test Commands**:
 
-- Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/services/temporal/runtime/test_codex_session_runtime.py tests/unit/auth/test_oauth_session_activities.py tests/unit/services/temporal/runtime/test_terminal_bridge.py`
+- Unit tests: use the focused unit command defined in `specs/194-oauth-terminal-docker-verification/quickstart.md`
 - Integration tests: `./tools/test_integration.sh`
 - Final verification: `/moonspec-verify` (`/speckit.verify` equivalent)
 
@@ -92,7 +92,7 @@
 
 **Purpose**: Finalize evidence without adding hidden scope.
 
-- [ ] T019 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` if any code or unit-test files changed (SC-005)
+- [ ] T019 Run the relevant unit command from `specs/194-oauth-terminal-docker-verification/quickstart.md` if any code or unit-test files changed (SC-005)
 - [X] T020 Run `/moonspec-verify` (`/speckit.verify` equivalent) against `specs/194-oauth-terminal-docker-verification/spec.md`, preserving MM-363 in verification output (FR-009, SC-005)
 
 ---

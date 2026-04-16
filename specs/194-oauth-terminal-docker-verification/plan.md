@@ -14,7 +14,7 @@ MM-363 is a runtime verification-closure story for OAuthTerminal managed-session
 **Language/Version**: Python 3.12  
 **Primary Dependencies**: Pydantic v2, Temporal Python SDK, pytest, Docker Compose, existing OAuth session workflow/activity catalog, managed Codex session controller/runtime helpers  
 **Storage**: Existing workflow artifacts and verification reports only; no new persistent storage  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` with focused OAuthTerminal and managed Codex targets when harness fixes are needed  
+**Unit Testing**: Focused OAuthTerminal and managed Codex unit targets from `quickstart.md` when harness fixes are needed  
 **Integration Testing**: `./tools/test_integration.sh` for compose-backed `integration_ci` coverage; focused direct integration targets may be used during diagnosis before the full script  
 **Target Platform**: MoonMind API and Temporal worker/runtime containers on Linux with Docker available for hermetic integration  
 **Project Type**: Backend/runtime verification story with Temporal, Docker, and artifact/report boundaries  
@@ -86,7 +86,7 @@ specs/
 
 ## Test Strategy
 
-- Unit strategy: run focused unit tests only if diagnosis identifies a harness or runtime behavior gap that can be validated without Docker. Candidate commands are `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_managed_session_controller.py tests/unit/services/temporal/runtime/test_codex_session_runtime.py tests/unit/auth/test_oauth_session_activities.py tests/unit/services/temporal/runtime/test_terminal_bridge.py`.
+- Unit strategy: run the focused unit command defined in `quickstart.md` only if diagnosis identifies a harness or runtime behavior gap that can be validated without Docker.
 - Integration strategy: run `./tools/test_integration.sh` in a Docker-enabled environment. If it fails because `/var/run/docker.sock` is missing, record that blocker and do not update prior verification reports to closure. If Docker is available and failures are specific to OAuthTerminal managed-session auth behavior, make the smallest runtime or test harness fix and rerun.
 
 ## Complexity Tracking

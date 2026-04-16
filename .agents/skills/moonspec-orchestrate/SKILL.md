@@ -1,6 +1,6 @@
 ---
 name: moonspec-orchestrate
-description: Orchestrate the full Moon Spec lifecycle from a feature request or declarative design through one-story specs, planning, TDD task generation, artifact alignment, implementation, and final verification. Use when the user asks for an end-to-end Moon Spec run, wants Codex to coordinate `moonspec-specify`, `moonspec-breakdown`, `moonspec-plan`, `moonspec-tasks`, `moonspec-align`, `moonspec-implement`, and `moonspec-verify`, or needs a resumable pipeline without manual analyze/remediation prompts.
+description: Orchestrate the full Moon Spec lifecycle from a preselected single-story feature request or active feature directory through specification, planning, TDD task generation, artifact alignment, implementation, and final verification. Use when the user asks for an end-to-end Moon Spec run and the input has already been routed to one independently testable story, or when Codex needs to coordinate `moonspec-specify`, `moonspec-plan`, `moonspec-tasks`, `moonspec-align`, `moonspec-implement`, and `moonspec-verify` without manual analyze/remediation prompts.
 ---
 
 # MoonSpec Orchestrate
@@ -12,7 +12,6 @@ Use this skill to coordinate the Moon Spec workflow end to end.
 Orchestrate downstream Moon Spec skills instead of reimplementing their detailed workflows:
 
 - `moonspec-specify`: create one-story specs from a single feature request.
-- `moonspec-breakdown`: split broad technical or declarative designs into one-story candidates under `docs/tmp`.
 - `moonspec-plan`: create implementation planning artifacts.
 - `moonspec-tasks`: create a TDD-first executable task breakdown.
 - `moonspec-align`: analyze and remediate artifact drift before implementation.
@@ -23,16 +22,18 @@ Do not use older `speckit-*` skill names in orchestration instructions. Slash co
 
 ## Inputs
 
-- Required: a feature request, active feature directory, or broad declarative design.
+- Required: a preselected single-story feature request or active feature directory.
 - Optional: implementation constraints, testing constraints, scope boundaries, source design paths, target story, or verification focus.
 - If no request or active feature context is available, ask once for the missing input before starting.
+- Inputs that still need story splitting are out of scope for this skill. Route them through a higher-level workflow such as `moonspec-breakdown` before starting MoonSpec Orchestrate.
 
 Default intent is `runtime`: production code plus tests must be delivered. Use `docs` intent only when the user explicitly asks for documentation-only work.
 
 ## Core Rules
 
 - Moon Spec uses one independently testable story per `spec.md`.
-- Broad designs must go through `moonspec-breakdown` before planning, but breakdown does not create `spec.md`.
+- Before starting downstream stages, validate that the input is already exactly one independently testable story or an active feature directory with an existing one-story `spec.md`.
+- If the input is a broad design, names multiple stories/features, asks to split or implement all stories, or otherwise cannot be bounded to one independently testable story without selection, stop immediately and report that a higher-level workflow must route it through `moonspec-breakdown` or another upstream selector first.
 - Single-story requests go through `moonspec-specify`.
 - TDD is the default strategy.
 - Unit tests and integration tests are both expected.
@@ -73,12 +74,6 @@ Use these gates before advancing:
   - It contains exactly one user story.
   - The original request or source design is preserved in `**Input**`.
   - Requirements are testable and contain no unresolved story-critical clarification.
-- Breakdown gate:
-  - A breakdown handoff exists under `docs/tmp/story-breakdowns/`.
-  - The handoff is not named `spec.md`.
-  - It contains ordered one-story candidates.
-  - It preserves the source design for later `/speckit.specify`.
-  - Source design coverage IDs such as `DESIGN-REQ-*` are mapped.
 - Plan gate:
   - `plan.md` exists.
   - `research.md` and `quickstart.md` exist.
@@ -106,33 +101,17 @@ If a gate fails, stop or run the appropriate upstream skill. Do not continue on 
 
 ## Workflow
 
-### 1. Classify Input
+### 1. Create Or Select Spec
 
-Classify the request:
+Use the provided input as a preselected single-story request or active feature directory:
 
-- Single-story feature request: use `moonspec-specify`.
-- Broad technical or declarative design: use `moonspec-breakdown`.
-- Existing feature directory: resume from current artifacts.
-- Documentation-only request: use `docs` intent only when explicitly requested.
+1. Validate the single-story precondition before running `moonspec-specify`.
+2. Stop immediately if the input still needs story splitting or upstream story selection.
+3. Run `moonspec-specify` if `spec.md` does not already exist.
+4. Verify the specify gate.
+5. Do not run `moonspec-breakdown` or create more than one spec from this workflow.
 
-For `Implement Docs/<path>.md` style requests, treat the document as a runtime source design unless the user explicitly says documentation-only.
-
-### 2. Create Or Select Specs
-
-For a single story:
-
-1. Run `moonspec-specify` if `spec.md` does not already exist.
-2. Verify the specify gate.
-
-For a broad design:
-
-1. Run `moonspec-breakdown`.
-2. Verify the breakdown gate.
-3. Select the recommended first story unless the user asked to process all stories.
-4. Run `moonspec-specify` for the selected story to create its `spec.md`.
-5. For "all stories", run specify and downstream stages in dependency order, one story at a time.
-
-### 3. Plan
+### 2. Plan
 
 For the selected spec:
 
@@ -140,12 +119,12 @@ For the selected spec:
 2. Verify generated artifacts.
 3. Stop if planning requires unresolved user input.
 
-### 4. Generate Tasks
+### 3. Generate Tasks
 
 1. Run `moonspec-tasks` if the tasks gate is incomplete or upstream artifacts changed.
 2. Verify `tasks.md` format, single-story focus, TDD order, unit/integration coverage, source traceability, and final `/speckit.verify`.
 
-### 5. Align Artifacts
+### 4. Align Artifacts
 
 1. Run `moonspec-align` after task generation.
 2. Let `moonspec-align` make conservative artifact edits without asking for follow-up responses.
@@ -154,14 +133,14 @@ For the selected spec:
 
 This replaces the old manual analyze remediation flow. Do not provide scripted "yes", "continue", or other user responses to get through analyze limitations.
 
-### 6. Implement
+### 5. Implement
 
 1. Run `moonspec-implement` when implementation work remains.
 2. Require TDD execution: unit tests and integration tests are written and confirmed failing before production code.
 3. Require completed work to be marked `[X]` in `tasks.md`.
 4. Preserve story scope; do not add hidden scope to make verification easier.
 
-### 7. Verify
+### 6. Verify
 
 1. Run `moonspec-verify` as the final gate unless an up-to-date verification report already covers the current code and artifacts.
 2. If verdict is `FULLY_IMPLEMENTED`, report success.
@@ -174,14 +153,7 @@ This replaces the old manual analyze remediation flow. Do not provide scripted "
 
 ## Multi-Spec Designs
 
-When `moonspec-breakdown` creates multiple stories:
-
-- Process stories in dependency order from the `docs/tmp/story-breakdowns/` handoff.
-- Create each `spec.md` with `moonspec-specify` only when that story reaches the specify stage.
-- Keep each resulting spec isolated through plan, tasks, align, implement, and verify.
-- Do not merge multiple stories into one `tasks.md`.
-- After each spec, report its verification verdict before moving to the next.
-- Stop if a dependency spec fails verification and blocks later specs.
+Multi-spec orchestration is out of scope for this skill. A higher-level workflow must split, order, and select stories before invoking MoonSpec Orchestrate for each individual story.
 
 ## Commit And PR Behavior
 
@@ -197,10 +169,10 @@ Return a concise report:
 ## MoonSpec Orchestration
 
 Feature:
-- [active spec path or breakdown handoff path]
+- [active spec path]
 
 Stages:
-- Specify/Breakdown: PASS/FAIL/SKIPPED
+- Specify: PASS/FAIL/SKIPPED
 - Plan: PASS/FAIL/SKIPPED
 - Tasks: PASS/FAIL/SKIPPED
 - Align: PASS/FAIL/SKIPPED
@@ -227,6 +199,7 @@ Mention source design coverage and `DOC-REQ-*`/`DESIGN-REQ-*` status when presen
 - Use `moonspec-*` skills for downstream work.
 - Use `moonspec-align`, not the old analyze prompt workaround.
 - Do not invent user approvals or fake intermediate outputs.
+- Do not run `moonspec-breakdown` or perform story routing from inside this workflow.
 - Enforce one story per spec.
 - Keep TDD, unit tests, integration tests, and `/speckit.verify` in the pipeline.
 - Treat verification as the final authority for completion.
