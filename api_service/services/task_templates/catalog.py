@@ -250,14 +250,10 @@ def _render_value(
 
 
 def _first_allowed_jira_project_key() -> str | None:
-    raw_projects = str(settings.atlassian.jira.jira_allowed_projects or "").strip()
-    if not raw_projects:
+    projects = settings.atlassian.jira.jira_allowed_projects
+    if not projects:
         return None
-    for raw_project in raw_projects.split(","):
-        project_key = raw_project.strip().upper()
-        if project_key:
-            return project_key
-    return None
+    return projects.split(",")[0]
 
 
 def _effective_inputs_schema(
@@ -265,16 +261,16 @@ def _effective_inputs_schema(
 ) -> list[dict[str, Any]]:
     """Apply runtime-derived defaults without mutating stored template versions."""
 
-    effective_schema = [dict(definition) for definition in inputs_schema]
     if slug != _JIRA_BREAKDOWN_SLUG:
-        return effective_schema
+        return inputs_schema
 
     project_key = _first_allowed_jira_project_key()
     if not project_key:
-        return effective_schema
+        return inputs_schema
 
+    effective_schema = [dict(definition) for definition in inputs_schema]
     for definition in effective_schema:
-        if str(definition.get("name") or "").strip() == _JIRA_BREAKDOWN_PROJECT_INPUT:
+        if definition.get("name") == _JIRA_BREAKDOWN_PROJECT_INPUT:
             definition["default"] = project_key
             break
     return effective_schema
@@ -302,7 +298,7 @@ def _serialize_template(
         ),
         "inputs": _effective_inputs_schema(
             slug=template.slug,
-            inputs_schema=list(version.inputs_schema or []),
+            inputs_schema=version.inputs_schema or [],
         ),
         "steps": list(version.steps or []),
         "annotations": dict(version.annotations or {}),
@@ -799,7 +795,7 @@ class TaskTemplateCatalogService:
         validated_inputs = self._resolve_inputs(
             schema=_effective_inputs_schema(
                 slug=template.slug,
-                inputs_schema=list(selected_version.inputs_schema or []),
+                inputs_schema=selected_version.inputs_schema or [],
             ),
             submitted=dict(inputs or {}),
         )
