@@ -51,6 +51,10 @@ async def mock_register_profile(request: dict) -> dict:
 async def mock_stop_auth_runner(request: dict) -> dict:
     return {"stopped": True}
 
+@activity.defn(name="oauth_session.mark_failed")
+async def mock_mark_failed(request: dict) -> dict:
+    return {}
+
 
 async def test_oauth_session_workflow_success() -> None:
     """Test full successful OAuth session workflow lifecycle."""
@@ -240,3 +244,52 @@ async def test_oauth_session_workflow_api_finalize_skips_verify_and_register() -
             assert result["status"] == "succeeded"
             assert verify_calls == 0
             assert register_calls == 0
+
+
+async def test_oauth_session_workflow_rejects_codex_oauth_input_without_refs() -> None:
+    """Codex OAuth sessions route missing refs through the failure activity path."""
+    status_updates: list[str] = []
+    failures: list[str] = []
+
+    @activity.defn(name="oauth_session.update_status")
+    async def record_update_status(request: dict) -> dict:
+        status_updates.append(request["status"])
+        return {}
+
+    @activity.defn(name="oauth_session.mark_failed")
+    async def record_mark_failed(request: dict) -> dict:
+        failures.append(request["reason"])
+        return {}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[record_update_status, record_mark_failed],
+        ), Worker(
+            env.client,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            workflows=[MoonMindOAuthSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                MoonMindOAuthSessionWorkflow.run,
+                {
+                    "session_id": "sess_missing_refs",
+                    "runtime_id": "codex_cli",
+                },
+                id="oauth-session:sess_missing_refs",
+                task_queue=WORKFLOW_TASK_QUEUE,
+            )
+
+            assert result == {
+                "session_id": "sess_missing_refs",
+                "status": "failed",
+                "failure_reason": (
+                    "volume_ref and volume_mount_path are required for Codex OAuth sessions"
+                ),
+            }
+            assert status_updates == ["starting"]
+            assert failures == [
+                "volume_ref and volume_mount_path are required for Codex OAuth sessions"
+            ]

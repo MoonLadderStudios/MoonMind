@@ -8,6 +8,7 @@ from moonmind.utils.logging import (
     _is_non_secret_sentinel,
     _is_sensitive_key,
     _secret_variants,
+    redact_profile_file_templates,
     scrub_github_tokens,
 )
 
@@ -127,3 +128,30 @@ def test_secret_redactor_scrub_sequence():
 
     result = redactor.scrub_sequence(["This is my_secret", "No secrets"])
     assert result == ["This is ***", "No secrets"]
+
+
+def test_redact_profile_file_templates_redacts_nested_content_fields():
+    raw_secret = "sk-template-raw-secret"
+
+    result = redact_profile_file_templates(
+        [
+            {
+                "path": "/tmp/config.toml",
+                "content_template": {"api_key": raw_secret, "model": "gpt-test"},
+            },
+            {
+                "path": "/tmp/legacy.json",
+                "contentTemplate": {"token": raw_secret},
+            },
+            {
+                "path": "/tmp/plain.txt",
+                "content": f"token={raw_secret}",
+            },
+        ]
+    )
+
+    assert raw_secret not in repr(result)
+    assert result[0]["content_template"]["api_key"] == "[REDACTED]"
+    assert result[0]["content_template"]["model"] == "gpt-test"
+    assert result[1]["contentTemplate"]["token"] == "[REDACTED]"
+    assert result[2]["content"] == "[REDACTED]"

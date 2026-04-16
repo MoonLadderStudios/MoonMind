@@ -118,6 +118,28 @@ def redact_sensitive_payload(payload: Any, *, key: str | None = None) -> Any:
     return payload
 
 
+def redact_profile_file_templates(value: list[Any]) -> list[Any]:
+    """Redact provider-profile file templates without exposing template bodies."""
+
+    redacted = redact_sensitive_payload(value)
+    if not isinstance(redacted, list):
+        return []
+
+    templates: list[Any] = []
+    for item in redacted:
+        if not isinstance(item, Mapping):
+            templates.append(item)
+            continue
+        template = dict(item)
+        for content_key in ("content", "contentTemplate", "content_template"):
+            if content_key in template:
+                template[content_key] = redact_sensitive_payload(
+                    template[content_key], key="secret"
+                )
+        templates.append(template)
+    return templates
+
+
 class SecretRedactor:
     """Utility to scrub sensitive values from log output.
 
@@ -169,6 +191,7 @@ class SecretRedactor:
 
 __all__ = [
     "SecretRedactor",
+    "redact_profile_file_templates",
     "redact_sensitive_payload",
     "redact_sensitive_text",
     "scrub_github_tokens",

@@ -24,6 +24,7 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
     ManagedAgentRateLimitPolicy,
 )
+from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.runtime.providers.registry import get_provider_default
 
@@ -397,6 +398,27 @@ async def finalize_oauth_session(
         "rate_limit_policy": policy_enum,
         "enabled": True,
     }
+    try:
+        validate_codex_oauth_profile_refs(
+            runtime_id=session_obj.runtime_id,
+            credential_source=ProviderCredentialSource.OAUTH_VOLUME.value,
+            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME.value,
+            volume_ref=session_obj.volume_ref,
+            volume_mount_path=session_obj.volume_mount_path,
+            volume_ref_field_name="volume_ref",
+            volume_mount_path_field_name="volume_mount_path",
+        )
+    except ValueError as exc:
+        session_obj.status = OAuthSessionStatus.FAILED
+        session_obj.completed_at = datetime.now(timezone.utc)
+        session_obj.failure_reason = str(exc)
+        await db.commit()
+        await _stop_oauth_auth_runner(session_obj)
+        await _fail_oauth_session_workflow(session_obj.session_id, str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
     if existing_profile:
         for key, value in profile_data.items():

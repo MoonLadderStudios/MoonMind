@@ -20,7 +20,9 @@ from api_service.db.models import (
     ManagedAgentRateLimitPolicy,
     User,
 )
-from moonmind.utils.logging import redact_sensitive_payload
+from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
+from moonmind.utils.logging import redact_profile_file_templates, redact_sensitive_payload
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
@@ -95,6 +97,15 @@ class ProviderProfileCreate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_runtime_env(self) -> "ProviderProfileCreate":
+        validate_codex_oauth_profile_refs(
+            runtime_id=self.runtime_id,
+            credential_source=self.credential_source,
+            runtime_materialization_mode=self.runtime_materialization_mode,
+            volume_ref=self.volume_ref,
+            volume_mount_path=self.volume_mount_path,
+            volume_ref_field_name="volume_ref",
+            volume_mount_path_field_name="volume_mount_path",
+        )
         return self
 
 
@@ -274,6 +285,7 @@ async def create_profile(
         is_default=False,
         max_lease_duration_seconds=body.max_lease_duration_seconds,
     )
+    _validate_codex_oauth_profile_row(profile)
     session.add(profile)
     await session.flush()
     await normalize_runtime_default_profile(
@@ -315,6 +327,7 @@ async def update_profile(
     if requested_is_default is False:
         profile.is_default = False
 
+    _validate_codex_oauth_profile_row(profile)
     await session.flush()
     await normalize_runtime_default_profile(
         session=session,
@@ -378,6 +391,27 @@ def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> 
     )
 
 
+def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
+    try:
+        validate_codex_oauth_profile_refs(
+            runtime_id=row.runtime_id,
+            credential_source=(
+                row.credential_source.value if row.credential_source else None
+            ),
+            runtime_materialization_mode=(
+                row.runtime_materialization_mode.value
+                if row.runtime_materialization_mode
+                else None
+            ),
+            volume_ref=row.volume_ref,
+            volume_mount_path=row.volume_mount_path,
+            volume_ref_field_name="volume_ref",
+            volume_mount_path_field_name="volume_mount_path",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
     payload = {
         "profile_id": row.profile_id,
@@ -410,8 +444,9 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
-    for key in ("env_template", "file_templates", "command_behavior"):
+    for key in ("env_template", "command_behavior"):
         payload[key] = redact_sensitive_payload(payload[key])
+    payload["file_templates"] = redact_profile_file_templates(payload["file_templates"])
     return payload
 
 

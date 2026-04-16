@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from api_service.db.models import ManagedAgentProviderProfile
+from moonmind.utils.logging import redact_profile_file_templates, redact_sensitive_payload
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +84,10 @@ def _manager_profile_payload(row: ManagedAgentProviderProfile) -> dict[str, Any]
         "priority": row.priority,
         "secret_refs": row.secret_refs or {},
         "clear_env_keys": row.clear_env_keys or [],
-        "env_template": row.env_template or {},
-        "file_templates": row.file_templates or [],
+        "env_template": redact_sensitive_payload(row.env_template or {}),
+        "file_templates": redact_profile_file_templates(row.file_templates or []),
         "home_path_overrides": row.home_path_overrides or {},
-        "command_behavior": row.command_behavior or {},
+        "command_behavior": redact_sensitive_payload(row.command_behavior or {}),
         "max_parallel_runs": row.max_parallel_runs,
         "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
         "rate_limit_policy": (
