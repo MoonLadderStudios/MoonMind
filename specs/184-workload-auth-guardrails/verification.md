@@ -30,7 +30,7 @@
 
 ## MoonSpec Prerequisite Script
 
-`.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` was attempted and blocked by the managed-agent branch name `mm-360-156e66b4`, which does not match the numbered Moon Spec branch pattern expected by the script. The active feature directory was resolved manually as `specs/184-workload-auth-guardrails`.
+`SPECIFY_FEATURE=184-workload-auth-guardrails .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` passed, resolving the active feature directory as `specs/184-workload-auth-guardrails` and listing `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `tasks.md`.
 
 ## Result
 
