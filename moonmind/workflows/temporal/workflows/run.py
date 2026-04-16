@@ -3057,6 +3057,9 @@ class MoonMindRunWorkflow:
                 continue
             if not _coerce_bool(candidate.get("enabled"), default=False):
                 continue
+            timeout_config = candidate.get("timeouts")
+            if not isinstance(timeout_config, Mapping):
+                timeout_config = {}
             return {
                 "enabled": True,
                 "checks": self._coerce_text(candidate.get("checks"), max_chars=20)
@@ -3084,15 +3087,35 @@ class MoonMindRunWorkflow:
                 "fallbackPollSeconds": (
                     candidate.get("fallbackPollSeconds")
                     or candidate.get("fallback_poll_seconds")
-                    or (
-                        candidate.get("timeouts", {}).get("fallbackPollSeconds")
-                        if isinstance(candidate.get("timeouts"), Mapping)
-                        else None
-                    )
+                    or timeout_config.get("fallbackPollSeconds")
+                    or timeout_config.get("fallback_poll_seconds")
                     or 120
+                ),
+                "expireAfterSeconds": (
+                    candidate.get("expireAfterSeconds")
+                    or candidate.get("expire_after_seconds")
+                    or timeout_config.get("expireAfterSeconds")
+                    or timeout_config.get("expire_after_seconds")
                 ),
             }
         return None
+
+    @staticmethod
+    def _normalize_positive_int(
+        value: Any,
+        *,
+        default: int | None,
+        maximum: int,
+    ) -> int | None:
+        if value is None or value == "":
+            return default
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return default
+        if candidate <= 0:
+            return default
+        return min(candidate, maximum)
 
     @staticmethod
     def _parse_github_pull_request_url(url: str) -> dict[str, Any] | None:
@@ -3131,6 +3154,19 @@ class MoonMindRunWorkflow:
         if not normalized_head_sha:
             return None
         pr_number = int(parsed["number"])
+        fallback_poll_seconds = self._normalize_positive_int(
+            request.get("fallbackPollSeconds"),
+            default=120,
+            maximum=3600,
+        )
+        expire_after_seconds = self._normalize_positive_int(
+            request.get("expireAfterSeconds"),
+            default=None,
+            maximum=2_592_000,
+        )
+        timeouts: dict[str, Any] = {"fallbackPollSeconds": fallback_poll_seconds or 120}
+        if expire_after_seconds is not None:
+            timeouts["expireAfterSeconds"] = expire_after_seconds
         return {
             "workflowType": "MoonMind.MergeAutomation",
             "parentWorkflowId": parent_workflow_id,
@@ -3173,9 +3209,7 @@ class MoonMindRunWorkflow:
                     "skill": "pr-resolver",
                     "mergeMethod": request.get("mergeMethod") or "squash",
                 },
-                "timeouts": {
-                    "fallbackPollSeconds": int(request.get("fallbackPollSeconds") or 120),
-                },
+                "timeouts": timeouts,
             },
             "resolverTemplate": {
                 "repository": repo,

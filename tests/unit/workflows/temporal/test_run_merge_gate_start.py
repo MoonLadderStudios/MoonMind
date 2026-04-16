@@ -70,6 +70,36 @@ def test_build_merge_gate_start_payload_from_published_pr() -> None:
     assert payload["resolverTemplate"]["repository"] == "MoonLadderStudios/MoonMind"
 
 
+def test_build_merge_gate_start_payload_normalizes_timeout_values() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters={
+            "publishMode": "pr",
+            "task": {
+                "publish": {
+                    "mergeAutomation": {
+                        "enabled": True,
+                        "fallbackPollSeconds": "not-a-number",
+                        "timeouts": {"expireAfterSeconds": "900"},
+                    }
+                }
+            },
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/341",
+        head_sha="abc123",
+        parent_workflow_id="mm:parent",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    assert payload["mergeAutomationConfig"]["timeouts"] == {
+        "fallbackPollSeconds": 120,
+        "expireAfterSeconds": 900,
+    }
+
+
 def test_build_merge_gate_start_payload_requires_real_head_sha() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._repo = "MoonLadderStudios/MoonMind"

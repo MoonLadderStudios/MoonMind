@@ -158,6 +158,19 @@ class MergeAutomationTimeoutsModel(BaseModel):
             return 120
         return min(candidate, 3600)
 
+    @field_validator("expire_after_seconds", mode="before")
+    @classmethod
+    def _normalize_expire_after_seconds(cls, value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return None
+        if candidate <= 0:
+            return None
+        return min(candidate, 2_592_000)
+
 
 class MergeAutomationConfigModel(BaseModel):
     """Full merge automation configuration carried by workflow input."""

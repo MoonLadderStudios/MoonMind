@@ -327,6 +327,20 @@ def _parse_expire_at(value: str | None) -> datetime | None:
     return parsed
 
 
+def _effective_expire_at(
+    start_input: MergeAutomationStartInput,
+    *,
+    started_at: datetime,
+) -> datetime | None:
+    explicit_expire_at = _parse_expire_at(start_input.expire_at)
+    if explicit_expire_at is not None:
+        return explicit_expire_at
+    expire_after_seconds = start_input.config.timeouts.expire_after_seconds
+    if expire_after_seconds is None:
+        return None
+    return started_at + timedelta(seconds=expire_after_seconds)
+
+
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindMergeAutomationWorkflow:
     """Wait for external PR readiness, then launch one pr-resolver run."""
@@ -394,10 +408,10 @@ class MoonMindMergeAutomationWorkflow:
         self._cycle_count = self._input.cycle_count
         self._status = STATE_AWAITING_EXTERNAL
         self._output_status = OUTPUT_WAITING
+        expire_at = _effective_expire_at(self._input, started_at=workflow.now())
         self._publish_visibility()
 
         while True:
-            expire_at = _parse_expire_at(self._input.expire_at)
             if expire_at is not None and workflow.now() >= expire_at:
                 self._status = STATE_COMPLETED
                 self._output_status = OUTPUT_EXPIRED
@@ -496,6 +510,8 @@ class MoonMindMergeAutomationWorkflow:
                         cycle_count=self._cycle_count,
                         resolver_history=self._resolver_history,
                         latest_head_sha=self._input.pull_request.head_sha,
-                        expire_at=self._input.expire_at,
+                        expire_at=(
+                            expire_at.isoformat() if expire_at is not None else None
+                        ),
                     )
                 )
