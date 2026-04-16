@@ -12,7 +12,8 @@
 **Test Commands**:
 
 - Unit tests: `./tools/test_unit.sh tests/unit/workflows/temporal/test_merge_gate_models.py tests/unit/workflows/temporal/test_merge_gate_workflow.py tests/unit/workflows/temporal/test_run_merge_gate_start.py`
-- Integration tests: `./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_merge_gate_temporal.py`
+- Workflow-boundary tests: `./tools/test_unit.sh tests/unit/workflows/temporal/workflows/test_merge_gate_temporal.py`
+- Hermetic integration tests: `./tools/test_integration.sh`
 - Final verification: `/speckit.verify`
 
 ## Format: `[ID] [P?] Description`
@@ -36,13 +37,13 @@
 
 ## Phase 2: Foundational
 
-**Purpose**: Define shared contracts and test fixtures that block story implementation.
+**Purpose**: Define shared contract inventory and test fixtures that block story implementation without adding production behavior before red-first tests.
 
 **CRITICAL**: No story implementation work begins until this phase is complete.
 
-- [ ] T007 Add merge-gate Pydantic request/result models for FR-003, FR-005, FR-008, and contract start input in moonmind/schemas/temporal_models.py
-- [ ] T008 Add readiness status, blocker, and resolver-run enums/models for FR-006, FR-012, and edge cases in moonmind/schemas/temporal_models.py
-- [ ] T009 Add merge-gate activity names and routing metadata for FR-005 and FR-007 in moonmind/workflows/temporal/activity_catalog.py
+- [ ] T007 Confirm merge-gate contract inventory and payload names from specs/179-merge-gate/contracts/merge-gate-contract.md
+- [ ] T008 Confirm merge-gate entity and state-transition inventory from specs/179-merge-gate/data-model.md
+- [ ] T009 Confirm workflow registration and activity routing anchors from specs/179-merge-gate/plan.md
 - [ ] T010 Add reusable fake readiness and resolver-launch fixtures for SC-001 through SC-005 in tests/unit/workflows/temporal/test_merge_gate_workflow.py
 - [ ] T011 Add parent-run publish outcome fixture for acceptance scenarios 1 and 2 in tests/unit/workflows/temporal/test_run_merge_gate_start.py
 
@@ -61,7 +62,8 @@
 **Test Plan**:
 
 - Unit: model validation, readiness classification, idempotency keys, parent-run gate-start decision, resolver payload construction, stale/closed/policy-denied blockers.
-- Integration: parent-to-gate workflow startup, parent completion after gate startup, waiting blockers, gate-open resolver launch, duplicate-event prevention, resolver readiness reuse after remediation commits.
+- Workflow-boundary: parent-to-gate workflow startup, parent completion after gate startup, waiting blockers, gate-open resolver launch, duplicate-event prevention, resolver readiness reuse after remediation commits.
+- Hermetic integration: workflow registration, activity routing, and projection behavior through `./tools/test_integration.sh` when Docker Compose is available.
 
 ### Unit Tests (write first)
 
@@ -71,7 +73,7 @@
 - [ ] T015 [P] Add failing unit tests for parent `MoonMind.Run` gate-start decisions covering FR-001, FR-002, FR-004, scenario 1, scenario 2, and disabled merge automation in tests/unit/workflows/temporal/test_run_merge_gate_start.py
 - [ ] T016 Run `./tools/test_unit.sh tests/unit/workflows/temporal/test_merge_gate_models.py tests/unit/workflows/temporal/test_merge_gate_workflow.py tests/unit/workflows/temporal/test_run_merge_gate_start.py` to confirm T012-T015 fail for the expected missing implementation
 
-### Integration Tests (write first)
+### Workflow-Boundary Tests (write first)
 
 - [ ] T017 Add failing Temporal workflow-boundary test for parent run publishing a PR, starting one merge gate, and completing independently covering FR-001, FR-002, FR-004, scenario 1, scenario 2, and SC-001 in tests/unit/workflows/temporal/workflows/test_merge_gate_temporal.py
 - [ ] T018 Add failing Temporal workflow-boundary test for waiting blockers and sanitized projection state covering FR-005, FR-006, FR-011, scenario 3, SC-002, and contract query shape in tests/unit/workflows/temporal/workflows/test_merge_gate_temporal.py
@@ -83,14 +85,14 @@
 ### Implementation
 
 - [ ] T023 Implement merge-gate model contracts and validation for FR-003, FR-005, FR-006, FR-008, FR-012 in moonmind/schemas/temporal_models.py
-- [ ] T024 Implement readiness classification helper and sanitized blocker normalization for FR-005, FR-006, FR-012, SC-002, and SC-004 in moonmind/workflows/temporal/workflows/merge_gate.py
-- [ ] T025 Implement `MoonMind.MergeGate` workflow wait/evaluate/open/block lifecycle for FR-005, FR-006, FR-007, FR-008, scenario 3, scenario 4, scenario 5, and scenario 6 in moonmind/workflows/temporal/workflows/merge_gate.py
-- [ ] T026 Implement external event signal handling for duplicate and out-of-order readiness events covering FR-008 and edge cases in moonmind/workflows/temporal/workflows/merge_gate.py
-- [ ] T027 Implement resolver follow-up creation payload builder using pr-resolver and publish mode `none` for FR-007, FR-009, scenario 4, and contract resolver request in moonmind/workflows/temporal/workflows/merge_gate.py
-- [ ] T028 Register merge-gate workflow type for FR-002 and operator visibility in moonmind/workflows/temporal/workers.py
-- [ ] T029 Register merge-gate workflow implementation for FR-002 in moonmind/workflows/temporal/worker_entrypoint.py
-- [ ] T030 Implement merge-gate activity runtime bindings for readiness evaluation and resolver creation covering FR-005, FR-007, FR-009, and contract activity names in moonmind/workflows/temporal/activity_runtime.py
-- [ ] T031 Register merge-gate activity catalog entries for FR-005 and FR-007 in moonmind/workflows/temporal/activity_catalog.py
+- [ ] T024 Implement merge-gate activity names and routing metadata for FR-005 and FR-007 in moonmind/workflows/temporal/activity_catalog.py
+- [ ] T025 Implement readiness classification helper and sanitized blocker normalization for FR-005, FR-006, FR-012, SC-002, and SC-004 in moonmind/workflows/temporal/workflows/merge_gate.py
+- [ ] T026 Implement `MoonMind.MergeGate` workflow wait/evaluate/open/block lifecycle for FR-005, FR-006, FR-007, FR-008, scenario 3, scenario 4, scenario 5, and scenario 6 in moonmind/workflows/temporal/workflows/merge_gate.py
+- [ ] T027 Implement external event signal handling for duplicate and out-of-order readiness events covering FR-008 and edge cases in moonmind/workflows/temporal/workflows/merge_gate.py
+- [ ] T028 Implement resolver follow-up creation payload builder using pr-resolver and publish mode `none` for FR-007, FR-009, scenario 4, and contract resolver request in moonmind/workflows/temporal/workflows/merge_gate.py
+- [ ] T029 Register merge-gate workflow type for FR-002 and operator visibility in moonmind/workflows/temporal/workers.py
+- [ ] T030 Register merge-gate workflow implementation for FR-002 in moonmind/workflows/temporal/worker_entrypoint.py
+- [ ] T031 Implement merge-gate activity runtime bindings for readiness evaluation and resolver creation covering FR-005, FR-007, FR-009, and contract activity names in moonmind/workflows/temporal/activity_runtime.py
 - [ ] T032 Implement parent `MoonMind.Run` merge-automation request detection and post-PR gate startup for FR-001, FR-002, FR-004, scenario 1, scenario 2, and SC-001 in moonmind/workflows/temporal/workflows/run.py
 - [ ] T033 Implement resolver-side readiness reuse hook or helper call after remediation commits for FR-010, scenario 7, and SC-005 in moonmind/workflows/temporal/workflows/run.py
 - [ ] T034 Expose compact gate status, blockers, and resolver refs through existing workflow memo/query/projection path for FR-011 and contract projection shape in moonmind/workflows/temporal/workflows/merge_gate.py
@@ -126,9 +128,9 @@
 ### Within The Story
 
 - Unit tests T012-T015 must be written before implementation and confirmed failing by T016.
-- Integration tests T017-T021 must be written before implementation and confirmed failing by T022.
+- Workflow-boundary tests T017-T021 must be written before implementation and confirmed failing by T022.
 - Model contract implementation T023 precedes workflow lifecycle work T025.
-- Activity catalog/runtime work T030-T031 precedes full workflow-boundary green tests.
+- Activity catalog/runtime work T024 and T031 precedes full workflow-boundary green tests.
 - Parent run startup work T032 depends on model contracts T023 and gate workflow startup shape T025.
 - Resolver readiness reuse T033 depends on readiness helper work T024.
 - Story validation T035 runs after all implementation tasks T023-T034.
@@ -157,8 +159,8 @@ Task: "Update operator-facing Temporal workflow catalog references in docs/Tempo
 
 1. Complete setup and foundational schema/activity scaffolding.
 2. Write all unit tests and confirm they fail for missing merge-gate models, workflow helpers, and parent startup logic.
-3. Write all Temporal boundary tests and confirm they fail for missing workflow registration/lifecycle behavior.
-4. Implement compact models, readiness helpers, workflow lifecycle, activity bindings, and parent-run startup.
+3. Write all Temporal workflow-boundary tests and confirm they fail for missing workflow registration/lifecycle behavior.
+4. Implement compact models, activity names, readiness helpers, workflow lifecycle, activity bindings, and parent-run startup.
 5. Re-run focused unit and workflow-boundary tests until green.
 6. Complete documentation polish and quickstart validation.
 7. Run full unit verification and hermetic integration verification when available.
@@ -169,11 +171,11 @@ Task: "Update operator-facing Temporal workflow catalog references in docs/Tempo
 ## Coverage Summary
 
 - FR-001 through FR-004: covered by T015, T017, T032, T035.
-- FR-005 through FR-008: covered by T012-T014, T018-T020, T023-T026, T030-T031, T035.
-- FR-009: covered by T014, T019, T027, T030, T035.
+- FR-005 through FR-008: covered by T012-T014, T018-T020, T023-T027, T031, T035.
+- FR-009: covered by T014, T019, T028, T031, T035.
 - FR-010: covered by T021, T033, T035.
 - FR-011: covered by T018, T034, T036, T039.
 - FR-012: covered by T012, T013, T020, T023, T024, T035.
-- Acceptance scenarios 1-7: covered by T017-T021 and implementation tasks T025-T033.
+- Acceptance scenarios 1-7: covered by T017-T021 and implementation tasks T026-T033.
 - SC-001 through SC-005: covered by T017-T021, T035, T039-T042.
 - Original MM-341 brief preservation: covered by T001 and final `/speckit.verify` task T042.
