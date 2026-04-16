@@ -70,15 +70,15 @@ Validation evidence:
 - Focused integration-style: `pytest tests/integration/schemas/test_claude_governance_telemetry_boundary.py -q` passed, 1 passed.
 - Related Claude schema regression: `pytest tests/unit/schemas/test_claude_managed_session_models.py tests/unit/schemas/test_claude_policy_envelope.py tests/unit/schemas/test_claude_context_snapshots.py tests/unit/schemas/test_claude_checkpoints.py tests/unit/schemas/test_claude_child_work.py tests/unit/schemas/test_claude_surfaces_handoff.py -q` passed, 131 passed.
 
-## Final Phase: Polish And Verification
+## Final Phase: Polish And /moonspec-verify
 
 - [X] T022 Review `specs/191-claude-governance-telemetry/spec.md`, `specs/191-claude-governance-telemetry/plan.md`, and `specs/191-claude-governance-telemetry/tasks.md` for MM-349 traceability and no stale placeholders
 - [X] T023 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` when time permits and record result or exact blocker in this file
 - [X] T024 Run `./tools/test_integration.sh` when Docker is available and record result or exact blocker in this file
-- [X] T025 Run final MoonSpec verification for `specs/191-claude-governance-telemetry/spec.md` and record the verdict in `specs/191-claude-governance-telemetry/verification.md`
+- [X] T025 Run final `/moonspec-verify` for `specs/191-claude-governance-telemetry/spec.md` and record the verdict in `specs/191-claude-governance-telemetry/verification.md`
 
 Final validation evidence:
-- Placeholder review: `rg -n "NEEDS CLARIFICATION|\\[FEATURE|###-feature|ACTION REQUIRED|TODO|PLACEHOLDER" specs/191-claude-governance-telemetry docs/tmp/jira-orchestration-inputs/MM-349-moonspec-orchestration-input.md` found no stale placeholders outside the checklist statement that no clarification markers remain.
+- Placeholder review: stale-placeholder scan across `specs/191-claude-governance-telemetry` and `docs/tmp/jira-orchestration-inputs/MM-349-moonspec-orchestration-input.md` found no stale placeholders.
 - Full unit wrapper: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` passed; Python reported 3424 passed, 1 xpassed, 111 warnings, 16 subtests passed; frontend Vitest reported 10 files and 224 tests passed.
 - Hermetic integration wrapper: `./tools/test_integration.sh` could not run because Docker is unavailable in this managed container: `failed to connect to the docker API at unix:///var/run/docker.sock`.
 
