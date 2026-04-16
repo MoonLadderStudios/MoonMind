@@ -161,16 +161,3 @@ steps:
     skill:
       id: jira-issue-updater
       args: {}
-  - title: Return Jira orchestration report
-    instructions: |-
-      Return a concise Jira Orchestration report with:
-      - Jira issue key and final Jira status
-      - Pull request URL
-      - Feature path or generated spec list
-      - Stage outcomes for Jira In Progress, Jira brief loading, Specify/Breakdown, Plan, Tasks, Align, Implement, Verify, PR creation, and Jira Code Review
-      - Files changed
-      - Tests run and status
-      - Remaining risks
-    skill:
-      id: auto
-      args: {}

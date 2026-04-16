@@ -112,17 +112,3 @@ steps:
     skill:
       id: moonspec-verify
       args: {}
-  - title: Return orchestration report and defer publish actions
-    instructions: |-
-      Return a concise MoonSpec Orchestration report with:
-      - Feature path or generated spec list
-      - Stage outcomes for Specify/Breakdown, Plan, Tasks, Align, Implement, and Verify
-      - Files changed
-      - Tests run and status
-      - Remaining risks
-      - Publish handoff status
-
-      Do not push branches or open pull requests from this preset. Publish behavior is handled by the wrapper publish stage when enabled.
-    skill:
-      id: auto
-      args: {}

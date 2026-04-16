@@ -76,6 +76,21 @@ The finish summary data is small and stored as JSON. A `reports/run_summary.json
 
 Finish summaries MUST NOT contain tokens, API keys, credential strings, or full command lines with secret arguments. All strings are passed through redaction mechanisms before sync.
 
+### 2.4 Preset Summary Ownership
+
+Task presets do not own generic end-of-run narration. Presets may emit structured
+facts that are useful after execution, such as a Jira issue key, pull request
+URL, verification verdict, publish handoff, or outcome data, but those facts are
+inputs to operator surfaces and workflow finalization rather than a replacement
+for the canonical finish summary.
+
+For orchestration presets, the final operational step should be the last action
+needed by that preset, such as MoonSpec verification or a Jira workflow
+transition. A preset should not add a final agent-authored report step whose only
+purpose is to summarize normal completion. This keeps success, failure,
+cancellation, and no-change runs on the same `reports/run_summary.json` contract
+even when late preset steps do not run.
+
 ---
 
 ## 3. Worker Implementation (Temporal Workflow)
