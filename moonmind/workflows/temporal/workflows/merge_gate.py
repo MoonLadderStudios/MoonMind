@@ -7,16 +7,18 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from moonmind.schemas.temporal_models import (
-    MergeAutomationStartInput,
-    PullRequestRefModel,
-    ReadinessBlockerModel,
-    ReadinessEvidenceModel,
-    ResolverRunRefModel,
-)
-from moonmind.utils.logging import scrub_github_tokens
+with workflow.unsafe.imports_passed_through():
+    from moonmind.schemas.temporal_models import (
+        MergeAutomationStartInput,
+        PullRequestRefModel,
+        ReadinessBlockerModel,
+        ReadinessEvidenceModel,
+        ResolverRunRefModel,
+    )
+    from moonmind.utils.logging import scrub_github_tokens
 
 
 TERMINAL_BLOCKER_KINDS = {
