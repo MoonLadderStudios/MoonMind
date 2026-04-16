@@ -337,6 +337,7 @@ The Create page preserves these execution-context controls:
 - `Starting Branch (optional)`
 - `Target Branch (optional)`
 - `Publish Mode`
+- `Enable merge automation` when publish mode is `pr` for an ordinary task
 
 Rules:
 
@@ -345,6 +346,21 @@ Rules:
 - provider-profile options are runtime-specific
 - repository validation rules are unaffected by attachments or Jira
 - resolver-style skills may still force publish mode to `none`
+- merge automation is available only for ordinary PR-publishing tasks
+- when merge automation is selected, the submitted task creation payload must
+  preserve `publishMode=pr`, preserve `task.publish.mode=pr`, and include
+  `mergeAutomation.enabled=true`
+- when publish mode is `branch` or `none`, or when the selected task is a direct
+  `pr-resolver` or `batch-pr-resolver` task, merge automation must be hidden or
+  disabled and must not be submitted
+- the merge automation copy must explain that MoonMind waits for the PR
+  readiness gate and then uses `pr-resolver`; it must not imply direct
+  auto-merge or a bypass around resolver behavior
+- Jira Orchestrate preset behavior remains explicit and unchanged by this
+  Create page option; changing Jira Orchestrate to parent-owned PR publishing
+  requires a separate story
+- repository validation rules remain unchanged by Jira integration
+- Jira import must never bypass or weaken repository validation
 - image upload must never bypass or weaken repository validation, publish validation, or runtime gating
 
 ---
