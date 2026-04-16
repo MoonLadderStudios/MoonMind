@@ -165,6 +165,78 @@ def test_fail_closed_refresh_failure_blocks_startup_without_permissive_envelope(
     )
 
 
+def test_lower_scope_fail_closed_source_cannot_block_managed_policy() -> None:
+    envelope, handshake, events = _resolve(
+        _source(
+            "server_managed",
+            settings={"permissions": {"mode": "plan"}},
+            version="server-v1",
+        ),
+        _source(
+            "local_project",
+            settings={"permissions": {"mode": "bypassPermissions"}},
+            fetch_state="fail_closed",
+            version="local-v1",
+        ),
+        fail_closed_on_refresh_failure=True,
+    )
+
+    assert envelope is not None
+    assert envelope.managed_source_kind == "server_managed"
+    assert envelope.policy_fetch_state == "fetched"
+    assert envelope.permissions.mode == "plan"
+    assert envelope.observability_sources == ("local_project",)
+    assert handshake.state == "ready"
+    assert tuple(event.event_type for event in events) == (
+        "policy.fetch.started",
+        "policy.fetch.succeeded",
+        "policy.compiled",
+        "policy.version.changed",
+    )
+
+
+def test_endpoint_fail_closed_does_not_override_non_empty_server_policy() -> None:
+    envelope, handshake, _events = _resolve(
+        _source(
+            "server_managed",
+            settings={"permissions": {"mode": "plan"}},
+            version="server-v1",
+        ),
+        _source(
+            "endpoint_managed",
+            settings={"permissions": {"mode": "default"}},
+            fetch_state="fail_closed",
+            version="endpoint-v1",
+        ),
+        fail_closed_on_refresh_failure=True,
+    )
+
+    assert envelope is not None
+    assert envelope.managed_source_kind == "server_managed"
+    assert envelope.permissions.mode == "plan"
+    assert handshake.state == "ready"
+
+
+def test_endpoint_fail_closed_blocks_when_server_policy_is_empty() -> None:
+    envelope, handshake, events = _resolve(
+        _source("server_managed", settings={}, version="server-empty"),
+        _source(
+            "endpoint_managed",
+            settings={},
+            fetch_state="fail_closed",
+            version="endpoint-v1",
+        ),
+        fail_closed_on_refresh_failure=True,
+    )
+
+    assert envelope is None
+    assert handshake.state == "fail_closed"
+    assert events[-1].metadata == {
+        "fetchState": "fail_closed",
+        "sourceKind": "endpoint_managed",
+    }
+
+
 def test_fetch_failed_without_fail_closed_preserves_fetch_state() -> None:
     envelope, handshake, _events = _resolve(
         _source(

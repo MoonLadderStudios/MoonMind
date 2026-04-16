@@ -156,6 +156,29 @@ def test_claude_policy_boundary_fail_closed_and_non_interactive_blocked_states()
     assert envelope is None
     assert handshake.model_dump(by_alias=True)["state"] == "fail_closed"
     assert events[-1].event_type == "policy.fetch.failed"
+    assert events[-1].metadata["sourceKind"] == "server_managed"
+
+    envelope, handshake, events = resolve_claude_policy_envelope(
+        session_id="claude-lower-fail-closed",
+        policy_envelope_id="policy-lower-fail-closed",
+        provider_mode="anthropic_api",
+        sources=(
+            _source("server_managed", {"permissions": {"mode": "plan"}}),
+            _source(
+                "local_project",
+                {"permissions": {"mode": "bypassPermissions"}},
+                fetch_state="fail_closed",
+            ),
+        ),
+        fail_closed_on_refresh_failure=True,
+        occurred_at=NOW,
+    )
+
+    assert envelope is not None
+    assert envelope.managed_source_kind == "server_managed"
+    assert envelope.observability_sources == ("local_project",)
+    assert handshake.state == "ready"
+    assert events[-1].event_type == "policy.version.changed"
 
     envelope, handshake, _events = resolve_claude_policy_envelope(
         session_id="claude-blocked",

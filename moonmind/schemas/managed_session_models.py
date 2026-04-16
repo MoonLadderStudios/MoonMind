@@ -1330,6 +1330,39 @@ def _selected_managed_source(
     return None
 
 
+def _fail_closed_managed_source(
+    sources: tuple[ClaudePolicySource, ...],
+) -> ClaudePolicySource | None:
+    server_source = next(
+        (
+            source
+            for source in sources
+            if source.source_kind == "server_managed" and source.supported
+        ),
+        None,
+    )
+    if server_source is not None:
+        if server_source.fetch_state == "fail_closed":
+            return server_source
+        if server_source.settings:
+            return None
+
+    endpoint_source = next(
+        (
+            source
+            for source in sources
+            if source.source_kind == "endpoint_managed" and source.supported
+        ),
+        None,
+    )
+    if (
+        endpoint_source is not None
+        and endpoint_source.fetch_state == "fail_closed"
+    ):
+        return endpoint_source
+    return None
+
+
 def _bootstrap_templates(
     settings: dict[str, Any],
 ) -> tuple[ClaudePolicyBootstrapTemplate, ...]:
@@ -1450,9 +1483,12 @@ def resolve_claude_policy_envelope(
         )
     ]
 
-    if fail_closed_on_refresh_failure and any(
-        source.fetch_state == "fail_closed" for source in sources
-    ):
+    fail_closed_source = (
+        _fail_closed_managed_source(sources)
+        if fail_closed_on_refresh_failure
+        else None
+    )
+    if fail_closed_source is not None:
         events.append(
             _policy_event(
                 policy_envelope_id=None,
@@ -1460,7 +1496,10 @@ def resolve_claude_policy_envelope(
                 event_type="policy.fetch.failed",
                 occurred_at=event_time,
                 sequence=2,
-                metadata={"fetchState": "fail_closed"},
+                metadata={
+                    "fetchState": "fail_closed",
+                    "sourceKind": fail_closed_source.source_kind,
+                },
             )
         )
         return (
