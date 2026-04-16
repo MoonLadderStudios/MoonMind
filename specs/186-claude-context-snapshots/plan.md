@@ -13,7 +13,7 @@ Implement the MM-345 Claude context-snapshot story as importable runtime contrac
 **Primary Dependencies**: Pydantic v2, existing MoonMind schema validation helpers  
 **Storage**: No new persistent storage; this story defines compact runtime contracts and deterministic outputs that can later be persisted by the managed-session store  
 **Unit Testing**: pytest via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`; focused iteration with `pytest tests/unit/schemas/test_claude_context_snapshots.py`  
-**Integration Testing**: pytest integration-style boundary tests; final required hermetic integration runner is `./tools/test_integration.sh` when Docker is available  
+**Integration Testing**: pytest integration-style boundary tests with focused iteration via `pytest tests/integration/schemas/test_claude_context_snapshots_boundary.py -q`; final required hermetic integration runner is `./tools/test_integration.sh` when Docker is available  
 **Target Platform**: Linux containers and local development environments supported by MoonMind  
 **Project Type**: Python orchestration service schema/runtime boundary  
 **Performance Goals**: Context contract construction and compaction planning are deterministic, bounded, and import-safe  
