@@ -12,7 +12,7 @@
 - Focused unit/workflow tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_merge_gate_models.py tests/unit/workflows/temporal/test_merge_gate_workflow.py tests/unit/workflows/temporal/test_run_merge_gate_start.py tests/unit/workflows/temporal/workflows/test_merge_gate_temporal.py tests/unit/workflows/temporal/test_temporal_workers.py`
 - Full unit verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - Hermetic integration: `./tools/test_integration.sh`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -55,7 +55,7 @@
 - [X] T017 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_merge_gate_models.py tests/unit/workflows/temporal/test_merge_gate_workflow.py tests/unit/workflows/temporal/test_run_merge_gate_start.py tests/unit/workflows/temporal/workflows/test_merge_gate_temporal.py tests/unit/workflows/temporal/test_temporal_workers.py`
 - [X] T018 Run full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` or record exact blocker
 - [X] T019 Run hermetic integration verification with `./tools/test_integration.sh` when Docker is available, or record exact Docker blocker in specs/186-merge-automation-waits/verification.md
-- [X] T020 Run `/speckit.verify` for specs/186-merge-automation-waits and record verdict in specs/186-merge-automation-waits/verification.md
+- [X] T020 Run `/moonspec-verify` for specs/186-merge-automation-waits and record verdict in specs/186-merge-automation-waits/verification.md
 
 ## Dependencies & Execution Order
 
