@@ -13,7 +13,7 @@
 
 - Unit tests: `./tools/test_unit.sh tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py`
 - Integration tests: `./tools/test_integration.sh`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -86,7 +86,7 @@
 - [X] T029 [P] Add any missing regression coverage for existing detached merge-gate behavior conflicts in `tests/unit/workflows/temporal/test_run_merge_gate_start.py` if code paths remain shared
 - [X] T030 Run `./tools/test_unit.sh` for full unit verification
 - [X] T031 Run `./tools/test_integration.sh` for hermetic integration verification, or document the exact environment blocker if Docker is unavailable
-- [X] T032 Run `/speckit.verify` for `specs/186-parent-owned-merge-automation/spec.md` and record the result in `specs/186-parent-owned-merge-automation/verification.md`
+- [X] T032 Run `/moonspec-verify` for `specs/186-parent-owned-merge-automation/spec.md` and record the result in `specs/186-parent-owned-merge-automation/verification.md`
 
 ## Dependencies And Execution Order
 
@@ -111,4 +111,4 @@
 4. Confirm all new tests fail for missing MM-350 semantics.
 5. Update parent workflow behavior and compact state handling.
 6. Reuse or adapt existing merge-gate child behavior without adding a top-level dependency target.
-7. Run focused tests, full unit tests, integration tests where available, and final `/speckit.verify`.
+7. Run focused tests, full unit tests, integration tests where available, and final `/moonspec-verify`.
