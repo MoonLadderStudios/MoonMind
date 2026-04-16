@@ -333,6 +333,41 @@ ClaudeContextEventName = Literal[
     "work.compaction.started",
     "work.compaction.completed",
 ]
+ClaudeChildContextReturnShape = Literal["summary", "summary_plus_metadata"]
+ClaudeChildContextCommunication = Literal["caller_only"]
+ClaudeChildContextLifecycleOwner = Literal["parent_turn"]
+ClaudeChildContextStatus = Literal[
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "canceled",
+]
+ClaudeSessionGroupStatus = Literal[
+    "creating",
+    "active",
+    "tearing_down",
+    "completed",
+    "failed",
+    "canceled",
+]
+ClaudeTeamMemberRole = Literal["lead", "teammate"]
+ClaudeTeamMemberStatus = Literal[
+    "starting",
+    "running",
+    "completed",
+    "failed",
+    "canceled",
+]
+ClaudeChildWorkEventName = Literal[
+    "child.subagent.started",
+    "child.subagent.completed",
+    "team.group.created",
+    "team.member.started",
+    "team.message.sent",
+    "team.member.completed",
+    "team.group.completed",
+]
 
 CLAUDE_DECISION_STAGE_ORDER: tuple[ClaudeDecisionStage, ...] = (
     "session_state_guard",
@@ -419,6 +454,15 @@ CLAUDE_CONTEXT_EVENT_NAMES: tuple[ClaudeContextEventName, ...] = (
     "work.context.loaded",
     "work.compaction.started",
     "work.compaction.completed",
+)
+CLAUDE_CHILD_WORK_EVENT_NAMES: tuple[ClaudeChildWorkEventName, ...] = (
+    "child.subagent.started",
+    "child.subagent.completed",
+    "team.group.created",
+    "team.member.started",
+    "team.message.sent",
+    "team.member.completed",
+    "team.group.completed",
 )
 _CLAUDE_CONTEXT_GUIDANCE_KINDS: frozenset[ClaudeContextSourceKind] = frozenset(
     {
@@ -1808,6 +1852,388 @@ class ClaudeContextCompactionResult(BaseModel):
     events: tuple[ClaudeContextEvent, ...]
 
 
+class ClaudeChildWorkUsage(BaseModel):
+    """Bounded usage accounting for Claude child work."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    input_tokens: int = Field(0, alias="inputTokens", ge=0)
+    output_tokens: int = Field(0, alias="outputTokens", ge=0)
+    total_tokens: int = Field(..., alias="totalTokens", ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_total(self) -> "ClaudeChildWorkUsage":
+        if self.total_tokens < self.input_tokens + self.output_tokens:
+            raise ValueError(
+                "totalTokens must be greater than or equal to "
+                "inputTokens + outputTokens"
+            )
+        return self
+
+
+class ClaudeChildContext(BaseModel):
+    """Parent-owned subagent child context for one Claude turn."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    child_context_id: NonBlankStr = Field(..., alias="childContextId")
+    parent_session_id: NonBlankStr = Field(..., alias="parentSessionId")
+    parent_turn_id: NonBlankStr = Field(..., alias="parentTurnId")
+    profile: NonBlankStr
+    context_window: Literal["isolated"] = Field("isolated", alias="contextWindow")
+    return_shape: ClaudeChildContextReturnShape = Field(..., alias="returnShape")
+    communication: ClaudeChildContextCommunication = "caller_only"
+    lifecycle_owner: ClaudeChildContextLifecycleOwner = Field(
+        "parent_turn", alias="lifecycleOwner"
+    )
+    status: ClaudeChildContextStatus
+    usage: ClaudeChildWorkUsage | None = None
+    started_at: datetime = Field(..., alias="startedAt")
+    completed_at: datetime | None = Field(None, alias="completedAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        compact = validate_compact_temporal_mapping(value, field_name="metadata")
+        promotion_keys = {"promotedSessionId", "promotionTarget", "peerSessionId"}
+        if promotion_keys.intersection(compact):
+            raise ValueError(
+                "Subagent promotion to sibling session is out of scope for MM-347"
+            )
+        return compact
+
+    @model_validator(mode="after")
+    def _validate_datetimes(self) -> "ClaudeChildContext":
+        if self.started_at.tzinfo is None:
+            self.started_at = self.started_at.replace(tzinfo=UTC)
+        if self.completed_at is not None:
+            if self.completed_at.tzinfo is None:
+                self.completed_at = self.completed_at.replace(tzinfo=UTC)
+            if self.completed_at < self.started_at:
+                raise ValueError("completedAt cannot precede startedAt")
+        return self
+
+
+class ClaudeSessionGroup(BaseModel):
+    """Grouped sibling sessions for a Claude agent team."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_group_id: NonBlankStr = Field(..., alias="sessionGroupId")
+    lead_session_id: NonBlankStr = Field(..., alias="leadSessionId")
+    status: ClaudeSessionGroupStatus
+    usage: ClaudeChildWorkUsage | None = None
+    created_at: datetime = Field(..., alias="createdAt")
+    completed_at: datetime | None = Field(None, alias="completedAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_datetimes(self) -> "ClaudeSessionGroup":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.completed_at is not None:
+            if self.completed_at.tzinfo is None:
+                self.completed_at = self.completed_at.replace(tzinfo=UTC)
+            if self.completed_at < self.created_at:
+                raise ValueError("completedAt cannot precede createdAt")
+        return self
+
+
+class ClaudeTeamMemberSession(BaseModel):
+    """Distinct managed session participating in a Claude agent team."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    session_group_id: NonBlankStr = Field(..., alias="sessionGroupId")
+    role: ClaudeTeamMemberRole
+    status: ClaudeTeamMemberStatus
+    usage: ClaudeChildWorkUsage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+
+class ClaudeTeamMessage(BaseModel):
+    """Direct peer message exchanged inside one Claude session group."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    message_id: NonBlankStr = Field(..., alias="messageId")
+    session_group_id: NonBlankStr = Field(..., alias="sessionGroupId")
+    sender_session_id: NonBlankStr = Field(..., alias="senderSessionId")
+    peer_session_id: NonBlankStr = Field(..., alias="peerSessionId")
+    sent_at: datetime = Field(..., alias="sentAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_message(self) -> "ClaudeTeamMessage":
+        if self.sender_session_id == self.peer_session_id:
+            raise ValueError("peerSessionId must differ from senderSessionId")
+        if self.sent_at.tzinfo is None:
+            self.sent_at = self.sent_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeChildWorkEvent(BaseModel):
+    """Normalized event for Claude subagent and team child work."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    event_id: NonBlankStr = Field(..., alias="eventId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    turn_id: NonBlankStr | None = Field(None, alias="turnId")
+    child_context_id: NonBlankStr | None = Field(None, alias="childContextId")
+    session_group_id: NonBlankStr | None = Field(None, alias="sessionGroupId")
+    peer_session_id: NonBlankStr | None = Field(None, alias="peerSessionId")
+    event_name: ClaudeChildWorkEventName = Field(..., alias="eventName")
+    occurred_at: datetime = Field(..., alias="occurredAt")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_event_shape(self) -> "ClaudeChildWorkEvent":
+        if self.event_name.startswith("child."):
+            if not self.child_context_id:
+                raise ValueError("childContextId is required for subagent events")
+            if not self.turn_id:
+                raise ValueError("turnId is required for subagent events")
+        if self.event_name.startswith("team.") and not self.session_group_id:
+            raise ValueError("sessionGroupId is required for team events")
+        if self.event_name == "team.message.sent" and not self.peer_session_id:
+            raise ValueError("peerSessionId is required for team.message.sent")
+        if self.occurred_at.tzinfo is None:
+            self.occurred_at = self.occurred_at.replace(tzinfo=UTC)
+        return self
+
+
+class ClaudeChildWorkFixtureFlow(BaseModel):
+    """Deterministic provider-free fixture flow for child-work boundaries."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    parent_session: ClaudeManagedSession = Field(..., alias="parentSession")
+    child_context: ClaudeChildContext = Field(..., alias="childContext")
+    session_group: ClaudeSessionGroup = Field(..., alias="sessionGroup")
+    team_members: tuple[ClaudeTeamMemberSession, ...] = Field(
+        ..., alias="teamMembers", min_length=2
+    )
+    team_message: ClaudeTeamMessage = Field(..., alias="teamMessage")
+    events: tuple[ClaudeChildWorkEvent, ...]
+
+
+def validate_claude_team_message_membership(
+    *,
+    message: ClaudeTeamMessage,
+    members: tuple[ClaudeTeamMemberSession, ...],
+) -> None:
+    """Validate that a team message stays inside one session group."""
+
+    by_session_id = {member.session_id: member for member in members}
+    sender = by_session_id.get(message.sender_session_id)
+    peer = by_session_id.get(message.peer_session_id)
+    if sender is None or peer is None:
+        raise ValueError("sender and peer must both be team members")
+    if (
+        sender.session_group_id != message.session_group_id
+        or peer.session_group_id != message.session_group_id
+    ):
+        raise ValueError("sender and peer must belong to the same session group")
+
+
+def build_claude_child_work_fixture_flow(
+    *,
+    parent_session_id: str,
+    parent_turn_id: str,
+    child_context_id: str,
+    session_group_id: str,
+    lead_session_id: str,
+    teammate_session_id: str,
+    message_id: str,
+    created_at: datetime,
+    metadata: dict[str, Any] | None = None,
+) -> ClaudeChildWorkFixtureFlow:
+    """Build a deterministic child-work flow for schema boundary tests."""
+
+    parent_session = ClaudeManagedSession(
+        sessionId=parent_session_id,
+        executionOwner="local_process",
+        state="active",
+        primarySurface="terminal",
+        projectionMode="primary",
+        activeTurnId=parent_turn_id,
+        createdBy="user",
+        createdAt=created_at,
+        updatedAt=created_at,
+    )
+    child_context = ClaudeChildContext(
+        childContextId=child_context_id,
+        parentSessionId=parent_session_id,
+        parentTurnId=parent_turn_id,
+        profile="researcher",
+        returnShape="summary_plus_metadata",
+        status="completed",
+        usage=ClaudeChildWorkUsage(
+            inputTokens=1000,
+            outputTokens=400,
+            totalTokens=1400,
+            metadata={"rollupTarget": "parent_session"},
+        ),
+        startedAt=created_at,
+        completedAt=created_at,
+        metadata=metadata or {},
+    )
+    session_group = ClaudeSessionGroup(
+        sessionGroupId=session_group_id,
+        leadSessionId=lead_session_id,
+        status="completed",
+        usage=ClaudeChildWorkUsage(
+            inputTokens=1200,
+            outputTokens=800,
+            totalTokens=2000,
+            metadata={"rollupTarget": "session_group"},
+        ),
+        createdAt=created_at,
+        completedAt=created_at,
+    )
+    lead = ClaudeTeamMemberSession(
+        sessionId=lead_session_id,
+        sessionGroupId=session_group_id,
+        role="lead",
+        status="completed",
+        usage=ClaudeChildWorkUsage(
+            inputTokens=700,
+            outputTokens=500,
+            totalTokens=1200,
+            metadata={"rollupTarget": "session_group"},
+        ),
+    )
+    teammate = ClaudeTeamMemberSession(
+        sessionId=teammate_session_id,
+        sessionGroupId=session_group_id,
+        role="teammate",
+        status="completed",
+        usage=ClaudeChildWorkUsage(
+            inputTokens=500,
+            outputTokens=300,
+            totalTokens=800,
+            metadata={"rollupTarget": "session_group"},
+        ),
+    )
+    team_message = ClaudeTeamMessage(
+        messageId=message_id,
+        sessionGroupId=session_group_id,
+        senderSessionId=lead_session_id,
+        peerSessionId=teammate_session_id,
+        sentAt=created_at,
+        metadata={"messageRef": f"artifact://messages/{message_id}"},
+    )
+    validate_claude_team_message_membership(
+        message=team_message,
+        members=(lead, teammate),
+    )
+    events = (
+        ClaudeChildWorkEvent(
+            eventId=f"{child_context_id}:started",
+            sessionId=parent_session_id,
+            turnId=parent_turn_id,
+            childContextId=child_context_id,
+            eventName="child.subagent.started",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{child_context_id}:completed",
+            sessionId=parent_session_id,
+            turnId=parent_turn_id,
+            childContextId=child_context_id,
+            eventName="child.subagent.completed",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{session_group_id}:created",
+            sessionId=lead_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.group.created",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{lead_session_id}:started",
+            sessionId=lead_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.member.started",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{teammate_session_id}:started",
+            sessionId=teammate_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.member.started",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{message_id}:sent",
+            sessionId=lead_session_id,
+            sessionGroupId=session_group_id,
+            peerSessionId=teammate_session_id,
+            eventName="team.message.sent",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{lead_session_id}:completed",
+            sessionId=lead_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.member.completed",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{teammate_session_id}:completed",
+            sessionId=teammate_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.member.completed",
+            occurredAt=created_at,
+        ),
+        ClaudeChildWorkEvent(
+            eventId=f"{session_group_id}:completed",
+            sessionId=lead_session_id,
+            sessionGroupId=session_group_id,
+            eventName="team.group.completed",
+            occurredAt=created_at,
+        ),
+    )
+    return ClaudeChildWorkFixtureFlow(
+        parentSession=parent_session,
+        childContext=child_context,
+        sessionGroup=session_group,
+        teamMembers=(lead, teammate),
+        teamMessage=team_message,
+        events=events,
+    )
+
+
 def compact_claude_context_snapshot(
     *,
     snapshot: ClaudeContextSnapshot,
@@ -2655,6 +3081,7 @@ def resolve_claude_policy_envelope(
 
 __all__ = [
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
+    "CLAUDE_CHILD_WORK_EVENT_NAMES",
     "CLAUDE_CHECKPOINT_CAPTURE_MODES",
     "CLAUDE_CHECKPOINT_RETENTION_STATES",
     "CLAUDE_CHECKPOINT_TRIGGERS",
@@ -2665,6 +3092,15 @@ __all__ = [
     "CLAUDE_DECISION_EVENT_NAMES",
     "CLAUDE_DECISION_STAGE_ORDER",
     "CLAUDE_HOOK_WORK_EVENT_NAMES",
+    "ClaudeChildContext",
+    "ClaudeChildContextCommunication",
+    "ClaudeChildContextLifecycleOwner",
+    "ClaudeChildContextReturnShape",
+    "ClaudeChildContextStatus",
+    "ClaudeChildWorkEvent",
+    "ClaudeChildWorkEventName",
+    "ClaudeChildWorkFixtureFlow",
+    "ClaudeChildWorkUsage",
     "ClaudeContextCompactionResult",
     "ClaudeContextEvent",
     "ClaudeContextEventName",
@@ -2722,10 +3158,16 @@ __all__ = [
     "ClaudeRewindResult",
     "ClaudeRewindStatus",
     "ClaudeSessionCreatedBy",
+    "ClaudeSessionGroup",
+    "ClaudeSessionGroupStatus",
     "ClaudeSessionState",
     "ClaudeSurfaceBinding",
     "ClaudeSurfaceConnectionState",
     "ClaudeSurfaceKind",
+    "ClaudeTeamMemberRole",
+    "ClaudeTeamMemberSession",
+    "ClaudeTeamMemberStatus",
+    "ClaudeTeamMessage",
     "ClaudeTurnInputOrigin",
     "ClaudeTurnState",
     "ClaudeWorkItemKind",
@@ -2764,6 +3206,7 @@ __all__ = [
     "ManagedSessionRequestTrackingStatus",
     "ManagedSessionTurnStatus",
     "PublishCodexManagedSessionArtifactsRequest",
+    "build_claude_child_work_fixture_flow",
     "claude_checkpoint_capture_decision",
     "claude_default_reinjection_policy",
     "compact_claude_context_snapshot",
@@ -2774,4 +3217,5 @@ __all__ = [
     "SteerCodexManagedSessionTurnRequest",
     "TerminateCodexManagedSessionRequest",
     "canonical_codex_managed_runtime_id",
+    "validate_claude_team_message_membership",
 ]
