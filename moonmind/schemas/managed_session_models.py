@@ -42,6 +42,9 @@ def _validate_absolute_posix_path(value: str, *, field_name: str) -> str:
     return normalized
 
 
+_RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
+
+
 ManagedSessionControlAction = Literal[
     "start_session",
     "resume_session",
@@ -763,6 +766,10 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
         for raw_key, raw_value in self.environment.items():
             key = require_non_blank(str(raw_key), field_name="environment key")
             value = str(raw_value)
+            if key.startswith(_RESERVED_SESSION_ENV_PREFIX):
+                raise ValueError(
+                    "environment cannot override reserved session keys: " + key
+                )
             if key == "MANAGED_AUTH_VOLUME_PATH":
                 value = _validate_absolute_posix_path(
                     value,

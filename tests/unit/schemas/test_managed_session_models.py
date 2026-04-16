@@ -234,6 +234,25 @@ def test_launch_codex_managed_session_request_rejects_invalid_auth_target() -> N
         )
 
 
+def test_launch_codex_managed_session_request_rejects_reserved_session_environment() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="environment cannot override reserved session keys: "
+        "MOONMIND_SESSION_WORKSPACE_PATH",
+    ):
+        LaunchCodexManagedSessionRequest(
+            taskRunId="task-123",
+            sessionId="sess-123",
+            threadId="thread-1",
+            workspacePath="/work/task/repo",
+            sessionWorkspacePath="/work/task/session",
+            artifactSpoolPath="/work/task/artifacts",
+            codexHomePath="/work/task/codex-home",
+            imageRef="moonmind:latest",
+            environment={"MOONMIND_SESSION_WORKSPACE_PATH": "/tmp/override"},
+        )
+
+
 def test_codex_managed_session_clear_request_requires_new_thread() -> None:
     with pytest.raises(ValidationError, match="must differ from threadId"):
         CodexManagedSessionClearRequest(
