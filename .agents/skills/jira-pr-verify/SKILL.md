@@ -15,7 +15,9 @@ Verify whether a PR satisfies the linked Jira issue and publish a concise PR com
   - existing `jira-fetch` artifacts such as `<artifact_root>/jira/<ISSUE>/issue.normalized.json`, `issue.md`, and `context.json`,
   - a MoonMind trusted Jira tool/connector response attached to the run or fetched during the run through `jira.get_issue`,
   - user-supplied Jira text pasted into the task.
-- Required for posting: authenticated GitHub access through `gh` or the GitHub app/connector.
+- Required for posting: authenticated GitHub access through `gh`.
+  The GitHub app/connector is a fallback only, because connector installation
+  visibility can differ from the managed runtime's `GITHUB_TOKEN`.
 - Optional: repo-only scope limits, out-of-scope areas, required test commands, or comment style.
 
 ## MoonMind Access Model
@@ -34,7 +36,44 @@ For MoonMind task plans, the correct shape is:
 
 1. Trusted Jira fetch/import step materializes normalized Jira issue artifacts.
 2. Managed agent step uses this skill with those artifacts plus the PR URL.
-3. Managed agent uses `gh`/GitHub connector to inspect and comment on the PR.
+3. Managed agent uses `gh` with the runtime-provided `GITHUB_TOKEN` to inspect and comment on the PR.
+
+## GitHub Access Policy
+
+Use `gh` as the primary and authoritative GitHub path for this skill.
+
+Before declaring GitHub access blocked, run these preflight checks from the managed
+agent shell. If the bundled helper is materialized in the workspace, use it:
+
+```bash
+.agents/skills/jira-pr-verify/tools/github_pr_preflight.py --repo <owner/repo> --pr <pr>
+```
+
+Otherwise run the equivalent `gh` commands directly:
+
+```bash
+gh auth status --hostname github.com
+gh repo view <owner/repo> --json nameWithOwner,viewerPermission,isPrivate
+gh pr view <pr> --repo <owner/repo> --json number,title,state,url,headRefName,baseRefName
+```
+
+If `gh` can view the repository and PR, continue with `gh` even if the GitHub
+app/connector returns 404 or cannot list the repository. A connector 404 only
+means the connector installation cannot see that repo from this session; it is
+not evidence that the runtime `GITHUB_TOKEN` lacks access.
+
+Only use the GitHub app/connector after one of these is true:
+
+- `gh` is not installed,
+- `gh auth status` reports no usable authentication,
+- `gh repo view` or `gh pr view` fails for the target repository/PR.
+
+When both `gh` and the connector are available, prefer `gh` for:
+
+- PR metadata: `gh pr view ... --json ...`
+- PR diff: `gh pr diff ...`
+- PR checks: `gh pr checks ...`
+- PR comments: `gh pr comment ... --body-file ...`
 
 ## Workflow
 
@@ -51,7 +90,7 @@ For MoonMind task plans, the correct shape is:
 - If acceptance criteria are missing or ambiguous, record them as `unverifiable` rather than inventing requirements.
 
 3. Inspect the PR.
-- Use `gh pr view <pr> --repo <owner/repo> --json number,url,title,body,baseRefName,headRefName,files,commits,statusCheckRollup,reviewDecision,comments,reviews` when available.
+- Use `gh pr view <pr> --repo <owner/repo> --json number,url,title,body,baseRefName,headRefName,files,commits,statusCheckRollup,reviewDecision,comments,reviews`.
 - Use `gh pr diff <pr> --repo <owner/repo>` or local `git diff <base>...HEAD` for implementation evidence.
 - Read changed code, tests, docs, workflow files, and configuration relevant to the Jira ledger.
 - Check CI status with `gh pr checks <pr> --repo <owner/repo>` when available.
@@ -101,8 +140,10 @@ Validation:
 7. Scan and post.
 - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
 - If any secret-like content appears, do not post. Redact and re-scan.
-- Post with `gh pr comment <pr> --repo <owner/repo> --body-file <comment_file>` or the GitHub connector.
-- If posting fails, leave the comment body in a local artifact and report the exact GitHub blocker.
+- If the bundled helper is materialized, post with `.agents/skills/jira-pr-verify/tools/post_pr_comment.py --repo <owner/repo> --pr <pr> --body-file <comment_file>`.
+- Otherwise post with `gh pr comment <pr> --repo <owner/repo> --body-file <comment_file>`.
+- If the helper fails, record the exact `gh` error, then optionally try the GitHub connector as a fallback.
+- If connector posting also fails, leave the comment body in a local artifact and report both the `gh` and connector blockers.
 
 ## Outputs
 
@@ -115,6 +156,6 @@ Validation:
 
 - Missing trusted Jira content: block and request a prior MoonMind Jira fetch/import step.
 - Jira issue is inaccessible through trusted tooling: block and identify the issue key and missing capability.
-- GitHub PR is inaccessible: block with the repo/PR and the `gh` or connector error.
+- GitHub PR is inaccessible: block with the repo/PR and the `gh` error. Do not block solely on a GitHub connector 404 unless `gh` preflight also fails.
 - PR comment cannot be posted: return the draft comment artifact and the posting error.
 - Jira requirements are ambiguous: mark affected items `unverifiable`; do not treat them as passing.
