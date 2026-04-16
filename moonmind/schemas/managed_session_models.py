@@ -128,6 +128,109 @@ ClaudeSurfaceConnectionState = Literal[
     "detached",
 ]
 ClaudeSessionCreatedBy = Literal["user", "schedule", "channel", "sdk", "team_lead"]
+ClaudeDecisionStage = Literal[
+    "session_state_guard",
+    "pretool_hooks",
+    "permission_rules",
+    "protected_path_guard",
+    "permission_mode_baseline",
+    "sandbox_substitution",
+    "auto_mode_classifier",
+    "interactive_prompt_or_headless_resolution",
+    "runtime_execution",
+    "posttool_hooks",
+    "checkpoint_capture",
+]
+ClaudeDecisionProposalKind = Literal[
+    "tool",
+    "file",
+    "network",
+    "mcp",
+    "hook",
+    "classifier",
+    "prompt",
+    "runtime",
+    "checkpoint",
+]
+ClaudeDecisionOutcome = Literal[
+    "proposed",
+    "mutated",
+    "allowed",
+    "asked",
+    "denied",
+    "deferred",
+    "canceled",
+    "resolved",
+    "failed",
+    "executed",
+]
+ClaudeDecisionProvenanceSource = Literal[
+    "session_state",
+    "policy",
+    "hook",
+    "protected_path",
+    "permission_mode",
+    "sandbox",
+    "classifier",
+    "user",
+    "headless_policy",
+    "runtime",
+    "checkpoint",
+]
+ClaudeDecisionEventName = Literal[
+    "decision.proposed",
+    "decision.mutated",
+    "decision.allowed",
+    "decision.asked",
+    "decision.denied",
+    "decision.deferred",
+    "decision.canceled",
+    "decision.resolved",
+]
+ClaudeHookSourceScope = Literal["managed", "user", "project", "plugin", "sdk"]
+ClaudeHookOutcome = Literal[
+    "allow",
+    "deny",
+    "ask",
+    "mutate",
+    "error",
+    "noop",
+    "defer",
+]
+ClaudeHookWorkEventName = Literal[
+    "work.hook.started",
+    "work.hook.completed",
+    "work.hook.blocked",
+]
+
+CLAUDE_DECISION_STAGE_ORDER: tuple[ClaudeDecisionStage, ...] = (
+    "session_state_guard",
+    "pretool_hooks",
+    "permission_rules",
+    "protected_path_guard",
+    "permission_mode_baseline",
+    "sandbox_substitution",
+    "auto_mode_classifier",
+    "interactive_prompt_or_headless_resolution",
+    "runtime_execution",
+    "posttool_hooks",
+    "checkpoint_capture",
+)
+CLAUDE_DECISION_EVENT_NAMES: tuple[ClaudeDecisionEventName, ...] = (
+    "decision.proposed",
+    "decision.mutated",
+    "decision.allowed",
+    "decision.asked",
+    "decision.denied",
+    "decision.deferred",
+    "decision.canceled",
+    "decision.resolved",
+)
+CLAUDE_HOOK_WORK_EVENT_NAMES: tuple[ClaudeHookWorkEventName, ...] = (
+    "work.hook.started",
+    "work.hook.completed",
+    "work.hook.blocked",
+)
 
 CODEX_MANAGED_SESSION_CONTROL_ACTIONS: tuple[ManagedSessionControlAction, ...] = (
     "start_session",
@@ -1038,6 +1141,7 @@ class ClaudeManagedWorkItem(BaseModel):
     session_id: NonBlankStr = Field(..., alias="sessionId")
     kind: ClaudeWorkItemKind = Field(..., alias="kind")
     status: ClaudeWorkItemStatus = Field(..., alias="status")
+    event_name: ClaudeHookWorkEventName | None = Field(None, alias="eventName")
     payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
     started_at: datetime = Field(..., alias="startedAt")
     ended_at: datetime | None = Field(None, alias="endedAt")
@@ -1056,9 +1160,244 @@ class ClaudeManagedWorkItem(BaseModel):
         return self
 
 
+def _decision_event_for_outcome(
+    outcome: ClaudeDecisionOutcome,
+) -> ClaudeDecisionEventName:
+    if outcome == "allowed":
+        return "decision.allowed"
+    if outcome == "asked":
+        return "decision.asked"
+    if outcome == "denied":
+        return "decision.denied"
+    if outcome == "deferred":
+        return "decision.deferred"
+    if outcome == "canceled":
+        return "decision.canceled"
+    if outcome == "mutated":
+        return "decision.mutated"
+    if outcome == "proposed":
+        return "decision.proposed"
+    return "decision.resolved"
+
+
+class ClaudeDecisionPoint(BaseModel):
+    """Normalized decision-stage record for Claude managed sessions."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    decision_id: NonBlankStr = Field(..., alias="decisionId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    turn_id: NonBlankStr = Field(..., alias="turnId")
+    work_item_id: NonBlankStr | None = Field(None, alias="workItemId")
+    proposal_kind: ClaudeDecisionProposalKind = Field(..., alias="proposalKind")
+    origin_stage: ClaudeDecisionStage = Field(..., alias="originStage")
+    outcome: ClaudeDecisionOutcome = Field(..., alias="outcome")
+    provenance_source: ClaudeDecisionProvenanceSource = Field(
+        ..., alias="provenanceSource"
+    )
+    event_name: ClaudeDecisionEventName = Field(..., alias="eventName")
+    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="metadata")
+
+    @model_validator(mode="after")
+    def _validate_invariants(self) -> "ClaudeDecisionPoint":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if (
+            self.origin_stage == "protected_path_guard"
+            and self.outcome == "allowed"
+        ):
+            raise ValueError("Protected path decisions cannot be allowed")
+        if self.provenance_source == "protected_path" and (
+            self.origin_stage != "protected_path_guard"
+            or self.outcome not in {"asked", "denied", "deferred"}
+        ):
+            raise ValueError(
+                "Protected path decisions must ask, deny, or defer at protected_path_guard"
+            )
+        if self.provenance_source == "classifier" and (
+            self.origin_stage != "auto_mode_classifier"
+        ):
+            raise ValueError(
+                "Classifier decisions must originate from auto_mode_classifier"
+            )
+        if self.provenance_source == "headless_policy" and (
+            self.origin_stage != "interactive_prompt_or_headless_resolution"
+            or self.outcome not in {"denied", "deferred"}
+        ):
+            raise ValueError("Headless decisions must deny or defer")
+        return self
+
+    @classmethod
+    def protected_path(
+        cls,
+        *,
+        decision_id: str,
+        session_id: str,
+        turn_id: str,
+        proposal_kind: ClaudeDecisionProposalKind,
+        outcome: Literal["asked", "denied", "deferred"],
+        created_at: datetime,
+        work_item_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ClaudeDecisionPoint":
+        if outcome == "allowed":
+            raise ValueError("Protected path decisions cannot be allowed")
+        return cls(
+            decisionId=decision_id,
+            sessionId=session_id,
+            turnId=turn_id,
+            workItemId=work_item_id,
+            proposalKind=proposal_kind,
+            originStage="protected_path_guard",
+            outcome=outcome,
+            provenanceSource="protected_path",
+            eventName=_decision_event_for_outcome(outcome),
+            metadata=metadata or {},
+            createdAt=created_at,
+        )
+
+    @classmethod
+    def classifier(
+        cls,
+        *,
+        decision_id: str,
+        session_id: str,
+        turn_id: str,
+        proposal_kind: ClaudeDecisionProposalKind,
+        outcome: ClaudeDecisionOutcome,
+        created_at: datetime,
+        work_item_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ClaudeDecisionPoint":
+        return cls(
+            decisionId=decision_id,
+            sessionId=session_id,
+            turnId=turn_id,
+            workItemId=work_item_id,
+            proposalKind=proposal_kind,
+            originStage="auto_mode_classifier",
+            outcome=outcome,
+            provenanceSource="classifier",
+            eventName=_decision_event_for_outcome(outcome),
+            metadata=metadata or {},
+            createdAt=created_at,
+        )
+
+    @classmethod
+    def headless_resolution(
+        cls,
+        *,
+        decision_id: str,
+        session_id: str,
+        turn_id: str,
+        proposal_kind: ClaudeDecisionProposalKind,
+        outcome: Literal["denied", "deferred"],
+        created_at: datetime,
+        work_item_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ClaudeDecisionPoint":
+        if outcome not in {"denied", "deferred"}:
+            raise ValueError("Headless decisions must deny or defer")
+        return cls(
+            decisionId=decision_id,
+            sessionId=session_id,
+            turnId=turn_id,
+            workItemId=work_item_id,
+            proposalKind=proposal_kind,
+            originStage="interactive_prompt_or_headless_resolution",
+            outcome=outcome,
+            provenanceSource="headless_policy",
+            eventName=_decision_event_for_outcome(outcome),
+            metadata=metadata or {},
+            createdAt=created_at,
+        )
+
+    @classmethod
+    def hook_tightened(
+        cls,
+        *,
+        decision_id: str,
+        session_id: str,
+        turn_id: str,
+        proposal_kind: ClaudeDecisionProposalKind,
+        origin_stage: Literal["pretool_hooks", "posttool_hooks"],
+        outcome: Literal["asked", "denied", "deferred", "mutated"],
+        created_at: datetime,
+        work_item_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ClaudeDecisionPoint":
+        if origin_stage not in {"pretool_hooks", "posttool_hooks"}:
+            raise ValueError(
+                "Hook decisions must originate from pretool_hooks or posttool_hooks"
+            )
+        next_metadata = dict(metadata or {})
+        next_metadata["hookTightened"] = True
+        return cls(
+            decisionId=decision_id,
+            sessionId=session_id,
+            turnId=turn_id,
+            workItemId=work_item_id,
+            proposalKind=proposal_kind,
+            originStage=origin_stage,
+            outcome=outcome,
+            provenanceSource="hook",
+            eventName=_decision_event_for_outcome(outcome),
+            metadata=next_metadata,
+            createdAt=created_at,
+        )
+
+
+class ClaudeHookAudit(BaseModel):
+    """Normalized Claude hook execution audit record."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    audit_id: NonBlankStr = Field(..., alias="auditId")
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    turn_id: NonBlankStr = Field(..., alias="turnId")
+    decision_id: NonBlankStr | None = Field(None, alias="decisionId")
+    hook_name: NonBlankStr = Field(..., alias="hookName")
+    source_scope: ClaudeHookSourceScope = Field(..., alias="sourceScope")
+    event_type: NonBlankStr = Field(..., alias="eventType")
+    matcher: NonBlankStr = Field(..., alias="matcher")
+    outcome: ClaudeHookOutcome = Field(..., alias="outcome")
+    audit_data: dict[str, Any] = Field(default_factory=dict, alias="auditData")
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @field_validator("audit_data", mode="after")
+    @classmethod
+    def _validate_audit_data(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="auditData")
+
+    @model_validator(mode="after")
+    def _validate_datetime(self) -> "ClaudeHookAudit":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        return self
+
+
 __all__ = [
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",
+    "CLAUDE_DECISION_EVENT_NAMES",
+    "CLAUDE_DECISION_STAGE_ORDER",
+    "CLAUDE_HOOK_WORK_EVENT_NAMES",
+    "ClaudeDecisionEventName",
+    "ClaudeDecisionOutcome",
+    "ClaudeDecisionPoint",
+    "ClaudeDecisionProposalKind",
+    "ClaudeDecisionProvenanceSource",
+    "ClaudeDecisionStage",
     "ClaudeExecutionOwner",
+    "ClaudeHookAudit",
+    "ClaudeHookOutcome",
+    "ClaudeHookSourceScope",
+    "ClaudeHookWorkEventName",
     "ClaudeManagedSession",
     "ClaudeManagedTurn",
     "ClaudeManagedWorkItem",

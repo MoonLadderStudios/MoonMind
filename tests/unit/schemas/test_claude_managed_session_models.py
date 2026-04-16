@@ -8,6 +8,10 @@ import pytest
 from pydantic import ValidationError
 
 from moonmind.schemas.managed_session_models import (
+    CLAUDE_DECISION_EVENT_NAMES,
+    CLAUDE_DECISION_STAGE_ORDER,
+    ClaudeDecisionPoint,
+    ClaudeHookAudit,
     ClaudeManagedSession,
     ClaudeManagedTurn,
     ClaudeManagedWorkItem,
@@ -276,3 +280,268 @@ def test_claude_work_item_lifecycle_datetimes_are_utc_aware() -> None:
 
     assert work_item.started_at == naive_started.replace(tzinfo=UTC)
     assert work_item.ended_at == naive_ended.replace(tzinfo=UTC)
+
+
+def _decision_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "decisionId": "decision-1",
+        "sessionId": "claude-session-1",
+        "turnId": "turn-1",
+        "proposalKind": "tool",
+        "originStage": "permission_rules",
+        "outcome": "allowed",
+        "provenanceSource": "policy",
+        "eventName": "decision.allowed",
+        "metadata": {"ruleId": "allow-read"},
+        "createdAt": NOW,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_claude_decision_stage_order_matches_documented_pipeline() -> None:
+    assert CLAUDE_DECISION_STAGE_ORDER == (
+        "session_state_guard",
+        "pretool_hooks",
+        "permission_rules",
+        "protected_path_guard",
+        "permission_mode_baseline",
+        "sandbox_substitution",
+        "auto_mode_classifier",
+        "interactive_prompt_or_headless_resolution",
+        "runtime_execution",
+        "posttool_hooks",
+        "checkpoint_capture",
+    )
+
+    decisions = [
+        ClaudeDecisionPoint(
+            **_decision_payload(
+                decisionId=f"decision-{index}",
+                originStage=stage,
+                outcome="resolved",
+                provenanceSource="runtime"
+                if stage == "runtime_execution"
+                else "policy",
+                eventName="decision.resolved",
+            )
+        )
+        for index, stage in enumerate(CLAUDE_DECISION_STAGE_ORDER, start=1)
+    ]
+
+    assert tuple(decision.origin_stage for decision in decisions) == (
+        CLAUDE_DECISION_STAGE_ORDER
+    )
+
+
+def test_claude_decision_event_names_match_documented_events() -> None:
+    assert CLAUDE_DECISION_EVENT_NAMES == (
+        "decision.proposed",
+        "decision.mutated",
+        "decision.allowed",
+        "decision.asked",
+        "decision.denied",
+        "decision.deferred",
+        "decision.canceled",
+        "decision.resolved",
+    )
+
+    for event_name in CLAUDE_DECISION_EVENT_NAMES:
+        decision = ClaudeDecisionPoint(
+            **_decision_payload(
+                decisionId=f"{event_name.replace('.', '-')}-1",
+                eventName=event_name,
+                outcome=event_name.removeprefix("decision.")
+                if event_name != "decision.asked"
+                else "asked",
+            )
+        )
+        assert decision.event_name == event_name
+
+
+def test_claude_decision_point_uses_canonical_wire_shape() -> None:
+    decision = ClaudeDecisionPoint(**_decision_payload(workItemId="item-1"))
+
+    wire = decision.model_dump(by_alias=True)
+
+    assert wire["decisionId"] == "decision-1"
+    assert wire["sessionId"] == "claude-session-1"
+    assert wire["turnId"] == "turn-1"
+    assert wire["workItemId"] == "item-1"
+    assert wire["originStage"] == "permission_rules"
+    assert "threadId" not in wire
+    assert "childThread" not in wire
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("originStage", "approval_prompt"),
+        ("eventName", "decision.approved"),
+        ("proposalKind", "database"),
+        ("provenanceSource", "unknown"),
+        ("outcome", "approved"),
+    ],
+)
+def test_claude_decision_point_rejects_unknown_vocabulary(
+    field: str, value: str
+) -> None:
+    with pytest.raises(ValidationError):
+        ClaudeDecisionPoint(**_decision_payload(**{field: value}))
+
+
+def test_protected_path_decision_cannot_be_auto_allowed() -> None:
+    decision = ClaudeDecisionPoint.protected_path(
+        decision_id="decision-protected",
+        session_id="claude-session-1",
+        turn_id="turn-1",
+        proposal_kind="file",
+        outcome="denied",
+        metadata={"path": "secrets.env"},
+        created_at=NOW,
+    )
+
+    assert decision.origin_stage == "protected_path_guard"
+    assert decision.provenance_source == "protected_path"
+    assert decision.event_name == "decision.denied"
+
+    with pytest.raises(ValueError, match="Protected path decisions"):
+        ClaudeDecisionPoint.protected_path(
+            decision_id="decision-protected-allow",
+            session_id="claude-session-1",
+            turn_id="turn-1",
+            proposal_kind="file",
+            outcome="allowed",
+            created_at=NOW,
+        )
+
+
+def test_classifier_decision_is_distinct_from_user_and_policy_outcomes() -> None:
+    decision = ClaudeDecisionPoint.classifier(
+        decision_id="decision-classifier",
+        session_id="claude-session-1",
+        turn_id="turn-1",
+        proposal_kind="tool",
+        outcome="asked",
+        metadata={"classifier": "auto-mode"},
+        created_at=NOW,
+    )
+
+    assert decision.origin_stage == "auto_mode_classifier"
+    assert decision.provenance_source == "classifier"
+    assert decision.provenance_source not in {"user", "policy"}
+    assert decision.event_name == "decision.asked"
+
+
+def test_headless_resolution_accepts_only_deny_or_defer() -> None:
+    denied = ClaudeDecisionPoint.headless_resolution(
+        decision_id="decision-headless-deny",
+        session_id="claude-session-1",
+        turn_id="turn-1",
+        proposal_kind="network",
+        outcome="denied",
+        created_at=NOW,
+    )
+    deferred = ClaudeDecisionPoint.headless_resolution(
+        decision_id="decision-headless-defer",
+        session_id="claude-session-1",
+        turn_id="turn-1",
+        proposal_kind="network",
+        outcome="deferred",
+        created_at=NOW,
+    )
+
+    assert denied.event_name == "decision.denied"
+    assert deferred.event_name == "decision.deferred"
+
+    with pytest.raises(ValueError, match="Headless decisions"):
+        ClaudeDecisionPoint.headless_resolution(
+            decision_id="decision-headless-allow",
+            session_id="claude-session-1",
+            turn_id="turn-1",
+            proposal_kind="network",
+            outcome="allowed",
+            created_at=NOW,
+        )
+
+
+def test_hook_tightened_decision_records_hook_provenance() -> None:
+    decision = ClaudeDecisionPoint.hook_tightened(
+        decision_id="decision-hook",
+        session_id="claude-session-1",
+        turn_id="turn-1",
+        proposal_kind="tool",
+        origin_stage="pretool_hooks",
+        outcome="asked",
+        metadata={"hookName": "review-sensitive-command"},
+        created_at=NOW,
+    )
+
+    assert decision.provenance_source == "hook"
+    assert decision.metadata["hookTightened"] is True
+    assert decision.event_name == "decision.asked"
+
+    with pytest.raises(ValueError, match="Hook decisions"):
+        ClaudeDecisionPoint.hook_tightened(
+            decision_id="decision-hook-invalid",
+            session_id="claude-session-1",
+            turn_id="turn-1",
+            proposal_kind="tool",
+            origin_stage="permission_rules",
+            outcome="asked",
+            created_at=NOW,
+        )
+
+
+def test_claude_hook_audit_validates_documented_fields() -> None:
+    audit = ClaudeHookAudit(
+        auditId="audit-1",
+        sessionId="claude-session-1",
+        turnId="turn-1",
+        decisionId="decision-hook",
+        hookName="review-sensitive-command",
+        sourceScope="project",
+        eventType="PreToolUse",
+        matcher="Bash(*)",
+        outcome="ask",
+        auditData={"reason": "sensitive command"},
+        createdAt=NOW,
+    )
+
+    wire = audit.model_dump(by_alias=True)
+
+    assert wire["auditId"] == "audit-1"
+    assert wire["sourceScope"] == "project"
+    assert wire["eventType"] == "PreToolUse"
+    assert wire["matcher"] == "Bash(*)"
+    assert wire["outcome"] == "ask"
+    assert wire["auditData"] == {"reason": "sensitive command"}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sourceScope", "workspace"),
+        ("outcome", "approved"),
+        ("hookName", "   "),
+        ("eventType", "   "),
+        ("matcher", "   "),
+    ],
+)
+def test_claude_hook_audit_rejects_invalid_values(field: str, value: str) -> None:
+    payload: dict[str, object] = {
+        "auditId": "audit-1",
+        "sessionId": "claude-session-1",
+        "turnId": "turn-1",
+        "hookName": "review-sensitive-command",
+        "sourceScope": "project",
+        "eventType": "PreToolUse",
+        "matcher": "Bash(*)",
+        "outcome": "ask",
+        "auditData": {},
+        "createdAt": NOW,
+    }
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        ClaudeHookAudit(**payload)
