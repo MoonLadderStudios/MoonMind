@@ -442,10 +442,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "merge_automation_evaluate_readiness",
     ),
-    "merge_automation.create_resolver_run": (
-        "integrations",
-        "merge_automation_create_resolver_run",
-    ),
     "agent_runtime.build_launch_context": (
         "agent_runtime",
         "agent_runtime_build_launch_context",
@@ -2059,54 +2055,6 @@ class TemporalIntegrationActivities:
                 "source": "jira",
             },
         )
-
-    async def merge_automation_create_resolver_run(self, payload, /, **kwargs):
-        import hashlib
-
-        key = ""
-        run_input: Mapping[str, Any] | None = None
-        if isinstance(payload, Mapping):
-            key = str(payload.get("idempotencyKey") or "").strip()
-            run_payload = payload.get("runInput") or payload.get("run_input")
-            if isinstance(run_payload, Mapping):
-                run_input = run_payload
-        suffix = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16] if key else "resolver"
-        workflow_id = f"merge-automation-resolver-{suffix}"
-        if run_input is not None:
-            try:
-                from moonmind.config.settings import settings
-                from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
-                from moonmind.workflows.temporal.client import get_temporal_client
-
-                client = await get_temporal_client(
-                    settings.temporal.address,
-                    settings.temporal.namespace,
-                )
-                handle = await client.start_workflow(
-                    "MoonMind.Run",
-                    dict(run_input),
-                    id=workflow_id,
-                    task_queue=WORKFLOW_TASK_QUEUE,
-                )
-                return {
-                    "workflowId": workflow_id,
-                    "runId": getattr(handle, "first_execution_run_id", None),
-                    "created": True,
-                }
-            except Exception as exc:
-                message = str(exc).lower()
-                if "already" not in message or "start" not in message:
-                    raise
-                return {
-                    "workflowId": workflow_id,
-                    "runId": None,
-                    "created": False,
-                }
-        return {
-            "workflowId": workflow_id,
-            "runId": None,
-            "created": True,
-        }
 
     async def integration_jules_send_message(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_send_message_activity

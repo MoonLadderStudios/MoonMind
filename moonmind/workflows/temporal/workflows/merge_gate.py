@@ -7,35 +7,18 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from temporalio import workflow
-from temporalio.common import RetryPolicy, SearchAttributeKey, SearchAttributePair
-from temporalio.workflow import ActivityCancellationType
+from temporalio.common import RetryPolicy
 
-with workflow.unsafe.imports_passed_through():
-    from moonmind.schemas.temporal_models import (
-        MergeAutomationStartInput,
-        PullRequestRefModel,
-        ReadinessBlockerModel,
-        ReadinessEvidenceModel,
-        ResolverRunRefModel,
-    )
-    from moonmind.utils.logging import scrub_github_tokens
-    from moonmind.workflows.temporal.activity_catalog import INTEGRATIONS_TASK_QUEUE
+from moonmind.schemas.temporal_models import (
+    MergeAutomationStartInput,
+    PullRequestRefModel,
+    ReadinessBlockerModel,
+    ReadinessEvidenceModel,
+    ResolverRunRefModel,
+)
+from moonmind.utils.logging import scrub_github_tokens
 
 
-WORKFLOW_NAME = "MoonMind.MergeAutomation"
-STATE_INITIALIZING = "initializing"
-STATE_AWAITING_EXTERNAL = "awaiting_external"
-STATE_EXECUTING = "executing"
-STATE_FINALIZING = "finalizing"
-STATE_COMPLETED = "completed"
-STATE_FAILED = "failed"
-STATE_CANCELED = "canceled"
-OUTPUT_WAITING = "waiting"
-OUTPUT_BLOCKED = "blocked"
-OUTPUT_OPEN = "open"
-OUTPUT_RESOLVER_LAUNCHED = "resolver_launched"
-OUTPUT_EXPIRED = "expired"
 TERMINAL_BLOCKER_KINDS = {
     "pull_request_closed",
     "stale_revision",
@@ -339,178 +322,3 @@ def _effective_expire_at(
     if expire_after_seconds is None:
         return None
     return started_at + timedelta(seconds=expire_after_seconds)
-
-
-@workflow.defn(name=WORKFLOW_NAME)
-class MoonMindMergeAutomationWorkflow:
-    """Wait for external PR readiness, then launch one pr-resolver run."""
-
-    def __init__(self) -> None:
-        self._status = STATE_INITIALIZING
-        self._output_status = OUTPUT_WAITING
-        self._input: MergeAutomationStartInput | None = None
-        self._blockers: list[ReadinessBlockerModel] = []
-        self._resolver_history: list[ResolverRunRefModel] = []
-        self._external_event_count = 0
-        self._last_handled_event_count = 0
-        self._cycle_count = 0
-
-    def _summary_payload(self) -> dict[str, Any]:
-        pr = self._input.pull_request if self._input is not None else None
-        return {
-            "status": self._output_status,
-            "workflowState": self._status,
-            "outputStatus": self._output_status,
-            "prNumber": pr.number if pr is not None else None,
-            "prUrl": pr.url if pr is not None else None,
-            "headSha": pr.head_sha if pr is not None else None,
-            "cycles": self._cycle_count,
-            "blockers": [
-                blocker.model_dump(by_alias=True, mode="json")
-                for blocker in self._blockers
-            ],
-            "resolverChildWorkflowIds": [
-                resolver.workflow_id for resolver in self._resolver_history
-            ],
-            "resolverHistory": [
-                resolver.model_dump(by_alias=True, mode="json")
-                for resolver in self._resolver_history
-            ],
-        }
-
-    def _publish_visibility(self) -> None:
-        workflow.upsert_memo({"summary": self._summary_payload()})
-        workflow.upsert_search_attributes(
-            [
-                SearchAttributePair(SearchAttributeKey.for_keyword("mm_state"), self._status),
-                SearchAttributePair(
-                    SearchAttributeKey.for_keyword("mm_entry"),
-                    "merge_automation",
-                ),
-            ]
-        )
-
-    @workflow.signal(name="merge_automation.external_event")
-    def external_event(self, _payload: dict[str, Any]) -> None:
-        self._external_event_count += 1
-
-    @workflow.query
-    def summary(self) -> dict[str, Any]:
-        return self._summary_payload()
-
-    @workflow.run
-    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if self._resolver_history:
-            return self._summary_payload()
-        self._input = MergeAutomationStartInput.model_validate(payload)
-        self._blockers = list(self._input.blockers)
-        self._resolver_history = list(self._input.resolver_history)
-        self._cycle_count = self._input.cycle_count
-        self._status = STATE_AWAITING_EXTERNAL
-        self._output_status = OUTPUT_WAITING
-        expire_at = _effective_expire_at(self._input, started_at=workflow.now())
-        self._publish_visibility()
-
-        while True:
-            if expire_at is not None and workflow.now() >= expire_at:
-                self._status = STATE_COMPLETED
-                self._output_status = OUTPUT_EXPIRED
-                self._publish_visibility()
-                return self._summary_payload()
-
-            evaluation = await workflow.execute_activity(
-                "merge_automation.evaluate_readiness",
-                self._input.model_dump(by_alias=True, mode="json"),
-                start_to_close_timeout=timedelta(minutes=2),
-                task_queue=INTEGRATIONS_TASK_QUEUE,
-                retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
-                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-            )
-            evidence = classify_readiness(
-                evaluation if isinstance(evaluation, Mapping) else {},
-                tracked_head_sha=self._input.pull_request.head_sha,
-            )
-            self._cycle_count += 1
-            self._blockers = list(evidence.blockers)
-            if evidence.ready:
-                self._status = STATE_EXECUTING
-                self._output_status = OUTPUT_OPEN
-                resolver_request = build_resolver_run_request(
-                    parent_workflow_id=self._input.parent_workflow_id,
-                    pull_request=self._input.pull_request,
-                    jira_issue_key=self._input.jira_issue_key,
-                    merge_method=self._input.config.resolver.merge_method,
-                )
-                resolver_payload = {
-                    "parentWorkflowId": self._input.parent_workflow_id,
-                    "pullRequest": self._input.pull_request.model_dump(
-                        by_alias=True,
-                        mode="json",
-                    ),
-                    "jiraIssueKey": self._input.jira_issue_key,
-                    "mergeMethod": self._input.config.resolver.merge_method,
-                    "idempotencyKey": deterministic_resolver_idempotency_key(
-                        parent_workflow_id=self._input.parent_workflow_id,
-                        repo=self._input.pull_request.repo,
-                        pr_number=self._input.pull_request.number,
-                        head_sha=self._input.pull_request.head_sha,
-                    ),
-                    "runInput": resolver_request,
-                }
-                result = await workflow.execute_activity(
-                    "merge_automation.create_resolver_run",
-                    resolver_payload,
-                    start_to_close_timeout=timedelta(minutes=2),
-                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
-                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                )
-                self._resolver_history.append(ResolverRunRefModel.model_validate(result))
-                self._status = STATE_FINALIZING
-                self._publish_visibility()
-                self._status = STATE_COMPLETED
-                self._output_status = OUTPUT_RESOLVER_LAUNCHED
-                self._publish_visibility()
-                return self._summary_payload()
-
-            if any(blocker.kind in TERMINAL_BLOCKER_KINDS for blocker in self._blockers):
-                self._status = STATE_FAILED
-                self._output_status = OUTPUT_BLOCKED
-                self._publish_visibility()
-                return self._summary_payload()
-
-            self._status = STATE_AWAITING_EXTERNAL
-            self._output_status = OUTPUT_WAITING
-            self._publish_visibility()
-            try:
-                target_event_count = self._external_event_count
-                await workflow.wait_condition(
-                    lambda: self._external_event_count > target_event_count,
-                    timeout=timedelta(
-                        seconds=self._input.config.timeouts.fallback_poll_seconds
-                    ),
-                )
-                self._last_handled_event_count = self._external_event_count
-            except TimeoutError:
-                # Expected fallback poll wake-up when no external signal arrives.
-                pass
-            try:
-                info = workflow.info()
-                should_continue = getattr(info, "is_continue_as_new_suggested", False)
-            except Exception:
-                should_continue = False
-            if callable(should_continue):
-                should_continue = should_continue()
-            if should_continue:
-                workflow.continue_as_new(
-                    build_continue_as_new_input(
-                        start_input=self._input,
-                        blockers=self._blockers,
-                        cycle_count=self._cycle_count,
-                        resolver_history=self._resolver_history,
-                        latest_head_sha=self._input.pull_request.head_sha,
-                        expire_at=(
-                            expire_at.isoformat() if expire_at is not None else None
-                        ),
-                    )
-                )
