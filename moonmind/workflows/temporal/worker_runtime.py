@@ -605,6 +605,21 @@ def _build_runtime_planner():
                 for step in raw_steps
                 if isinstance(step, Mapping)
             }
+            if not story_output_payload:
+                for step in raw_steps:
+                    if not isinstance(step, Mapping):
+                        continue
+                    step_story_output = _coerce_mapping(
+                        step.get("storyOutput") or step.get("story_output")
+                    )
+                    if step_story_output:
+                        story_output_payload = dict(step_story_output)
+                        story_output_mode = str(
+                            story_output_payload.get("mode")
+                            or story_output_payload.get("target")
+                            or ""
+                        ).strip().lower()
+                        break
             should_prepare_story_breakdown = should_prepare_story_breakdown or bool(
                 step_tool_names & (_JIRA_STORY_OUTPUT_TOOLS | _MOONSPEC_BREAKDOWN_TOOLS)
             )

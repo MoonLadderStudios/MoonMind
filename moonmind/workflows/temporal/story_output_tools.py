@@ -14,6 +14,7 @@ from moonmind.integrations.jira.models import (
     CreateIssueRequest,
     CreateIssueLinkRequest,
     CreateSubtaskRequest,
+    ListCreateIssueTypesRequest,
     SearchIssuesRequest,
 )
 from moonmind.integrations.jira.tool import JiraToolService
@@ -105,6 +106,83 @@ def _story_description(story: Mapping[str, Any]) -> str:
         ),
     ]
     return (description + "".join(sections)).strip() or _story_summary(story, index=1)
+
+
+def _breakdown_source_path(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    source = value.get("source")
+    if isinstance(source, Mapping):
+        path = _string(source.get("referencePath") or source.get("path"))
+        if path:
+            return path
+    return ""
+
+
+def _story_source_reference(
+    story: Mapping[str, Any],
+    *,
+    fallback_path: str = "",
+) -> dict[str, Any]:
+    source_ref = story.get("sourceReference") or story.get("source_reference")
+    if isinstance(source_ref, Mapping):
+        reference = dict(source_ref)
+    else:
+        reference = {}
+    path = _string(reference.get("path") or fallback_path)
+    if path:
+        reference["path"] = path
+    return reference
+
+
+def _missing_source_reference_story_ids(
+    stories: Sequence[Mapping[str, Any]],
+    *,
+    fallback_path: str,
+) -> list[str]:
+    missing: list[str] = []
+    for index, story in enumerate(stories, start=1):
+        reference = _story_source_reference(story, fallback_path=fallback_path)
+        if not _string(reference.get("path")):
+            missing.append(_story_id(story, index=index))
+    return missing
+
+
+def _story_description_with_source(
+    story: Mapping[str, Any],
+    *,
+    fallback_source_path: str,
+) -> str:
+    description = _story_description(story)
+    reference = _story_source_reference(story, fallback_path=fallback_source_path)
+    source_path = _string(reference.get("path"))
+    source_lines: list[str] = []
+    if source_path:
+        source_lines.append(f"Source Document: {source_path}")
+    title = _string(reference.get("title"))
+    if title:
+        source_lines.append(f"Source Title: {title}")
+    sections = [
+        _string(item)
+        for item in _list(reference.get("sections"))
+        if _string(item)
+    ]
+    if sections:
+        source_lines.append(
+            "Source Sections:\n" + "\n".join(f"- {item}" for item in sections)
+        )
+    coverage_ids = [
+        _string(item)
+        for item in _list(reference.get("coverageIds") or reference.get("coverage_ids"))
+        if _string(item)
+    ]
+    if coverage_ids:
+        source_lines.append(
+            "Coverage IDs:\n" + "\n".join(f"- {item}" for item in coverage_ids)
+        )
+    if not source_lines:
+        return description
+    return (description + "\n\nSource Document\n" + "\n".join(source_lines)).strip()
 
 
 def _truncate_jira_description(description: str) -> str:
@@ -375,7 +453,10 @@ async def _create_dependency_links(
                 {
                     **base_result,
                     "status": "failed",
-                    "errorCode": _string(getattr(exc, "code", "")) or exc.__class__.__name__,
+                    "errorCode": (
+                        _string(getattr(exc, "code", ""))
+                        or exc.__class__.__name__
+                    ),
                     "message": "Jira dependency link creation failed.",
                 }
             )
@@ -383,8 +464,45 @@ async def _create_dependency_links(
         status = "existing" if result.get("existing") else "created"
         link_results.append({**base_result, "status": status})
 
-    chain_complete = all(item.get("status") in {"created", "existing"} for item in link_results)
+    chain_complete = all(
+        item.get("status") in {"created", "existing"} for item in link_results
+    )
     return link_results, chain_complete
+
+
+def _extract_issue_type_items(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, Mapping):
+        candidates = (
+            payload.get("issueTypes")
+            or payload.get("issuetypes")
+            or payload.get("values")
+            or payload.get("items")
+            or []
+        )
+    else:
+        candidates = payload
+    return [dict(item) for item in _list(candidates) if isinstance(item, Mapping)]
+
+
+async def _resolve_issue_type_id(
+    *,
+    service: JiraToolService,
+    project_key: str,
+    issue_type_id: str,
+    issue_type_name: str,
+) -> str:
+    if issue_type_id:
+        return issue_type_id
+    if not issue_type_name:
+        return ""
+    payload = await service.list_create_issue_types(
+        ListCreateIssueTypesRequest(projectKey=project_key)
+    )
+    normalized_name = issue_type_name.strip().lower()
+    for item in _extract_issue_type_items(payload):
+        if _string(item.get("name")).lower() == normalized_name:
+            return _string(item.get("id"))
+    return ""
 
 
 async def create_jira_issues_from_stories(
@@ -410,6 +528,16 @@ async def create_jira_issues_from_stories(
         or inputs.get("issueTypeId")
         or inputs.get("issue_type_id")
     )
+    issue_type_name = _string(
+        jira_payload.get("issueTypeName")
+        or jira_payload.get("issue_type_name")
+        or jira_payload.get("issueType")
+        or jira_payload.get("issue_type")
+        or inputs.get("issueTypeName")
+        or inputs.get("issue_type_name")
+        or inputs.get("issueType")
+        or inputs.get("issue_type")
+    )
     fallback_on_failure = str(
         story_output.get("fallback")
         or story_output.get("onFailure")
@@ -430,12 +558,14 @@ async def create_jira_issues_from_stories(
             )
         raise ValueError(dependency_mode_error)
 
-    stories = _coerce_story_payload(
+    raw_story_payload = (
         inputs.get("stories")
         or inputs.get("storyBreakdown")
         or inputs.get("story_breakdown")
         or inputs.get("storyBreakdownJson")
     )
+    breakdown_source_path = _breakdown_source_path(raw_story_payload)
+    stories = _coerce_story_payload(raw_story_payload)
     if not stories:
         repo = _string(inputs.get("repository") or inputs.get("repo"))
         ref = _string(
@@ -452,6 +582,13 @@ async def create_jira_issues_from_stories(
                 fetched = story_fetcher(repo, ref, path)
                 if inspect.isawaitable(fetched):
                     fetched = await fetched  # type: ignore[assignment]
+                fetched_payload: Any = fetched
+                if isinstance(fetched, str) and fetched.strip():
+                    try:
+                        fetched_payload = json.loads(fetched)
+                    except json.JSONDecodeError:
+                        fetched_payload = fetched
+                breakdown_source_path = _breakdown_source_path(fetched_payload)
                 stories = _coerce_story_payload(fetched)
             except Exception as exc:
                 if fallback_on_failure:
@@ -470,17 +607,75 @@ async def create_jira_issues_from_stories(
                 dependency_mode=dependency_mode,
             )
         raise ValueError("No stories were available for Jira issue creation.")
-    if not project_key or not issue_type_id:
+    if not project_key:
+        reason = (
+            "Jira projectKey and issueTypeId are required."
+            if not (issue_type_id or issue_type_name)
+            else "Jira projectKey is required."
+        )
         if fallback_on_failure:
             return _fallback_result(
-                reason="Jira projectKey and issueTypeId are required.",
+                reason=reason,
                 inputs=inputs,
                 story_count=len(stories),
                 dependency_mode=dependency_mode,
             )
-        raise ValueError("Jira projectKey and issueTypeId are required.")
+        raise ValueError(reason)
+
+    story_breakdown_path = _string(
+        inputs.get("storyBreakdownPath") or story_output.get("storyBreakdownPath")
+    )
+    if story_breakdown_path:
+        missing_source_ids = _missing_source_reference_story_ids(
+            stories,
+            fallback_path=breakdown_source_path,
+        )
+        if missing_source_ids:
+            reason = (
+                "Jira story creation requires sourceReference.path or breakdown "
+                "source.referencePath for every story. Missing: "
+                + ", ".join(missing_source_ids)
+            )
+            if fallback_on_failure:
+                return _fallback_result(
+                    reason=reason,
+                    inputs=inputs,
+                    story_count=len(stories),
+                    dependency_mode=dependency_mode,
+                )
+            raise ValueError(reason)
 
     service = jira_service_factory()
+    try:
+        issue_type_id = await _resolve_issue_type_id(
+            service=service,
+            project_key=project_key,
+            issue_type_id=issue_type_id,
+            issue_type_name=issue_type_name,
+        )
+    except Exception as exc:
+        if fallback_on_failure:
+            return _fallback_result(
+                reason=f"Unable to resolve Jira issue type: {exc}",
+                inputs=inputs,
+                story_count=len(stories),
+                dependency_mode=dependency_mode,
+            )
+        raise
+    if not issue_type_id:
+        reason = (
+            "Jira issueTypeId is required or issueTypeName must resolve to a "
+            "creatable issue type."
+        )
+        if fallback_on_failure:
+            return _fallback_result(
+                reason=reason,
+                inputs=inputs,
+                story_count=len(stories),
+                dependency_mode=dependency_mode,
+            )
+        raise ValueError(reason)
+
     created: list[dict[str, Any]] = []
     issue_mappings: list[dict[str, Any]] = []
     marker_label = _workflow_marker_label(inputs=inputs, context=_context)
@@ -510,7 +705,12 @@ async def create_jira_issues_from_stories(
                 jira_payload=jira_payload,
                 marker_label=marker_label,
             )
-            description = _truncate_jira_description(_story_description(story))
+            description = _truncate_jira_description(
+                _story_description_with_source(
+                    story,
+                    fallback_source_path=breakdown_source_path,
+                )
+            )
             parent_issue_key = _parent_issue_key(
                 story=story,
                 jira_payload=jira_payload,

@@ -486,7 +486,8 @@ When a task requests Jira issue creation from ambiguous user intent, the planner
 
 Pure Jira issue creation does not require branch or PR publishing. A PR is required only when the agent produces repository changes that need to be published.
 
-When a task already has fully structured story JSON and an exact Jira target, the planner may use the narrower deterministic batch tool:
+When a task already has fully structured story JSON and a concrete Jira target,
+the planner may use the narrower deterministic batch tool:
 
 ```json
 {
@@ -500,7 +501,8 @@ When a task already has fully structured story JSON and an exact Jira target, th
       "mode": "jira",
       "jira": {
         "projectKey": "MM",
-        "issueTypeId": "10001"
+        "issueTypeName": "Story",
+        "dependencyMode": "linear_blocker_chain"
       }
     },
     "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json"
@@ -508,7 +510,12 @@ When a task already has fully structured story JSON and an exact Jira target, th
 }
 ```
 
-`story.create_jira_issues` is backed by `mm.tool.execute` and requires `integration:jira`. It creates one Jira issue per story from inline `stories` or from `storyBreakdownPath`; it is not the default path for ambiguous Jira requests.
+`story.create_jira_issues` is backed by `mm.tool.execute` and requires
+`integration:jira`. It creates one Jira issue per story from inline `stories` or
+from `storyBreakdownPath`, resolves `issueTypeName` through the trusted Jira
+metadata surface when `issueTypeId` is not supplied, and creates dependency
+links when `dependencyMode = linear_blocker_chain`. It is not the default path
+for ambiguous Jira requests.
 
 If Jira output succeeds, workflow PR output is skipped because Jira is the requested output. If Jira output cannot run or fails and fallback is enabled, the tool returns fallback metadata pointing to the existing `docs/tmp/story-breakdowns/...` handoff so normal branch/PR publishing can expose that docs output.
 

@@ -41,6 +41,14 @@ class _FakeJiraService:
         self.search_requests.append(request)
         return self.search_response
 
+    async def list_create_issue_types(self, request):
+        return {
+            "issueTypes": [
+                {"id": "10005", "name": "Story"},
+                {"id": "10006", "name": "Task"},
+            ]
+        }
+
     async def create_issue_link(self, request):
         self.link_requests.append(request)
         if self.fail_link_after is not None and len(self.link_requests) > self.fail_link_after:
@@ -98,6 +106,84 @@ async def test_create_jira_issues_from_inline_story_breakdown():
     assert request.summary == "Create proposal intent records"
     assert request.fields["labels"] == ["moonmind"]
     assert "Intent is visible" in request.description
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_source():
+    service = _FakeJiraService()
+    breakdown = {
+        "source": {
+            "referencePath": "docs/Designs/RuntimeTypes.md",
+            "title": "Runtime Types",
+        },
+        "stories": [
+            {
+                "id": "STORY-001",
+                "summary": "Create proposal intent records",
+                "description": "As an operator, I can track proposal intent.",
+                "sourceReference": {
+                    "sections": ["Section 1"],
+                    "coverageIds": ["DESIGN-REQ-001"],
+                },
+            }
+        ],
+    }
+
+    async def fetcher(_repo: str, _ref: str, _path: str) -> str:
+        import json
+
+        return json.dumps(breakdown)
+
+    result = await create_jira_issues_from_stories(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetBranch": "breakdown-branch",
+            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeName": "Story",
+                    "dependencyMode": "none",
+                },
+            },
+        },
+        jira_service_factory=lambda: service,
+        story_fetcher=fetcher,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    request = service.requests[0]
+    assert request.issue_type_id == "10005"
+    assert "Source Document: docs/Designs/RuntimeTypes.md" in request.description
+    assert "Section 1" in request.description
+    assert "DESIGN-REQ-001" in request.description
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_blocks_story_breakdown_without_source_reference():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "linear_blocker_chain",
+                },
+            },
+            "stories": [{"id": "STORY-001", "summary": "No source"}],
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert service.requests == []
+    assert result.outputs["storyOutput"]["status"] == "fallback"
+    assert "requires sourceReference.path" in result.outputs["storyOutput"]["reason"]
+    assert "STORY-001" in result.outputs["storyOutput"]["reason"]
 
 
 @pytest.mark.asyncio
@@ -210,7 +296,16 @@ async def test_create_jira_issues_fallback_reports_partial_success():
                 "mode": "jira",
                 "jira": {"projectKey": "MM", "issueTypeId": "10001"},
             },
-            "stories": [{"summary": "First"}, {"summary": "Second"}],
+            "stories": [
+                {
+                    "summary": "First",
+                    "sourceReference": {"path": "docs/Designs/RuntimeTypes.md"},
+                },
+                {
+                    "summary": "Second",
+                    "sourceReference": {"path": "docs/Designs/RuntimeTypes.md"},
+                },
+            ],
         },
         jira_service_factory=lambda: service,
     )

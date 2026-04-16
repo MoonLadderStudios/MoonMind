@@ -76,7 +76,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert jira_template.latest_version is not None
         assert [
             step["skill"]["id"] for step in jira_template.latest_version.steps
-        ] == ["moonspec-breakdown", "jira-issue-creator"]
+        ] == ["moonspec-breakdown", "story.create_jira_issues"]
 
         result = await session.execute(
             select(TaskStepTemplate)
