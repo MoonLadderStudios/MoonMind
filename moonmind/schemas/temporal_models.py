@@ -275,6 +275,7 @@ class MergeAutomationStartInput(BaseModel):
     workflow_type: Literal["MoonMind.MergeAutomation"] = Field(..., alias="workflowType")
     parent_workflow_id: str = Field(..., alias="parentWorkflowId")
     parent_run_id: str | None = Field(None, alias="parentRunId")
+    principal: str | None = Field(None, alias="principal")
     publish_context_ref: str = Field(..., alias="publishContextRef")
     pull_request: PullRequestRefModel = Field(..., alias="pullRequest")
     jira_issue_key: str | None = Field(None, alias="jiraIssueKey")
