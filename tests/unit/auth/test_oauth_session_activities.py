@@ -181,6 +181,46 @@ async def test_register_profile_activity_persists_oauth_home_codex_profile(
 
 
 @pytest.mark.asyncio
+async def test_register_profile_activity_rejects_codex_oauth_profile_without_refs(
+    _oauth_activity_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "oas_activitymissingrefs"
+    profile_id = "codex-activity-missing-refs"
+
+    async with _oauth_activity_session_factory() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="   ",
+                volume_mount_path=None,
+                status=OAuthSessionStatus.REGISTERING_PROFILE,
+                requested_by_user_id="not-a-uuid",
+                account_label="codex account",
+                metadata_json={
+                    "provider_id": "openai",
+                    "provider_label": "OpenAI",
+                },
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        lambda: _session_context(_oauth_activity_session_factory),
+    )
+
+    with pytest.raises(ValueError, match="volume_ref is required"):
+        await oauth_session_register_profile({"session_id": session_id})
+
+    async with _oauth_activity_session_factory() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+
+
+@pytest.mark.asyncio
 async def test_update_terminal_session_persists_runner_metadata(
     _oauth_activity_session_factory,
     monkeypatch: pytest.MonkeyPatch,

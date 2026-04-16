@@ -1,6 +1,9 @@
 """Temporal regression tests for OAuth session workflow."""
 
+import asyncio
+
 import pytest
+from temporalio.client import WorkflowFailureError
 from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
@@ -240,3 +243,31 @@ async def test_oauth_session_workflow_api_finalize_skips_verify_and_register() -
             assert result["status"] == "succeeded"
             assert verify_calls == 0
             assert register_calls == 0
+
+
+async def test_oauth_session_workflow_rejects_codex_oauth_input_without_refs() -> None:
+    """Codex OAuth sessions require compact auth-volume refs before side effects."""
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=WORKFLOW_TASK_QUEUE,
+            workflows=[MoonMindOAuthSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            with pytest.raises(WorkflowFailureError) as exc_info:
+                await asyncio.wait_for(
+                    env.client.execute_workflow(
+                        MoonMindOAuthSessionWorkflow.run,
+                        {
+                            "session_id": "sess_missing_refs",
+                            "runtime_id": "codex_cli",
+                        },
+                        id="oauth-session:sess_missing_refs",
+                        task_queue=WORKFLOW_TASK_QUEUE,
+                    ),
+                    timeout=5,
+                )
+            assert (
+                "volume_ref and volume_mount_path are required"
+                in str(exc_info.value.__cause__)
+            )

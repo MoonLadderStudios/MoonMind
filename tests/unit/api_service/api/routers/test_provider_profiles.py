@@ -10,8 +10,15 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
-from api_service.db.models import Base, ManagedAgentProviderProfile, ProviderCredentialSource, ManagedAgentRateLimitPolicy
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    ManagedAgentRateLimitPolicy,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
+)
 from api_service.main import app
+from api_service.services.provider_profile_service import _manager_profile_payload
 
 
 @pytest.fixture(scope="module")
@@ -133,6 +140,61 @@ async def test_provider_profile_response_redacts_secret_like_runtime_fields(
     assert response.json()["volume_mount_path"] == "/home/app/.codex"
     assert response.json()["env_template"]["OPENAI_API_KEY"] == "[REDACTED]"
     assert response.json()["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
+
+
+def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -> None:
+    raw_secret = "sk-test-manager-payload-secret"
+    row = ManagedAgentProviderProfile(
+        profile_id="manager_payload_redaction",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+        volume_ref="codex_auth_volume",
+        volume_mount_path="/home/app/.codex",
+        env_template={"OPENAI_API_KEY": raw_secret},
+        file_templates=[{"path": "/tmp/auth.json", "content": raw_secret}],
+        command_behavior={"authorization": f"Bearer {raw_secret}"},
+        secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
+        max_parallel_runs=2,
+        cooldown_after_429_seconds=120,
+        max_lease_duration_seconds=900,
+        enabled=True,
+    )
+
+    payload = _manager_profile_payload(row)
+
+    assert raw_secret not in repr(payload)
+    assert payload["volume_ref"] == "codex_auth_volume"
+    assert payload["volume_mount_path"] == "/home/app/.codex"
+    assert payload["max_parallel_runs"] == 2
+    assert payload["cooldown_after_429_seconds"] == 120
+    assert payload["max_lease_duration_seconds"] == 900
+    assert payload["env_template"]["OPENAI_API_KEY"] == "[REDACTED]"
+    assert payload["file_templates"][0]["content"] == "[REDACTED]"
+    assert payload["command_behavior"]["authorization"] == "[REDACTED_AUTHORIZATION]"
+    assert payload["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
+
+
+@pytest.mark.asyncio
+async def test_create_codex_oauth_profile_requires_volume_ref_and_mount_path(
+    client_app: AsyncClient, _module_db
+) -> None:
+    payload = {
+        "profile_id": "codex_oauth_missing_refs",
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "credential_source": "oauth_volume",
+        "runtime_materialization_mode": "oauth_home",
+        "enabled": True,
+    }
+
+    async with client_app as client:
+        response = await client.post("/api/v1/provider-profiles", json=payload)
+
+    assert response.status_code == 422
+    assert "volume_ref is required" in response.text
+    assert "volume_mount_path is required" in response.text
 
 
 @pytest.mark.asyncio

@@ -131,6 +131,51 @@ def test_managed_agent_provider_profile_accepts_valid_per_profile_limits() -> No
     assert profile.cooldown_after_429_seconds == 120
 
 
+def test_codex_oauth_provider_profile_requires_auth_volume_refs() -> None:
+    with pytest.raises(ValidationError, match="volumeRef is required"):
+        ManagedAgentProviderProfile(
+            profileId="codex_oauth_missing_volume",
+            runtimeId="codex_cli",
+            providerId="openai",
+            credentialSource="oauth_volume",
+            runtimeMaterializationMode="oauth_home",
+        )
+
+    with pytest.raises(ValidationError, match="volumeMountPath is required"):
+        ManagedAgentProviderProfile(
+            profileId="codex_oauth_missing_mount",
+            runtimeId="codex_cli",
+            providerId="openai",
+            credentialSource="oauth_volume",
+            runtimeMaterializationMode="oauth_home",
+            volumeRef="codex_auth_volume",
+        )
+
+
+def test_codex_oauth_provider_profile_preserves_secret_free_refs_and_policy() -> None:
+    profile = ManagedAgentProviderProfile(
+        profileId="codex_oauth_profile",
+        runtimeId="codex_cli",
+        providerId="openai",
+        credentialSource="oauth_volume",
+        runtimeMaterializationMode="oauth_home",
+        volumeRef="codex_auth_volume",
+        volumeMountPath="/home/app/.codex",
+        maxParallelRuns=3,
+        cooldownAfter429Seconds=120,
+        maxLeaseDurationSeconds=900,
+        rateLimitPolicy={"strategy": "queue"},
+    )
+
+    assert profile.provider_id == "openai"
+    assert profile.volume_ref == "codex_auth_volume"
+    assert profile.volume_mount_path == "/home/app/.codex"
+    assert profile.max_parallel_runs == 3
+    assert profile.cooldown_after_429_seconds == 120
+    assert profile.max_lease_duration_seconds == 900
+    assert profile.rate_limit_policy == {"strategy": "queue"}
+
+
 def test_managed_runtime_profile_rejects_github_tokens_in_env_overrides() -> None:
     with pytest.raises(
         ValidationError, match="envOverrides must not contain raw credential keys"

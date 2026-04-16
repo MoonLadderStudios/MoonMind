@@ -149,6 +149,14 @@ class MoonMindOAuthSessionWorkflow:
             raise exceptions.ApplicationError(
                 "session_id and runtime_id are required", non_retryable=True
             )
+        if runtime_id == "codex_cli" and (
+            not str(volume_ref or "").strip()
+            or not str(volume_mount_path or "").strip()
+        ):
+            raise exceptions.ApplicationError(
+                "volume_ref and volume_mount_path are required for Codex OAuth sessions",
+                non_retryable=True,
+            )
 
         # Step 1: Transition to starting
         await self._update_status("starting")

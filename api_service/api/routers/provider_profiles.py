@@ -20,6 +20,7 @@ from api_service.db.models import (
     ManagedAgentRateLimitPolicy,
     User,
 )
+from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
 from moonmind.utils.logging import redact_sensitive_payload
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,15 @@ class ProviderProfileCreate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_runtime_env(self) -> "ProviderProfileCreate":
+        validate_codex_oauth_profile_refs(
+            runtime_id=self.runtime_id,
+            credential_source=self.credential_source,
+            runtime_materialization_mode=self.runtime_materialization_mode,
+            volume_ref=self.volume_ref,
+            volume_mount_path=self.volume_mount_path,
+            volume_ref_field_name="volume_ref",
+            volume_mount_path_field_name="volume_mount_path",
+        )
         return self
 
 
@@ -274,6 +284,7 @@ async def create_profile(
         is_default=False,
         max_lease_duration_seconds=body.max_lease_duration_seconds,
     )
+    _validate_codex_oauth_profile_row(profile)
     session.add(profile)
     await session.flush()
     await normalize_runtime_default_profile(
@@ -315,6 +326,7 @@ async def update_profile(
     if requested_is_default is False:
         profile.is_default = False
 
+    _validate_codex_oauth_profile_row(profile)
     await session.flush()
     await normalize_runtime_default_profile(
         session=session,
@@ -376,6 +388,27 @@ def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> 
         status_code=403,
         detail="Not authorized to manage this provider profile.",
     )
+
+
+def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
+    try:
+        validate_codex_oauth_profile_refs(
+            runtime_id=row.runtime_id,
+            credential_source=(
+                row.credential_source.value if row.credential_source else None
+            ),
+            runtime_materialization_mode=(
+                row.runtime_materialization_mode.value
+                if row.runtime_materialization_mode
+                else None
+            ),
+            volume_ref=row.volume_ref,
+            volume_mount_path=row.volume_mount_path,
+            volume_ref_field_name="volume_ref",
+            volume_mount_path_field_name="volume_mount_path",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
