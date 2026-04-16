@@ -64,6 +64,85 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
 
 
 @pytest.mark.asyncio
+async def test_run_execution_stage_skips_integration_after_merge_gate_cancellation(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    integration_calls: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            )
+            if artifact_ref == "art:sha256:456":
+                return (
+                    b'{"skills":[{"name":"repo.noop","version":"1.0",'
+                    b'"description":"No-op","inputs":{"schema":{"type":"object"}},'
+                    b'"outputs":{"schema":{"type":"object"}},'
+                    b'"executor":{"activity_type":"mm.skill.execute",'
+                    b'"selector":{"mode":"by_capability"}},'
+                    b'"requirements":{"capabilities":["sandbox"]},'
+                    b'"policies":{"timeouts":{"start_to_close_seconds":60,'
+                    b'"schedule_to_close_seconds":120},"retries":{"max_attempts":1}}}]}'
+                )
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "step-1",
+                        "tool": {
+                            "type": "skill",
+                            "name": "repo.noop",
+                            "version": "1.0",
+                        },
+                        "inputs": {},
+                    }
+                ]
+            )
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_merge_gate(
+        *,
+        parameters: dict[str, Any],
+        pull_request_url: str | None,
+    ) -> None:
+        mock_run_workflow._cancel_requested = True
+        mock_run_workflow._set_state("canceled", summary="merge automation canceled")
+
+    async def fake_integration_stage(
+        *,
+        parameters: dict[str, Any],
+        plan_ref: str | None,
+    ) -> None:
+        integration_calls.append({"parameters": parameters, "plan_ref": plan_ref})
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(mock_run_workflow, "_maybe_start_merge_gate", fake_merge_gate)
+    monkeypatch.setattr(
+        mock_run_workflow,
+        "_run_integration_stage",
+        fake_integration_stage,
+    )
+
+    await mock_run_workflow._run_execution_stage(
+        parameters={"publishMode": "none"},
+        plan_ref="plan-1",
+    )
+
+    assert integration_calls == []
+
+
+@pytest.mark.asyncio
 async def test_run_integration_stage_poll_driven_completion(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
@@ -423,6 +502,86 @@ async def test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activ
     assert payload["context"]["workflow_id"] == "wf-1"
     assert payload["context"]["node_id"] == "workload-step"
     assert tool_calls[0][2]["task_queue"] == "mm.activity.agent_runtime"
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_skips_integration_after_merge_automation_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._integration = "jules"
+    workflow._repo = "org/repo"
+    integration_calls = 0
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "noop",
+                    "tool": {
+                        "type": "agent_runtime",
+                        "name": "codex",
+                        "version": "1.0",
+                    },
+                    "inputs": {"instructions": "No-op"},
+                }
+            ]
+        )
+
+    async def fake_maybe_start_merge_gate(
+        *,
+        parameters: dict[str, Any],
+        pull_request_url: str | None,
+    ) -> None:
+        assert parameters["publishMode"] == "none"
+        assert pull_request_url is None
+        workflow._cancel_requested = True
+
+    async def fake_run_integration_stage(
+        *,
+        parameters: dict[str, Any],
+        plan_ref: str | None,
+    ) -> None:
+        nonlocal integration_calls
+        integration_calls += 1
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_ordered_plan_node_payloads",
+        lambda *, nodes, edges: [],
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == "run-conditional-registry-read-v1",
+    )
+    monkeypatch.setattr(workflow, "_maybe_start_merge_gate", fake_maybe_start_merge_gate)
+    monkeypatch.setattr(workflow, "_run_integration_stage", fake_run_integration_stage)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "org/repo", "publishMode": "none"},
+        plan_ref="plan-1",
+    )
+
+    assert integration_calls == 0
 
 
 @pytest.mark.asyncio

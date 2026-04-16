@@ -64,11 +64,37 @@ def test_parent_owned_merge_automation_success_outcomes(status: str) -> None:
     assert workflow._merge_automation_child_succeeded({"status": status}) is True
 
 
-@pytest.mark.parametrize("status", ["blocked", "failed", "expired", "canceled", "completed"])
+@pytest.mark.parametrize("status", ["blocked", "failed", "expired", "completed"])
 def test_parent_owned_merge_automation_non_success_outcomes(status: str) -> None:
     workflow = MoonMindRunWorkflow()
 
     assert workflow._merge_automation_child_succeeded({"status": status}) is False
+
+
+def test_parent_owned_merge_automation_canceled_outcome_is_cancellation() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._merge_automation_child_canceled({"status": "canceled"}) is True
+    assert workflow._merge_automation_child_succeeded({"status": "canceled"}) is False
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({}, "merge automation failed: missing terminal status"),
+        (
+            {"status": "completed"},
+            "merge automation failed: unsupported terminal status completed",
+        ),
+    ],
+)
+def test_parent_owned_merge_automation_unknown_status_reason_is_deterministic(
+    result: dict[str, object],
+    expected: str,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._merge_automation_failure_reason(result) == expected
 
 
 def test_parent_owned_merge_automation_failure_reason_includes_blocker() -> None:

@@ -8,7 +8,8 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import SearchAttributeKey, SearchAttributePair
-from temporalio.workflow import ActivityCancellationType
+from temporalio.exceptions import CancelledError
+from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.temporal_models import (
@@ -37,6 +38,7 @@ STATE_MERGED = "merged"
 STATE_ALREADY_MERGED = "already_merged"
 STATE_EXPIRED = "expired"
 STATE_FAILED = "failed"
+STATE_CANCELED = "canceled"
 DISPOSITION_REENTER_GATE = "reenter_gate"
 DISPOSITION_MERGED = "merged"
 DISPOSITION_ALREADY_MERGED = "already_merged"
@@ -60,10 +62,11 @@ class MoonMindMergeAutomationWorkflow:
         self._resolver_child_workflow_ids: list[str] = []
         self._external_event_count = 0
         self._refresh_tracked_head_sha_on_next_evaluation = False
+        self._summary: str | None = None
 
     def _summary_payload(self) -> dict[str, Any]:
         pr = self._input.pull_request if self._input is not None else None
-        return {
+        payload = {
             "status": self._status,
             "prNumber": pr.number if pr is not None else None,
             "prUrl": pr.url if pr is not None else None,
@@ -75,6 +78,9 @@ class MoonMindMergeAutomationWorkflow:
                 for blocker in self._blockers
             ],
         }
+        if self._summary:
+            payload["summary"] = self._summary
+        return payload
 
     def _publish_visibility(self) -> None:
         workflow.upsert_memo({"summary": self._summary_payload()})
@@ -199,14 +205,23 @@ class MoonMindMergeAutomationWorkflow:
                     f"{resolver_workflow_id}:{len(self._resolver_child_workflow_ids) + 1}"
                 )
                 self._resolver_child_workflow_ids.append(resolver_workflow_id)
-                resolver_result = await workflow.execute_child_workflow(
-                    "MoonMind.Run",
-                    resolver_request,
-                    id=resolver_workflow_id,
-                    task_queue=WORKFLOW_TASK_QUEUE,
-                    static_summary="Resolving pull request for merge automation",
-                    static_details=f"Resolve {self._input.pull_request.url}",
-                )
+                try:
+                    resolver_result = await workflow.execute_child_workflow(
+                        "MoonMind.Run",
+                        resolver_request,
+                        id=resolver_workflow_id,
+                        task_queue=WORKFLOW_TASK_QUEUE,
+                        cancellation_type=ChildWorkflowCancellationType.TRY_CANCEL,
+                        static_summary="Resolving pull request for merge automation",
+                        static_details=f"Resolve {self._input.pull_request.url}",
+                    )
+                except CancelledError:
+                    self._status = STATE_CANCELED
+                    self._summary = (
+                        "Merge automation canceled while resolver child was active."
+                    )
+                    self._publish_visibility()
+                    return self._summary_payload()
                 resolver_status = str(
                     (resolver_result or {}).get("status")
                     if isinstance(resolver_result, Mapping)
