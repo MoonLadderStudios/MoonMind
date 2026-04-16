@@ -22,6 +22,11 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
 )
 from api_service.main import app
+from api_service.api.routers.oauth_sessions import _handle_oauth_terminal_ws_message
+from moonmind.workflows.temporal.runtime.terminal_bridge import (
+    InMemoryPtyAdapter,
+    TerminalBridgeConnection,
+)
 
 
 @pytest.fixture(scope="module")
@@ -539,6 +544,100 @@ async def test_oauth_terminal_attach_rejects_expired_session(
         row = await session.get(ManagedAgentOAuthSession, session_id)
         assert row is not None
         assert row.metadata_json is None
+
+
+class _FakeWebSocket:
+    def __init__(self) -> None:
+        self.sent_json: list[dict[str, object]] = []
+        self.closed: list[int] = []
+
+    async def send_json(self, payload: dict[str, object]) -> None:
+        self.sent_json.append(payload)
+
+    async def close(self, code: int) -> None:
+        self.closed.append(code)
+
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_message_handler_proxies_to_pty_with_safe_metadata() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminalwspty1",
+        terminal_bridge_id="br_oas_terminalwspty1",
+        owner_user_id="None",
+    )
+    pty = InMemoryPtyAdapter()
+    websocket = _FakeWebSocket()
+
+    should_close, close_reason = await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"input","data":"codex login\\n"}'},
+        bridge=bridge,
+        pty_adapter=pty,
+        websocket=websocket,
+    )
+    assert should_close is False
+    assert close_reason is None
+    assert websocket.sent_json[-1] == {"type": "input_ack", "bytes": 12}
+
+    await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"resize","cols":100,"rows":30}'},
+        bridge=bridge,
+        pty_adapter=pty,
+        websocket=websocket,
+    )
+    await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"heartbeat"}'},
+        bridge=bridge,
+        pty_adapter=pty,
+        websocket=websocket,
+    )
+    should_close, close_reason = await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"close"}'},
+        bridge=bridge,
+        pty_adapter=pty,
+        websocket=websocket,
+    )
+
+    assert should_close is True
+    assert close_reason == "client_closed"
+    assert pty.written == [b"codex login\n"]
+    assert pty.resizes == [(100, 30)]
+    assert websocket.closed == [1000]
+    metadata = bridge.safe_metadata()
+    assert metadata == {
+        "terminal_heartbeat_count": 1,
+        "terminal_input_event_count": 1,
+        "terminal_output_event_count": 0,
+        "terminal_last_cols": 100,
+        "terminal_last_rows": 30,
+    }
+    assert "codex login" not in str(metadata)
+
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_message_handler_rejects_generic_exec_frame() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminalwsreject1",
+        terminal_bridge_id="br_oas_terminalwsreject1",
+        owner_user_id="None",
+    )
+    websocket = _FakeWebSocket()
+
+    should_close, close_reason = await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"docker_exec","command":"sh"}'},
+        bridge=bridge,
+        pty_adapter=InMemoryPtyAdapter(),
+        websocket=websocket,
+    )
+
+    assert should_close is True
+    assert close_reason == "generic Docker exec and task terminal frames are not supported"
+    assert websocket.sent_json == [
+        {
+            "type": "error",
+            "detail": "generic Docker exec and task terminal frames are not supported",
+        }
+    ]
+    assert websocket.closed == [4400]
 
 
 @pytest.mark.asyncio
