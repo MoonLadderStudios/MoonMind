@@ -3,6 +3,8 @@
 from moonmind.schemas.workload_models import (
     RunnerProfile,
     ValidatedWorkloadRequest,
+    WorkloadCredentialMount,
+    WorkloadMount,
     WorkloadOwnershipMetadata,
     WorkloadRequest,
     WorkloadResult,
@@ -37,6 +39,8 @@ __all__ = [
     "RunnerProfileRegistry",
     "UNREAL_RUN_TESTS_TOOL",
     "ValidatedWorkloadRequest",
+    "WorkloadCredentialMount",
+    "WorkloadMount",
     "WorkloadOwnershipMetadata",
     "WorkloadPolicyError",
     "WorkloadRequest",

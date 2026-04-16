@@ -1,7 +1,9 @@
 import sys
 import pytest
 import asyncio
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
@@ -9,6 +11,9 @@ from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from temporalio.client import WorkflowFailureError
 from temporalio.service import RPCError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus, ProfileSelector
+from moonmind.schemas.workload_models import WorkloadRequest
+from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
+from moonmind.workloads.registry import RunnerProfileRegistry
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
 # NOTE: This test file is NOT marked integration_ci because the Temporal
@@ -138,6 +143,80 @@ _COMMON_AGENT_RUN_ACTIVITIES.extend([
 ])
 
 _managed_launch_requests: list[dict] = []
+
+
+@pytest.mark.integration_ci
+async def test_workload_auth_volume_guardrails_reject_inheritance_and_allow_declared_exception(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    profile = {
+        "id": "local-python",
+        "kind": "one_shot",
+        "image": "python:3.12-slim",
+        "entrypoint": ["/bin/bash"],
+        "commandWrapper": ["-lc"],
+        "workdirTemplate": f"{workspace_root}/${{task_run_id}}/repo",
+        "requiredMounts": [
+            {
+                "type": "volume",
+                "source": "agent_workspaces",
+                "target": str(workspace_root),
+            }
+        ],
+        "credentialMounts": [
+            {
+                "type": "volume",
+                "source": "codex_auth_volume",
+                "target": "/work/credential/codex",
+                "readOnly": True,
+                "justification": "Approved credential repair workload for MM-318",
+                "approvalRef": "MM-318",
+            }
+        ],
+        "networkPolicy": "none",
+        "resources": {"cpu": "1", "memory": "1g"},
+        "timeoutSeconds": 60,
+        "maxTimeoutSeconds": 60,
+        "cleanup": {"removeContainerOnExit": True, "killGraceSeconds": 3},
+        "devicePolicy": {"mode": "none"},
+    }
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(json.dumps({"profiles": [profile]}), encoding="utf-8")
+    registry = RunnerProfileRegistry.load_file(
+        registry_path,
+        workspace_root=workspace_root,
+    )
+
+    validated = registry.validate_request(
+        WorkloadRequest.model_validate(
+            {
+                "profileId": "local-python",
+                "taskRunId": "task-1",
+                "stepId": "workload-guardrail",
+                "attempt": 1,
+                "toolName": "container.run_workload",
+                "repoDir": str(workspace_root / "task-1" / "repo"),
+                "artifactsDir": str(
+                    workspace_root / "task-1" / "artifacts" / "workload-guardrail"
+                ),
+                "command": ["pytest", "-q"],
+                "sessionId": "managed-session-1",
+                "sessionEpoch": 1,
+            }
+        )
+    )
+
+    run_args = DockerWorkloadLauncher().build_run_args(validated)
+
+    assert "moonmind.kind=workload" in run_args
+    assert "moonmind.workload_profile=local-python" in run_args
+    assert not any("managed-session-identity" in arg for arg in run_args)
+    assert (
+        "type=volume,source=codex_auth_volume,target=/work/credential/codex,readonly"
+        in run_args
+    )
+    assert "Approved credential repair" not in " ".join(run_args)
 
 
 
