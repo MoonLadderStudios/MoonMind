@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira PR Verify"
+  short_description: "Verify a PR against a Jira issue"
+  default_prompt: "Use $jira-pr-verify to compare Jira issue KANDY-123 against PR #456 and post the findings."
