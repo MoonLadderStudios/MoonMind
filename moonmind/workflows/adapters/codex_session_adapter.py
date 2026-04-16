@@ -43,6 +43,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ManagedProfileLaunchContext,
     _derive_pr_resolver_failure,
+    _derive_pr_resolver_metadata,
     _current_time,
     _generate_run_id,
     _is_generic_process_exit_summary,
@@ -586,6 +587,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 if record is not None:
                     failure_class = result.failure_class
                     summary = str(result.summary or "").strip()
+                    metadata = dict(result.metadata)
+                    metadata.update(_derive_pr_resolver_metadata(record.workspace_path))
                     derived_failure_class, derived_summary = (
                         _derive_pr_resolver_failure(record.workspace_path)
                     )
@@ -604,8 +607,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                                 update={
                                     "failure_class": derived_failure_class,
                                     "summary": derived_summary or summary,
+                                    "metadata": metadata,
                                 }
                             )
+                        elif metadata != result.metadata:
+                            result = result.model_copy(update={"metadata": metadata})
+                    elif metadata != result.metadata:
+                        result = result.model_copy(update={"metadata": metadata})
             return result
         return AgentRunResult(
             summary="Codex managed-session result not found.",

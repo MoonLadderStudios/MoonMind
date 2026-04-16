@@ -110,6 +110,8 @@ class _RunWorkflowOutputBase(TypedDict):
 class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
     proposals_generated: int
     proposals_submitted: int
+    mergeAutomationDisposition: str
+    headSha: str
 
 
 WORKFLOW_NAME = "MoonMind.Run"
@@ -238,6 +240,8 @@ class MoonMindRunWorkflow:
         self._last_step_id: Optional[str] = None
         self._last_step_summary: Optional[str] = None
         self._last_diagnostics_ref: Optional[str] = None
+        self._merge_automation_disposition: Optional[str] = None
+        self._merge_automation_head_sha: Optional[str] = None
         self._declared_dependencies: list[str] = []
         self._dependency_wait_occurred: bool = False
         self._dependency_wait_duration_ms: int = 0
@@ -1447,6 +1451,10 @@ class MoonMindRunWorkflow:
         if self._proposals_generated > 0 or self._proposals_submitted > 0:
             output["proposals_generated"] = self._proposals_generated
             output["proposals_submitted"] = self._proposals_submitted
+        if self._merge_automation_disposition:
+            output["mergeAutomationDisposition"] = self._merge_automation_disposition
+        if self._merge_automation_head_sha:
+            output["headSha"] = self._merge_automation_head_sha
         return output
 
     def _initialize_from_payload(
@@ -2820,6 +2828,22 @@ class MoonMindRunWorkflow:
             outputs.get("diagnostics_ref") or outputs.get("diagnosticsRef"),
             max_chars=200,
         )
+        merge_automation_disposition = self._coerce_text(
+            outputs.get("mergeAutomationDisposition")
+            or outputs.get("merge_automation_disposition"),
+            max_chars=80,
+        )
+        if merge_automation_disposition:
+            self._merge_automation_disposition = merge_automation_disposition
+        merge_automation_head_sha = self._coerce_text(
+            outputs.get("headSha")
+            or outputs.get("head_sha")
+            or outputs.get("latestHeadSha")
+            or outputs.get("latest_head_sha"),
+            max_chars=80,
+        )
+        if merge_automation_head_sha:
+            self._merge_automation_head_sha = merge_automation_head_sha
 
         publish_branch = self._coerce_text(
             outputs.get("push_branch") or outputs.get("branch"),
