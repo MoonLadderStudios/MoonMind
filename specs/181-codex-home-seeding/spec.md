@@ -6,20 +6,56 @@
 **Input**:
 
 ```text
-Jira issue: MM-318 from MM board
-Summary: breakdown docs\ManagedAgents\OAuthTerminal.md
+Jira issue: MM-357 from MM project
+Summary: Per-Run Codex Home Seeding
 Issue type: Story
 Current Jira status: In Progress
 Jira project key: MM
 
-Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-318 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-357 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
 
-MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md
+MM-357: Per-Run Codex Home Seeding
 
-Selected generated story: STORY-003 Per-Run Codex Home Seeding
-Dependencies: STORY-002
-Breakdown JSON: docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json
-Source design: docs/ManagedAgents/OAuthTerminal.md
+MoonSpec Story ID: STORY-003
+Short Name: codex-home-seeding
+User Story
+As a task operator, I can start Codex App Server from a per-run CODEX_HOME seeded one way from durable credentials without making the auth volume live runtime state.
+Acceptance Criteria
+- Eligible auth entries copy into codexHomePath before Codex App Server starts.
+- Missing or invalid auth-volume paths fail with actionable errors.
+- Excluded entries are not copied into the per-run home.
+- Codex App Server uses per-run CODEX_HOME, not the durable auth-volume mount.
+- Operator execution evidence is artifact-backed, not runtime-home-backed.
+Requirements
+- Create the per-run codexHomePath under the task workspace.
+- Copy only eligible auth entries from MANAGED_AUTH_VOLUME_PATH into codexHomePath.
+- Start Codex App Server with CODEX_HOME = codexHomePath.
+- Keep runtime home directories out of operator/audit presentation.
+Independent Test
+Run the session runtime with a fake auth-volume directory and assert eligible files are copied, excluded files are not copied, and Codex App Server receives the per-run CODEX_HOME.
+Dependencies
+- STORY-002
+Risks
+- Eligible/excluded file policy must stay aligned with Codex CLI auth layout changes.
+Out of Scope
+- Deciding which provider profile is selected.
+- OAuth enrollment and profile registration.
+- Live Logs UI implementation.
+Source Document
+docs/ManagedAgents/OAuthTerminal.md
+Source Sections
+- 3.2 Shared task workspace volume
+- 4. Volume Targeting Rules
+- 7. Managed Codex Session Launch
+- 10. Operator Behavior
+- 11. Required Boundaries
+Coverage IDs
+- DESIGN-REQ-005
+- DESIGN-REQ-007
+- DESIGN-REQ-008
+- DESIGN-REQ-010
+- DESIGN-REQ-019
+- DESIGN-REQ-020
 ```
 
 ## User Story - Per-Run Codex Home Seeding
@@ -57,7 +93,7 @@ Run the session runtime with a fake auth-volume directory and assert eligible fi
 - **FR-002**: The system MUST copy only eligible auth entries from MANAGED_AUTH_VOLUME_PATH into codexHomePath.
 - **FR-003**: The system MUST start Codex App Server with CODEX_HOME = codexHomePath.
 - **FR-004**: The system MUST keep runtime home directories out of operator/audit presentation.
-- **FR-005**: The spec artifacts MUST retain Jira issue key MM-318 and the original preset brief so final verification can compare against the originating Jira request.
+- **FR-005**: The spec artifacts MUST retain Jira issue key MM-357 and the original preset brief so final verification can compare against the originating Jira request.
 
 ## Source Design Requirements
 

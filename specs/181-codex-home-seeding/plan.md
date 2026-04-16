@@ -4,7 +4,7 @@
 
 ## Input
 
-Single-story feature specification from `specs/181-codex-home-seeding/spec.md` generated from Jira issue `MM-318` and the preserved preset brief `MM-318: breakdown docs\ManagedAgents\OAuthTerminal.md`.
+Single-story feature specification from `specs/181-codex-home-seeding/spec.md` generated from Jira issue `MM-357` and the preserved preset brief `MM-357: Per-Run Codex Home Seeding`.
 
 ## Summary
 
@@ -20,7 +20,7 @@ This story implements session-runtime auth seeding and per-run CODEX_HOME startu
 - Target platform: MoonMind API service, Temporal worker/runtime services, managed Codex session containers, and Mission Control where applicable.
 - Project type: backend orchestration/runtime with optional browser surface for OAuth terminal flow.
 - Performance goals: validation and serialization must be deterministic and low-overhead relative to existing workflow/API calls.
-- Constraints: preserve `MM-318` traceability; keep raw credential contents out of workflow history, browser responses, logs, and artifacts; fail fast for unsupported or unsafe runtime values.
+- Constraints: preserve `MM-357` traceability; keep raw credential contents out of workflow history, browser responses, logs, and artifacts; fail fast for unsupported or unsafe runtime values.
 - Scale/scope: one independently testable story, dependencies: STORY-002.
 
 ## Constitution Check

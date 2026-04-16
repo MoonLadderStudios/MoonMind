@@ -2189,6 +2189,90 @@ def test_runtime_launch_session_seeds_auth_volume_without_overwriting_materializ
     assert not Path(request.codex_home_path, "logs_1.sqlite").exists()
 
 
+def test_runtime_launch_session_seeds_auth_directories_and_excludes_sessions(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    (auth_volume_path / "auth.json").write_text('{"token":"oauth"}', encoding="utf-8")
+    account_dir = auth_volume_path / "accounts"
+    account_dir.mkdir()
+    (account_dir / "default.json").write_text('{"account":"default"}', encoding="utf-8")
+    sessions_dir = auth_volume_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "rollout.jsonl").write_text("secret transcript", encoding="utf-8")
+    symlink_path = auth_volume_path / "linked-auth.json"
+    symlink_path.symlink_to(auth_volume_path / "auth.json")
+
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    runtime.launch_session(request)
+
+    assert Path(request.codex_home_path, "auth.json").is_file()
+    assert Path(request.codex_home_path, "accounts", "default.json").is_file()
+    assert not Path(request.codex_home_path, "sessions").exists()
+    assert not Path(request.codex_home_path, "linked-auth.json").exists()
+
+
+def test_runtime_launch_session_rejects_missing_auth_volume_path(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "missing-auth-volume"
+
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    with pytest.raises(RuntimeError, match="MANAGED_AUTH_VOLUME_PATH does not exist"):
+        runtime.launch_session(request)
+
+
+def test_runtime_launch_session_rejects_file_auth_volume_path(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume-file"
+    auth_volume_path.write_text("not a directory", encoding="utf-8")
+
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    with pytest.raises(RuntimeError, match="MANAGED_AUTH_VOLUME_PATH must be a directory"):
+        runtime.launch_session(request)
+
+
 def test_runtime_launch_session_rejects_auth_volume_equal_to_codex_home(
     tmp_path: Path,
 ) -> None:

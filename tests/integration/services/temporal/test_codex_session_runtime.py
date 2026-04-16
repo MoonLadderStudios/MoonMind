@@ -110,3 +110,40 @@ def test_runtime_send_turn_recovers_task_complete_message_from_rollout_transcrip
     assert handle.metadata["lastAssistantText"] == (
         "Recovered from durable task_complete event"
     )
+
+
+def test_runtime_launch_session_seeds_auth_volume_and_uses_per_run_codex_home(
+    tmp_path: Path,
+) -> None:
+    codex_home_record_path = tmp_path / "codex-home.txt"
+    script = write_fake_app_server(
+        tmp_path,
+        codex_home_record_path=codex_home_record_path,
+    )
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    (auth_volume_path / "auth.json").write_text('{"token":"oauth"}', encoding="utf-8")
+    (auth_volume_path / "logs_1.sqlite").write_text("runtime log", encoding="utf-8")
+    (auth_volume_path / "sessions").mkdir()
+
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    runtime.launch_session(request)
+
+    assert Path(request.codex_home_path, "auth.json").is_file()
+    assert not Path(request.codex_home_path, "logs_1.sqlite").exists()
+    assert not Path(request.codex_home_path, "sessions").exists()
+    assert codex_home_record_path.read_text(encoding="utf-8").splitlines()[-1] == str(
+        Path(request.codex_home_path)
+    )
