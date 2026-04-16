@@ -65,6 +65,7 @@ Requirements:
 - Preserves the original `sessionId`.
 - Preserves the original `executionOwner`.
 - Adds a surface binding with `projectionMode = remote_projection`.
+- Sets `updatedAt` to the caller-provided modification timestamp.
 - Rejects blank surface identifiers.
 
 ### `ClaudeManagedSession.cloud_handoff(...) -> ClaudeManagedSession`

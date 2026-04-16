@@ -942,12 +942,23 @@ class ClaudeManagedSession(BaseModel):
     def _validate_extensions(cls, value: dict[str, Any]) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="extensions")
 
+    @model_validator(mode="after")
+    def _validate_datetimes(self) -> "ClaudeManagedSession":
+        if self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=UTC)
+        if self.updated_at.tzinfo is None:
+            self.updated_at = self.updated_at.replace(tzinfo=UTC)
+        if self.ended_at is not None and self.ended_at.tzinfo is None:
+            self.ended_at = self.ended_at.replace(tzinfo=UTC)
+        return self
+
     def with_remote_projection(
         self,
         *,
         surface_id: str,
         surface_kind: ClaudeSurfaceKind,
         interactive: bool,
+        updated_at: datetime,
     ) -> "ClaudeManagedSession":
         """Return a copy with an added Remote Control projection surface."""
 
@@ -959,9 +970,10 @@ class ClaudeManagedSession(BaseModel):
             interactive=interactive,
         )
         return self.model_copy(
+            deep=True,
             update={
                 "surface_bindings": (*self.surface_bindings, binding),
-                "updated_at": self.updated_at,
+                "updated_at": updated_at,
             }
         )
 
@@ -1007,6 +1019,14 @@ class ClaudeManagedTurn(BaseModel):
     started_at: datetime = Field(..., alias="startedAt")
     completed_at: datetime | None = Field(None, alias="completedAt")
 
+    @model_validator(mode="after")
+    def _validate_datetimes(self) -> "ClaudeManagedTurn":
+        if self.started_at.tzinfo is None:
+            self.started_at = self.started_at.replace(tzinfo=UTC)
+        if self.completed_at is not None and self.completed_at.tzinfo is None:
+            self.completed_at = self.completed_at.replace(tzinfo=UTC)
+        return self
+
 
 class ClaudeManagedWorkItem(BaseModel):
     """Event-bearing work unit emitted during a Claude managed turn."""
@@ -1026,6 +1046,14 @@ class ClaudeManagedWorkItem(BaseModel):
     @classmethod
     def _validate_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="payload")
+
+    @model_validator(mode="after")
+    def _validate_datetimes(self) -> "ClaudeManagedWorkItem":
+        if self.started_at.tzinfo is None:
+            self.started_at = self.started_at.replace(tzinfo=UTC)
+        if self.ended_at is not None and self.ended_at.tzinfo is None:
+            self.ended_at = self.ended_at.replace(tzinfo=UTC)
+        return self
 
 
 __all__ = [

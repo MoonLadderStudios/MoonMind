@@ -35,6 +35,7 @@ def test_claude_session_boundary_supports_documented_story_shapes() -> None:
         surface_id="remote-web-1",
         surface_kind="web",
         interactive=True,
+        updated_at=NOW,
     )
     cloud = _session(
         sessionId="cloud-1",
