@@ -1,3 +1,6 @@
+import asyncio
+import codecs
+import json
 import logging
 import hashlib
 import secrets
@@ -33,6 +36,7 @@ from moonmind.workflows.temporal.runtime.providers.registry import get_provider_
 from moonmind.workflows.temporal.runtime.terminal_bridge import (
     TerminalBridgeConnection,
     TerminalBridgeFrameError,
+    create_docker_exec_pty_adapter,
 )
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
@@ -51,6 +55,110 @@ _TERMINAL_ATTACH_STATUSES = (
     OAuthSessionStatus.AWAITING_USER,
     OAuthSessionStatus.VERIFYING,
 )
+_oauth_terminal_pty_adapter_factory = create_docker_exec_pty_adapter
+
+
+def _make_terminal_output_sender(websocket: WebSocket):
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    async def _send_terminal_output(chunk: bytes) -> None:
+        text = decoder.decode(chunk)
+        if text:
+            await websocket.send_text(text)
+
+    return _send_terminal_output
+
+
+async def _close_for_pty_io_error(
+    websocket: WebSocket,
+) -> tuple[bool, str]:
+    logger.info("OAuth terminal PTY disconnected during websocket I/O", exc_info=True)
+    await websocket.send_json(
+        {"type": "error", "detail": "OAuth terminal PTY disconnected."}
+    )
+    await websocket.close(code=1011)
+    return True, "pty_disconnected"
+
+
+async def _handle_oauth_terminal_ws_message(
+    message,
+    *,
+    bridge: TerminalBridgeConnection,
+    pty_adapter,
+    websocket: WebSocket,
+) -> tuple[bool, str | None]:
+    if message.get("type") == "websocket.disconnect":
+        return True, "client_disconnected"
+    if message.get("bytes") is not None:
+        data = message["bytes"] or b""
+        try:
+            await pty_adapter.write_bytes(data)
+        except OSError:
+            return await _close_for_pty_io_error(websocket)
+        bridge.input_event_count += 1
+        await websocket.send_json({"type": "input_ack", "bytes": len(data)})
+        return False, None
+    text = message.get("text")
+    if text is None:
+        await websocket.send_json(
+            {"type": "error", "detail": "Frame must be text, bytes, or JSON"}
+        )
+        await websocket.close(code=4400)
+        return True, "invalid_frame_format"
+    try:
+        frame = json.loads(text)
+    except json.JSONDecodeError:
+        data = text.encode("utf-8")
+        try:
+            await pty_adapter.write_bytes(data)
+        except OSError:
+            return await _close_for_pty_io_error(websocket)
+        bridge.input_event_count += 1
+        await websocket.send_json({"type": "input_ack", "bytes": len(data)})
+        return False, None
+    if not isinstance(frame, dict):
+        await websocket.send_json(
+            {"type": "error", "detail": "Frame must be a JSON object"}
+        )
+        await websocket.close(code=4400)
+        return True, "invalid_frame_format"
+    try:
+        response = await bridge.handle_frame_for_pty(frame, pty_adapter)
+    except TerminalBridgeFrameError as exc:
+        await websocket.send_json({"type": "error", "detail": str(exc)})
+        await websocket.close(code=4400)
+        return True, str(exc)
+    except OSError:
+        return await _close_for_pty_io_error(websocket)
+    await websocket.send_json(response)
+    if response.get("type") == "close_ack":
+        await websocket.close(code=1000)
+        return True, "client_closed"
+    return False, None
+
+
+async def _persist_oauth_terminal_close_metadata(
+    session_id: str,
+    *,
+    close_reason: str,
+    bridge: TerminalBridgeConnection | None,
+) -> None:
+    async with get_async_session_context() as db:
+        result = await db.execute(
+            select(ManagedAgentOAuthSession).where(
+                ManagedAgentOAuthSession.session_id == session_id
+            )
+        )
+        session_obj = result.scalars().first()
+        if session_obj:
+            metadata = dict(session_obj.metadata_json or {})
+            metadata["terminal_close_reason"] = close_reason
+            metadata["terminal_disconnected_at"] = _utcnow().isoformat()
+            if bridge is not None:
+                metadata.update(bridge.safe_metadata())
+            session_obj.metadata_json = metadata
+            session_obj.disconnected_at = _utcnow()
+            await db.commit()
 
 
 def _hash_attach_token(token: str) -> str:
@@ -379,6 +487,10 @@ async def oauth_terminal_websocket(
     session_id: str,
     token: str,
 ):
+    bridge: TerminalBridgeConnection | None = None
+    pty_adapter = None
+    output_task: asyncio.Task | None = None
+    close_reason = "client_disconnected"
     async with get_async_session_context() as db:
         result = await db.execute(
             select(ManagedAgentOAuthSession).where(
@@ -393,6 +505,7 @@ async def oauth_terminal_websocket(
             not session_obj
             or session_obj.status not in _TERMINAL_ATTACH_STATUSES
             or _oauth_session_is_expired(session_obj)
+            or not session_obj.container_name
             or not expected_digest
             or token_used
             or not secrets.compare_digest(expected_digest, _hash_attach_token(token))
@@ -401,67 +514,85 @@ async def oauth_terminal_websocket(
             return
 
         metadata["terminal_attach_token_used"] = True
-        metadata["terminal_connected_at"] = datetime.now(timezone.utc).isoformat()
+        metadata["terminal_connected_at"] = _utcnow().isoformat()
         session_obj.metadata_json = metadata
-        session_obj.connected_at = datetime.now(timezone.utc)
+        session_obj.connected_at = _utcnow()
         await db.commit()
         bridge = TerminalBridgeConnection(
             session_id=session_obj.session_id,
             terminal_bridge_id=session_obj.terminal_bridge_id or "",
             owner_user_id=session_obj.requested_by_user_id,
         )
+        pty_adapter = _oauth_terminal_pty_adapter_factory(
+            container_name=session_obj.container_name,
+            runtime_id=session_obj.runtime_id,
+        )
 
     await websocket.accept()
-    await websocket.send_json(
-        {
-            "type": "ready",
-            "session_id": session_id,
-            "transport": "moonmind_pty_ws",
-        }
-    )
-
-    close_reason = "client_disconnected"
     try:
+        try:
+            await pty_adapter.connect()
+        except Exception:
+            close_reason = "pty_connect_failed"
+            logger.warning(
+                "Failed to connect OAuth terminal PTY for session %s",
+                session_id,
+                exc_info=True,
+            )
+            await websocket.send_json(
+                {"type": "error", "detail": "OAuth terminal bridge is not ready."}
+            )
+            await websocket.close(code=1011)
+            return
+
+        await websocket.send_json(
+            {
+                "type": "ready",
+                "session_id": session_id,
+                "transport": "moonmind_pty_ws",
+            }
+        )
+
+        output_task = asyncio.create_task(
+            bridge.stream_pty_output(
+                pty_adapter,
+                _make_terminal_output_sender(websocket),
+            )
+        )
         while True:
-            frame = await websocket.receive_json()
-            if not isinstance(frame, dict):
-                close_reason = "invalid_frame_format"
-                await websocket.send_json(
-                    {"type": "error", "detail": "Frame must be a JSON object"}
-                )
-                await websocket.close(code=4400)
-                break
-            try:
-                response = bridge.handle_frame(frame)
-            except TerminalBridgeFrameError as exc:
-                close_reason = str(exc)
-                await websocket.send_json({"type": "error", "detail": str(exc)})
-                await websocket.close(code=4400)
-                break
-            await websocket.send_json(response)
-            if response.get("type") == "close_ack":
-                close_reason = "client_closed"
-                await websocket.close(code=1000)
+            message = await websocket.receive()
+            should_close, message_close_reason = await _handle_oauth_terminal_ws_message(
+                message,
+                bridge=bridge,
+                pty_adapter=pty_adapter,
+                websocket=websocket,
+            )
+            if message_close_reason is not None:
+                close_reason = message_close_reason
+            if should_close:
                 break
     except WebSocketDisconnect:
         close_reason = "client_disconnected"
     finally:
-        async with get_async_session_context() as db:
-            result = await db.execute(
-                select(ManagedAgentOAuthSession).where(
-                    ManagedAgentOAuthSession.session_id == session_id
-                )
-            )
-            session_obj = result.scalars().first()
-            if session_obj:
-                metadata = dict(session_obj.metadata_json or {})
-                metadata["terminal_close_reason"] = close_reason
-                metadata["terminal_disconnected_at"] = datetime.now(
-                    timezone.utc
-                ).isoformat()
-                session_obj.metadata_json = metadata
-                session_obj.disconnected_at = datetime.now(timezone.utc)
-                await db.commit()
+        if output_task is not None:
+            output_task.cancel()
+            try:
+                await output_task
+            except asyncio.CancelledError:
+                # Cancellation is expected while shutting down the terminal bridge.
+                pass
+            except Exception:
+                logger.debug("OAuth terminal output task failed", exc_info=True)
+        if pty_adapter is not None:
+            try:
+                await pty_adapter.close()
+            except Exception:
+                logger.debug("OAuth terminal PTY close failed", exc_info=True)
+        await _persist_oauth_terminal_close_metadata(
+            session_id,
+            close_reason=close_reason,
+            bridge=bridge,
+        )
 
 @router.post("/{session_id}/finalize")
 async def finalize_oauth_session(

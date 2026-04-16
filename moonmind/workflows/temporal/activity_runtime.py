@@ -442,10 +442,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "merge_automation_evaluate_readiness",
     ),
-    "merge_automation.create_resolver_run": (
-        "integrations",
-        "merge_automation_create_resolver_run",
-    ),
     "agent_runtime.build_launch_context": (
         "agent_runtime",
         "agent_runtime_build_launch_context",
@@ -2060,54 +2056,6 @@ class TemporalIntegrationActivities:
             },
         )
 
-    async def merge_automation_create_resolver_run(self, payload, /, **kwargs):
-        import hashlib
-
-        key = ""
-        run_input: Mapping[str, Any] | None = None
-        if isinstance(payload, Mapping):
-            key = str(payload.get("idempotencyKey") or "").strip()
-            run_payload = payload.get("runInput") or payload.get("run_input")
-            if isinstance(run_payload, Mapping):
-                run_input = run_payload
-        suffix = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16] if key else "resolver"
-        workflow_id = f"merge-automation-resolver-{suffix}"
-        if run_input is not None:
-            try:
-                from moonmind.config.settings import settings
-                from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
-                from moonmind.workflows.temporal.client import get_temporal_client
-
-                client = await get_temporal_client(
-                    settings.temporal.address,
-                    settings.temporal.namespace,
-                )
-                handle = await client.start_workflow(
-                    "MoonMind.Run",
-                    dict(run_input),
-                    id=workflow_id,
-                    task_queue=WORKFLOW_TASK_QUEUE,
-                )
-                return {
-                    "workflowId": workflow_id,
-                    "runId": getattr(handle, "first_execution_run_id", None),
-                    "created": True,
-                }
-            except Exception as exc:
-                message = str(exc).lower()
-                if "already" not in message or "start" not in message:
-                    raise
-                return {
-                    "workflowId": workflow_id,
-                    "runId": None,
-                    "created": False,
-                }
-        return {
-            "workflowId": workflow_id,
-            "runId": None,
-            "created": True,
-        }
-
     async def integration_jules_send_message(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import jules_send_message_activity
         return await jules_send_message_activity(payload)
@@ -3353,44 +3301,66 @@ class TemporalAgentRuntimeActivities:
         *,
         parameters: Mapping[str, Any] | None,
     ) -> str:
-        prepared = cls._append_jira_issue_creator_tool_hint(
+        prepared = cls._append_selected_jira_tool_hint(
             instructions,
             parameters=parameters,
         )
         return append_managed_codex_runtime_note(prepared)
 
     @staticmethod
-    def _append_jira_issue_creator_tool_hint(
+    def _append_selected_jira_tool_hint(
         instructions: str,
         *,
         parameters: Mapping[str, Any] | None,
     ) -> str:
         params = parameters if isinstance(parameters, Mapping) else {}
-        if selected_agent_skill(params) != "jira-issue-creator":
+        selected_skill = selected_agent_skill(params)
+        if selected_skill not in {"jira-issue-creator", "jira-pr-verify"}:
             return instructions
         if "MoonMind trusted Jira tools" in instructions:
             return instructions
-        story_breakdown_path = str(params.get("storyBreakdownPath") or "").strip()
-        story_breakdown_hint = (
-            f"- Read MoonSpec story candidates from `{story_breakdown_path}`.\n"
-            if story_breakdown_path
-            else ""
-        )
+        tool_lines = [
+            "- Use the internal MoonMind API from the managed session via "
+            "`$MOONMIND_URL` for Jira operations; do not look for raw Jira "
+            "credentials in the shell.",
+            "- List available tools with `GET $MOONMIND_URL/mcp/tools`.",
+            "- Invoke Jira tools with `POST $MOONMIND_URL/mcp/tools/call`.",
+        ]
+        if selected_skill == "jira-issue-creator":
+            story_breakdown_path = str(params.get("storyBreakdownPath") or "").strip()
+            if story_breakdown_path:
+                tool_lines.insert(
+                    0,
+                    f"- Read MoonSpec story candidates from `{story_breakdown_path}`.",
+                )
+            tool_lines.extend(
+                [
+                    "- Example create-metadata call: "
+                    '`{"tool":"jira.list_create_issue_types",'
+                    '"arguments":{"projectKey":"<PROJECT_KEY>"}}`.',
+                    "- Resolve the Story issue type through "
+                    "`jira.list_create_issue_types` and create issues through "
+                    "`jira.create_issue`.",
+                    "- Treat the task as blocked if Jira tool calls are unavailable "
+                    "or no Jira issue key is returned.",
+                ]
+            )
+        else:
+            tool_lines.extend(
+                [
+                    "- Fetch the Jira issue body through `jira.get_issue` before "
+                    "verifying PR coverage.",
+                    "- Example issue fetch call: "
+                    '`{"tool":"jira.get_issue",'
+                    '"arguments":{"issueKey":"<ISSUE_KEY>"}}`.',
+                    "- Treat the task as blocked if trusted Jira tool calls are "
+                    "unavailable or the issue fetch is denied.",
+                ]
+            )
         return (
             instructions.rstrip()
             + "\n\nMoonMind trusted Jira tools:\n"
-            + story_breakdown_hint
-            + "- Use the internal MoonMind API from the managed session via "
-            + "`$MOONMIND_URL` for Jira operations; do not look for raw Jira "
-            + "credentials in the shell.\n"
-            + "- List available tools with `GET $MOONMIND_URL/mcp/tools`.\n"
-            + "- Invoke Jira tools with `POST $MOONMIND_URL/mcp/tools/call` and "
-            + "JSON like `{\"tool\":\"jira.list_create_issue_types\","
-            + "\"arguments\":{\"projectKey\":\"<PROJECT_KEY>\"}}`.\n"
-            + "- Resolve the Story issue type through `jira.list_create_issue_types` "
-            + "and create issues through `jira.create_issue`.\n"
-            + "- Treat the task as blocked if Jira tool calls are unavailable or no "
-            + "Jira issue key is returned."
+            + "\n".join(tool_lines)
         )
 
     async def agent_runtime_send_turn(

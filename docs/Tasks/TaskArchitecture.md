@@ -1,199 +1,438 @@
 # Task Architecture (Control Plane)
 
-Status: Active  
-Owners: MoonMind Engineering  
-Last Updated: 2026-04-04  
+Status: Active
+Owners: MoonMind Engineering
+Last updated: 2026-04-16
 
 ## 1. Purpose
 
-This document defines the **high-level control plane architecture** of MoonMind's task system and Mission Control dashboard. 
+This document defines the high-level desired-state control-plane architecture for MoonMind tasks.
 
-It maps how the control plane translates user intentions in the Mission Control UI—specifically task instructions, artifacts, runtime choices, and **agent skill selection intent**—into the durable execution system backed by Temporal. 
+It maps how the control plane translates user intent from Mission Control — including:
 
-Detailed UI behavior, route-level contracts, payload examples, and page interaction rules are documented natively in `docs/UI/MissionControlArchitecture.md`.
-Detailed backend workflow execution logic is defined in `docs/Temporal/TemporalArchitecture.md` and `docs/Tasks/SkillAndPlanContracts.md`.
-Detailed agent-skill storage, precedence, and workspace path rules live in `docs/Tasks/AgentSkillSystem.md`.
+- task objective text
+- step-authored instructions
+- objective-scoped and step-scoped input attachments
+- runtime and publish choices
+- agent skill selection intent
+- presets, Jira imports, and dependency declarations
 
----
+into durable execution under Temporal.
 
-## 2. Current System Snapshot
-
-MoonMind has transitioned from a raw queue/system dispatcher into a workflow-orchestrated system backed by **Temporal**. The Mission Control dashboard operates as the **Control Plane**, surfacing workflows to the user as "Tasks".
-
-The current dashboard and backend API support:
-- Workflow Executions for single commands (`MoonMind.Run`), manifest graphs (`MoonMind.ManifestIngest`), and agent lifecycle orchestration (`MoonMind.AgentRun` child workflows).
-- First-class Artifact references (pointers passed from UI to the backend vs. raw embedded payloads).
-- A task-detail model that reads execution overview plus a dedicated step-ledger surface instead of inferring step state from logs or timeline heuristics.
-- Visual Task Proposals which can be reviewed by humans before formal promotion into new Temporal executions.
-- Shared task preset/template catalogs for rapid workflow authoring.
-- Operator actions (Pause, Resume, Cancel, Approve) dispatched via API as Temporal Signals/Updates.
-- **Agent Skill Systems:** MoonMind uses a deployment-backed Agent Skill System where tasks carry explicit skill-selection intent, and the control plane resolves that intent into a run-scoped immutable skill context before execution.
+This document is architectural and declarative. Detailed page behavior belongs in `docs/UI/CreatePage.md`. Detailed image-input behavior belongs in `docs/Tasks/ImageSystem.md`.
 
 ---
 
-## 3. High-Level Architecture
+## 2. System snapshot
 
-The API Service acts as the translation layer between the Mission Control UI (Task domain) and the Execution Plane (Temporal Workflow domain). All operations (read/write/signal) pass through this API.
+MoonMind uses a Temporal-backed execution model in which Mission Control acts as the control plane.
+
+The control plane already centers on these product objects:
+
+- `MoonMind.Run` as the standard task execution workflow
+- first-class artifacts for large or binary inputs and outputs
+- step-authored tasks rather than opaque queue jobs
+- reusable task presets
+- runtime and provider selection intent
+- durable execution actions such as pause, resume, cancel, approve, and rerun
+
+Desired-state additions clarified by this document:
+
+- image inputs are first-class structured task inputs
+- attachment targeting is explicit and durable
+- create, edit, and rerun preserve attachment bindings through an authoritative task input snapshot
+- runtime preparation and prompt composition are target-aware rather than attachment-bucket-driven
+
+---
+
+## 3. Core architectural principles
+
+### 3.1 Task-first control plane
+
+The user authors tasks, not workflow internals.
+
+Rules:
+
+- the Create page defines user intent in task terms
+- the control plane translates that task intent into execution-plane contracts
+- the execution plane owns lifecycle progression, retries, waiting, and history
+
+### 3.2 Artifact-first binary handling
+
+Rules:
+
+- binary inputs are stored as artifacts
+- binary inputs are referenced in execution contracts by lightweight refs
+- binary inputs are not embedded in workflow histories or text instructions
+
+### 3.3 Explicit target binding
+
+Rules:
+
+- an input attachment must belong to an explicit target
+- the supported target kinds are:
+  - task objective target
+  - step target
+- target binding must survive create, edit, rerun, prepare, prompt composition, and detail rendering
+
+### 3.4 Durable reconstruction
+
+Rules:
+
+- task input reconstruction uses an authoritative snapshot
+- text-only reconstruction is insufficient for attachment-aware tasks
+- silent loss of attachment bindings is a contract violation
+
+### 3.5 Separation of text from structured inputs
+
+Rules:
+
+- instruction text remains text
+- images remain structured inputs
+- derived image context is a secondary artifact, not the instruction field itself
+
+---
+
+## 4. High-level architecture
 
 ```mermaid
 flowchart LR
-    U[Authenticated User] --> D[Mission Control UI]
+    U[Authenticated User] --> UI[Mission Control Create Page]
 
     subgraph Control Plane
-        D --> A[API Service]
-        A --> P[Task Proposal APIs]
-        A --> T[Task Template Catalog APIs]
-        A --> C[Artifact Metadata API]
-        A --> S[Agent Skill Catalog / Resolution API]
+        UI --> API[Executions API]
+        UI --> ART[Artifact API]
+        UI --> JIRA[Jira Browser API]
+        API --> SNAP[Authoritative Task Input Snapshot]
+        API --> PROF[Provider Profile + Runtime Defaults]
+        API --> PRESETS[Task Preset APIs]
     end
 
-    subgraph Execution Plane - Temporal Foundation
-        A -.->|Start/Signal/Query+Refs| WF[MoonMind.Run]
-        WF -->|Child Workflow| AR[MoonMind.AgentRun]
-        WF --> Q[mm.activity.* Task Queues]
-        AR --> Q_RT[mm.activity.agent_runtime]
-        AR --> Q_INT[mm.activity.integrations]
-        Q --> W_LLM[LLM Activity Fleet]
-        Q --> W_SB[Sandbox Activity Fleet]
-        Q --> W_ART[Artifact Activity Fleet]
-        Q_RT --> W_AGT[Agent Runtime Fleet]
-        Q_INT --> W_INT[Integrations Fleet]
-    end
-
-    subgraph Long-Lived Workflows
-        PPM[MoonMind.ProviderProfileManager]
-        OA[MoonMind.OAuthSession]
+    subgraph Execution Plane
+        API -.-> RUN[MoonMind.Run]
+        RUN --> PREP[Prepare / Artifact Activities]
+        RUN --> VISION[Vision Context Activity]
+        RUN --> STEP[Planner or Step Runtime]
+        RUN --> CHILD[MoonMind.AgentRun child workflow]
     end
 
     subgraph Blob Storage
-        D -.->|Direct Presigned Upload/Download| S3[(MinIO / S3 Object Store)]
-        W_ART -.-> S3
+        ART -.-> S3[(Artifact Store)]
+        PREP -.-> S3
+        VISION -.-> S3
     end
 ```
 
-### Key layers
+Key boundary:
 
-- **UI Layer (Mission Control)**: Presents "Tasks" to the user, allowing for creation, monitoring, and interaction (e.g., approval gates, pausing work).
-- **Control Plane API**: Maps UI requests to Temporal commands (Start Workflow, Send Signal) and manages domain concepts outside Temporal's scope (Proposals, Templates, Auth). This now heavily features agent skill selection, skill snapshot preparation, and passing only refs into execution.
-- **Execution Plane (Temporal)**: Owns durable states and schedules Activities under role-based fleets. `MoonMind.Run` owns task-level step truth and progress, while true agent execution steps dispatch as `MoonMind.AgentRun` child workflows rather than plain activity invocations.
-- **Blob Storage (Artifacts)**: Heavy data is stored out-of-band in an S3-compatible backend (MinIO). The UI and the Workflow exchange lightweight `ArtifactRef`s.
-
-### Control-plane boundary
-
-Task submit resolves selection intent into immutable refs. True agent lifecycle orchestration happens through `MoonMind.AgentRun` child workflows on the execution plane. The control plane does not drive agent lifecycle steps directly.
-
-Boundary responsibilities:
-
-- **Control plane** owns skill-selection intent, policy resolution, and snapshot preparation
-- **Execution plane** owns durable lifecycle orchestration and state progression
-- **Runtime adapters** own provider/runtime translation and canonical contract normalization
+- the control plane owns authoring intent, artifact refs, target binding, runtime choice, and snapshot durability
+- the execution plane owns lifecycle and step execution
+- runtime adapters own provider-specific realization details
 
 ---
 
-## 4. Control Plane Responsibilities
+## 5. Control-plane responsibilities
 
-The Mission Control provides one place to:
-- **Submit Work**: Send instructions, artifacts, runtime choices, and explicit skill-selection intent into the API, which starts a new Temporal Workflow Execution.
-- **Resolve Agent Skills**: Accept task/step skill selectors, merge built-in/deployment/repo/local sources under policy, and produce an immutable resolved skill snapshot for execution.
-- **Provide Files**: Upload images/context to the Artifact Store (`POST /artifacts`) and pass the generated `ArtifactRef` into the task input.
-- **Review Pre-Execution Plans**: Triage "Task Proposals" built by workers before they are promoted into full task runs.
-- **Monitor State**: Surface Temporal Visibility metrics, workflow statuses, and `mm_state` progression fields in a user-friendly table.
-- **Read Step Truth**: Fetch execution detail plus a step-ledger surface, using the plan artifact as the canonical planned-step source and workflow state/query as the live step-state source.
-- **Command & Control**: Pause, Resume, and Cancel executing runs by issuing commands to the API, sending Temporal Signals to the workflow.
+The control plane is responsible for all of the following.
 
-### 4.1 Agent Skill Resolution Boundary
+### 5.1 Authoring and validation
 
-The core control-plane resolution flow operates as follows:
-1. The user submits workflow intent inside Mission Control, potentially including `task.skills` and `step.skills`.
-2. The control plane resolves built-in, deployment, repo, and local skill sources using canonical precedence rules.
-3. The control plane produces a `ResolvedSkillSet` artifact.
-4. Only refs and compact metadata linking to the snapshot are passed into the execution-plane workflow/runtime path.
+- render the Create page
+- validate repository, runtime, publish mode, dependencies, and attachment policy
+- collect text fields, preset state, Jira imports, and input attachments into a coherent draft
 
-**Explicit Boundary Rule:** The *control plane* owns task-facing selection, policy, and resolution intent. The *execution plane* consumes immutable resolved refs. The *runtime adapters* materialize the snapshot for the target runtime.
+### 5.2 Artifact upload orchestration
 
-### 4.2 Task Payload and Mission Control Implications
+- create upload intents through MoonMind artifact APIs
+- upload browser-selected files before execution submission
+- finalize artifact creation and reject incomplete uploads
+- submit only structured attachment refs to the execution API
 
-Task-shaped payloads and UI surfaces now encapsulate skill-selection logic. 
-* The control plane API expects payloads including `task.skills`, `step.skills`, skill-set names, include/exclude selectors, and potentially materialization preferences.
-* The Mission Control UI provides selection mechanisms for skill sets at submit time, displays resolved skill snapshots inside task detail views, and exposes compact provenance metadata for user review.
-* Mission Control task detail should render the Steps surface from a dedicated step-ledger read, not by parsing generic artifacts or managed-run log text.
-* Task payloads and control-plane APIs should not depend on provider-shaped execution results. The control plane consumes canonical runtime contracts (`AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`), not provider-native payloads.
-* For Temporal-backed task surfaces, `taskId == workflowId`.
+### 5.3 Task contract normalization
 
-*(Note on Scheduling/Reruns: When a task is rerun, the control plane reuses the original resolved skill snapshot by default. Conversely, scheduled tasks preserve the explicit skill-selection intent and resolve it according to the canonical policy at their scheduled execution time.)*
+- normalize the task-shaped payload
+- preserve `task.inputAttachments` and `task.steps[].inputAttachments`
+- preserve step identity and order
+- preserve runtime and publish intent
+- preserve preset and Jira provenance when those contracts allow it
 
----
+### 5.4 Snapshot durability
 
-## 5. Workload Types
+- persist an authoritative task input snapshot for edit and rerun
+- reconstruct from that snapshot rather than from lossy derived projections
+- preserve attachment target binding in the snapshot
 
-From the perspective of the Dashboard and the user, workloads are represented as **Tasks** or **Proposals**.
+### 5.5 User-facing reads
 
-### 5.1 Workflow Executions (Tasks)
-
-These represent actively running automation. The dashboard groups these under the "Tasks" list.
-
-| Workflow type | Purpose |
-| --- | --- |
-| `MoonMind.Run` | Standard execution container for text instructions, direct executable tool invocations, plan-driven work, and agent-runtime work that may carry resolved agent skill context |
-| `MoonMind.ManifestIngest` | Complex ingest jobs utilizing fan-out/fan-in aggregation |
-| `MoonMind.AgentRun` | Durable lifecycle wrapper for true agent execution; dispatched as a child workflow from `MoonMind.Run` per plan step when `tool.type == "agent_runtime"` |
-| `MoonMind.ProviderProfileManager` | Long-running provider-profile coordination for managed runtimes |
-| `MoonMind.OAuthSession` | OAuth dance lifecycle |
-
-The UI surfaces these by querying Temporal Visibility indices filtered securely by the user's API credentials.
-
-Important: true agent steps are executed as `MoonMind.AgentRun` child workflows, not as plain activity invocations. This gives each agent step its own durable lifecycle, cancellation boundary, and history shard.
-
-Task-detail rule:
-
-- the parent task view shows the latest/current run's step ledger by default
-- step rows may carry `childWorkflowId`, `childRunId`, and `taskRunId`
-- child runtime logs and diagnostics stay in `/api/task-runs/*` and must not be flattened into parent workflow state
-
-### 5.2 Task Proposals
-- **Control-plane only objects**. These are recommendations generated by agents or by the `proposals` stage of a `MoonMind.Run`, awaiting human review.
-- Proposals do not execute on their own. Promotion creates a new `MoonMind.Run` through the same Temporal-backed create path used by `/api/executions`; the legacy queue backend is not part of the target design.
-- Proposal payloads may need to persist explicit skill-selection intent so that promoted executions preserve the intended execution context.
+- expose previews and downloads through MoonMind APIs
+- surface attachment metadata by target in detail, edit, and rerun flows
+- expose enough diagnostics for operators to understand attachment-related failures
 
 ---
 
-## 6. System Invariants (Control Plane)
+## 6. Canonical task-shaped contract
 
-The following invariants define how the UI interacts with the execution backend:
+Representative contract:
 
-1. **Artifact Passing, Not Data Embedding**  
-   The UI will not post large text blobs or multipart image attachments directly into a task execution payload. It uses `POST /artifacts` to receive short-lived `ArtifactRef` pointers, passing only those refs down to Temporal. 
+```ts
+interface TaskInputAttachmentRef {
+  artifactId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+}
 
-2. **Decoupled execution capability**  
-   The UI determines **what** the intent is (Target Repository, required executable tool or runtime, selected agent skills / skill sets, Artifacts). The API and Temporal ensure the job is routed to the exact fleet (`mm.activity.sandbox`, `mm.activity.llm`, `mm.activity.agent_runtime`, `mm.activity.integrations`) equipped to fulfill that specific capability.
+interface TaskStepPayload {
+  id?: string;
+  title?: string;
+  instructions?: string;
+  inputAttachments?: TaskInputAttachmentRef[];
+  skill?: {
+    id?: string;
+    args?: Record<string, unknown>;
+    requiredCapabilities?: string[];
+  };
+  skills?: {
+    include?: Array<{ name: string }>;
+  };
+}
 
-3. **Status Polling & Observability**  
-   The UI reads state by polling the API, which interrogates Temporal Visibility and the Postgres Artifact Index. **Temporal Visibility is the source of truth for execution state.** Projection rows and adapter caches may exist for performance and compatibility, but they are not the semantic owner of query behavior. The source of truth for file outputs lives in the Artifact Index.
+interface TaskPayload {
+  instructions?: string;
+  inputAttachments?: TaskInputAttachmentRef[];
+  steps?: TaskStepPayload[];
+  runtime?: {
+    mode?: string;
+    profileId?: string;
+    model?: string;
+    effort?: string;
+  };
+  publish?: {
+    mode?: "none" | "branch" | "pr";
+  };
+  git?: {
+    startingBranch?: string;
+    targetBranch?: string;
+  };
+  appliedStepTemplates?: unknown[];
+  dependsOn?: string[];
+}
+```
 
-4. **Approval Routing via Signals**  
-   When a workflow asks for human permission (e.g. "Can I push to `main`?"), the workflow enters a paused state. The UI displays the approval button, and submitting the form delegates a Temporal `Update` or `Signal` through the Control Plane API to seamlessly unpause the execution block.
+Rules:
 
-5. **Skill Selection, Then Snapshot Resolution**  
-   The UI and API exchange skill-selection intent, not raw mutable runtime skill state. The control plane resolves that intent into an immutable skill snapshot before or as part of execution preparation.
-
-6. **Resolved Skill Context Uses Refs**  
-   The control plane must not embed full instruction bundles or skill bodies directly in task payloads when artifact-backed refs are the correct execution boundary.
-
-7. **Canonical Runtime Contracts**  
-   Task payloads and control-plane APIs must not depend on provider-shaped execution results. Canonical runtime contracts (`AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`) are the interface between the execution plane and the control plane.
+- `task.inputAttachments` is the objective-scoped input target
+- `task.steps[n].inputAttachments` is the step-scoped input target
+- these fields are part of the task contract, not incidental UI metadata
+- the absence of attachments is valid
+- the presence of attachments must be preserved across create, detail, edit, and rerun
 
 ---
 
-## 7. Document Boundaries
+## 7. Snapshot and edit/rerun architecture
 
-Use this document to understand the "Big Picture" view of the Mission Control UI operating over the Execution Plane.
+The original task input snapshot is the authoritative representation of the authored draft.
 
-For implementation-level specs, see:
-- `docs/Tasks/AgentSkillSystem.md`: Canonical storage, precedence, versioning, path conventions, and `ResolvedSkillSet` semantics for agent skills.
-- `docs/UI/MissionControlArchitecture.md`: Dashboard API routes, endpoint mappings, layout structures, and live UX component behavior.
-- `docs/Tasks/SkillAndPlanContracts.md`: How executable tools and plans generated in the control plane resolve to literal executions in the execution plane.
-- `docs/Temporal/StepLedgerAndProgressModel.md`: Canonical step-ledger schema, status vocabulary, checks, attempts, and latest-run behavior.
-- `docs/Temporal/TemporalArchitecture.md`: Pure Temporal execution philosophy, queue logic, visibility tables, and worker fleet design.
-- `docs/Temporal/TaskExecutionCompatibilityModel.md`: Concrete compatibility bridge between task-oriented product surfaces and Temporal-backed workflow executions.
-- `docs/Temporal/VisibilityAndUiQueryModel.md`: Canonical query model, Search Attribute registry, status mapping, and pagination semantics for Temporal-backed list/detail surfaces.
-- `docs/Tasks/ImageSystem.md`: The specific flow of image processing from UI `ArtifactRef` generation into LLM context chunks.
+Rules:
+
+- it must preserve:
+  - task objective text
+  - objective-scoped attachment refs
+  - step text
+  - step-scoped attachment refs
+  - step order and identity
+  - runtime and publish selections
+  - preset application metadata
+  - dependency declarations that remain part of the editable contract
+- edit and rerun derive their initial browser state from this snapshot
+- fallback evidence refs may assist diagnostics, but they are not an authoritative replacement for the snapshot
+- an attachment-aware execution without a reconstructible snapshot is degraded and must be treated as such explicitly
+
+---
+
+## 8. Execution-plane responsibilities
+
+The execution plane consumes the normalized task contract.
+
+### 8.1 Workflow responsibilities
+
+`MoonMind.Run` owns:
+
+- durable state progression
+- waiting, retry, and cancel semantics
+- prepare-time attachment handling
+- image context generation orchestration
+- passing target-aware context into the relevant planner or step runtime
+
+### 8.2 Prepare responsibilities
+
+Prepare owns:
+
+- downloading objective-scoped and step-scoped attachments
+- writing a canonical attachments manifest
+- materializing raw files into stable workspace locations
+- producing target-aware image context artifacts
+- failing explicitly when attachment preparation is incomplete or invalid
+
+### 8.3 Step execution responsibilities
+
+Step execution owns:
+
+- consuming task-level objective context when relevant
+- consuming only the current step’s step-scoped image context by default
+- avoiding accidental leakage of unrelated step attachments into the wrong step execution
+
+### 8.4 Child workflow responsibilities
+
+If a step is executed through `MoonMind.AgentRun`, the parent-child boundary must preserve target-aware prepared context.
+
+Rules:
+
+- parent workflow remains the source of truth for attachment target binding
+- child workflows receive only the prepared context relevant to the child step
+- child workflow logs and diagnostics do not redefine target binding semantics
+
+---
+
+## 9. Artifact and authorization boundary
+
+The artifact system is the binary boundary of the control plane.
+
+Rules:
+
+- the browser never receives long-lived object-store credentials
+- user preview and download are authorized by execution ownership and view permissions
+- worker-side download and materialization use service credentials and execution authorization
+- artifact links are execution-scoped
+- target binding is preserved by task contract and snapshot semantics, not inferred from storage paths alone
+
+Recommended metadata may include:
+
+- target kind
+- step reference
+- original filename
+- source import path such as upload or Jira import
+
+Rules:
+
+- metadata is helpful for observability
+- metadata must not be the only place where target meaning exists
+
+---
+
+## 10. Runtime and prompt boundary
+
+The control plane does not dictate provider-native multimodal payloads.
+
+Rules:
+
+- the control plane passes normalized task intent plus artifact refs
+- text-first runtimes consume generated image context through the canonical `INPUT ATTACHMENTS` contract
+- multimodal runtimes may consume raw image refs through runtime adapters without changing the control-plane task contract
+- runtime adapters must not invent new attachment targeting rules that the Create page cannot express
+
+---
+
+## 11. Invariants
+
+The following invariants define the desired-state task system.
+
+1. **No binary payloads in Temporal history**
+   Image bytes do not belong in execution histories or inline create payload text.
+
+2. **Explicit attachment targets**
+   Every input attachment belongs either to the task objective target or to a declared step target.
+
+3. **No silent attachment loss**
+   Create, edit, rerun, and prepare must fail explicitly rather than silently dropping attachments.
+
+4. **Text remains text**
+   Instruction fields remain textual authoring surfaces. Images remain structured inputs.
+
+5. **Snapshot-based durability**
+   Attachment-aware edit and rerun require an authoritative task input snapshot.
+
+6. **Server-defined policy**
+   Attachment policy is defined by server configuration and enforced by both browser and API.
+
+7. **MoonMind-owned browser APIs**
+   The browser talks only to MoonMind APIs, not directly to Jira, object storage, or provider-specific file endpoints.
+
+8. **Target-aware runtime consumption**
+   By default, step execution receives only its own step-scoped attachment context plus relevant objective-scoped context.
+
+9. **No hidden retargeting**
+   Reordering steps, applying presets, or changing text must not silently retarget an existing attachment to another step.
+
+10. **Compatibility without semantic drift**
+   Compatibility aliases and migration layers may exist, but they must not change the canonical meaning of objective-scoped versus step-scoped attachments.
+
+---
+
+## 12. Workload-specific behavior
+
+### 12.1 `MoonMind.Run`
+
+This is the canonical attachment-aware task workflow.
+
+Rules:
+
+- attachment-aware task authoring is defined against `MoonMind.Run`
+- create, edit, rerun, and detail flows for attachment-aware tasks are all modeled in task-shaped `MoonMind.Run` terms
+
+### 12.2 `MoonMind.AgentRun`
+
+This child workflow may execute a specific step.
+
+Rules:
+
+- when used, it consumes prepared context for the step it represents
+- it must not redefine or broaden its attachment scope beyond what the parent workflow prepared
+
+### 12.3 Other workflow types
+
+Other workflow types may reuse artifact infrastructure, but they do not redefine the Create-page attachment contract.
+
+---
+
+## 13. Observability and operator surfaces
+
+The architecture must support operator understanding without requiring raw history parsing.
+
+Rules:
+
+- task detail should expose attachment metadata by target
+- diagnostics should expose manifest and generated context refs where appropriate
+- attachment failures should identify:
+  - which target failed
+  - whether the failure happened during upload, validation, materialization, or context generation
+- step-aware surfaces should identify the current step’s attachment context separately from unrelated step inputs
+
+---
+
+## 14. Boundary with page-level and subsystem docs
+
+Use this document to understand the architectural contract.
+
+Use the related docs for detailed behavior:
+
+- `docs/UI/CreatePage.md` for page sections, field behavior, Jira targeting, edit/rerun UX, and validation copy
+- `docs/Tasks/ImageSystem.md` for image-input upload, artifact storage, materialization, context generation, and preview/download behavior
+- `docs/Tasks/AgentSkillSystem.md` for skill selection and resolution
+- `docs/Temporal/TemporalArchitecture.md` for workflow lifecycle and worker topology
+
+---
+
+## 15. Summary
+
+MoonMind’s control plane is task-first, artifact-first, and target-aware.
+
+For image inputs that means:
+
+- the user authors text and image inputs in one draft
+- the control plane uploads and binds images to explicit targets
+- the task contract and authoritative snapshot preserve those bindings
+- the execution plane prepares and injects target-aware context
+- detail, edit, and rerun surfaces can round-trip the same authored intent without semantic loss
+
+That is the desired-state task architecture contract.

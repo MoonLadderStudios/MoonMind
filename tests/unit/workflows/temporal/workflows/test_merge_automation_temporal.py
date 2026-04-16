@@ -158,6 +158,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         _payload: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
+        assert activity_type != "merge_automation.create_resolver_run"
         nonlocal readiness_calls
         assert activity_type == "merge_automation.evaluate_readiness"
         readiness_calls += 1
@@ -213,6 +214,8 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         "resolver:wf-parent:MoonLadderStudios/MoonMind:350:def456:2",
     ]
     assert child_payloads[0]["initialParameters"]["publishMode"] == "none"
+    assert child_payloads[0]["initialParameters"]["task"]["publish"]["mode"] == "none"
+    assert child_payloads[0]["initialParameters"]["task"]["skill"]["id"] == "pr-resolver"
     assert child_payloads[0]["initialParameters"]["task"]["tool"] == {
         "type": "skill",
         "name": "pr-resolver",

@@ -636,9 +636,7 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
             assert template.title == "MoonSpec Orchestrate"
             assert template.latest_version is not None
             assert [step["skill"]["id"] for step in template.latest_version.steps] == [
-                "auto",
                 "moonspec-specify",
-                "auto",
                 "moonspec-plan",
                 "moonspec-tasks",
                 "moonspec-align",
@@ -666,7 +664,7 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 context={},
             )
 
-            assert len(expanded["steps"]) == 8
+            assert len(expanded["steps"]) == 6
             assert expanded["steps"][-1]["title"] == "Verify completion"
             assert "moonspec-verify" == expanded["steps"][-1]["skill"]["id"]
             assert all(

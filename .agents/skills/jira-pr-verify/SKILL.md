@@ -13,7 +13,7 @@ Verify whether a PR satisfies the linked Jira issue and publish a concise PR com
 - Required: PR URL or PR number plus repository.
 - Required: trusted Jira issue content, available through one of:
   - existing `jira-fetch` artifacts such as `<artifact_root>/jira/<ISSUE>/issue.normalized.json`, `issue.md`, and `context.json`,
-  - a MoonMind trusted Jira tool/connector response attached to the run,
+  - a MoonMind trusted Jira tool/connector response attached to the run or fetched during the run through `jira.get_issue`,
   - user-supplied Jira text pasted into the task.
 - Required for posting: authenticated GitHub access through `gh` or the GitHub app/connector.
 - Optional: repo-only scope limits, out-of-scope areas, required test commands, or comment style.
@@ -22,7 +22,13 @@ Verify whether a PR satisfies the linked Jira issue and publish a concise PR com
 
 Do not expect raw Jira credentials inside the managed agent shell. MoonMind intentionally keeps `ATLASSIAN_*` secrets on the trusted control-plane/tool side. Use Jira artifacts or trusted Jira tool output as the source of truth.
 
-If Jira content is not already available to the managed agent, stop as blocked and report that the task must run a trusted Jira fetch/import step first. Do not scrape a private Atlassian browser page, infer hidden acceptance criteria from a branch name, or ask for `ATLASSIAN_API_KEY` in the agent environment.
+If Jira content is not already available to the managed agent, first use MoonMind's trusted Jira MCP tool path when it is exposed to the runtime:
+
+1. List tools with `GET $MOONMIND_URL/mcp/tools`.
+2. Fetch the issue with `POST $MOONMIND_URL/mcp/tools/call` and JSON like `{"tool":"jira.get_issue","arguments":{"issueKey":"KANDY-2558"}}`.
+3. Use the sanitized tool result as the Jira source of truth.
+
+If `jira.get_issue` is unavailable, denied by policy, or the runtime does not expose `$MOONMIND_URL`, stop as blocked and report that the task must run a trusted Jira fetch/import step first. Do not scrape a private Atlassian browser page, infer hidden acceptance criteria from a branch name, or ask for `ATLASSIAN_API_KEY` in the agent environment.
 
 For MoonMind task plans, the correct shape is:
 
@@ -39,6 +45,7 @@ For MoonMind task plans, the correct shape is:
 
 2. Load Jira requirements.
 - Prefer `issue.normalized.json` and `issue.md` from the trusted Jira artifact directory.
+- If no Jira artifact is present and `$MOONMIND_URL` is available, call the trusted MCP tool `jira.get_issue` for the issue key.
 - Extract a ledger of goals, functional requirements, acceptance criteria, constraints, explicit non-goals, and referenced docs.
 - Preserve Jira wording in summaries, but do not paste long private Jira text into the PR comment.
 - If acceptance criteria are missing or ambiguous, record them as `unverifiable` rather than inventing requirements.
