@@ -320,11 +320,9 @@ That means:
           },
           "authoredPresets": [
             {
-              "bindingId": "preset-binding-123",
               "presetId": "runtime-quality-followup",
               "version": "2026-04-17",
-              "includePath": ["root", "regression-coverage"],
-              "detached": false
+              "includePath": ["root", "regression-coverage"]
             }
           ],
           "runtime": {
@@ -338,11 +336,10 @@ That means:
               "title": "Add regression coverage",
               "instructions": "Add a regression test covering retry loop detection in the Temporal runtime.",
               "source": {
-                "kind": "preset",
-                "bindingId": "preset-binding-123",
+                "kind": "preset-derived",
+                "presetId": "runtime-quality-followup",
                 "includePath": ["root", "regression-coverage"],
-                "blueprintStepSlug": "add-regression-test",
-                "detached": false
+                "originalStepId": "add-regression-test"
               }
             }
           ]

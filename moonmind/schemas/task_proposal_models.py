@@ -38,6 +38,9 @@ class TaskProposalTaskPreview(BaseModel):
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
     instructions: Optional[str] = Field(None, alias="instructions")
+    preset_provenance: Optional[str] = Field(None, alias="presetProvenance")
+    authored_preset_count: int = Field(0, alias="authoredPresetCount")
+    step_source_kinds: list[str] = Field(default_factory=list, alias="stepSourceKinds")
 
 
 class TaskProposalModel(BaseModel):

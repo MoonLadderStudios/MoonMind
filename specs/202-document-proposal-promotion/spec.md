@@ -135,7 +135,7 @@ Dependencies
 ### Key Entities
 
 - **Authored Preset Metadata**: Optional task-level provenance describing preset bindings that were reliably authored into a task before flattening.
-- **Step Source Provenance**: Optional per-step metadata that identifies manual, preset-derived, include path, blueprint step, or detached state without becoming executable logic.
+- **Step Source Provenance**: Optional per-step metadata that identifies manual, preset-derived, preset-include, or detached state with preset references, include path, and original step id when available, without becoming executable logic.
 - **Flat Task Payload**: The execution-ready proposal payload that promotion validates and submits to create a new run.
 - **Flattened-Only Proposal**: A proposal whose steps may have originated from previous preset expansion but no longer carry reliable authored preset bindings.
 - **Refresh-Latest Workflow**: An explicit future workflow that would intentionally re-resolve current preset definitions before submission.
