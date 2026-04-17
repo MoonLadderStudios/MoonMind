@@ -44,6 +44,13 @@ export type TemporalTaskEditingExecutionContract = {
   actions?: TemporalTaskEditingActions;
 };
 
+export type TemporalTaskInputAttachmentRef = {
+  artifactId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+};
+
 export type TemporalSubmissionDraft = {
   runtime: string | null;
   providerProfile: string | null;
@@ -55,6 +62,7 @@ export type TemporalSubmissionDraft = {
   publishMode: string | null;
   taskInstructions: string;
   primarySkill: string | null;
+  inputAttachments: TemporalTaskInputAttachmentRef[];
   steps: Array<{
     id: string;
     title: string;
@@ -64,6 +72,7 @@ export type TemporalSubmissionDraft = {
     skillRequiredCapabilities: string[];
     templateStepId: string;
     templateInstructions: string;
+    inputAttachments?: TemporalTaskInputAttachmentRef[];
     storyOutput?: Record<string, unknown>;
   }>;
   appliedTemplates: Array<{
@@ -245,6 +254,25 @@ function taskInstructionsFrom(...tasks: Record<string, unknown>[]): string {
   return '';
 }
 
+function normalizeAttachmentRefs(value: unknown): TemporalTaskInputAttachmentRef[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => objectValue(entry))
+    .map((entry) => ({
+      artifactId: stringValue(entry.artifactId, entry.artifact_id),
+      filename: stringValue(entry.filename, entry.name),
+      contentType: stringValue(entry.contentType, entry.content_type),
+      sizeBytes: Math.max(0, Number(entry.sizeBytes ?? entry.size_bytes ?? 0) || 0),
+    }))
+    .filter((entry) => entry.artifactId && entry.filename && entry.contentType);
+}
+
+function attachmentKey(ref: TemporalTaskInputAttachmentRef): string {
+  return ref.artifactId;
+}
+
 function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number] | null {
   const step = objectValue(value);
   if (Object.keys(step).length === 0) {
@@ -261,6 +289,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id.startsWith('tpl:') ? id : '',
   );
   const storyOutput = firstObjectValue(step.storyOutput, step.story_output);
+  const inputAttachments = normalizeAttachmentRefs(step.inputAttachments);
   const result = {
     id,
     title: stringValue(step.title),
@@ -277,6 +306,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
       step.template_instructions,
       templateStepId ? instructions : '',
     ),
+    ...(inputAttachments.length > 0 ? { inputAttachments } : {}),
     ...(Object.keys(storyOutput).length > 0 ? { storyOutput } : {}),
   };
 
@@ -289,6 +319,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.skillRequiredCapabilities.length > 0 ||
     result.templateStepId ||
     result.templateInstructions ||
+    inputAttachments.length > 0 ||
     Object.keys(storyOutput).length > 0;
   return hasContent ? result : null;
 }
@@ -313,6 +344,15 @@ function selectDraftSteps(
   taskSteps: TemporalSubmissionDraft['steps'],
   artifactTaskSteps: TemporalSubmissionDraft['steps'],
 ): TemporalSubmissionDraft['steps'] {
+  const artifactHasAttachments = artifactTaskSteps.some(
+    (step) => (step.inputAttachments || []).length > 0,
+  );
+  const taskHasAttachments = taskSteps.some(
+    (step) => (step.inputAttachments || []).length > 0,
+  );
+  if (artifactHasAttachments && !taskHasAttachments) {
+    return artifactTaskSteps;
+  }
   if (artifactTaskSteps.length > taskSteps.length) {
     return artifactTaskSteps;
   }
@@ -361,6 +401,28 @@ function normalizeAppliedTemplates(
         : [],
     }))
     .filter((entry) => entry.slug);
+}
+
+function assertSnapshotAttachmentBindings(
+  artifactParams: Record<string, unknown>,
+  artifactTask: Record<string, unknown>,
+  artifactTaskSteps: TemporalSubmissionDraft['steps'],
+): void {
+  const compactRefs = normalizeAttachmentRefs(artifactParams.attachmentRefs);
+  if (compactRefs.length === 0) {
+    return;
+  }
+  const boundRefs = [
+    ...normalizeAttachmentRefs(artifactTask.inputAttachments),
+    ...artifactTaskSteps.flatMap((step) => step.inputAttachments || []),
+  ];
+  const boundKeys = new Set(boundRefs.map(attachmentKey));
+  const unbound = compactRefs.filter((ref) => !boundKeys.has(attachmentKey(ref)));
+  if (unbound.length > 0) {
+    throw new Error(
+      'Attachment bindings could not be reconstructed from this execution.',
+    );
+  }
 }
 
 function snapshotDraftTask(
@@ -443,6 +505,11 @@ export function buildTemporalSubmissionDraftFromExecution(
   const artifactSkill = objectValue(artifactTask.skill);
   const taskSteps = draftStepsFromTask(task);
   const artifactTaskSteps = draftStepsFromTask(artifactTask);
+  assertSnapshotAttachmentBindings(
+    artifactParams,
+    artifactTask,
+    artifactTaskSteps,
+  );
 
   const artifactRepository = stringValue(artifactParams.repository);
   const taskSkills = skillSelectorNames(task.skills);
@@ -517,7 +584,10 @@ export function buildTemporalSubmissionDraftFromExecution(
       publish.mode,
       artifactPublish.mode,
     ),
-    taskInstructions: taskInstructionsFrom(task, artifactTask),
+    taskInstructions:
+      Object.keys(snapshotDraft).length > 0
+        ? taskInstructionsFrom(artifactTask, task)
+        : taskInstructionsFrom(task, artifactTask),
     primarySkill: nullableStringValue(
       execution.targetSkill,
       tool.name,
@@ -530,6 +600,15 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactSkill.name,
       artifactTaskSkills[0],
     ),
+    inputAttachments: (() => {
+      const taskAttachments = normalizeAttachmentRefs(task.inputAttachments);
+      const artifactAttachments = normalizeAttachmentRefs(artifactTask.inputAttachments);
+      return artifactAttachments.length > 0 && taskAttachments.length === 0
+        ? artifactAttachments
+        : taskAttachments.length > 0
+          ? taskAttachments
+          : artifactAttachments;
+    })(),
     steps: selectDraftSteps(taskSteps, artifactTaskSteps),
     appliedTemplates: normalizeAppliedTemplates(
       task.appliedStepTemplates || artifactTask.appliedStepTemplates,

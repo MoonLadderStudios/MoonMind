@@ -686,6 +686,46 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Aattachment-edit?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:attachment-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-secondary",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              inputArtifactRef: "attachment-snapshot",
+              taskInputSnapshot: {
+                available: true,
+                artifactRef: "attachment-snapshot",
+                snapshotVersion: 1,
+                sourceKind: "create",
+                reconstructionMode: "authoritative",
+                disabledReasons: {},
+                fallbackEvidenceRefs: [],
+              },
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Arerun-123?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -989,6 +1029,17 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Aattachment-edit/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "immediate",
+              message: "Inputs updated.",
+              execution: { workflowId: "mm:attachment-edit" },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Arerun-123/update") {
           return Promise.resolve({
             ok: true,
@@ -1241,6 +1292,69 @@ describe("Task Create Entrypoint", () => {
                   publish: { mode: "pr" },
                   tool: { type: "skill", name: "speckit-orchestrate" },
                 },
+              }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/attachment-snapshot/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                snapshotVersion: 1,
+                source: { kind: "create" },
+                draft: {
+                  taskShape: "multi_step",
+                  task: {
+                    instructions: "Preserve the existing attachments.",
+                    inputAttachments: [
+                      {
+                        artifactId: "art-objective",
+                        filename: "objective.png",
+                        contentType: "image/png",
+                        sizeBytes: 1234,
+                      },
+                    ],
+                    runtime: {
+                      mode: "codex_cli",
+                      model: "gpt-5.4",
+                      effort: "medium",
+                      profileId: "profile:codex-secondary",
+                    },
+                    steps: [
+                      {
+                        id: "step-with-attachment",
+                        title: "Attached step",
+                        instructions: "Preserve the existing attachments.",
+                        inputAttachments: [
+                          {
+                            artifactId: "art-step",
+                            filename: "step.webp",
+                            contentType: "image/webp",
+                            sizeBytes: 4567,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                },
+                attachmentRefs: [
+                  {
+                    artifactId: "art-objective",
+                    filename: "objective.png",
+                    contentType: "image/png",
+                    sizeBytes: 1234,
+                    targetKind: "objective",
+                  },
+                  {
+                    artifactId: "art-step",
+                    filename: "step.webp",
+                    contentType: "image/webp",
+                    sizeBytes: 4567,
+                    targetKind: "step",
+                    stepId: "step-with-attachment",
+                    stepOrdinal: 0,
+                  },
+                ],
               }),
           } as Response);
         }
@@ -1702,6 +1816,151 @@ describe("Task Create Entrypoint", () => {
       taskInstructions: "Rerun from immutable artifact input.",
       primarySkill: "speckit-orchestrate",
     });
+  });
+
+  it("reconstructs persisted objective and step attachments from the authoritative task snapshot", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:attachment-snapshot",
+        workflowType: "MoonMind.Run",
+        taskInputSnapshot: {
+          available: true,
+          artifactRef: "art-snapshot",
+          snapshotVersion: 1,
+          sourceKind: "create",
+          reconstructionMode: "authoritative",
+          disabledReasons: {},
+          fallbackEvidenceRefs: [],
+        },
+        inputParameters: {
+          task: {
+            instructions: "Fallback inline instructions.",
+          },
+        },
+      },
+      {
+        snapshotVersion: 1,
+        source: { kind: "create" },
+        draft: {
+          taskShape: "multi_step",
+          task: {
+            instructions: "Preserve attachments from the snapshot.",
+            inputAttachments: [
+              {
+                artifactId: "art-objective",
+                filename: "objective.png",
+                contentType: "image/png",
+                sizeBytes: 1234,
+              },
+            ],
+            steps: [
+              {
+                id: "step-with-attachment",
+                title: "Attached step",
+                instructions: "Use the step attachment.",
+                inputAttachments: [
+                  {
+                    artifactId: "art-step",
+                    filename: "step.webp",
+                    contentType: "image/webp",
+                    sizeBytes: 4567,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        attachmentRefs: [
+          {
+            artifactId: "art-objective",
+            filename: "objective.png",
+            contentType: "image/png",
+            sizeBytes: 1234,
+            targetKind: "objective",
+          },
+          {
+            artifactId: "art-step",
+            filename: "step.webp",
+            contentType: "image/webp",
+            sizeBytes: 4567,
+            targetKind: "step",
+            stepId: "step-with-attachment",
+            stepOrdinal: 0,
+          },
+        ],
+      },
+    );
+
+    expect(draft.taskInstructions).toBe(
+      [
+        "Preserve attachments from the snapshot.",
+        "Use the step attachment.",
+      ].join("\n\n"),
+    );
+    expect(draft.inputAttachments).toEqual([
+      {
+        artifactId: "art-objective",
+        filename: "objective.png",
+        contentType: "image/png",
+        sizeBytes: 1234,
+      },
+    ]);
+    expect(draft.steps).toEqual([
+      expect.objectContaining({
+        id: "step-with-attachment",
+        inputAttachments: [
+          {
+            artifactId: "art-step",
+            filename: "step.webp",
+            contentType: "image/webp",
+            sizeBytes: 4567,
+          },
+        ],
+      }),
+    ]);
+  });
+
+  it("fails reconstruction when compact attachment refs cannot be bound from the task snapshot", () => {
+    expect(() =>
+      buildTemporalSubmissionDraftFromExecution(
+        {
+          workflowId: "mm:unbound-attachments",
+          workflowType: "MoonMind.Run",
+          taskInputSnapshot: {
+            available: true,
+            artifactRef: "art-snapshot",
+            snapshotVersion: 1,
+            sourceKind: "create",
+            reconstructionMode: "authoritative",
+            disabledReasons: {},
+            fallbackEvidenceRefs: [],
+          },
+          inputParameters: {
+            task: {},
+          },
+        },
+        {
+          snapshotVersion: 1,
+          source: { kind: "create" },
+          draft: {
+            taskShape: "inline_instructions",
+            task: {
+              instructions: "This snapshot lost structured attachment bindings.",
+            },
+          },
+          attachmentRefs: [
+            {
+              artifactId: "art-lost",
+              filename: "lost.png",
+              contentType: "image/png",
+              sizeBytes: 100,
+              targetKind: "step",
+              stepOrdinal: 0,
+            },
+          ],
+        },
+      ),
+    ).toThrow("Attachment bindings could not be reconstructed from this execution.");
   });
 
   it("reconstructs primary skill from object-shaped task skill selectors", () => {
@@ -2674,6 +2933,76 @@ describe("Task Create Entrypoint", () => {
     expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
     ).toBe("Changes were scheduled for the next safe point.");
+  });
+
+  it("retains unchanged persisted attachment refs when editing an artifact-backed execution", async () => {
+    renderForEdit("mm:attachment-edit", withAttachmentPolicy());
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Preserve the existing attachments.");
+    });
+    expect(await screen.findByText("objective.png (1.2 KB)")).toBeTruthy();
+    expect(await screen.findByText("step.webp (4.5 KB)")).toBeTruthy();
+    const downloadLinks = await screen.findAllByRole("link", {
+      name: "Download",
+    });
+    expect(downloadLinks.map((link) => link.getAttribute("href"))).toEqual([
+      "/api/artifacts/art-objective/download",
+      "/api/artifacts/art-step/download",
+    ]);
+
+    fireEvent.change(instructions, {
+      target: { value: "Edited instructions with existing attachments." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aattachment-edit/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) => String(url) === "/api/executions/mm%3Aattachment-edit/update",
+      )
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request).toMatchObject({
+      updateName: "UpdateInputs",
+      parametersPatch: {
+        repository: "MoonLadderStudios/MoonMind",
+        task: {
+          instructions: "Edited instructions with existing attachments.",
+          inputAttachments: [
+            {
+              artifactId: "art-objective",
+              filename: "objective.png",
+              contentType: "image/png",
+              sizeBytes: 1234,
+            },
+          ],
+          steps: [
+            {
+              id: "step-with-attachment",
+              title: "Attached step",
+              instructions: "Edited instructions with existing attachments.",
+              inputAttachments: [
+                {
+                  artifactId: "art-step",
+                  filename: "step.webp",
+                  contentType: "image/webp",
+                  sizeBytes: 4567,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
   });
 
   it("externalizes oversized edited input before sending UpdateInputs", async () => {
