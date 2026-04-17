@@ -4349,6 +4349,23 @@ describe("Task Create Entrypoint", () => {
     expect(screen.getByRole("button", { name: "Create" })).not.toBeNull();
   });
 
+  it("places the Create action at the right end of the step action row", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    await screen.findByText("Step 1 (Primary)");
+
+    const addStepButton = screen.getByRole("button", { name: "Add Step" });
+    const createButton = screen.getByRole("button", { name: "Create" });
+    const stepActionRow = addStepButton.closest(".queue-step-actions");
+
+    expect(stepActionRow).not.toBeNull();
+    expect(createButton.closest(".queue-step-actions")).toBe(stepActionRow);
+    expect(Array.from(stepActionRow?.children || [])).toEqual([
+      addStepButton,
+      createButton,
+    ]);
+  });
+
   it("uses only MoonMind REST endpoints while submitting a manually authored task", async () => {
     renderWithClient(
       <TaskCreatePage payload={withoutOptionalAuthoringIntegrations()} />,
