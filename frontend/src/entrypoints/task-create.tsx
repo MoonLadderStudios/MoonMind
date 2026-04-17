@@ -9,6 +9,7 @@ import {
   recordTemporalTaskEditingClientEvent,
   resolveTaskSubmitPageMode,
   type TemporalTaskEditingExecutionContract,
+  type TemporalTaskInputAttachmentRef,
 } from "../lib/temporalTaskEditing";
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
@@ -418,6 +419,7 @@ interface StepState {
   skillRequiredCapabilities: string;
   templateStepId: string;
   templateInstructions: string;
+  inputAttachments: StepAttachmentRef[];
   templateAttachments: StepAttachmentRef[];
   storyOutput?: Record<string, unknown>;
 }
@@ -774,6 +776,7 @@ function createStepStateEntry(
     skillRequiredCapabilities: "",
     templateStepId: "",
     templateInstructions: "",
+    inputAttachments: [],
     templateAttachments: [],
     ...overrides,
   };
@@ -807,12 +810,28 @@ function createStepStateEntriesFromTemporalDraft(
       skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
-      templateAttachments: step.templateAttachments || [],
+      inputAttachments: (step.inputAttachments || []).map(
+        stepAttachmentRefFromTemporal,
+      ),
+      templateAttachments:
+        step.templateAttachments ||
+        (step.inputAttachments || []).map(stepAttachmentRefFromTemporal),
       ...(step.storyOutput && Object.keys(step.storyOutput).length > 0
         ? { storyOutput: step.storyOutput }
         : {}),
     });
   });
+}
+
+function stepAttachmentRefFromTemporal(
+  attachment: TemporalTaskInputAttachmentRef,
+): StepAttachmentRef {
+  return {
+    artifactId: attachment.artifactId,
+    filename: attachment.filename,
+    contentType: attachment.contentType,
+    sizeBytes: attachment.sizeBytes,
+  };
 }
 
 function hasExplicitSkillSelection(skillId: string): boolean {
@@ -897,6 +916,7 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
     !step.skillRequiredCapabilities.trim() &&
     !step.templateStepId.trim() &&
     !step.templateInstructions.trim() &&
+    step.inputAttachments.length === 0 &&
     step.templateAttachments.length === 0
   );
 }
@@ -1034,16 +1054,21 @@ function formatAttachmentBytes(value: number): string {
 function validateAttachmentFiles(
   files: File[],
   policy: AttachmentPolicy,
+  persistedRefs: StepAttachmentRef[] = [],
 ): {
   ok: boolean;
   errors: string[];
   totalBytes: number;
 } {
   const errors: string[] = [];
-  if (files.length > policy.maxCount) {
-    errors.push(`Too many attachments (${files.length}/${policy.maxCount}).`);
+  const totalCount = files.length + persistedRefs.length;
+  if (totalCount > policy.maxCount) {
+    errors.push(`Too many attachments (${totalCount}/${policy.maxCount}).`);
   }
   let totalBytes = 0;
+  persistedRefs.forEach((attachment) => {
+    totalBytes += Math.max(0, Number(attachment.sizeBytes) || 0);
+  });
   files.forEach((file) => {
     const type = String(file.type || "")
       .trim()
@@ -1905,6 +1930,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedStepAttachmentFiles, setSelectedStepAttachmentFiles] = useState<
     Record<string, File[]>
   >({});
+  const [persistedObjectiveAttachments, setPersistedObjectiveAttachments] =
+    useState<StepAttachmentRef[]>([]);
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2191,6 +2218,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
     setSteps(reconstructedSteps);
     setNextStepNumber(reconstructedSteps.length + 1);
+    setPersistedObjectiveAttachments(
+      draft.inputAttachments.map(stepAttachmentRefFromTemporal),
+    );
+    setSelectedObjectiveAttachmentFiles([]);
+    setSelectedStepAttachmentFiles({});
     setAppliedTemplates(draft.appliedTemplates);
     setAppliedTemplateFeatureRequest("");
     setScheduleMode("immediate");
@@ -2844,7 +2876,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       0,
       attachmentPolicy.maxCount -
         (selectedObjectiveAttachmentFiles.length +
-          Object.values(selectedStepAttachmentFiles).flat().length),
+          Object.values(selectedStepAttachmentFiles).flat().length +
+          persistedAttachmentRefs.length),
     );
     const toDownload = eligible.slice(0, room);
     if (toDownload.length === 0) {
@@ -2902,6 +2935,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         const validation = validateAttachmentFiles(
           [...nextObjectiveFiles, ...Object.values(nextFilesByStep).flat()],
           attachmentPolicy,
+          persistedAttachmentRefs,
         );
         if (!validation.ok) {
           setSubmitMessage(validation.errors.join(" "));
@@ -3088,6 +3122,27 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     });
   }
 
+  function removePersistedObjectiveAttachment(artifactId: string) {
+    setPersistedObjectiveAttachments((current) =>
+      current.filter((attachment) => attachment.artifactId !== artifactId),
+    );
+  }
+
+  function removePersistedStepAttachment(localId: string, artifactId: string) {
+    setSteps((current) =>
+      current.map((step) =>
+        step.localId === localId
+          ? {
+              ...step,
+              inputAttachments: step.inputAttachments.filter(
+                (attachment) => attachment.artifactId !== artifactId,
+              ),
+            }
+          : step,
+      ),
+    );
+  }
+
   function removeObjectiveAttachment(fileToRemove: File) {
     setSelectedObjectiveAttachmentFiles((current) => {
       const next = current.filter((file) => file !== fileToRemove);
@@ -3118,6 +3173,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     [selectedObjectiveAttachmentFiles, selectedStepAttachmentFiles],
   );
 
+  const persistedAttachmentRefs = useMemo(
+    () => [
+      ...persistedObjectiveAttachments,
+      ...steps.flatMap((step) => step.inputAttachments),
+    ],
+    [persistedObjectiveAttachments, steps],
+  );
+
   const providerOptions = [...(providerProfilesQuery.data || [])]
     .sort((left, right) => {
       const leftDefault = Boolean(left.is_default);
@@ -3136,8 +3199,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }));
 
   const attachmentValidation = useMemo(
-    () => validateAttachmentFiles(selectedAttachmentFiles, attachmentPolicy),
-    [attachmentPolicy, selectedAttachmentFiles],
+    () =>
+      validateAttachmentFiles(
+        selectedAttachmentFiles,
+        attachmentPolicy,
+        persistedAttachmentRefs,
+      ),
+    [attachmentPolicy, persistedAttachmentRefs, selectedAttachmentFiles],
   );
 
   const modelOptions = useMemo(
@@ -3780,7 +3848,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       );
       return;
     }
-    if (selectedAttachmentFiles.length > 0) {
+    if (selectedAttachmentFiles.length > 0 || persistedAttachmentRefs.length > 0) {
       if (!attachmentPolicy.enabled) {
         setSubmitMessage("Attachments are disabled for this runtime.");
         return;
@@ -3886,6 +3954,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const hasStepContent =
         Boolean(step.instructions) ||
         stepAttachmentFiles.length > 0 ||
+        step.inputAttachments.length > 0 ||
         Boolean(stepSkillId) ||
         Boolean(stepSkillArgsRaw) ||
         stepSkillCaps.length > 0;
@@ -4028,9 +4097,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    const primaryAttachmentRefs = primaryStep
+    const uploadedPrimaryAttachmentRefs = primaryStep
       ? uploadedStepAttachments[primaryStep.localId] || []
       : [];
+    const persistedPrimaryStepAttachmentRefs = primaryStep
+      ? primaryStep.inputAttachments || []
+      : [];
+    const primaryStepAttachmentRefs = [
+      ...persistedPrimaryStepAttachmentRefs,
+      ...uploadedPrimaryAttachmentRefs,
+    ];
+    const taskLevelAttachmentRefs = [
+      ...persistedObjectiveAttachments,
+      ...uploadedObjectiveAttachments,
+    ];
     const objectiveInstructionsForSubmit = objectiveInstructions.trim();
     const primaryInstructionsForSubmit = primaryInstructions.trim();
 
@@ -4048,7 +4128,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       skillCaps: stepSkillCaps,
       hasStepContent: hasPreUploadStepContent,
     } of parsedAdditionalStepInputs) {
-      const stepAttachments = uploadedStepAttachments[step.localId] || [];
+      const uploadedStepAttachmentsForStep =
+        uploadedStepAttachments[step.localId] || [];
+      const stepAttachments = [
+        ...(step.inputAttachments || []),
+        ...uploadedStepAttachmentsForStep,
+      ];
       const stepInstructions = step.instructions.trim();
       if (!hasPreUploadStepContent && !stepInstructions) {
         continue;
@@ -4060,6 +4145,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       if (stepAttachments.length > 0) {
         stepPayload.inputAttachments = stepAttachments;
+      } else if (pageMode.mode !== "create") {
+        stepPayload.inputAttachments = [];
       }
       if (step.title.trim()) {
         stepPayload.title = step.title.trim();
@@ -4094,7 +4181,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       additionalSteps.length > 0 ||
       includePrimaryStepForObjectiveOverride ||
       hasTemplateBoundStep ||
-      primaryAttachmentRefs.length > 0;
+      primaryStepAttachmentRefs.length > 0;
 
     const normalizedSteps = includeExplicitSteps
       ? [
@@ -4104,8 +4191,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               ...(primaryInstructionsForSubmit
                 ? { instructions: primaryInstructionsForSubmit }
                 : {}),
-              ...(primaryAttachmentRefs.length > 0
-                ? { inputAttachments: primaryAttachmentRefs }
+              ...(primaryStepAttachmentRefs.length > 0
+                ? { inputAttachments: primaryStepAttachmentRefs }
+                : pageMode.mode !== "create"
+                  ? { inputAttachments: [] }
                 : {}),
               ...(primaryStepHasSkillOverride
                 ? { tool: primaryStepTool, skill: primaryStepSkill }
@@ -4225,8 +4314,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       instructions: objectiveInstructionsForSubmit,
       tool: resolvedTool,
       skill: resolvedSkill,
-      ...(uploadedObjectiveAttachments.length > 0
-        ? { inputAttachments: uploadedObjectiveAttachments }
+      ...(taskLevelAttachmentRefs.length > 0
+        ? { inputAttachments: taskLevelAttachmentRefs }
+        : pageMode.mode !== "create"
+          ? { inputAttachments: [] }
         : {}),
       ...(taskSkillSelectors ? { skills: taskSkillSelectors } : {}),
       ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
@@ -4793,6 +4884,71 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         <p className="small">
                           {`Up to ${attachmentPolicy.maxCount} files across all steps, ${formatAttachmentBytes(attachmentPolicy.maxBytes)} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`}
                         </p>
+                        {isPrimaryStep && persistedObjectiveAttachments.length > 0 ? (
+                          <ul className="list queue-step-attachments-list">
+                            {persistedObjectiveAttachments.map((attachment) => (
+                              <li key={`objective-${attachment.artifactId}`}>
+                                <span>
+                                  {`${attachment.filename} (${formatAttachmentBytes(attachment.sizeBytes)})`}
+                                </span>
+                                <a
+                                  className="button secondary"
+                                  href={configuredArtifactDownloadUrl(
+                                    artifactDownloadEndpoint,
+                                    attachment.artifactId,
+                                  )}
+                                  download={attachment.filename}
+                                >
+                                  Download
+                                </a>
+                                <button
+                                  type="button"
+                                  className="button secondary"
+                                  onClick={() =>
+                                    removePersistedObjectiveAttachment(
+                                      attachment.artifactId,
+                                    )
+                                  }
+                                >
+                                  Remove
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {step.inputAttachments.length > 0 ? (
+                          <ul className="list queue-step-attachments-list">
+                            {step.inputAttachments.map((attachment) => (
+                              <li key={`step-${step.localId}-${attachment.artifactId}`}>
+                                <span>
+                                  {`${attachment.filename} (${formatAttachmentBytes(attachment.sizeBytes)})`}
+                                </span>
+                                <a
+                                  className="button secondary"
+                                  href={configuredArtifactDownloadUrl(
+                                    artifactDownloadEndpoint,
+                                    attachment.artifactId,
+                                  )}
+                                  download={attachment.filename}
+                                >
+                                  Download
+                                </a>
+                                <button
+                                  type="button"
+                                  className="button secondary"
+                                  onClick={() =>
+                                    removePersistedStepAttachment(
+                                      step.localId,
+                                      attachment.artifactId,
+                                    )
+                                  }
+                                >
+                                  Remove
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
                         {(selectedStepAttachmentFiles[step.localId] || []).length > 0 ? (
                           <ul className="list queue-step-attachments-list">
                             {(selectedStepAttachmentFiles[step.localId] || []).map((file) => (
