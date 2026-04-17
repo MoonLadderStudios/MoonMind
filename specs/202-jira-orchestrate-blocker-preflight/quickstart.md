@@ -1,6 +1,6 @@
 # Quickstart: Jira Orchestrate Blocker Preflight
 
-## Red-First Validation
+## Red-First Unit Validation
 
 1. Add or update a focused unit test for `jira-orchestrate` expansion in `tests/unit/api/test_task_step_templates_service.py`.
 2. Assert the expanded preset includes a blocker preflight step immediately after `Move Jira issue to In Progress`.
@@ -10,6 +10,17 @@
 
 ```bash
 pytest tests/unit/api/test_task_step_templates_service.py -q
+```
+
+## Red-First Integration Validation
+
+1. Add or update startup seed coverage in `tests/integration/test_startup_task_template_seeding.py`.
+2. Assert the persisted global `jira-orchestrate` template includes the blocker preflight step after In Progress and before MoonSpec lifecycle steps.
+3. Assert the persisted template still preserves the pull request handoff and final Code Review transition.
+4. Run the focused startup seed integration test and confirm it fails before implementation:
+
+```bash
+pytest tests/integration/test_startup_task_template_seeding.py -q
 ```
 
 ## Implementation Validation
@@ -22,11 +33,7 @@ pytest tests/unit/api/test_task_step_templates_service.py -q
 
 Expected result: the catalog expansion test passes with the new blocker preflight step and updated step count.
 
-## Startup Seed Integration
-
-Update startup seed coverage in `tests/integration/test_startup_task_template_seeding.py` so it verifies the seeded `jira-orchestrate` template includes the preflight step in the persisted catalog.
-
-Run:
+Then rerun:
 
 ```bash
 pytest tests/integration/test_startup_task_template_seeding.py -q

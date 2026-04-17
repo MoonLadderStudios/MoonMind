@@ -35,7 +35,7 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T003 Confirm no new database migration, route, persistent model, or raw Jira credential path is needed by documenting the bounded seeded-preset scope in `specs/202-jira-orchestrate-blocker-preflight/tasks.md` if discovery changes the plan. (FR-010, DESIGN-REQ-008)
+- [ ] T003 Confirm the bounded seeded-preset scope by reviewing `specs/202-jira-orchestrate-blocker-preflight/plan.md`, `specs/202-jira-orchestrate-blocker-preflight/research.md`, and `api_service/data/task_step_templates/jira-orchestrate.yaml`; stop before story work if discovery shows a database migration, route, persistent model, or raw Jira credential path is needed. (FR-010, DESIGN-REQ-008)
 
 **Checkpoint**: Foundation ready; story test and implementation work can begin.
 
