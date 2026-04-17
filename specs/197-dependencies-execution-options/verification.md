@@ -27,7 +27,7 @@
 | FR-007 | `frontend/src/entrypoints/task-create.tsx:2642`, `frontend/src/entrypoints/task-create.tsx:2648`, `frontend/src/entrypoints/task-create.test.tsx:4143`, `frontend/src/entrypoints/task-create.test.tsx:4166` | VERIFIED | Branch/none and resolver-style tasks omit enabled merge automation fields. |
 | FR-008 | `frontend/src/entrypoints/task-create.tsx:3838`, `frontend/src/entrypoints/task-create.tsx:3845`, `frontend/src/entrypoints/task-create.test.tsx:4373`, `frontend/src/entrypoints/task-create.test.tsx:4405`, `frontend/src/entrypoints/task-create.test.tsx:4435` | VERIFIED | Jira import and image upload do not bypass repository validation, artifact upload ordering, or resolver restrictions. |
 | FR-009 | `frontend/src/entrypoints/task-create.tsx:5409`, `frontend/src/entrypoints/task-create.test.tsx:4075` | VERIFIED | UI copy explains `pr-resolver` after readiness and does not advertise direct auto-merge. |
-| FR-010 | `specs/197-dependencies-execution-options/spec.md:6`, `specs/197-dependencies-execution-options/tasks.md:82`, this report | VERIFIED | MM-379 is preserved in spec, task, and verification artifacts. |
+| FR-010 | `specs/197-dependencies-execution-options/spec.md:6`, `specs/197-dependencies-execution-options/spec.md:87`, `specs/197-dependencies-execution-options/tasks.md:82`, this report | VERIFIED | MM-379 and the original Jira preset brief are preserved in spec, task, and verification artifacts. |
 
 ## Acceptance Scenario Coverage
 
@@ -52,7 +52,7 @@
 
 ## Original Request Alignment
 
-- PASS: The Jira preset brief for MM-379 is preserved as the canonical Moon Spec input.
+- PASS: The Jira preset brief for MM-379 is preserved as the canonical Moon Spec input, including the full original preset brief in `spec.md`.
 - PASS: Runtime mode was used; implementation evidence targets Create page behavior rather than docs-only updates.
 - PASS: Existing valid behavior was not regenerated or replaced; missing spec/plan/tasks artifacts were created first, then focused tests were added and validated.
 - PASS: The source design path `docs/UI/CreatePage.md` is treated as runtime source requirements through DESIGN-REQ-004, DESIGN-REQ-013, DESIGN-REQ-014, and DESIGN-REQ-015.
