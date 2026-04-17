@@ -1051,6 +1051,30 @@ function formatAttachmentBytes(value: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function attachmentFileKey(file: File): string {
+  return [
+    file.name || "attachment",
+    file.size,
+    file.type || "application/octet-stream",
+    file.lastModified,
+  ].join(":");
+}
+
+function attachmentTargetKey(target: "objective" | string): string {
+  return target === "objective" ? "objective" : `step:${target}`;
+}
+
+function isImageOnlyPolicy(policy: AttachmentPolicy): boolean {
+  return (
+    policy.allowedContentTypes.length > 0 &&
+    policy.allowedContentTypes.every((type) => type.startsWith("image/"))
+  );
+}
+
+function attachmentControlLabel(policy: AttachmentPolicy): string {
+  return isImageOnlyPolicy(policy) ? "Images" : "Input Attachments";
+}
+
 function validateAttachmentFiles(
   files: File[],
   policy: AttachmentPolicy,
@@ -1090,6 +1114,108 @@ function validateAttachmentFiles(
     );
   }
   return { ok: errors.length === 0, errors, totalBytes };
+}
+
+function validateAttachmentTargets(
+  targets: Array<{ key: string; label: string; files: File[] }>,
+  policy: AttachmentPolicy,
+  persistedRefs: StepAttachmentRef[] = [],
+): {
+  ok: boolean;
+  errors: Record<string, string>;
+  messages: string[];
+} {
+  const errors: Record<string, string> = {};
+  const messages: string[] = [];
+  const files = targets.flatMap((target) =>
+    target.files.map((file) => ({ ...target, file })),
+  );
+  const totalCount = files.length + persistedRefs.length;
+  if (totalCount > policy.maxCount) {
+    const message = `Too many attachments (${totalCount}/${policy.maxCount}).`;
+    errors.attachments = message;
+    messages.push(message);
+  }
+
+  let totalBytes = persistedRefs.reduce(
+    (sum, attachment) => sum + Math.max(0, Number(attachment.sizeBytes) || 0),
+    0,
+  );
+  for (const entry of files) {
+    const type = String(entry.file.type || "")
+      .trim()
+      .toLowerCase();
+    if (!policy.allowedContentTypes.includes(type)) {
+      const message = `${entry.label}: Unsupported file type for ${
+        entry.file.name || "attachment"
+      }.`;
+      errors[entry.key] = message;
+      messages.push(message);
+    }
+    const sizeBytes = Math.max(0, Number(entry.file.size) || 0);
+    if (sizeBytes > policy.maxBytes) {
+      const message = `${entry.label}: ${
+        entry.file.name || "attachment"
+      } exceeds ${formatAttachmentBytes(policy.maxBytes)}.`;
+      errors[entry.key] = message;
+      messages.push(message);
+    }
+    totalBytes += sizeBytes;
+  }
+
+  if (totalBytes > policy.totalBytes) {
+    const message = `Total attachment size exceeds ${formatAttachmentBytes(
+      policy.totalBytes,
+    )}.`;
+    errors.attachments = message;
+    messages.push(message);
+  }
+
+  return { ok: messages.length === 0, errors, messages };
+}
+
+function AttachmentPreview({
+  file,
+  alt,
+  onError,
+}: {
+  file: File;
+  alt: string;
+  onError: () => void;
+}) {
+  const [previewUrl, setPreviewUrl] = useState("");
+
+  useEffect(() => {
+    if (
+      !file.type.startsWith("image/") ||
+      typeof URL === "undefined" ||
+      typeof URL.createObjectURL !== "function"
+    ) {
+      setPreviewUrl("");
+      return;
+    }
+
+    const nextPreviewUrl = URL.createObjectURL(file);
+    setPreviewUrl(nextPreviewUrl);
+    return () => {
+      if (typeof URL.revokeObjectURL === "function") {
+        URL.revokeObjectURL(nextPreviewUrl);
+      }
+    };
+  }, [file]);
+
+  if (!previewUrl) {
+    return null;
+  }
+
+  return (
+    <img
+      alt={alt}
+      className="queue-attachment-preview"
+      src={previewUrl}
+      onError={onError}
+    />
+  );
 }
 
 function validateJiraImageAttachment(
@@ -1932,6 +2058,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   >({});
   const [persistedObjectiveAttachments, setPersistedObjectiveAttachments] =
     useState<StepAttachmentRef[]>([]);
+  const [attachmentTargetErrors, setAttachmentTargetErrors] = useState<
+    Record<string, string>
+  >({});
+  const [previewFailureMessages, setPreviewFailureMessages] = useState<
+    Record<string, string>
+  >({});
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -3098,6 +3230,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   function updateStepAttachments(localId: string, files: File[]) {
+    const targetKey = attachmentTargetKey(localId);
+    setAttachmentTargetErrors((current) => {
+      const next = { ...current };
+      delete next[targetKey];
+      return next;
+    });
     setSteps((current) =>
       current.map((step) => {
         if (
@@ -3144,6 +3282,18 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   function removeObjectiveAttachment(fileToRemove: File) {
+    const targetKey = attachmentTargetKey("objective");
+    const previewKey = `${targetKey}:${attachmentFileKey(fileToRemove)}`;
+    setAttachmentTargetErrors((current) => {
+      const next = { ...current };
+      delete next[targetKey];
+      return next;
+    });
+    setPreviewFailureMessages((current) => {
+      const next = { ...current };
+      delete next[previewKey];
+      return next;
+    });
     setSelectedObjectiveAttachmentFiles((current) => {
       const next = current.filter((file) => file !== fileToRemove);
       updatePresetReapplyStateForObjective(templateFeatureRequest, next);
@@ -3152,6 +3302,18 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   function removeStepAttachment(localId: string, fileToRemove: File) {
+    const targetKey = attachmentTargetKey(localId);
+    const previewKey = `${targetKey}:${attachmentFileKey(fileToRemove)}`;
+    setAttachmentTargetErrors((current) => {
+      const next = { ...current };
+      delete next[targetKey];
+      return next;
+    });
+    setPreviewFailureMessages((current) => {
+      const next = { ...current };
+      delete next[previewKey];
+      return next;
+    });
     setSelectedStepAttachmentFiles((current) => {
       const files = current[localId] || [];
       const nextFiles = files.filter((file) => file !== fileToRemove);
@@ -3163,6 +3325,28 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       return next;
     });
+  }
+
+  function clearAttachmentTargetError(targetKey: string) {
+    setAttachmentTargetErrors((current) => {
+      const next = { ...current };
+      delete next[targetKey];
+      return next;
+    });
+  }
+
+  function markAttachmentPreviewFailed(
+    targetKey: string,
+    targetLabel: string,
+    file: File,
+  ) {
+    const message = `${targetLabel}: Preview unavailable for ${
+      file.name || "attachment"
+    }. Attachment metadata remains available.`;
+    setPreviewFailureMessages((current) => ({
+      ...current,
+      [`${targetKey}:${attachmentFileKey(file)}`]: message,
+    }));
   }
 
   const selectedAttachmentFiles = useMemo(
@@ -3198,14 +3382,32 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       isDefault: Boolean(profile.is_default),
     }));
 
-  const attachmentValidation = useMemo(
+  const attachmentLabel = attachmentControlLabel(attachmentPolicy);
+  const attachmentTargetValidation = useMemo(
     () =>
-      validateAttachmentFiles(
-        selectedAttachmentFiles,
+      validateAttachmentTargets(
+        [
+          {
+            key: attachmentTargetKey("objective"),
+            label: "Feature Request / Initial Instructions",
+            files: selectedObjectiveAttachmentFiles,
+          },
+          ...steps.map((step, index) => ({
+            key: attachmentTargetKey(step.localId),
+            label: `Step ${index + 1}`,
+            files: selectedStepAttachmentFiles[step.localId] || [],
+          })),
+        ],
         attachmentPolicy,
         persistedAttachmentRefs,
       ),
-    [attachmentPolicy, persistedAttachmentRefs, selectedAttachmentFiles],
+    [
+      attachmentPolicy,
+      persistedAttachmentRefs,
+      selectedObjectiveAttachmentFiles,
+      selectedStepAttachmentFiles,
+      steps,
+    ],
   );
 
   const modelOptions = useMemo(
@@ -3853,11 +4055,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         setSubmitMessage("Attachments are disabled for this runtime.");
         return;
       }
-      if (!attachmentValidation.ok) {
-        setSubmitMessage(attachmentValidation.errors.join(" "));
+      if (!attachmentTargetValidation.ok) {
+        setAttachmentTargetErrors(attachmentTargetValidation.errors);
+        setSubmitMessage(attachmentTargetValidation.messages.join(" "));
         return;
       }
     }
+    setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
     if (!supportedTaskRuntimes.includes(normalizedRuntime)) {
@@ -4050,48 +4254,127 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
 
     setIsSubmitting(true);
-    let uploadedObjectiveAttachments: StepAttachmentRef[] = [];
-    let uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
+    const uploadedObjectiveAttachments: StepAttachmentRef[] = [];
+    const uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
     try {
       if (selectedAttachmentFiles.length > 0) {
-        uploadedObjectiveAttachments = await Promise.all(
-          selectedObjectiveAttachmentFiles.map((file) =>
-            createInputAttachmentArtifact(
-              artifactCreateEndpoint,
-              file,
-              normalizedRepository,
-              { kind: "objective" },
-            ),
-          ),
-        );
-        const uploadEntries = await Promise.all(
-          steps.map(async (step, index) => {
-            const files = selectedStepAttachmentFiles[step.localId] || [];
-            if (files.length === 0) {
-              return [step.localId, []] as const;
+        type AttachmentUploadResult =
+          | {
+              ok: true;
+              targetKey: string;
+              ref: StepAttachmentRef;
             }
-            const refs = await Promise.all(
-              files.map((file) =>
-                createInputAttachmentArtifact(
+          | {
+              ok: false;
+              targetKey: string;
+              message: string;
+            };
+        const objectiveTargetKey = attachmentTargetKey("objective");
+        const uploadPromises: Promise<AttachmentUploadResult>[] =
+          selectedObjectiveAttachmentFiles.map(async (file) => {
+            try {
+              const ref = await createInputAttachmentArtifact(
+                artifactCreateEndpoint,
+                file,
+                normalizedRepository,
+                { kind: "objective" },
+              );
+              return {
+                ok: true,
+                targetKey: objectiveTargetKey,
+                ref,
+              } satisfies AttachmentUploadResult;
+            } catch (error) {
+              const failure =
+                error instanceof Error
+                  ? error
+                  : new Error("Failed to upload objective attachment.");
+              const message = `Feature Request / Initial Instructions: ${failure.message}`;
+              setAttachmentTargetErrors((current) => ({
+                ...current,
+                [objectiveTargetKey]: message,
+              }));
+              return {
+                ok: false,
+                targetKey: objectiveTargetKey,
+                message,
+              } satisfies AttachmentUploadResult;
+            }
+          });
+
+        for (const [index, step] of steps.entries()) {
+          const files = selectedStepAttachmentFiles[step.localId] || [];
+          const targetKey = attachmentTargetKey(step.localId);
+          uploadPromises.push(
+            ...files.map(async (file) => {
+              try {
+                const ref = await createInputAttachmentArtifact(
                   artifactCreateEndpoint,
                   file,
                   normalizedRepository,
                   { kind: "step", stepLabel: `Step ${index + 1}` },
-                ),
-              ),
-            );
-            return [step.localId, refs] as const;
-          }),
-        );
-        uploadedStepAttachments = Object.fromEntries(
-          uploadEntries.filter(([, refs]) => refs.length > 0),
-        );
+                );
+                return {
+                  ok: true,
+                  targetKey,
+                  ref,
+                } satisfies AttachmentUploadResult;
+              } catch (error) {
+                const failure =
+                  error instanceof Error
+                    ? error
+                    : new Error("Failed to upload step attachment.");
+                const message = `Step ${index + 1}: ${failure.message}`;
+                setAttachmentTargetErrors((current) => ({
+                  ...current,
+                  [targetKey]: message,
+                }));
+                return {
+                  ok: false,
+                  targetKey,
+                  message,
+                } satisfies AttachmentUploadResult;
+              }
+            }),
+          );
+        }
+
+        const uploadResults = await Promise.all(uploadPromises);
+        const uploadFailure = uploadResults.find((result) => !result.ok);
+        if (uploadFailure && !uploadFailure.ok) {
+          setSubmitMessage(uploadFailure.message);
+          setIsSubmitting(false);
+          return;
+        }
+
+        for (const result of uploadResults) {
+          if (!result.ok) {
+            continue;
+          }
+          if (result.targetKey === objectiveTargetKey) {
+            uploadedObjectiveAttachments.push(result.ref);
+            continue;
+          }
+          const stepAttachmentRefs =
+            uploadedStepAttachments[result.targetKey] || [];
+          stepAttachmentRefs.push(result.ref);
+          uploadedStepAttachments[result.targetKey] = stepAttachmentRefs;
+        }
+
+        for (const step of steps) {
+          const targetKey = attachmentTargetKey(step.localId);
+          if (uploadedStepAttachments[targetKey]) {
+            uploadedStepAttachments[step.localId] =
+              uploadedStepAttachments[targetKey];
+            delete uploadedStepAttachments[targetKey];
+          }
+        }
       }
     } catch (error) {
       const failure =
         error instanceof Error
           ? error
-          : new Error("Failed to upload step attachments.");
+          : new Error("Failed to upload attachments.");
       setSubmitMessage(failure.message);
       setIsSubmitting(false);
       return;
@@ -4865,7 +5148,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     {attachmentPolicy.enabled ? (
                       <div className="queue-step-attachments">
                         <label>
-                          Attachments (optional)
+                          {`Step ${index + 1} ${attachmentLabel} (optional)`}
                           <input
                             type="file"
                             data-step-field="attachments"
@@ -4884,6 +5167,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         <p className="small">
                           {`Up to ${attachmentPolicy.maxCount} files across all steps, ${formatAttachmentBytes(attachmentPolicy.maxBytes)} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`}
                         </p>
+                        {attachmentTargetErrors[
+                          attachmentTargetKey(step.localId)
+                        ] ? (
+                          <p className="notice error">
+                            {
+                              attachmentTargetErrors[
+                                attachmentTargetKey(step.localId)
+                              ]
+                            }
+                          </p>
+                        ) : null}
                         {isPrimaryStep && persistedObjectiveAttachments.length > 0 ? (
                           <ul className="list queue-step-attachments-list">
                             {persistedObjectiveAttachments.map((attachment) => (
@@ -4953,7 +5247,50 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           <ul className="list queue-step-attachments-list">
                             {(selectedStepAttachmentFiles[step.localId] || []).map((file) => (
                               <li key={`${file.name}-${file.size}-${file.lastModified}`}>
-                                {`${file.name} (${formatAttachmentBytes(file.size)})`}
+                                <span>
+                                  <strong>{file.name}</strong>{" "}
+                                  <span className="small">
+                                    {`${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`}
+                                  </span>
+                                </span>
+                                <AttachmentPreview
+                                  file={file}
+                                  alt={`Preview of Step ${index + 1} attachment ${file.name}`}
+                                  onError={() =>
+                                    markAttachmentPreviewFailed(
+                                      attachmentTargetKey(step.localId),
+                                      `Step ${index + 1}`,
+                                      file,
+                                    )
+                                  }
+                                />
+                                {previewFailureMessages[
+                                  `${attachmentTargetKey(step.localId)}:${attachmentFileKey(file)}`
+                                ] ? (
+                                  <p className="small notice error">
+                                    {
+                                      previewFailureMessages[
+                                        `${attachmentTargetKey(step.localId)}:${attachmentFileKey(file)}`
+                                      ]
+                                    }
+                                  </p>
+                                ) : null}
+                                {attachmentTargetErrors[
+                                  attachmentTargetKey(step.localId)
+                                ] ? (
+                                  <button
+                                    type="button"
+                                    className="secondary"
+                                    aria-label={`Retry upload for Step ${index + 1} attachment ${file.name}`}
+                                    onClick={() =>
+                                      clearAttachmentTargetError(
+                                        attachmentTargetKey(step.localId),
+                                      )
+                                    }
+                                  >
+                                    Retry
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
                                   className="secondary"
@@ -5129,7 +5466,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               {attachmentPolicy.enabled ? (
                 <div className="queue-step-attachments">
                   <label>
-                    Feature Request / Initial Instructions attachments
+                    {`Feature Request / Initial Instructions ${attachmentLabel}`}
                     <input
                       type="file"
                       data-step-field="objective-attachments"
@@ -5139,6 +5476,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                       onChange={(event) => {
                         const nextFiles = Array.from(
                           event.currentTarget.files || [],
+                        );
+                        clearAttachmentTargetError(
+                          attachmentTargetKey("objective"),
                         );
                         setSelectedObjectiveAttachmentFiles(nextFiles);
                         updatePresetReapplyStateForObjective(
@@ -5151,6 +5491,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <p className="small">
                     {`Up to ${attachmentPolicy.maxCount} files across the objective and all steps, ${formatAttachmentBytes(attachmentPolicy.maxBytes)} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`}
                   </p>
+                  {attachmentTargetErrors[attachmentTargetKey("objective")] ? (
+                    <p className="notice error">
+                      {attachmentTargetErrors[attachmentTargetKey("objective")]}
+                    </p>
+                  ) : null}
                   {selectedObjectiveAttachmentFiles.length > 0 ? (
                     <ul className="list queue-step-attachments-list">
                       {selectedObjectiveAttachmentFiles.map((file) => (
@@ -5161,6 +5506,44 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                               {`${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`}
                             </span>
                           </span>
+                          <AttachmentPreview
+                            file={file}
+                            alt={`Preview of objective attachment ${file.name}`}
+                            onError={() =>
+                              markAttachmentPreviewFailed(
+                                attachmentTargetKey("objective"),
+                                "Feature Request / Initial Instructions",
+                                file,
+                              )
+                            }
+                          />
+                          {previewFailureMessages[
+                            `${attachmentTargetKey("objective")}:${attachmentFileKey(file)}`
+                          ] ? (
+                            <p className="small notice error">
+                              {
+                                previewFailureMessages[
+                                  `${attachmentTargetKey("objective")}:${attachmentFileKey(file)}`
+                                ]
+                              }
+                            </p>
+                          ) : null}
+                          {attachmentTargetErrors[
+                            attachmentTargetKey("objective")
+                          ] ? (
+                            <button
+                              type="button"
+                              className="secondary"
+                              aria-label={`Retry upload for objective attachment ${file.name}`}
+                              onClick={() =>
+                                clearAttachmentTargetError(
+                                  attachmentTargetKey("objective"),
+                                )
+                              }
+                            >
+                              Retry
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             className="secondary"
