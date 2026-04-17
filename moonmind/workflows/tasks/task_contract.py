@@ -63,6 +63,12 @@ _EMBEDDED_ATTACHMENT_DATA_FIELDS = frozenset(
 class TaskContractError(ValueError):
     """Raised when queue payloads violate task contract requirements."""
 
+    def __init__(
+        self, message: str, *, diagnostic: Mapping[str, object] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.diagnostic = dict(diagnostic) if diagnostic is not None else None
+
 
 def _clean_str(value: object) -> str:
     if value is None:
@@ -83,6 +89,126 @@ def _contains_data_image_url(value: object) -> bool:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return any(_contains_data_image_url(item) for item in value)
     return False
+
+
+def _attachment_validation_failed_diagnostic(
+    *,
+    attachment: Mapping[str, object] | None,
+    target_kind: str,
+    error: str,
+    step_ref: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "event": "attachment_validation_failed",
+        "status": "failed",
+        "targetKind": target_kind,
+        "error": error,
+    }
+    if step_ref:
+        payload["stepRef"] = step_ref
+    if attachment is not None:
+        for source_keys, output_key in (
+            (("artifactId", "artifact_id"), "artifactId"),
+            (("filename",), "filename"),
+            (("contentType", "content_type"), "contentType"),
+            (("sizeBytes", "size_bytes"), "sizeBytes"),
+        ):
+            value = next(
+                (
+                    attachment.get(source_key)
+                    for source_key in source_keys
+                    if attachment.get(source_key) is not None
+                    and attachment.get(source_key) != ""
+                ),
+                None,
+            )
+            if value is not None and value != "":
+                payload[output_key] = value
+    return payload
+
+
+def _attachment_payload_value(
+    payload: Mapping[str, object], *field_names: str
+) -> object:
+    for field_name in field_names:
+        value = payload.get(field_name)
+        if _clean_optional_str(value):
+            return value
+    return None
+
+
+def _raise_attachment_validation_error(
+    message: str,
+    *,
+    attachment: Mapping[str, object] | None,
+    target_kind: str,
+    step_ref: str | None = None,
+) -> None:
+    raise TaskContractError(
+        message,
+        diagnostic=_attachment_validation_failed_diagnostic(
+            attachment=attachment,
+            target_kind=target_kind,
+            step_ref=step_ref,
+            error=message,
+        ),
+    )
+
+
+def _validate_input_attachment_payloads(
+    value: object,
+    *,
+    list_error: str,
+    target_kind: str,
+    step_ref: str | None = None,
+) -> object:
+    if value is None or value == "":
+        return []
+    if not isinstance(value, list):
+        _raise_attachment_validation_error(
+            list_error,
+            attachment=None,
+            target_kind=target_kind,
+            step_ref=step_ref,
+        )
+    for raw in value:
+        if not isinstance(raw, Mapping):
+            _raise_attachment_validation_error(
+                "inputAttachments entries must be objects",
+                attachment=None,
+                target_kind=target_kind,
+                step_ref=step_ref,
+            )
+        payload = dict(raw)
+        blocked = sorted(
+            key
+            for key in payload
+            if str(key).strip() in _EMBEDDED_ATTACHMENT_DATA_FIELDS
+        )
+        if blocked or _contains_data_image_url(payload):
+            _raise_attachment_validation_error(
+                "inputAttachments entries must not include embedded image data",
+                attachment=payload,
+                target_kind=target_kind,
+                step_ref=step_ref,
+            )
+        missing = [
+            field_name
+            for field_name, aliases in (
+                ("artifactId", ("artifactId", "artifact_id")),
+                ("filename", ("filename",)),
+                ("contentType", ("contentType", "content_type")),
+            )
+            if _attachment_payload_value(payload, *aliases) is None
+        ]
+        if missing:
+            _raise_attachment_validation_error(
+                "inputAttachments entries require artifactId, filename, and contentType",
+                attachment=payload,
+                target_kind=target_kind,
+                step_ref=step_ref,
+            )
+    return value
 
 
 def _default_publish_mode() -> str:
@@ -661,7 +787,11 @@ class TaskInputAttachmentRef(BaseModel):
     @classmethod
     def _reject_embedded_image_data(cls, value: object) -> object:
         if not isinstance(value, Mapping):
-            raise TaskContractError("inputAttachments entries must be objects")
+            _raise_attachment_validation_error(
+                "inputAttachments entries must be objects",
+                attachment=None,
+                target_kind="unknown",
+            )
         payload = dict(value)
         blocked = sorted(
             key
@@ -669,8 +799,10 @@ class TaskInputAttachmentRef(BaseModel):
             if str(key).strip() in _EMBEDDED_ATTACHMENT_DATA_FIELDS
         )
         if blocked or _contains_data_image_url(payload):
-            raise TaskContractError(
-                "inputAttachments entries must not include embedded image data"
+            _raise_attachment_validation_error(
+                "inputAttachments entries must not include embedded image data",
+                attachment=payload,
+                target_kind=str(payload.get("targetKind") or "unknown"),
             )
         return payload
 
@@ -679,12 +811,16 @@ class TaskInputAttachmentRef(BaseModel):
     def _normalize_required_string(cls, value: object) -> str:
         cleaned = _clean_optional_str(value)
         if not cleaned:
-            raise TaskContractError(
-                "inputAttachments entries require artifactId, filename, and contentType"
+            _raise_attachment_validation_error(
+                "inputAttachments entries require artifactId, filename, and contentType",
+                attachment=None,
+                target_kind="unknown",
             )
         if _contains_data_image_url(cleaned):
-            raise TaskContractError(
-                "inputAttachments entries must not include embedded image data"
+            _raise_attachment_validation_error(
+                "inputAttachments entries must not include embedded image data",
+                attachment=None,
+                target_kind="unknown",
             )
         return cleaned
 
@@ -804,11 +940,11 @@ class TaskStepSpec(BaseModel):
     @field_validator("input_attachments", mode="before")
     @classmethod
     def _normalize_input_attachments(cls, value: object) -> object:
-        if value is None or value == "":
-            return []
-        if not isinstance(value, list):
-            raise TaskContractError("task.steps[].inputAttachments must be a list")
-        return value
+        return _validate_input_attachment_payloads(
+            value,
+            list_error="task.steps[].inputAttachments must be a list",
+            target_kind="step",
+        )
 
     @model_validator(mode="before")
     @classmethod
@@ -816,6 +952,13 @@ class TaskStepSpec(BaseModel):
         if not isinstance(value, Mapping):
             return value
         payload = dict(value)
+        if "inputAttachments" in payload:
+            _validate_input_attachment_payloads(
+                payload.get("inputAttachments"),
+                list_error="task.steps[].inputAttachments must be a list",
+                target_kind="step",
+                step_ref=_clean_optional_str(payload.get("id")),
+            )
         forbidden = {
             "runtime",
             "targetRuntime",
@@ -877,11 +1020,11 @@ class TaskExecutionSpec(BaseModel):
     @field_validator("input_attachments", mode="before")
     @classmethod
     def _normalize_input_attachments(cls, value: object) -> object:
-        if value is None or value == "":
-            return []
-        if not isinstance(value, list):
-            raise TaskContractError("task.inputAttachments must be a list")
-        return value
+        return _validate_input_attachment_payloads(
+            value,
+            list_error="task.inputAttachments must be a list",
+            target_kind="objective",
+        )
 
     @field_validator("authored_presets", mode="before")
     @classmethod
