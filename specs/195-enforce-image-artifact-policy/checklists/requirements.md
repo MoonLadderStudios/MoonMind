@@ -38,3 +38,4 @@
 
 - Input classified as a single-story runtime feature request from the MM-368 Jira preset brief.
 - Existing Moon Spec artifacts were inspected; no MM-368 feature directory existed, so orchestration resumed from Specify.
+- Active `spec.md` passes the specify gate and embeds the original MM-368 Jira preset brief for final verification comparison.

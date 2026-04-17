@@ -7,7 +7,7 @@
 
 ## Original Request Source
 
-Canonical Moon Spec orchestration input: `docs/tmp/jira-orchestration-inputs/MM-368-moonspec-orchestration-input.md`
+Canonical Moon Spec orchestration input: `docs/tmp/jira-orchestration-inputs/MM-368-moonspec-orchestration-input.md`. The original MM-368 Jira preset brief is also preserved directly in `spec.md` under "Original Jira Preset Brief" so verification can compare against the active specification without resolving the external preserved brief file.
 
 The input was classified as a single-story runtime feature request. The Jira brief points at `docs/Tasks/ImageSystem.md`; that document was treated as runtime source requirements, not docs-only work.
 
