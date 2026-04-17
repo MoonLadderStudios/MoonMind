@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ from api_service.db.models import (
 )
 from api_service.main import app
 from moonmind.config.settings import settings
+from moonmind.workflows import get_temporal_artifact_service
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 CURRENT_USER_DEP = get_current_user()
@@ -746,6 +748,27 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                         "requiredCapabilities": ["git"],
                         "task": {
                             "instructions": "Implement Temporal submit redirect coverage.",
+                            "inputAttachments": [
+                                {
+                                    "artifactId": "art-objective",
+                                    "filename": "same-name.png",
+                                    "contentType": "image/png",
+                                    "sizeBytes": 10,
+                                }
+                            ],
+                            "steps": [
+                                {
+                                    "instructions": "Review the step screenshot.",
+                                    "inputAttachments": [
+                                        {
+                                            "artifactId": "art-step",
+                                            "filename": "same-name.png",
+                                            "contentType": "image/png",
+                                            "sizeBytes": 20,
+                                        }
+                                    ],
+                                }
+                            ],
                             "runtime": {
                                 "mode": "codex",
                                 "model": "gpt-5.3-codex",
@@ -809,11 +832,53 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                     body["workflowId"],
                 )
                 assert canonical is not None
+                assert canonical.parameters["task"]["inputAttachments"] == [
+                    {
+                        "artifactId": "art-objective",
+                        "filename": "same-name.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 10,
+                    }
+                ]
+                assert canonical.parameters["task"]["steps"][0][
+                    "inputAttachments"
+                ] == [
+                    {
+                        "artifactId": "art-step",
+                        "filename": "same-name.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 20,
+                    }
+                ]
                 assert (
                     canonical.memo["task_input_snapshot_ref"]
                     == snapshot["artifactRef"]
                 )
                 assert snapshot["artifactRef"] in canonical.artifact_refs
+                artifact_service = get_temporal_artifact_service(session)
+                _, stored = await artifact_service.read(
+                    artifact_id=snapshot["artifactRef"],
+                    principal=str(shared_user_id),
+                )
+                snapshot_payload = json.loads(stored.decode("utf-8"))
+                assert snapshot_payload["draft"]["task"]["inputAttachments"] == [
+                    {
+                        "artifactId": "art-objective",
+                        "filename": "same-name.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 10,
+                    }
+                ]
+                assert snapshot_payload["draft"]["task"]["steps"][0][
+                    "inputAttachments"
+                ] == [
+                    {
+                        "artifactId": "art-step",
+                        "filename": "same-name.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 20,
+                    }
+                ]
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine

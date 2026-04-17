@@ -78,6 +78,7 @@ from moonmind.workflows.tasks.model_resolver import resolve_effective_model
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 from moonmind.workflows.tasks.task_contract import (
     TaskContractError,
+    TaskInputAttachmentRef,
     TaskProposalPolicy,
     TaskSkillSelectors,
 )
@@ -1280,6 +1281,27 @@ def _normalize_task_proposal_policy(raw: Any) -> dict[str, Any] | None:
         raise _invalid_task_request(str(exc)) from exc
 
 
+def _normalize_task_input_attachments(
+    raw: Any, *, field_name: str
+) -> list[dict[str, Any]]:
+    if raw is None or raw == "":
+        return []
+    if not isinstance(raw, list):
+        raise _invalid_task_request(f"{field_name} must be a JSON array.")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        try:
+            attachment = TaskInputAttachmentRef.model_validate(item).model_dump(
+                by_alias=True,
+                exclude_none=True,
+            )
+        except (TaskContractError, ValidationError, ValueError) as exc:
+            raise _invalid_task_request(f"{field_name}[{index}]: {exc}") from exc
+        normalized.append(attachment)
+    return normalized
+
+
 def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw_steps = task_payload.get("steps")
     if raw_steps is None:
@@ -1331,6 +1353,13 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         if normalized_skills is not None:
             normalized_step["skills"] = normalized_skills
 
+        normalized_input_attachments = _normalize_task_input_attachments(
+            step_payload.get("inputAttachments"),
+            field_name=f"payload.task.steps[{index}].inputAttachments",
+        )
+        if normalized_input_attachments:
+            normalized_step["inputAttachments"] = normalized_input_attachments
+
         raw_skill = (
             step_payload.get("skill")
             if isinstance(step_payload.get("skill"), Mapping)
@@ -1366,6 +1395,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "id",
                 "title",
                 "instructions",
+                "inputAttachments",
                 "skill",
                 "skills",
                 "tool",
@@ -1920,6 +1950,12 @@ async def _create_execution_from_task_request(
     normalized_task_for_planner["proposeTasks"] = propose_tasks
     if normalized_proposal_policy is not None:
         normalized_task_for_planner["proposalPolicy"] = normalized_proposal_policy
+    normalized_input_attachments = _normalize_task_input_attachments(
+        task_payload.get("inputAttachments"),
+        field_name="payload.task.inputAttachments",
+    )
+    if normalized_input_attachments:
+        normalized_task_for_planner["inputAttachments"] = normalized_input_attachments
     if normalized_task_skills is not None:
         normalized_task_for_planner["skills"] = normalized_task_skills
     if normalized_tool is not None:

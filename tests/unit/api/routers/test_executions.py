@@ -971,6 +971,107 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     }
 
 
+def test_create_task_shaped_execution_forwards_input_attachments(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """MM-367: objective and step attachment refs reach MoonMind.Run parameters."""
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Inspect submitted screenshots.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art-objective",
+                            "filename": "same-name.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 10,
+                        }
+                    ],
+                    "steps": [
+                        {
+                            "instructions": "Inspect the step screenshot.",
+                            "inputAttachments": [
+                                {
+                                    "artifactId": "art-step",
+                                    "filename": "same-name.png",
+                                    "contentType": "image/png",
+                                    "sizeBytes": 20,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["task"]["inputAttachments"] == [
+        {
+            "artifactId": "art-objective",
+            "filename": "same-name.png",
+            "contentType": "image/png",
+            "sizeBytes": 10,
+        }
+    ]
+    assert initial_parameters["task"]["steps"][0]["inputAttachments"] == [
+        {
+            "artifactId": "art-step",
+            "filename": "same-name.png",
+            "contentType": "image/png",
+            "sizeBytes": 20,
+        }
+    ]
+
+
+def test_create_task_shaped_execution_rejects_embedded_attachment_data(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """MM-367: task-shaped submit rejects inline image payloads in refs."""
+
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Inspect submitted screenshot.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art-inline",
+                            "filename": "inline.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 10,
+                            "dataUrl": "data:image/png;base64,AAAA",
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_request"
+    assert "embedded image data" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_derives_pr_resolver_title_from_tool_inputs(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
