@@ -1,6 +1,6 @@
 # Tasks: Create Page Repository Dropdown
 
-**Input**: Design documents from `/specs/202-repository-dropdown/`  
+**Input**: Design documents from `/specs/203-repository-dropdown/`  
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
@@ -26,7 +26,7 @@
 **Purpose**: Verify existing project and test surfaces needed for this story
 
 - [X] T001 Verify repository option work uses existing dashboard runtime config and Create page files in `api_service/api/routers/task_dashboard_view_model.py` and `frontend/src/entrypoints/task-create.tsx`
-- [X] T002 Verify focused backend and frontend test commands from `specs/202-repository-dropdown/quickstart.md`
+- [X] T002 Verify focused backend and frontend test commands from `specs/203-repository-dropdown/quickstart.md`
 
 ---
 
@@ -36,8 +36,8 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete
 
-- [X] T003 Define the browser-safe repository option contract in `specs/202-repository-dropdown/contracts/repository-options.md` for FR-001, FR-005, FR-006
-- [X] T004 Confirm no persistent storage or migration is required in `specs/202-repository-dropdown/plan.md` for FR-004
+- [X] T003 Define the browser-safe repository option contract in `specs/203-repository-dropdown/contracts/repository-options.md` for FR-001, FR-005, FR-006
+- [X] T004 Confirm no persistent storage or migration is required in `specs/203-repository-dropdown/plan.md` for FR-004
 
 **Checkpoint**: Foundation ready - story test and implementation work can now begin
 
@@ -87,7 +87,7 @@
 
 **Purpose**: Improvements that strengthen the completed story without changing its core scope
 
-- [X] T017 [P] Update MoonSpec verification evidence and preserve MM-393 references in `specs/202-repository-dropdown/quickstart.md`
+- [X] T017 [P] Update MoonSpec verification evidence and preserve MM-393 references in `specs/203-repository-dropdown/quickstart.md`
 - [X] T018 Run `./tools/test_unit.sh` for final required unit-suite verification
 - [X] T019 Run `/speckit.verify` to validate the final implementation against the original MM-393 feature request
 

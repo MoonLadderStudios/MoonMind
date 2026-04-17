@@ -4832,21 +4832,66 @@ describe("Task Create Entrypoint", () => {
     expect(payload).not.toHaveProperty("mergeAutomation");
   });
 
-  it("places the Create action at the right end of the step action row", async () => {
+  it("keeps step authoring and bottom controls inside one shared Steps card", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    await screen.findByText("Step 1 (Primary)");
+    const primaryStepLabel = await screen.findByText("Step 1 (Primary)");
+
+    const stepsSection = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Steps"]',
+    );
+    expect(stepsSection).not.toBeNull();
+    expect(stepsSection?.classList.contains("card")).toBe(true);
+    expect(
+      Array.from(document.querySelectorAll<HTMLElement>(".queue-step-section"))
+        .some((element) => element.classList.contains("card")),
+    ).toBe(false);
 
     const addStepButton = screen.getByRole("button", { name: "Add Step" });
     const createButton = screen.getByRole("button", { name: "Create" });
+    const repoInput = screen.getByLabelText(/GitHub Repo/);
+    const startingBranchInput = screen.getByLabelText("Starting Branch (optional)");
+    const targetBranchInput = screen.getByLabelText("Target Branch (optional)");
     const stepActionRow = addStepButton.closest(".queue-step-actions");
 
     expect(stepActionRow).not.toBeNull();
+    expect(addStepButton.closest('[data-canonical-create-section="Steps"]')).toBe(
+      stepsSection,
+    );
     expect(createButton.closest(".queue-step-actions")).toBe(stepActionRow);
+    expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBe(
+      stepsSection,
+    );
+    expect(
+      startingBranchInput.closest('[data-canonical-create-section="Steps"]'),
+    ).toBe(stepsSection);
+    expect(
+      targetBranchInput.closest('[data-canonical-create-section="Steps"]'),
+    ).toBe(stepsSection);
     expect(Array.from(stepActionRow?.children || [])).toEqual([
       addStepButton,
       createButton,
     ]);
+    expect(
+      primaryStepLabel.compareDocumentPosition(repoInput) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      repoInput.compareDocumentPosition(startingBranchInput) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      startingBranchInput.compareDocumentPosition(targetBranchInput) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      targetBranchInput.compareDocumentPosition(addStepButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      addStepButton.compareDocumentPosition(createButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("uses only MoonMind REST endpoints while submitting a manually authored task", async () => {
