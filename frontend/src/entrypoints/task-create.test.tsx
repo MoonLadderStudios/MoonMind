@@ -3479,7 +3479,7 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
-  it("keeps manual skill capability routing in advanced settings", async () => {
+  it("reveals per-step advanced skill options from the bottom toggle", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
@@ -3488,19 +3488,30 @@ describe("Task Create Entrypoint", () => {
     expect(primaryStep).not.toBeNull();
     expect(
       within(primaryStep as HTMLElement).queryByLabelText(
+        /skill args/i,
+      ),
+    ).toBeNull();
+    expect(
+      within(primaryStep as HTMLElement).queryByLabelText(
         /skill required capabilities/i,
       ),
     ).toBeNull();
 
-    const advancedSettings = screen
-      .getByText("Advanced Settings")
-      .closest("details") as HTMLDetailsElement | null;
-    expect(advancedSettings).not.toBeNull();
-    expect(advancedSettings?.open).toBe(false);
+    expect(document.querySelector("#queue-advanced-settings")).toBeNull();
 
-    fireEvent.click(screen.getByText("Advanced Settings"));
+    const advancedToggle = screen.getByLabelText("Show advanced step options");
+    expect(advancedToggle.closest('[data-canonical-create-section="Submit"]')).not.toBeNull();
+    fireEvent.click(advancedToggle);
+
+    expect(
+      within(primaryStep as HTMLElement).getByLabelText(
+        "Step 1 Skill Args (optional JSON object)",
+      ),
+    ).toBeTruthy();
     fireEvent.change(
-      screen.getByLabelText("Step 1 skill required capabilities (optional CSV)"),
+      within(primaryStep as HTMLElement).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
       {
         target: { value: "docker, qdrant" },
       },

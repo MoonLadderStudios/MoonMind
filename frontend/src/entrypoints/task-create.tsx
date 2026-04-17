@@ -2032,6 +2032,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const [nextStepNumber, setNextStepNumber] = useState(2);
+  const [showAdvancedStepOptions, setShowAdvancedStepOptions] = useState(false);
   const [runtime, setRuntime] = useState(defaultRuntime);
   const [model, setModel] = useState(
     String(
@@ -3583,6 +3584,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         }
         if (
           Object.prototype.hasOwnProperty.call(updates, "skillId") &&
+          !showAdvancedStepOptions &&
           !shouldShowSkillArgs(nextStep)
         ) {
           nextStep.skillArgs = "";
@@ -4176,7 +4178,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
 
     const primarySkillId = primaryValidation.value.skillId.trim() || "auto";
-    const primarySkillArgsRaw = shouldShowSkillArgs(primaryStep)
+    const primarySkillArgsRaw =
+      showAdvancedStepOptions || shouldShowSkillArgs(primaryStep)
       ? String(primaryStep?.skillArgs || "").trim()
       : "";
     const taskSkillRequiredCapabilities = parseCapabilitiesCsv(
@@ -4237,7 +4240,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         continue;
       }
       const stepSkillId = step.skillId.trim();
-      const stepSkillArgsRaw = shouldShowSkillArgs(step)
+      const stepSkillArgsRaw =
+        showAdvancedStepOptions || shouldShowSkillArgs(step)
         ? step.skillArgs.trim()
         : "";
       const stepSkillCaps = parseCapabilitiesCsv(
@@ -5190,7 +5194,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             {steps.map((step, index) => {
               const isPrimaryStep = index === 0;
               const stepLabel = isPrimaryStep ? " (Primary)" : "";
-              const showSkillArgsField = shouldShowSkillArgs(step);
+              const showSkillArgsField =
+                showAdvancedStepOptions || shouldShowSkillArgs(step);
               return (
                 <section
                   key={step.localId}
@@ -5493,28 +5498,46 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     )}
                   </label>
 
-                  <label
-                    className={
-                      showSkillArgsField
-                        ? "queue-step-skill-args-field"
-                        : "queue-step-skill-args-field hidden"
-                    }
-                    data-skill-args-index={String(index)}
-                  >
-                    Skill Args (optional JSON object)
-                    <textarea
-                      className="queue-step-skill-args"
-                      data-step-field="skillArgs"
-                      data-step-index={String(index)}
-                      placeholder='{"notes":"optional context"}'
-                      value={step.skillArgs}
-                      onChange={(event) =>
-                        updateStep(step.localId, {
-                          skillArgs: event.target.value,
-                        })
-                      }
-                    />
-                  </label>
+                  {showSkillArgsField ? (
+                    <label
+                      className="queue-step-skill-args-field"
+                      data-skill-args-index={String(index)}
+                    >
+                      {`Step ${index + 1} Skill Args (optional JSON object)`}
+                      <textarea
+                        className="queue-step-skill-args"
+                        data-step-field="skillArgs"
+                        data-step-index={String(index)}
+                        placeholder='{"notes":"optional context"}'
+                        value={step.skillArgs}
+                        onChange={(event) =>
+                          updateStep(step.localId, {
+                            skillArgs: event.target.value,
+                          })
+                        }
+                      />
+                    </label>
+                  ) : null}
+                  {showAdvancedStepOptions ? (
+                    <label>
+                      {`Step ${index + 1} Skill Required Capabilities (optional CSV)`}
+                      <input
+                        data-step-field="skillRequiredCapabilities"
+                        data-step-index={String(index)}
+                        value={step.skillRequiredCapabilities}
+                        placeholder="docker,qdrant,unity"
+                        onChange={(event) =>
+                          updateStep(step.localId, {
+                            skillRequiredCapabilities: event.target.value,
+                          })
+                        }
+                      />
+                      <span className="small">
+                        Optional worker routing overrides. Runtime, publish mode,
+                        skills, and presets already add the common capabilities.
+                      </span>
+                    </label>
+                  ) : null}
                 </section>
               );
             })}
@@ -5575,36 +5598,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </div>
           </div>
         </section>
-
-        <details className="card stack" id="queue-advanced-settings">
-          <summary>
-            <strong>Advanced Settings</strong>
-          </summary>
-          <div className="stack queue-advanced-settings-body">
-            <div>
-              <strong>Skill Required Capabilities</strong>
-              <p className="small">
-                Optional worker routing overrides. Runtime, publish mode, skills, and presets already add the common capabilities automatically.
-              </p>
-            </div>
-            {steps.map((step, index) => (
-              <label key={step.localId}>
-                {`Step ${index + 1} skill required capabilities (optional CSV)`}
-                <input
-                  data-step-field="skillRequiredCapabilities"
-                  data-step-index={String(index)}
-                  value={step.skillRequiredCapabilities}
-                  placeholder="docker,qdrant,unity"
-                  onChange={(event) =>
-                    updateStep(step.localId, {
-                      skillRequiredCapabilities: event.target.value,
-                    })
-                  }
-                />
-              </label>
-            ))}
-          </div>
-        </details>
 
         {taskTemplateCatalogEnabled ? (
           <section
@@ -6143,6 +6136,20 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           data-canonical-create-section="Submit"
           aria-label="Submit"
         >
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={showAdvancedStepOptions}
+            aria-label="Show advanced step options"
+            onChange={(event) =>
+              setShowAdvancedStepOptions(event.target.checked)
+            }
+          />
+          Advanced mode
+          <span className="small">
+            Adds skill args and required capabilities to each step.
+          </span>
+        </label>
         <p
           id="queue-submit-message"
           className={
