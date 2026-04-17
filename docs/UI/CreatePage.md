@@ -96,7 +96,7 @@ The page is a single composition form with these canonical sections, in this ord
 | 5 | Execution context | Runtime, provider, model, effort, publish mode |
 | 6 | Execution controls | Priority, max attempts, propose tasks |
 | 7 | Schedule | Immediate, once, deferred minutes, recurring |
-| 8 | Submit | Create, save changes, or rerun |
+| 8 | Submit | Display submission status and error messages |
 
 Rules:
 
