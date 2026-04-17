@@ -920,6 +920,73 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     assert int(raised_strict.value.code) == int(exit_code_blocked)
 
 
+def test_finalize_snapshot_auth_failure_reports_publish_unavailable(
+    pr_resolve_finalize_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    main = pr_resolve_finalize_module["main"]
+    globals_dict = main.__globals__
+    exit_code_blocked = pr_resolve_finalize_module["EXIT_CODE_BLOCKED"]
+
+    def _boom(
+        _snapshot_script: Path,
+        _pr: str | None,
+        _snapshot_path: Path,
+    ) -> None:
+        raise subprocess.CalledProcessError(
+            returncode=pr_resolve_finalize_module["EXIT_CODE_FAILED"],
+            cmd=["python3", "pr_resolve_snapshot.py"],
+            stderr=(
+                "You are not logged into any GitHub hosts. "
+                "Run gh auth login to authenticate."
+            ),
+        )
+
+    monkeypatch.setitem(globals_dict, "_run_snapshot", _boom)
+    monkeypatch.setitem(globals_dict, "_check_pr_merged", lambda _selector: False)
+
+    result_path = tmp_path / "pr_resolver_result.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--pr",
+            "feature/branch",
+            "--result-path",
+            str(result_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        main()
+    assert int(raised.value.code) == 0
+
+    import json
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "publish_unavailable"
+    assert payload["next_step"] == "manual_review"
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--strict-exit-codes",
+            "--pr",
+            "feature/branch",
+            "--result-path",
+            str(result_path),
+        ],
+    )
+    with pytest.raises(SystemExit) as raised_strict:
+        main()
+    assert int(raised_strict.value.code) == int(exit_code_blocked)
+
+
 def test_summarize_ci_treats_stale_rollup_as_running(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
