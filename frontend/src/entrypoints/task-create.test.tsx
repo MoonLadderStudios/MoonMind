@@ -4560,6 +4560,11 @@ describe("Task Create Entrypoint", () => {
       saveButton.compareDocumentPosition(applyButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    expect(saveButton.getAttribute("title")).toBe(
+      "Save the current steps as a reusable preset",
+    );
+    expect(saveButton.querySelector("svg")).not.toBeNull();
+    expect(saveButton.textContent).toBe("");
   });
 
   it("exposes the canonical Create page section order in create mode", async () => {

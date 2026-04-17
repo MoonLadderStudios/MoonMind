@@ -1904,6 +1904,16 @@ function CloseIcon() {
   );
 }
 
+function SaveIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M6 4h10l2 2v14H6z" />
+      <path d="M9 4v6h6V4" />
+      <path d="M9 17h6" />
+    </svg>
+  );
+}
+
 export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const dashboardConfig = readDashboardConfig(payload);
   const pageMode = useMemo(
@@ -5728,9 +5738,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 <button
                   type="button"
                   id="queue-template-save-current"
+                  className="queue-step-icon-button"
+                  aria-label="Save Current Steps as Preset"
+                  title="Save the current steps as a reusable preset"
                   onClick={handleSaveCurrentStepsAsPreset}
                 >
-                  Save Current Steps as Preset
+                  <SaveIcon />
                 </button>
               ) : null}
               <button
