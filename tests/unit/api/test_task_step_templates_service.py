@@ -214,6 +214,78 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     ]
 
 
+async def test_create_template_rejects_templated_include_version(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="include version must be a literal pinned version",
+            ):
+                await service.create_template(
+                    slug="runtime-selected-parent",
+                    title="Runtime Selected Parent",
+                    description="Invalid dynamic child selection",
+                    scope="global",
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[
+                        {
+                            "name": "child_version",
+                            "label": "Child version",
+                            "type": "text",
+                        }
+                    ],
+                    steps=[
+                        {
+                            "kind": "include",
+                            "slug": "child-checks",
+                            "version": "{{ inputs.child_version }}",
+                            "alias": "checks",
+                            "scope": "global",
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=None,
+                )
+
+
+async def test_create_template_rejects_unsupported_include_fields(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="include uses unsupported keys: instructions, skill",
+            ):
+                await service.create_template(
+                    slug="override-parent",
+                    title="Override Parent",
+                    description="Invalid child overrides",
+                    scope="global",
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "kind": "include",
+                            "slug": "child-checks",
+                            "version": "1.0.0",
+                            "alias": "checks",
+                            "scope": "global",
+                            "instructions": "Override child instructions",
+                            "skill": {"id": "moonspec-verify"},
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=None,
+                )
+
+
 async def test_expand_template_rejects_global_parent_personal_include(tmp_path):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:

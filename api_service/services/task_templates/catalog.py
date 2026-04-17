@@ -70,6 +70,18 @@ _STEP_RESERVED_KEYS = frozenset(
         "annotations",
     }
 )
+_INCLUDE_STEP_KEYS = frozenset(
+    {
+        "kind",
+        "slug",
+        "version",
+        "alias",
+        "scope",
+        "inputMapping",
+        "input_mapping",
+        "annotations",
+    }
+)
 _STEP_KIND = "step"
 _INCLUDE_KIND = "include"
 logger = logging.getLogger(__name__)
@@ -766,12 +778,26 @@ class TaskTemplateCatalogService:
                     f"Step {index} kind must be one of: {_STEP_KIND}, {_INCLUDE_KIND}."
                 )
             if kind == _INCLUDE_KIND:
+                unsupported = sorted(
+                    key
+                    for key in raw_step
+                    if str(key).strip() not in _INCLUDE_STEP_KEYS
+                )
+                if unsupported:
+                    raise TaskTemplateValidationError(
+                        f"Step {index} include uses unsupported keys: "
+                        f"{', '.join(unsupported)}."
+                    )
                 include_slug = _normalize_slug(str(raw_step.get("slug") or ""))
                 include_version = str(raw_step.get("version") or "").strip()
                 include_alias = _normalize_slug(str(raw_step.get("alias") or ""))
                 if not include_version:
                     raise TaskTemplateValidationError(
                         f"Step {index} include requires a pinned version."
+                    )
+                if _UNRESOLVED_PLACEHOLDER_PATTERN.search(include_version):
+                    raise TaskTemplateValidationError(
+                        f"Step {index} include version must be a literal pinned version."
                     )
                 if include_alias in include_aliases:
                     raise TaskTemplateValidationError(
