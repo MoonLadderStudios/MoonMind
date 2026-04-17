@@ -25,3 +25,14 @@ Run:
 Expected:
 - Python unit tests pass.
 - Frontend Vitest suite passes after dependencies are prepared.
+
+## Final MoonSpec Verification
+
+Run:
+
+```bash
+/moonspec-verify
+```
+
+Expected:
+- Verification compares the implementation against MM-373, the preserved Jira preset brief in `spec.md`, the single-story requirements, and the recorded test evidence.
