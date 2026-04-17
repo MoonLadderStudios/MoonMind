@@ -42,6 +42,22 @@ _NO_COMMIT_PUSH_PATTERN = re.compile(
     r"\bdo\s+not\s+commit(?:\s+or\s+push|/push)\b",
     re.IGNORECASE,
 )
+_DATA_IMAGE_URL_PATTERN = re.compile(r"^data:image/", re.IGNORECASE)
+_EMBEDDED_ATTACHMENT_DATA_FIELDS = frozenset(
+    {
+        "base64",
+        "bytes",
+        "content",
+        "data",
+        "data_url",
+        "dataUrl",
+        "dataURL",
+        "image_data",
+        "imageData",
+        "raw",
+        "rawBytes",
+    }
+)
 
 
 class TaskContractError(ValueError):
@@ -57,6 +73,16 @@ def _clean_str(value: object) -> str:
 def _clean_optional_str(value: object) -> str | None:
     cleaned = _clean_str(value)
     return cleaned or None
+
+
+def _contains_data_image_url(value: object) -> bool:
+    if isinstance(value, str):
+        return _DATA_IMAGE_URL_PATTERN.match(value.strip()) is not None
+    if isinstance(value, Mapping):
+        return any(_contains_data_image_url(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_contains_data_image_url(item) for item in value)
+    return False
 
 
 def _default_publish_mode() -> str:
@@ -621,6 +647,48 @@ class TaskProposalPolicy(BaseModel):
         return lowered
 
 
+class TaskInputAttachmentRef(BaseModel):
+    """Compact task input attachment reference for task-shaped submissions."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    artifact_id: str = Field(..., alias="artifactId")
+    filename: str = Field(..., alias="filename")
+    content_type: str = Field(..., alias="contentType")
+    size_bytes: int = Field(..., alias="sizeBytes", ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_embedded_image_data(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            raise TaskContractError("inputAttachments entries must be objects")
+        payload = dict(value)
+        blocked = sorted(
+            key
+            for key in payload
+            if str(key).strip() in _EMBEDDED_ATTACHMENT_DATA_FIELDS
+        )
+        if blocked or _contains_data_image_url(payload):
+            raise TaskContractError(
+                "inputAttachments entries must not include embedded image data"
+            )
+        return payload
+
+    @field_validator("artifact_id", "filename", "content_type", mode="before")
+    @classmethod
+    def _normalize_required_string(cls, value: object) -> str:
+        cleaned = _clean_optional_str(value)
+        if not cleaned:
+            raise TaskContractError(
+                "inputAttachments entries require artifactId, filename, and contentType"
+            )
+        if _contains_data_image_url(cleaned):
+            raise TaskContractError(
+                "inputAttachments entries must not include embedded image data"
+            )
+        return cleaned
+
+
 class TaskStepSpec(BaseModel):
     """Optional execution step contained within a canonical task payload."""
 
@@ -631,11 +699,23 @@ class TaskStepSpec(BaseModel):
     instructions: str | None = Field(None, alias="instructions")
     skill: TaskSkillSelection | None = Field(None, alias="skill")
     skills: TaskSkillSelectors | None = Field(None, alias="skills")
+    input_attachments: list[TaskInputAttachmentRef] = Field(
+        default_factory=list, alias="inputAttachments"
+    )
 
     @field_validator("id", "title", "instructions", mode="before")
     @classmethod
     def _normalize_optional_strings(cls, value: object) -> str | None:
         return _clean_optional_str(value)
+
+    @field_validator("input_attachments", mode="before")
+    @classmethod
+    def _normalize_input_attachments(cls, value: object) -> object:
+        if value is None or value == "":
+            return []
+        if not isinstance(value, list):
+            raise TaskContractError("task.steps[].inputAttachments must be a list")
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -687,6 +767,9 @@ class TaskExecutionSpec(BaseModel):
         default_factory=_default_propose_tasks, alias="proposeTasks"
     )
     steps: list[TaskStepSpec] = Field(default_factory=list, alias="steps")
+    input_attachments: list[TaskInputAttachmentRef] = Field(
+        default_factory=list, alias="inputAttachments"
+    )
     container: TaskContainerSelection | None = Field(None, alias="container")
     proposal_policy: TaskProposalPolicy | None = Field(None, alias="proposalPolicy")
 
@@ -694,6 +777,15 @@ class TaskExecutionSpec(BaseModel):
     @classmethod
     def _normalize_instructions(cls, value: object) -> str | None:
         return _clean_optional_str(value)
+
+    @field_validator("input_attachments", mode="before")
+    @classmethod
+    def _normalize_input_attachments(cls, value: object) -> object:
+        if value is None or value == "":
+            return []
+        if not isinstance(value, list):
+            raise TaskContractError("task.inputAttachments must be a list")
+        return value
 
     @field_validator("propose_tasks", mode="before")
     @classmethod
@@ -1386,6 +1478,7 @@ __all__ = [
     "SUPPORTED_EXECUTION_RUNTIMES",
     "CanonicalTaskPayload",
     "TaskContractError",
+    "TaskInputAttachmentRef",
     "build_task_stage_plan",
     "build_canonical_task_view",
     "has_attachment_mutation_fields",

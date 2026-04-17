@@ -143,6 +143,36 @@ function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
   };
 }
 
+function withoutOptionalAuthoringIntegrations(
+  payload: BootPayload = mockPayload,
+): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      sources?: Record<string, unknown>;
+      system?: Record<string, unknown>;
+    };
+  };
+  const { jira: _jiraSources, ...sources } =
+    initialData.dashboardConfig.sources || {};
+  const {
+    jiraIntegration: _jiraIntegration,
+    attachmentPolicy: _attachmentPolicy,
+    taskTemplateCatalog: _taskTemplateCatalog,
+    ...system
+  } = initialData.dashboardConfig.system || {};
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        sources,
+        system,
+      },
+    },
+  };
+}
+
 function withJiraSessionMemory(
   rememberLastBoardInSession: boolean,
   payload: BootPayload = mockPayload,
@@ -211,6 +241,12 @@ describe("Task Create Entrypoint", () => {
       string,
       unknown
     >;
+  }
+
+  function canonicalCreateSections(): string[] {
+    return Array.from(
+      document.querySelectorAll<HTMLElement>("[data-canonical-create-section]"),
+    ).map((element) => element.dataset.canonicalCreateSection || "");
   }
 
   beforeEach(() => {
@@ -1844,6 +1880,43 @@ describe("Task Create Entrypoint", () => {
             dependencyMode: "linear_blocker_chain",
           },
         },
+      },
+    ]);
+  });
+
+  it("reconstructs template attachments for editable Temporal steps", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:template-attachments",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Edit a template-backed task.",
+          steps: [
+            {
+              id: "tpl:speckit-demo:1.2.3:01",
+              instructions: "Clarify the template scope.",
+              templateStepId: "tpl:speckit-demo:1.2.3:01",
+              templateInstructions: "Clarify the template scope.",
+              inputAttachments: [
+                {
+                  artifactId: "art-template",
+                  filename: "template.png",
+                  contentType: "image/png",
+                  sizeBytes: 14,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.steps[0]?.templateAttachments).toEqual([
+      {
+        artifactId: "art-template",
+        filename: "template.png",
+        contentType: "image/png",
+        sizeBytes: 14,
       },
     ]);
   });
@@ -3610,6 +3683,106 @@ describe("Task Create Entrypoint", () => {
     expect(screen.getByText("Schedule (optional)")).not.toBeNull();
   });
 
+  it("exposes the canonical Create page section order in create mode", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    await screen.findByText("Step 1 (Primary)");
+
+    expect(canonicalCreateSections()).toEqual([
+      "Header",
+      "Steps",
+      "Task Presets",
+      "Dependencies",
+      "Execution context",
+      "Execution controls",
+      "Schedule",
+      "Submit",
+    ]);
+  });
+
+  it("uses the same Create page composition surface for edit and rerun modes", async () => {
+    const { unmount } = renderForEdit("mm:artifact-edit");
+
+    await screen.findByRole("heading", { name: "Edit Task" });
+    expect(canonicalCreateSections()).toEqual([
+      "Header",
+      "Steps",
+      "Task Presets",
+      "Dependencies",
+      "Execution context",
+      "Execution controls",
+      "Submit",
+    ]);
+    unmount();
+
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+    );
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    await screen.findByRole("heading", { name: "Rerun Task" });
+    expect(canonicalCreateSections()).toEqual([
+      "Header",
+      "Steps",
+      "Task Presets",
+      "Dependencies",
+      "Execution context",
+      "Execution controls",
+      "Submit",
+    ]);
+  });
+
+  it("keeps manual authoring available without optional presets Jira or image upload", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withoutOptionalAuthoringIntegrations()} />,
+    );
+
+    expect(await screen.findByText("Step 1 (Primary)")).not.toBeNull();
+    expect(await screen.findByLabelText("Instructions")).not.toBeNull();
+    expect(screen.queryByLabelText("Preset")).toBeNull();
+    expect(screen.queryByText("Browse Jira issue")).toBeNull();
+    expect(screen.queryByLabelText(/attachments/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Create" })).not.toBeNull();
+  });
+
+  it("uses only MoonMind REST endpoints while submitting a manually authored task", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withoutOptionalAuthoringIntegrations()} />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Submit through MoonMind REST only." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const urls = fetchSpy.mock.calls.map(([url]) => String(url));
+    expect(urls).toContain("/api/executions");
+    expect(
+      urls.every(
+        (url) =>
+          url.startsWith("/api/") ||
+          url.startsWith("/api?") ||
+          url === "/api",
+      ),
+    ).toBe(true);
+    expect(
+      urls.some((url) =>
+        /atlassian|jira\.|amazonaws|storage\.googleapis|openai|anthropic|googleapis/i.test(
+          url,
+        ),
+      ),
+    ).toBe(false);
+  });
+
   it("updates provider-profile options when the selected runtime changes", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
@@ -4173,6 +4346,314 @@ describe("Task Create Entrypoint", () => {
     ]);
   });
 
+  it("does not mutate the draft when selecting a preset before apply", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Keep this authored step." },
+    });
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+
+    expect(screen.getByDisplayValue("Keep this authored step.")).toBeTruthy();
+    expect(
+      screen.queryByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeTruthy();
+  });
+
+  it("marks an applied preset dirty when preset objective text changes manually", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create with revised objective" },
+      },
+    );
+
+    expect(
+      screen.getByText(
+        "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reapply preset" })).toBeTruthy();
+    expect(
+      screen.getByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
+    ).toBeTruthy();
+  });
+
+  it("marks an applied preset dirty when objective attachments change and submits them as task attachments", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    const objectiveFile = new File(["objective image"], "objective.png", {
+      type: "image/png",
+    });
+    fireEvent.change(
+      await screen.findByLabelText(
+        "Feature Request / Initial Instructions attachments",
+      ),
+      {
+        target: { files: [objectiveFile] },
+      },
+    );
+
+    expect(screen.getByRole("button", { name: "Reapply preset" })).toBeTruthy();
+    expect(
+      screen.getByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const artifactCreateCall = fetchSpy.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "/api/artifacts" &&
+        String(init?.body || "").includes(
+          "task-dashboard-objective-attachment",
+        ),
+    );
+    expect(JSON.parse(String(artifactCreateCall?.[1]?.body))).toMatchObject({
+      content_type: "image/png",
+      size_bytes: objectiveFile.size,
+      metadata: {
+        filename: "objective.png",
+        source: "task-dashboard-objective-attachment",
+        target: "Feature Request / Initial Instructions",
+      },
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.inputAttachments).toEqual([
+      {
+        artifactId: "art-001",
+        filename: "objective.png",
+        contentType: "image/png",
+        sizeBytes: objectiveFile.size,
+      },
+    ]);
+    expect(request.payload.task.steps[0].inputAttachments).toBeUndefined();
+  });
+
+  it("detaches template step identity when a template-bound step attachment changes", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    const file = new File(["step image"], "step.png", { type: "image/png" });
+    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+      target: { files: [file] },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.steps[0]).toEqual(
+      expect.objectContaining({
+        instructions: expect.stringContaining(
+          "Clarify the {{ inputs.feature_name }} scope.",
+        ),
+        inputAttachments: [
+          {
+            artifactId: "art-001",
+            filename: "step.png",
+            contentType: "image/png",
+            sizeBytes: file.size,
+          },
+        ],
+      }),
+    );
+    expect([undefined, null, ""]).toContain(
+      request.payload.task.steps[0]?.id,
+    );
+  });
+
+  it("preserves template step identity when template attachments remain unchanged", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:speckit-demo:1.2.3:01",
+                title: "Clarify spec",
+                instructions: "Clarify the {{ inputs.feature_name }} scope.",
+                inputAttachments: [
+                  {
+                    artifactId: "art-template",
+                    filename: "template.png",
+                    contentType: "image/png",
+                    sizeBytes: 10,
+                  },
+                ],
+                skill: {
+                  id: "speckit-clarify",
+                  args: { feature: "Task Create" },
+                },
+              },
+            ],
+            appliedTemplate: {
+              slug: "speckit-demo",
+              version: "1.2.3",
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.steps[0]).toEqual(
+      expect.objectContaining({
+        id: "tpl:speckit-demo:1.2.3:01",
+        instructions: "Clarify the {{ inputs.feature_name }} scope.",
+      }),
+    );
+    expect(request.payload.task.steps[0].inputAttachments).toBeUndefined();
+  });
+
   it("derives the task objective from feature-request template input aliases", () => {
     expect(
       resolveObjectiveInstructions("", "", [
@@ -4572,9 +5053,9 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
     const requestUrls = fetchSpy.mock.calls.map(([input]) => String(input));
     expect(requestUrls).toContain("/api/jira/boards/42/columns?projectKey=ENG");
     expect(requestUrls).toContain("/api/jira/boards/42/issues?projectKey=ENG");
@@ -4907,26 +5388,32 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
-  it("loads Jira issue preview when an issue is selected", async () => {
+  it("appends Jira issue text immediately when an issue is selected", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
+    const presetInstructions = await screen.findByLabelText(
+      "Feature Request / Initial Instructions",
+    );
     fireEvent.click(
-      await screen.findByRole("button", {
+      screen.getByRole("button", {
         name: "Browse Jira issue for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
 
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+    );
     expect(
-      await screen.findByText("Let operators browse Jira stories."),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("Given a board, users can select a story preview."),
-    ).toBeTruthy();
+      screen.queryByText("Given a board, users can select a story preview."),
+    ).toBeNull();
   });
 
-  it("does not mutate draft fields when selecting a Jira issue preview", async () => {
+  it("appends only to the selected target when selecting a Jira issue", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
@@ -4947,14 +5434,14 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-
-    expect(await screen.findAllByText("Let operators browse Jira stories."))
-      .not.toHaveLength(0);
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing step instructions.",
     );
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
-      "Keep existing preset instructions.",
+      "Keep existing preset instructions.\n\n---\n\nENG-202: Build browser shell\n\nLet operators browse Jira stories.",
     );
   });
 
@@ -5004,6 +5491,10 @@ describe("Task Create Entrypoint", () => {
         "Failed to load Jira issue. You can continue creating the task manually. Jira issue detail failed.",
       ),
     ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: /ENG-202/ }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
     expect(screen.queryByRole("button", { name: "Replace target text" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Append to target text" })).toBeNull();
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
@@ -5014,7 +5505,110 @@ describe("Task Create Entrypoint", () => {
     );
   });
 
-  it("replaces preset instructions with selected Jira import text", async () => {
+  it("waits for a fresh Jira issue detail response before appending cached issue text", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    let issueDetailRequests = 0;
+    const freshIssue = { resolve: null as (() => void) | null };
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
+        issueDetailRequests += 1;
+        if (issueDetailRequests === 1) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              url: "https://jira.example.test/browse/ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              acceptanceCriteriaText:
+                "Given a board, users can select a story preview.",
+              recommendedImports: {
+                presetInstructions:
+                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+                stepInstructions:
+                  "Complete Jira issue ENG-202: Build browser shell",
+              },
+            }),
+          } as Response);
+        }
+        return new Promise<Response>((resolve) => {
+          freshIssue.resolve = () => {
+            resolve({
+              ok: true,
+              json: async () => ({
+                issueKey: "ENG-202",
+                url: "https://jira.example.test/browse/ENG-202",
+                summary: "Build browser shell",
+                issueType: "Story",
+                column: { id: "doing", name: "Doing" },
+                status: { id: "3", name: "In Progress" },
+                descriptionText: "Fresh Jira issue details.",
+                acceptanceCriteriaText:
+                  "Given a board, users can select a story preview.",
+                recommendedImports: {
+                  presetInstructions:
+                    "ENG-202: Build browser shell\n\nFresh Jira issue details.",
+                  stepInstructions:
+                    "Complete Jira issue ENG-202: Build browser shell",
+                },
+              }),
+            } as Response);
+          };
+        });
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const presetInstructions = await screen.findByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Reset instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "To Do 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    await waitFor(() => {
+      expect(freshIssue.resolve).not.toBeNull();
+    });
+    expect(screen.getByRole("dialog", { name: "Browse Jira issue" })).toBeTruthy();
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Reset instructions.",
+    );
+
+    freshIssue.resolve?.();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Reset instructions.\n\n---\n\nENG-202: Build browser shell\n\nFresh Jira issue details.",
+    );
+  });
+
+  it("appends preset instructions with selected Jira import text", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const stepInstructions = await screen.findByLabelText("Instructions");
@@ -5035,18 +5629,16 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
 
-    expect(await screen.findAllByText("Let operators browse Jira stories."))
-      .not.toHaveLength(0);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
 
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing step instructions.",
     );
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
-      "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+      "Keep existing preset instructions.\n\n---\n\nENG-202: Build browser shell\n\nLet operators browse Jira stories.",
     );
   });
 
@@ -5067,17 +5659,17 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
 
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Append to target text" }));
 
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing preset instructions.\n\n---\n\nENG-202: Build browser shell\n\nLet operators browse Jira stories.",
     );
   });
 
-  it("replaces only the selected step instructions with Jira import text", async () => {
+  it("appends only the selected step instructions with Jira import text", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const primaryStep = await screen.findByLabelText("Instructions");
@@ -5109,12 +5701,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
 
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
 
     expect((primaryStep as HTMLTextAreaElement).value).toBe(
       "Keep primary instructions.",
@@ -5122,28 +5712,30 @@ describe("Task Create Entrypoint", () => {
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Keep preset instructions.",
     );
-    expect(secondStep.value).toBe("Complete Jira issue ENG-202: Build browser shell");
+    expect(secondStep.value).toBe(
+      "Replace this secondary step.\n\n---\n\nComplete Jira issue ENG-202: Build browser shell",
+    );
     expect(thirdStep.value).toBe("Keep tertiary instructions.");
   });
 
-  it("defaults step-target Jira imports to execution brief mode", async () => {
+  it("uses execution brief text for step-target Jira imports", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
+    const stepInstructions = await screen.findByLabelText("Instructions");
     fireEvent.click(
-      await screen.findByRole("button", {
+      screen.getByRole("button", {
         name: "Browse Jira issue for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    expect((screen.getByLabelText("Import mode") as HTMLSelectElement).value)
-      .toBe("execution-brief");
-    expect(
-      screen.getByText("Complete Jira issue ENG-202: Build browser shell"),
-    ).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+    expect(screen.queryByLabelText("Import mode")).toBeNull();
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Complete Jira issue ENG-202: Build browser shell",
+    );
   });
 
   it("uses an unnamed Jira issue fallback when issue title metadata is empty", async () => {
@@ -5183,17 +5775,14 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
 
-    expect(await screen.findByText("Complete Jira issue (unnamed)")).toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
-
-    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
-      "Complete Jira issue (unnamed)",
-    );
+    await waitFor(() => {
+      expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+        "Complete Jira issue (unnamed)",
+      );
+    });
   });
 
-  it("preserves existing target text when selected Jira import mode is empty", async () => {
+  it("preserves existing target text when selected Jira import text is empty", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -5240,50 +5829,27 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
     await waitFor(() => {
-      expect(screen.getByLabelText("Import mode")).toBeTruthy();
+      expect(
+        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
+      ).toBeNull();
     });
-    fireEvent.change(screen.getByLabelText("Import mode"), {
-      target: { value: "acceptance-only" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+
 
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
-      "Keep existing preset instructions.",
+      "Keep existing preset instructions.\n\n---\n\nENG-202: Build browser shell",
     );
     await waitFor(() => {
       expect(
         screen.queryByRole("dialog", { name: "Browse Jira issue" }),
       ).toBeNull();
     });
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
-      }),
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
-    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    await waitFor(() => {
-      expect(screen.getByLabelText("Import mode")).toBeTruthy();
-    });
-    fireEvent.change(screen.getByLabelText("Import mode"), {
-      target: { value: "description-only" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Append to target text" }));
 
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing step instructions.",
     );
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
-      ).toBeNull();
-    });
   });
 
-  it("imports selected Jira text by mode", async () => {
+  it("imports selected Jira text in the standard preset format", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const presetInstructions = await screen.findByLabelText(
@@ -5297,24 +5863,13 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findAllByText("Let operators browse Jira stories."))
-      .not.toHaveLength(0);
-
-    fireEvent.change(screen.getByLabelText("Import mode"), {
-      target: { value: "acceptance-only" },
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
 
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
-      "Given a board, users can select a story preview.",
+      "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
     );
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("dialog", { name: "Browse Jira issue" }),
-      ).toBeNull();
-    });
   });
 
   it("marks preset instructions as needing reapply after Jira import changes an applied preset", async () => {
@@ -5349,11 +5904,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
 
     expect(
       screen.getByText(
@@ -5379,7 +5933,7 @@ describe("Task Create Entrypoint", () => {
     expect(screen.getByRole("button", { name: "Apply" })).toBeTruthy();
   });
 
-  it("does not mark preset instructions as needing reapply when Jira import leaves text unchanged", async () => {
+  it("marks preset instructions as needing reapply when Jira import appends to matching text", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
@@ -5413,17 +5967,16 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
 
     expect(
-      screen.queryByText(
+      screen.getByText(
         "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
       ),
-    ).toBeNull();
+    ).toBeTruthy();
   });
 
   it("detaches template step identity when Jira import edits a template-bound step", async () => {
@@ -5458,11 +6011,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -5482,7 +6034,8 @@ describe("Task Create Entrypoint", () => {
         instructions: "Clarify the {{ inputs.feature_name }} scope.",
       }),
       expect.objectContaining({
-        instructions: "Complete Jira issue ENG-202: Build browser shell",
+        instructions:
+          "Write a plan for the task builder recovery.\n\n---\n\nComplete Jira issue ENG-202: Build browser shell",
       }),
     ]);
     expect([undefined, null, ""]).toContain(
@@ -5529,11 +6082,10 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
 
     expect(
       screen.queryByText(
@@ -5552,11 +6104,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
 
     expect(
       screen.getByLabelText(
@@ -5576,9 +6127,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Append to target text" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
 
     expect(
       screen.getByLabelText("Jira import provenance for Step 1 instructions")
@@ -5646,11 +6198,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
     await waitFor(() => {
       expect(
         screen.queryByRole("dialog", { name: "Browse Jira issue" }),
@@ -5673,7 +6224,7 @@ describe("Task Create Entrypoint", () => {
       throw new Error("Expected Jira image download to be pending.");
     }
     imageDownload.resolve();
-    expect(await screen.findByText("wireframe.png (10 B)")).toBeTruthy();
+    expect(await screen.findByText("wireframe.png")).toBeTruthy();
     expect(
       screen.getByRole("dialog", { name: "Browse Jira issue" }),
     ).toBeTruthy();
@@ -5689,11 +6240,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
     await waitFor(() => {
       expect(
         screen.queryByRole("dialog", { name: "Browse Jira issue" }),
@@ -5707,7 +6257,7 @@ describe("Task Create Entrypoint", () => {
     );
 
     expect(
-      await screen.findByRole("button", { name: "Replace target text" }),
+      await screen.findByRole("dialog", { name: "Browse Jira issue" }),
     ).toBeTruthy();
     expect((screen.getByLabelText("Project") as HTMLSelectElement).value).toBe(
       "ENG",
@@ -5748,11 +6298,6 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: /MY-PROJ-123/ }),
     );
-    expect(await screen.findByText("Keep the full Jira project key."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
     await waitFor(() => {
       expect(
         screen.queryByRole("dialog", { name: "Browse Jira issue" }),
@@ -5766,7 +6311,7 @@ describe("Task Create Entrypoint", () => {
     );
 
     expect(
-      await screen.findByRole("button", { name: "Replace target text" }),
+      await screen.findByRole("dialog", { name: "Browse Jira issue" }),
     ).toBeTruthy();
     expect((screen.getByLabelText("Project") as HTMLSelectElement).value).toBe(
       "MY-PROJ",
@@ -5791,11 +6336,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
 
     expect(
       screen.getByLabelText(
@@ -5823,11 +6367,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
 
     expect(
       screen.getByLabelText("Jira import provenance for Step 1 instructions"),
@@ -5850,11 +6393,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
 
     expect(
       screen.getByLabelText("Jira import provenance for Step 1 instructions"),
@@ -5900,11 +6442,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findAllByText("Let operators browse Jira stories."))
-      .not.toHaveLength(0);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
 
     expect(
       screen.queryByLabelText(
@@ -5923,11 +6464,10 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
-    expect(await screen.findByText("Let operators browse Jira stories."))
-      .toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Replace target text" }),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
     await waitFor(() => {
       expect(
         screen.queryByRole("dialog", { name: "Browse Jira issue" }),

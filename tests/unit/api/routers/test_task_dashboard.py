@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from contextlib import contextmanager
+from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator
@@ -22,6 +23,37 @@ from api_service.api.routers.task_dashboard import (
     _resolve_user_dependency_overrides,
     router,
 )
+
+
+class _BootPayloadParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._capturing = False
+        self.payload_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "script":
+            return
+        attr_map = dict(attrs)
+        self._capturing = (
+            attr_map.get("id") == "moonmind-ui-boot"
+            and attr_map.get("type") == "application/json"
+        )
+
+    def handle_data(self, data: str) -> None:
+        if self._capturing:
+            self.payload_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script":
+            self._capturing = False
+
+
+def _extract_boot_payload(response_text: str) -> dict[str, object]:
+    parser = _BootPayloadParser()
+    parser.feed(response_text)
+    assert parser.payload_parts
+    return json.loads("".join(parser.payload_parts))
 
 
 def _write_dashboard_test_manifest(root: Path) -> Path:
@@ -178,6 +210,23 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
+
+
+def test_task_create_route_uses_canonical_boot_payload(client: TestClient) -> None:
+    """GET /tasks/new renders the task-create shell with server runtime config."""
+    response = client.get("/tasks/new")
+
+    assert response.status_code == 200
+    assert "moonmind-ui-boot" in response.text
+    boot_payload = _extract_boot_payload(response.text)
+
+    assert boot_payload["page"] == "task-create"
+    dashboard_config = boot_payload["initialData"]["dashboardConfig"]
+    assert dashboard_config["initialPath"] == "/tasks/new"
+    assert dashboard_config["sources"]["temporal"]["create"].startswith("/api/")
+    assert dashboard_config["sources"]["temporal"]["artifactCreate"].startswith(
+        "/api/"
+    )
 
 
 def test_alias_routes_redirect_to_canonical_paths(client: TestClient) -> None:

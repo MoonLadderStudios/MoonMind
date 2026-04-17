@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ from api_service.db.models import (
 )
 from api_service.main import app
 from moonmind.config.settings import settings
+from moonmind.workflows import get_temporal_artifact_service
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 CURRENT_USER_DEP = get_current_user()
@@ -67,13 +69,16 @@ async def _create_uploaded_artifact(
     artifact_id: str,
     *,
     status: TemporalArtifactStatus = TemporalArtifactStatus.COMPLETE,
+    content_type: str = "application/json; charset=utf-8",
+    size_bytes: int = 128,
+    metadata_json: dict[str, object] | None = None,
 ) -> str:
     async with db_base.async_session_maker() as session:
         session.add(
             TemporalArtifact(
                 artifact_id=artifact_id,
-                content_type="application/json; charset=utf-8",
-                size_bytes=128,
+                content_type=content_type,
+                size_bytes=size_bytes,
                 storage_key=f"tests/{artifact_id}.json",
                 storage_backend=TemporalArtifactStorageBackend.S3,
                 encryption=TemporalArtifactEncryption.NONE,
@@ -81,7 +86,7 @@ async def _create_uploaded_artifact(
                 retention_class=TemporalArtifactRetentionClass.STANDARD,
                 redaction_level=TemporalArtifactRedactionLevel.NONE,
                 upload_mode=TemporalArtifactUploadMode.SINGLE_PUT,
-                metadata_json={"label": "Contract test input"},
+                metadata_json=metadata_json or {"label": "Contract test input"},
             )
         )
         await session.commit()
@@ -716,6 +721,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
         "temporal_artifact_root",
         str(tmp_path / "artifacts"),
     )
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
 
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -734,6 +740,16 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
             input_artifact_ref = await _create_uploaded_artifact(
                 "art_01TESTCONTRACTINPUT000000000",
             )
+            objective_artifact = await _create_uploaded_artifact(
+                "art_01TESTCONTRACTOBJECTIVE0000",
+                content_type="image/png",
+                size_bytes=10,
+            )
+            step_artifact = await _create_uploaded_artifact(
+                "art_01TESTCONTRACTSTEP00000000",
+                content_type="image/png",
+                size_bytes=20,
+            )
             create_response = await client.post(
                 "/api/executions",
                 json={
@@ -746,6 +762,27 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                         "requiredCapabilities": ["git"],
                         "task": {
                             "instructions": "Implement Temporal submit redirect coverage.",
+                            "inputAttachments": [
+                                {
+                                    "artifactId": objective_artifact,
+                                    "filename": "same-name.png",
+                                    "contentType": "image/png",
+                                    "sizeBytes": 10,
+                                }
+                            ],
+                            "steps": [
+                                {
+                                    "instructions": "Review the step screenshot.",
+                                    "inputAttachments": [
+                                        {
+                                            "artifactId": step_artifact,
+                                            "filename": "same-name.png",
+                                            "contentType": "image/png",
+                                            "sizeBytes": 20,
+                                        }
+                                    ],
+                                }
+                            ],
                             "runtime": {
                                 "mode": "codex",
                                 "model": "gpt-5.3-codex",
@@ -809,11 +846,53 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                     body["workflowId"],
                 )
                 assert canonical is not None
+                assert canonical.parameters["task"]["inputAttachments"] == [
+                    {
+                        "artifactId": objective_artifact,
+                        "filename": "same-name.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 10,
+                    }
+                ]
+                assert canonical.parameters["task"]["steps"][0][
+                    "inputAttachments"
+                ] == [
+                    {
+                        "artifactId": step_artifact,
+                        "filename": "same-name.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 20,
+                    }
+                ]
                 assert (
                     canonical.memo["task_input_snapshot_ref"]
                     == snapshot["artifactRef"]
                 )
                 assert snapshot["artifactRef"] in canonical.artifact_refs
+                artifact_service = get_temporal_artifact_service(session)
+                _, stored = await artifact_service.read(
+                    artifact_id=snapshot["artifactRef"],
+                    principal=str(shared_user_id),
+                )
+                snapshot_payload = json.loads(stored.decode("utf-8"))
+                assert snapshot_payload["draft"]["task"]["inputAttachments"] == [
+                    {
+                        "artifactId": objective_artifact,
+                        "filename": "same-name.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 10,
+                    }
+                ]
+                assert snapshot_payload["draft"]["task"]["steps"][0][
+                    "inputAttachments"
+                ] == [
+                    {
+                        "artifactId": step_artifact,
+                        "filename": "same-name.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 20,
+                    }
+                ]
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
@@ -878,6 +957,120 @@ async def test_task_shaped_create_rejects_pending_upload_input_artifact(tmp_path
             body = create_response.json()
             assert body["detail"]["code"] == "invalid_execution_request"
             assert "readable artifact" in body["detail"]["message"]
+    finally:
+        db_base.DATABASE_URL = original_db_url
+        db_base.engine = original_engine
+        db_base.async_session_maker = original_session_maker
+
+
+@pytest.mark.asyncio
+async def test_task_shaped_create_preserves_image_input_attachments(tmp_path, monkeypatch):
+    original_db_url = db_base.DATABASE_URL
+    original_engine = db_base.engine
+    original_session_maker = db_base.async_session_maker
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_contract_image_inputs.db"
+    db_base.DATABASE_URL = db_url
+    db_base.engine = create_async_engine(db_url, future=True)
+    db_base.async_session_maker = sessionmaker(
+        db_base.engine, class_=AsyncSession, expire_on_commit=False
+    )
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_max_count", 4)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_max_bytes", 1024)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_total_bytes", 4096)
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        settings.workflow,
+        "temporal_artifact_root",
+        str(tmp_path / "artifacts"),
+    )
+
+    async with db_base.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    shared_user_id = uuid4()
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
+        id=shared_user_id, is_superuser=False
+    )
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            objective_artifact = await _create_uploaded_artifact(
+                "art_01TESTIMAGEOBJECTIVE000000",
+                content_type="image/png",
+                size_bytes=8,
+                metadata_json={"source": "task-dashboard-step-attachment"},
+            )
+            step_artifact = await _create_uploaded_artifact(
+                "art_01TESTIMAGESTEP0000000000",
+                content_type="image/webp",
+                size_bytes=12,
+                metadata_json={"source": "task-dashboard-step-attachment"},
+            )
+
+            create_response = await client.post(
+                "/api/executions",
+                json={
+                    "type": "task",
+                    "payload": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "targetRuntime": "codex",
+                        "task": {
+                            "instructions": "Review the provided images.",
+                            "runtime": {"mode": "codex"},
+                            "inputAttachments": [
+                                {
+                                    "artifactId": objective_artifact,
+                                    "filename": "objective.png",
+                                    "contentType": "image/png",
+                                    "sizeBytes": 8,
+                                }
+                            ],
+                            "steps": [
+                                {
+                                    "instructions": "Inspect the detail image.",
+                                    "inputAttachments": [
+                                        {
+                                            "artifactId": step_artifact,
+                                            "filename": "detail.webp",
+                                            "contentType": "image/webp",
+                                            "sizeBytes": 12,
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                    },
+                },
+            )
+
+            assert create_response.status_code == 201
+            body = create_response.json()
+            async with db_base.async_session_maker() as session:
+                canonical = await session.get(
+                    TemporalExecutionCanonicalRecord,
+                    body["workflowId"],
+                )
+                assert canonical is not None
+                task = canonical.parameters["task"]
+                assert task["inputAttachments"][0]["artifactId"] == objective_artifact
+                assert task["steps"][0]["inputAttachments"][0]["artifactId"] == step_artifact
+                assert objective_artifact in canonical.artifact_refs
+                assert step_artifact in canonical.artifact_refs
+
+                snapshot_ref = canonical.memo["task_input_snapshot_ref"]
+                snapshot_artifact = await session.get(TemporalArtifact, snapshot_ref)
+                assert snapshot_artifact is not None
+                assert any(
+                    item["artifactId"] == objective_artifact
+                    and item["targetKind"] == "objective"
+                    for item in snapshot_artifact.metadata_json["attachment_refs"]
+                )
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine

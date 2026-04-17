@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,9 @@ from api_service.db.models import (
     TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
     TemporalExecutionRecord,
+    TemporalArtifact,
+    TemporalArtifactLink,
+    TemporalArtifactStatus,
     TemporalArtifactRetentionClass,
     User,
 )
@@ -78,6 +82,7 @@ from moonmind.workflows.tasks.model_resolver import resolve_effective_model
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 from moonmind.workflows.tasks.task_contract import (
     TaskContractError,
+    TaskInputAttachmentRef,
     TaskProposalPolicy,
     TaskSkillSelectors,
 )
@@ -1250,6 +1255,200 @@ def _coerce_step_count(value: Any) -> int:
     return len(value)
 
 
+_ATTACHMENT_REF_KEYS = frozenset(
+    {"artifactId", "filename", "contentType", "sizeBytes"}
+)
+_FORBIDDEN_ATTACHMENT_CONTENT_TYPES = frozenset({"image/svg+xml"})
+
+
+def _normalized_attachment_content_type(value: object) -> str:
+    return str(value or "").split(";", 1)[0].strip().lower()
+
+
+def _allowed_attachment_content_types() -> set[str]:
+    configured = {
+        _normalized_attachment_content_type(item)
+        for item in settings.workflow.agent_job_attachment_allowed_content_types
+    }
+    configured.discard("")
+    configured.difference_update(_FORBIDDEN_ATTACHMENT_CONTENT_TYPES)
+    return configured or {"image/png", "image/jpeg", "image/webp"}
+
+
+def _normalize_attachment_ref(raw: Any, *, field_name: str) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise _invalid_task_request(f"{field_name} must be an object.")
+    unsupported = sorted(str(key) for key in raw.keys() if key not in _ATTACHMENT_REF_KEYS)
+    if unsupported:
+        raise _invalid_task_request(
+            f"{field_name} contains unsupported fields: {', '.join(unsupported)}."
+        )
+    artifact_id = str(raw.get("artifactId") or "").strip()
+    if not artifact_id:
+        raise _invalid_task_request(f"{field_name}.artifactId is required.")
+    if not artifact_id.startswith("art_"):
+        raise _invalid_task_request(f"{field_name}.artifactId must be a MoonMind artifact id.")
+    filename = str(raw.get("filename") or "").strip()
+    if not filename:
+        raise _invalid_task_request(f"{field_name}.filename is required.")
+    content_type = _normalized_attachment_content_type(raw.get("contentType"))
+    if not content_type:
+        raise _invalid_task_request(f"{field_name}.contentType is required.")
+    if content_type in _FORBIDDEN_ATTACHMENT_CONTENT_TYPES:
+        raise _invalid_task_request(f"{content_type} is not supported for input attachments.")
+    allowed = _allowed_attachment_content_types()
+    if content_type not in allowed:
+        supported = ", ".join(sorted(allowed))
+        raise _invalid_task_request(
+            f"{field_name}.contentType must be one of: {supported}."
+        )
+    size_value = raw.get("sizeBytes")
+    if isinstance(size_value, bool):
+        raise _invalid_task_request(f"{field_name}.sizeBytes must be a non-negative integer.")
+    try:
+        size_bytes = int(size_value)
+    except (TypeError, ValueError) as exc:
+        raise _invalid_task_request(
+            f"{field_name}.sizeBytes must be a non-negative integer."
+        ) from exc
+    if size_bytes < 0:
+        raise _invalid_task_request(f"{field_name}.sizeBytes must be a non-negative integer.")
+    return {
+        "artifactId": artifact_id,
+        "filename": filename,
+        "contentType": content_type,
+        "sizeBytes": size_bytes,
+    }
+
+
+def _normalize_attachment_ref_list(raw: Any, *, field_name: str) -> list[dict[str, Any]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise _invalid_task_request(f"{field_name} must be a JSON array.")
+    return [
+        _normalize_attachment_ref(item, field_name=f"{field_name}[{index}]")
+        for index, item in enumerate(raw)
+    ]
+
+
+async def _validate_and_collect_task_input_attachments(
+    *,
+    task_payload: Mapping[str, Any],
+    session: AsyncSession | None,
+) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]], list[dict[str, Any]]]:
+    objective_refs = _normalize_attachment_ref_list(
+        task_payload.get("inputAttachments") or task_payload.get("input_attachments"),
+        field_name="payload.task.inputAttachments",
+    )
+    step_refs: dict[int, list[dict[str, Any]]] = {}
+    raw_steps = task_payload.get("steps")
+    if isinstance(raw_steps, list):
+        for index, step in enumerate(raw_steps):
+            if not isinstance(step, Mapping):
+                continue
+            refs = _normalize_attachment_ref_list(
+                step.get("inputAttachments") or step.get("input_attachments"),
+                field_name=f"payload.task.steps[{index}].inputAttachments",
+            )
+            if refs:
+                step_refs[index] = refs
+
+    attachment_index: list[dict[str, Any]] = []
+    for ref in objective_refs:
+        attachment_index.append({**ref, "targetKind": "objective"})
+    for index, refs in step_refs.items():
+        step = raw_steps[index] if isinstance(raw_steps, list) else {}
+        step_ref = ""
+        if isinstance(step, Mapping):
+            step_ref = str(step.get("id") or "").strip()
+        for ref in refs:
+            attachment_index.append(
+                {
+                    **ref,
+                    "targetKind": "step",
+                    "stepOrdinal": index,
+                    **({"stepRef": step_ref} if step_ref else {}),
+                }
+            )
+
+    if not attachment_index:
+        return objective_refs, step_refs, []
+    if not settings.workflow.agent_job_attachment_enabled:
+        raise _invalid_task_request("input attachment policy is disabled.")
+
+    unique: dict[str, dict[str, Any]] = {}
+    for ref in attachment_index:
+        artifact_id = ref["artifactId"]
+        existing = unique.get(artifact_id)
+        if existing is not None and (
+            existing["contentType"] != ref["contentType"]
+            or existing["sizeBytes"] != ref["sizeBytes"]
+        ):
+            raise _invalid_task_request(
+                f"input attachment {artifact_id} has conflicting declarations."
+            )
+        unique.setdefault(artifact_id, ref)
+
+    if len(unique) > settings.workflow.agent_job_attachment_max_count:
+        raise _invalid_task_request(
+            "too many input attachments "
+            f"({len(unique)}/{settings.workflow.agent_job_attachment_max_count})."
+        )
+    max_bytes = int(settings.workflow.agent_job_attachment_max_bytes)
+    total_bytes = 0
+    for ref in unique.values():
+        size_bytes = int(ref["sizeBytes"])
+        if size_bytes > max_bytes:
+            raise _invalid_task_request(
+                f"input attachment {ref['artifactId']} exceeds max bytes ({max_bytes})."
+            )
+        total_bytes += size_bytes
+    total_limit = int(settings.workflow.agent_job_attachment_total_bytes)
+    if total_bytes > total_limit:
+        raise _invalid_task_request(
+            f"input attachments exceed total bytes ({total_limit})."
+        )
+
+    if session is not None:
+        artifact_ids = list(unique)
+        artifact_result = await session.execute(
+            select(TemporalArtifact).where(
+                TemporalArtifact.artifact_id.in_(artifact_ids)
+            )
+        )
+        artifacts_by_id = {
+            artifact.artifact_id: artifact
+            for artifact in artifact_result.scalars().all()
+        }
+        for ref in unique.values():
+            artifact = artifacts_by_id.get(ref["artifactId"])
+            if artifact is None:
+                raise _invalid_task_request(
+                    f"input attachment artifact was not found: {ref['artifactId']}."
+                )
+            if artifact.status is not TemporalArtifactStatus.COMPLETE:
+                raise _invalid_task_request(
+                    "input attachment artifact must be complete before execution start: "
+                    f"{ref['artifactId']} is {artifact.status.value}."
+                )
+            artifact_content_type = _normalized_attachment_content_type(
+                artifact.content_type
+            )
+            if artifact_content_type and artifact_content_type != ref["contentType"]:
+                raise _invalid_task_request(
+                    f"input attachment {ref['artifactId']} content type mismatch."
+                )
+            if artifact.size_bytes is not None and int(artifact.size_bytes) != int(
+                ref["sizeBytes"]
+            ):
+                raise _invalid_task_request(
+                    f"input attachment {ref['artifactId']} size mismatch."
+                )
+
+    return objective_refs, step_refs, attachment_index
+
+
 def _normalize_task_skill_selectors(
     raw: Any, *, field_name: str
 ) -> dict[str, Any] | None:
@@ -1278,6 +1477,27 @@ def _normalize_task_proposal_policy(raw: Any) -> dict[str, Any] | None:
         )
     except (TaskContractError, ValidationError, ValueError) as exc:
         raise _invalid_task_request(str(exc)) from exc
+
+
+def _normalize_task_input_attachments(
+    raw: Any, *, field_name: str
+) -> list[dict[str, Any]]:
+    if raw is None or raw == "":
+        return []
+    if not isinstance(raw, list):
+        raise _invalid_task_request(f"{field_name} must be a JSON array.")
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        try:
+            attachment = TaskInputAttachmentRef.model_validate(item).model_dump(
+                by_alias=True,
+                exclude_none=True,
+            )
+        except (TaskContractError, ValidationError, ValueError) as exc:
+            raise _invalid_task_request(f"{field_name}[{index}]: {exc}") from exc
+        normalized.append(attachment)
+    return normalized
 
 
 def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1331,6 +1551,14 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
         if normalized_skills is not None:
             normalized_step["skills"] = normalized_skills
 
+        normalized_input_attachments = _normalize_task_input_attachments(
+            step_payload.get("inputAttachments")
+            or step_payload.get("input_attachments"),
+            field_name=f"payload.task.steps[{index}].inputAttachments",
+        )
+        if normalized_input_attachments:
+            normalized_step["inputAttachments"] = normalized_input_attachments
+
         raw_skill = (
             step_payload.get("skill")
             if isinstance(step_payload.get("skill"), Mapping)
@@ -1366,6 +1594,8 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "id",
                 "title",
                 "instructions",
+                "inputAttachments",
+                "input_attachments",
                 "skill",
                 "skills",
                 "tool",
@@ -1664,6 +1894,7 @@ def _build_original_task_input_snapshot_payload(
     source_kind: str,
     payload: Mapping[str, Any],
     task_payload: Mapping[str, Any],
+    attachment_refs: list[dict[str, Any]] | None = None,
     source_workflow_id: str | None = None,
     source_run_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1683,7 +1914,7 @@ def _build_original_task_input_snapshot_payload(
         },
         "draft": draft,
         "largeContentRefs": {},
-        "attachmentRefs": [],
+        "attachmentRefs": list(attachment_refs or []),
         "lineage": {},
         "excluded": {
             "schedule": (
@@ -1740,6 +1971,7 @@ async def _persist_original_task_input_snapshot(
     user: User,
     payload: Mapping[str, Any],
     task_payload: Mapping[str, Any],
+    attachment_refs: list[dict[str, Any]] | None = None,
     source_kind: str,
     source_workflow_id: str | None = None,
     source_run_id: str | None = None,
@@ -1759,6 +1991,7 @@ async def _persist_original_task_input_snapshot(
         source_kind=source_kind,
         payload=payload,
         task_payload=task_payload,
+        attachment_refs=attachment_refs,
         source_workflow_id=source_workflow_id,
         source_run_id=source_run_id,
     )
@@ -1787,6 +2020,7 @@ async def _persist_original_task_input_snapshot(
             "draft_shape": snapshot_payload["draft"]["taskShape"],
             "schema_name": "OriginalTaskInputSnapshot",
             "created_by": principal,
+            "attachment_refs": list(attachment_refs or []),
         },
     )
     completed = await artifact_service.write_complete(
@@ -1806,10 +2040,63 @@ async def _persist_original_task_input_snapshot(
         memo["task_input_snapshot_source_kind"] = source_kind
         target_record.memo = memo
         refs = list(target_record.artifact_refs or [])
+        for attachment_ref in attachment_refs or []:
+            attachment_id = str(attachment_ref.get("artifactId") or "").strip()
+            if attachment_id and attachment_id not in refs:
+                refs.append(attachment_id)
         if completed.artifact_id not in refs:
             refs.append(completed.artifact_id)
             target_record.artifact_refs = refs
+        else:
+            target_record.artifact_refs = refs
     return completed.artifact_id
+
+
+async def _attach_input_attachment_artifacts_to_execution(
+    *,
+    session: AsyncSession | None,
+    record,
+    attachment_refs: list[dict[str, Any]],
+) -> None:
+    if session is None or not attachment_refs:
+        return
+    if not isinstance(
+        record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)
+    ):
+        return
+    unique_ids = list(dict.fromkeys(str(ref.get("artifactId") or "") for ref in attachment_refs))
+    unique_ids = [artifact_id for artifact_id in unique_ids if artifact_id]
+    if not unique_ids:
+        return
+
+    existing_refs = list(record.artifact_refs or [])
+    changed_refs = False
+    for artifact_id in unique_ids:
+        if artifact_id not in existing_refs:
+            existing_refs.append(artifact_id)
+            changed_refs = True
+        session.add(
+            TemporalArtifactLink(
+                id=uuid4(),
+                artifact_id=artifact_id,
+                namespace=record.namespace,
+                workflow_id=record.workflow_id,
+                run_id=record.run_id,
+                link_type="input.attachment",
+                label=next(
+                    (
+                        str(ref.get("filename") or "").strip()
+                        for ref in attachment_refs
+                        if ref.get("artifactId") == artifact_id
+                    ),
+                    None,
+                )
+                or None,
+            )
+        )
+    if changed_refs:
+        record.artifact_refs = existing_refs
+    await session.flush()
 
 
 async def _create_execution_from_task_request(
@@ -1872,8 +2159,20 @@ async def _create_execution_from_task_request(
 
     if len(depends_on) > 10:
         raise _invalid_task_request(f"{field_name} can have a maximum of 10 items.")
+    (
+        objective_attachment_refs,
+        step_attachment_refs,
+        attachment_index,
+    ) = await _validate_and_collect_task_input_attachments(
+        task_payload=task_payload,
+        session=session,
+    )
     step_count = _coerce_step_count(task_payload.get("steps"))
     normalized_steps = _normalize_task_steps(task_payload)
+    if step_attachment_refs:
+        for index, refs in step_attachment_refs.items():
+            if index < len(normalized_steps):
+                normalized_steps[index]["inputAttachments"] = refs
 
     repository = str(payload.get("repository") or "").strip() or None
     integration = (
@@ -1920,6 +2219,13 @@ async def _create_execution_from_task_request(
     normalized_task_for_planner["proposeTasks"] = propose_tasks
     if normalized_proposal_policy is not None:
         normalized_task_for_planner["proposalPolicy"] = normalized_proposal_policy
+    normalized_input_attachments = _normalize_task_input_attachments(
+        task_payload.get("inputAttachments")
+        or task_payload.get("input_attachments"),
+        field_name="payload.task.inputAttachments",
+    )
+    if normalized_input_attachments:
+        normalized_task_for_planner["inputAttachments"] = normalized_input_attachments
     if normalized_task_skills is not None:
         normalized_task_for_planner["skills"] = normalized_task_skills
     if normalized_tool is not None:
@@ -1933,6 +2239,8 @@ async def _create_execution_from_task_request(
             normalized_task_for_planner["inputs"] = dict(normalized_tool["inputs"])
     if isinstance(task_payload.get("inputs"), dict):
         normalized_task_for_planner["inputs"] = dict(task_payload["inputs"])
+    if objective_attachment_refs:
+        normalized_task_for_planner["inputAttachments"] = objective_attachment_refs
     if runtime_payload:
         normalized_task_for_planner["runtime"] = dict(runtime_payload)
     if normalized_steps:
@@ -2083,17 +2391,26 @@ async def _create_execution_from_task_request(
             },
         ) from exc
 
+    await _attach_input_attachment_artifacts_to_execution(
+        session=session,
+        record=record,
+        attachment_refs=attachment_index,
+    )
+
     snapshot_ref = await _persist_original_task_input_snapshot(
         session=session,
         record=record,
         user=user,
         payload=payload,
         task_payload=task_payload,
+        attachment_refs=attachment_index,
         source_kind="create",
     )
-    execution = _serialize_execution(record, user=user)
     if snapshot_ref:
         await session.commit()
+    if isinstance(record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)):
+        await session.refresh(record)
+    execution = _serialize_execution(record, user=user)
     return execution
 
 
