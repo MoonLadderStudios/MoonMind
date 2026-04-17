@@ -46,34 +46,41 @@
 - [X] T007 Add focused UI tests proving manual preset objective text and objective-scoped attachment changes mark Reapply preset without mutating expanded steps in `frontend/src/entrypoints/task-create.test.tsx` (FR-001, FR-005, FR-009, SC-004, DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-025).
 - [X] T008 Add focused UI tests proving template-bound step instruction and attachment edits detach template identity in `frontend/src/entrypoints/task-create.test.tsx` (FR-006, FR-007, FR-008, SC-005, SC-006, DESIGN-REQ-010, DESIGN-REQ-025).
 
+### Integration Tests
+
+- [X] T009 Add request-shape integration coverage proving submitted task payloads carry objective-scoped attachments at task input level and omit detached template identities after manual step edits in `frontend/src/entrypoints/task-create.test.tsx` (FR-001, FR-005, FR-007, FR-008, FR-009, SC-004, SC-006, DESIGN-REQ-011, DESIGN-REQ-025).
+
 ### Red-First Confirmation
 
-- [X] T009 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm new tests fail for missing objective attachment target, dirty-state trigger, or template attachment detachment before production edits.
+- [X] T010 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm new tests fail for missing objective attachment target, dirty-state trigger, or template attachment detachment before production edits.
 
 ### Implementation
 
-- [X] T010 Add objective-scoped preset attachment draft state, UI, validation, upload, task-level payload submission, and reapply dirty-state tracking in `frontend/src/entrypoints/task-create.tsx` (FR-001, FR-005, FR-009, DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-025).
-- [X] T011 Add template attachment snapshots and attachment-set detachment logic for preset-expanded steps in `frontend/src/entrypoints/task-create.tsx` (FR-006, FR-007, FR-008, DESIGN-REQ-010, DESIGN-REQ-025).
-- [X] T012 Preserve existing preset Apply replacement/append behavior, non-mutating selection, and objective/title resolution; make only test-driven fixes in `frontend/src/entrypoints/task-create.tsx` (FR-002, FR-003, FR-004, DESIGN-REQ-012, DESIGN-REQ-022).
-- [X] T013 Run focused UI tests and fix failures in `frontend/src/entrypoints/task-create.tsx` or `frontend/src/entrypoints/task-create.test.tsx` only as needed (FR-001 through FR-009).
+- [X] T011 Add objective-scoped preset attachment draft state, UI, validation, upload, task-level payload submission, and reapply dirty-state tracking in `frontend/src/entrypoints/task-create.tsx` (FR-001, FR-005, FR-009, DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-025).
+- [X] T012 Add template attachment snapshots and attachment-set detachment logic for preset-expanded steps in `frontend/src/entrypoints/task-create.tsx` (FR-006, FR-007, FR-008, DESIGN-REQ-010, DESIGN-REQ-025).
+- [X] T013 Preserve existing preset Apply replacement/append behavior, non-mutating selection, and objective/title resolution; make only test-driven fixes in `frontend/src/entrypoints/task-create.tsx` (FR-002, FR-003, FR-004, DESIGN-REQ-012, DESIGN-REQ-022).
+
+### Story Validation
+
+- [X] T014 Run focused UI and request-shape tests, then fix failures in `frontend/src/entrypoints/task-create.tsx` or `frontend/src/entrypoints/task-create.test.tsx` only as needed (FR-001 through FR-009, SC-001 through SC-006).
 
 ## Phase 4: Polish And Verification
 
-- [X] T014 Run full unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`.
-- [X] T015 Run `/moonspec-verify` and record the result in `specs/196-preset-application-reapply-state/verification.md` (FR-010, SC-007).
+- [X] T015 Run full unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`.
+- [X] T016 Run `/moonspec-verify` and record the result in `specs/196-preset-application-reapply-state/verification.md` (FR-010, SC-007).
 
 ## Dependencies & Execution Order
 
 - T001-T003 must complete before story tests.
-- T004-T008 must be written before T010-T012.
-- T009 confirms red-first behavior before implementation.
-- T010-T013 complete the story.
-- T014-T015 run after focused tests pass.
+- T004-T009 must be written before T011-T013.
+- T010 confirms red-first behavior before implementation.
+- T011-T014 complete the story.
+- T015-T016 run after focused tests pass.
 
 ## Parallel Opportunities
 
-- T004 through T008 can be drafted in the same focused UI test file but must be validated as one red-first batch.
-- T010 and T011 touch the same implementation file and must run sequentially.
+- T004 through T009 can be drafted in the same focused UI test file but must be validated as one red-first batch.
+- T011 and T012 touch the same implementation file and must run sequentially.
 
 ## Notes
 
