@@ -250,8 +250,6 @@ type JiraImportMode =
   | "description-only"
   | "acceptance-only";
 
-type JiraWriteMode = "replace" | "append";
-
 interface JiraImportProvenance {
   issueKey: string;
   boardId: string;
@@ -690,7 +688,7 @@ function jiraImportTextForMode(
 function writeJiraImportedText(
   currentText: string,
   importedText: string,
-  writeMode: JiraWriteMode,
+  writeMode: "replace" | "append",
 ): string {
   const normalizedImport = importedText.trim();
   if (writeMode === "replace" || !currentText.trim()) {
@@ -1854,6 +1852,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedJiraBoardId, setSelectedJiraBoardId] = useState("");
   const [activeJiraColumnId, setActiveJiraColumnId] = useState("");
   const [selectedJiraIssueKey, setSelectedJiraIssueKey] = useState("");
+  const [pendingJiraImportIssueKey, setPendingJiraImportIssueKey] =
+    useState("");
   const [jiraImportMode, setJiraImportMode] =
     useState<JiraImportMode>("preset-brief");
   const [presetJiraProvenance, setPresetJiraProvenance] =
@@ -1864,7 +1864,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedStepAttachmentFiles, setSelectedStepAttachmentFiles] = useState<
     Record<string, File[]>
   >({});
-  const [jiraImageImporting, setJiraImageImporting] = useState(false);
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2655,6 +2654,32 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const jiraImportWillCustomizeTemplateStep =
     isTemplateBoundStepForInstructions(jiraTargetStep);
 
+  useEffect(() => {
+    if (
+      !jiraBrowserOpen ||
+      !pendingJiraImportIssueKey ||
+      selectedJiraIssueKey !== pendingJiraImportIssueKey
+    ) {
+      return;
+    }
+    if (jiraIssueDetailQuery.isError) {
+      setPendingJiraImportIssueKey("");
+      return;
+    }
+    if (jiraIssueDetailQuery.isFetching || !selectedJiraIssue) {
+      return;
+    }
+    setPendingJiraImportIssueKey("");
+    void importSelectedJiraIssue();
+  }, [
+    jiraIssueDetailQuery.isError,
+    jiraIssueDetailQuery.isFetching,
+    jiraBrowserOpen,
+    pendingJiraImportIssueKey,
+    selectedJiraIssue,
+    selectedJiraIssueKey,
+  ]);
+
   function jiraProvenanceForTarget(
     target: JiraImportTarget,
   ): JiraImportProvenance | null {
@@ -2705,9 +2730,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       nextBoardId,
     );
     setJiraImportTarget(target);
-    setJiraImportMode(provenance?.importMode || defaultJiraImportMode(target));
+    setJiraImportMode(defaultJiraImportMode(target));
     setJiraBrowserOpen(true);
     setSelectedJiraIssueKey(provenance?.issueKey || "");
+    setPendingJiraImportIssueKey("");
   }
 
   function closeJiraBrowser() {
@@ -2740,6 +2766,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   function selectJiraColumn(columnId: string) {
     setActiveJiraColumnId(columnId);
     setSelectedJiraIssueKey("");
+    setPendingJiraImportIssueKey("");
+  }
+
+  function selectJiraIssue(issueKey: string) {
+    setPendingJiraImportIssueKey(issueKey);
+    setSelectedJiraIssueKey(issueKey);
   }
 
   async function importSelectedJiraImages(
@@ -2776,7 +2808,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setSubmitMessage("Attachment limit reached before Jira images could be added.");
       return;
     }
-    setJiraImageImporting(true);
     try {
       const downloaded = await Promise.allSettled(
         toDownload.map(async (attachment) => {
@@ -2853,12 +2884,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           ? error
           : new Error("Failed to download Jira images.");
       setSubmitMessage(failure.message);
-    } finally {
-      setJiraImageImporting(false);
     }
   }
 
-  async function importSelectedJiraIssue(writeMode: JiraWriteMode) {
+  async function importSelectedJiraIssue() {
     closeJiraBrowser();
     const issue = selectedJiraIssue;
     const importTarget = jiraImportTarget;
@@ -2872,7 +2901,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const nextText = writeJiraImportedText(
         templateFeatureRequest,
         selectedJiraImportText,
-        writeMode,
+        "append",
       );
       if (nextText.trim() === templateFeatureRequest.trim()) {
         return;
@@ -2901,7 +2930,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       instructions: writeJiraImportedText(
         targetStep.instructions,
         selectedJiraImportText,
-        writeMode,
+        "append",
       ),
     });
     const provenance = createJiraProvenance(
@@ -4433,7 +4462,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                             ? "jira-issue-button active"
                             : "jira-issue-button"
                         }
-                        onClick={() => setSelectedJiraIssueKey(issue.issueKey)}
+                        disabled={Boolean(pendingJiraImportIssueKey)}
+                        onClick={() => selectJiraIssue(issue.issueKey)}
                       >
                         <strong>{issue.issueKey}</strong>
                         <span>{issue.summary}</span>
@@ -4454,96 +4484,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 </div>
               </div>
 
-              <aside className="jira-issue-preview stack">
+              <aside className="jira-issue-action stack">
                 {jiraIssueError ? (
                   <p className="notice small">{jiraIssueError}</p>
                 ) : selectedJiraIssueKey && jiraIssueDetailQuery.isLoading ? (
-                  <p className="small">Loading Jira issue...</p>
-                ) : selectedJiraIssue ? (
-                  <>
-                    <div>
-                      <p className="small">{selectedJiraIssue.issueKey}</p>
-                      <h4>{selectedJiraIssue.summary}</h4>
-                    </div>
-                    {selectedJiraIssue.descriptionText ? (
-                      <section>
-                        <strong>Description</strong>
-                        <p style={{ whiteSpace: "pre-wrap" }}>
-                          {selectedJiraIssue.descriptionText}
-                        </p>
-                      </section>
-                    ) : null}
-                    {selectedJiraIssue.acceptanceCriteriaText ? (
-                      <section>
-                        <strong>Acceptance criteria</strong>
-                        <p style={{ whiteSpace: "pre-wrap" }}>
-                          {selectedJiraIssue.acceptanceCriteriaText}
-                        </p>
-                      </section>
-                    ) : null}
-                    {Array.isArray(selectedJiraIssue.attachments) &&
-                    selectedJiraIssue.attachments.length > 0 ? (
-                      <section>
-                        <strong>Images</strong>
-                        <ul className="list">
-                          {selectedJiraIssue.attachments.map((attachment) => (
-                            <li key={attachment.id}>
-                              {attachment.filename}
-                              {attachment.sizeBytes
-                                ? ` (${formatAttachmentBytes(attachment.sizeBytes)})`
-                                : ""}
-                            </li>
-                          ))}
-                        </ul>
-                        <p className="small">
-                          {attachmentPolicy.enabled
-                            ? "Imported text will add supported Jira images to task attachments."
-                            : "Jira images are available, but image attachments are disabled for this runtime."}
-                        </p>
-                      </section>
-                    ) : null}
-                    <label>
-                      Import mode
-                      <select
-                        value={jiraImportMode}
-                        onChange={(event) =>
-                          setJiraImportMode(event.target.value as JiraImportMode)
-                        }
-                      >
-                        <option value="preset-brief">Preset brief</option>
-                        <option value="execution-brief">Execution brief</option>
-                        <option value="description-only">Description only</option>
-                        <option value="acceptance-only">
-                          Acceptance criteria only
-                        </option>
-                      </select>
-                    </label>
-                    <section>
-                      <strong>Import preview</strong>
-                      <p style={{ whiteSpace: "pre-wrap" }}>
-                        {selectedJiraImportText}
-                      </p>
-                    </section>
-                    <div className="actions">
-                      <button
-                        type="button"
-                        disabled={jiraImageImporting}
-                        onClick={() => void importSelectedJiraIssue("replace")}
-                      >
-                        Replace target text
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={jiraImageImporting}
-                        onClick={() => void importSelectedJiraIssue("append")}
-                      >
-                        Append to target text
-                      </button>
-                    </div>
-                  </>
+                  <p className="small">Adding Jira issue to instructions...</p>
                 ) : (
-                  <p className="small">Choose a Jira issue to preview.</p>
+                  <p className="small">
+                    Select an issue to append it to {jiraTargetText}.
+                  </p>
                 )}
               </aside>
             </div>

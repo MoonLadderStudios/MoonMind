@@ -1651,7 +1651,7 @@ button.secondary:hover {
   box-shadow: none;
 }
 
-.jira-issue-preview {
+.jira-issue-action {
   min-width: 0;
   padding: 0.75rem;
   border: 1px solid rgb(var(--mm-border));
