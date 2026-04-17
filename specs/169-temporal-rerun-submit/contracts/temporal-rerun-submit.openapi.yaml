@@ -116,18 +116,16 @@ components:
           type:
             - string
             - "null"
-        startingBranch:
+        branch:
           type:
             - string
             - "null"
-        targetBranch:
-          type:
-            - string
-            - "null"
+          description: "Single authored branch selection used by rerun drafts. Legacy targetBranch is historical metadata only."
         publishMode:
           type:
             - string
             - "null"
+          description: "Task publish mode retained for rerun submission semantics; visual placement is not a separate schema concern."
         targetSkill:
           type:
             - string
