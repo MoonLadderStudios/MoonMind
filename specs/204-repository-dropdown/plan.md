@@ -1,7 +1,7 @@
 # Implementation Plan: Create Page Repository Dropdown
 
-**Branch**: `203-repository-dropdown` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md)  
-**Input**: Single-story feature specification from `/specs/203-repository-dropdown/spec.md`
+**Branch**: `204-repository-dropdown` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md)  
+**Input**: Single-story feature specification from `/specs/204-repository-dropdown/spec.md`
 
 **Note**: This plan follows the Moon Spec lifecycle for MM-393 and treats the feature as runtime implementation work.
 
@@ -45,7 +45,7 @@ Task authors need repository suggestions on the Create page so they can select c
 ### Documentation (this feature)
 
 ```text
-specs/203-repository-dropdown/
+specs/204-repository-dropdown/
 ├── plan.md
 ├── research.md
 ├── data-model.md
