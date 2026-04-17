@@ -988,7 +988,7 @@ function validatePrimaryStepSubmission(
   }
   return {
     ok: false,
-    error: "Primary step requires instructions or an explicit skill selection.",
+    error: "Primary step must include instructions or an explicit skill.",
   };
 }
 
@@ -4990,11 +4990,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         })
                       }
                     />
-                    <span className="small">
-                      {isPrimaryStep
-                        ? "Primary step must include instructions or an explicit skill."
-                        : "Leave skill blank to inherit primary step defaults."}
-                    </span>
+                    {isPrimaryStep ? null : (
+                      <span className="small">
+                        Leave skill blank to inherit primary step defaults.
+                      </span>
+                    )}
                   </label>
 
                   <label
