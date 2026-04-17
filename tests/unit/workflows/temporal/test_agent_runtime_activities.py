@@ -481,6 +481,46 @@ async def test_launch_session_uses_github_descriptor_from_activity_environment(
     assert launched_request.github_credential.env_var == "GITHUB_TOKEN"
 
 
+async def test_launch_session_preserves_request_scoped_github_token_for_controller() -> None:
+    token = "ghp_request_scoped_token_12345678901234567890"
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    await activities.agent_runtime_launch_session(
+        {
+            "taskRunId": "task-1",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+            "workspacePath": "/work/task/repo",
+            "sessionWorkspacePath": "/work/task/session",
+            "artifactSpoolPath": "/work/task/artifacts",
+            "codexHomePath": "/work/task/codex-home",
+            "imageRef": "moonmind:latest",
+            "environment": {"GITHUB_TOKEN": token},
+            "workspaceSpec": {"repository": "MoonLadderStudios/private-repo"},
+        }
+    )
+
+    launched_request = controller.launch_session.await_args.args[0]
+    assert launched_request.environment["GITHUB_TOKEN"] == token
+    assert "GIT_TERMINAL_PROMPT" not in launched_request.environment
+    assert launched_request.github_credential is not None
+    assert launched_request.github_credential.source == "environment"
+    assert launched_request.github_credential.env_var == "GITHUB_TOKEN"
+
+
 async def test_launch_session_injects_moonmind_url_from_activity_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -600,8 +600,10 @@ class DockerCodexManagedSessionController:
         command: Sequence[str],
         *,
         request: LaunchCodexManagedSessionRequest | None = None,
+        git_env: Mapping[str, str] | None = None,
     ) -> tuple[str, str]:
-        git_env = await self._git_host_environment(request)
+        if git_env is None:
+            git_env = await self._git_host_environment(request)
         return await self._run_host_command(
             command,
             extra_env=git_env,
@@ -628,9 +630,11 @@ class DockerCodexManagedSessionController:
         command: Sequence[str],
         *,
         request: LaunchCodexManagedSessionRequest | None = None,
+        git_env: Mapping[str, str] | None = None,
     ) -> tuple[int, str, str]:
         command_kwargs = self._managed_session_user_command_kwargs()
-        git_env = await self._git_host_environment(request)
+        if git_env is None:
+            git_env = await self._git_host_environment(request)
         return await self._command_runner(
             tuple(command),
             env=git_env,
@@ -661,6 +665,7 @@ class DockerCodexManagedSessionController:
         workspace_path: Path,
         request: LaunchCodexManagedSessionRequest,
         repository: str,
+        git_env: Mapping[str, str],
     ) -> None:
         workspace_path.parent.mkdir(parents=True, exist_ok=True)
         await self._remove_workspace_path(workspace_path=workspace_path)
@@ -679,7 +684,11 @@ class DockerCodexManagedSessionController:
         if branch:
             clone_command.extend(["--branch", branch, "--single-branch"])
         clone_command.extend([source, str(workspace_path)])
-        await self._run_git_host_command(clone_command, request=request)
+        await self._run_git_host_command(
+            clone_command,
+            request=request,
+            git_env=git_env,
+        )
         self._normalize_container_path_ownership((workspace_path,))
 
     @staticmethod
@@ -726,6 +735,11 @@ class DockerCodexManagedSessionController:
             or request.workspace_spec.get("repo")
             or ""
         ).strip()
+        git_env = (
+            await self._git_host_environment(request)
+            if repository
+            else None
+        )
         if workspace_path.exists():
             self._normalize_container_path_ownership([workspace_path])
             if repository:
@@ -734,10 +748,12 @@ class DockerCodexManagedSessionController:
                         workspace_path=workspace_path,
                         request=request,
                         repository=repository,
+                        git_env=git_env,
                     )
                 await self._ensure_target_branch(
                     workspace_path=workspace_path,
                     request=request,
+                    git_env=git_env,
                 )
             return
 
@@ -751,10 +767,12 @@ class DockerCodexManagedSessionController:
             workspace_path=workspace_path,
             request=request,
             repository=repository,
+            git_env=git_env,
         )
         await self._ensure_target_branch(
             workspace_path=workspace_path,
             request=request,
+            git_env=git_env,
         )
 
     def _collect_managed_support_paths(
@@ -782,6 +800,7 @@ class DockerCodexManagedSessionController:
         *,
         workspace_path: Path,
         request: LaunchCodexManagedSessionRequest,
+        git_env: Mapping[str, str],
     ) -> None:
         target_branch = str(request.workspace_spec.get("targetBranch") or "").strip()
         if not target_branch:
@@ -797,13 +816,13 @@ class DockerCodexManagedSessionController:
         returncode, stdout, stderr = await self._git_command_result(
             checkout_command,
             request=request,
+            git_env=git_env,
         )
         if returncode == 0:
             return
 
         failure_detail = stderr or stdout
         if not self._branch_missing_checkout_failure(failure_detail):
-            git_env = await self._git_host_environment(request)
             rendered_command, rendered_detail = self._scrub_command_failure(
                 checkout_command,
                 stderr.strip() or stdout.strip(),
@@ -823,6 +842,7 @@ class DockerCodexManagedSessionController:
         fetch_returncode, fetch_stdout, fetch_stderr = await self._git_command_result(
             fetch_command,
             request=request,
+            git_env=git_env,
         )
         if fetch_returncode == 0:
             await self._run_git_host_command(
@@ -834,12 +854,12 @@ class DockerCodexManagedSessionController:
                     f"origin/{target_branch}",
                 ),
                 request=request,
+                git_env=git_env,
             )
             return
 
         fetch_detail = fetch_stderr or fetch_stdout
         if not self._remote_branch_missing_failure(fetch_detail):
-            git_env = await self._git_host_environment(request)
             rendered_command, rendered_detail = self._scrub_command_failure(
                 fetch_command,
                 fetch_stderr.strip() or fetch_stdout.strip(),
@@ -858,6 +878,7 @@ class DockerCodexManagedSessionController:
                 target_branch,
             ),
             request=request,
+            git_env=git_env,
         )
 
     @staticmethod

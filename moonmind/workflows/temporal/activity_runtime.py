@@ -3132,7 +3132,8 @@ class TemporalAgentRuntimeActivities:
                 enable_managed_secret_fallback=bool(repository),
             )
 
-        environment.pop("GITHUB_TOKEN", None)
+        if not str(environment.get("GITHUB_TOKEN", "")).strip():
+            environment.pop("GITHUB_TOKEN", None)
         environment.pop("GIT_TERMINAL_PROMPT", None)
         return request.model_copy(
             update={

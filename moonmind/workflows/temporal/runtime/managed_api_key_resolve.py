@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from sqlalchemy import select
 
@@ -27,6 +27,11 @@ _MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from moonmind.schemas.managed_session_models import (
+        ManagedGitHubCredentialDescriptor,
+    )
 
 
 def _normalize_secret_ref_input(
@@ -182,7 +187,7 @@ def build_github_credential_descriptor_for_launch(
     *,
     ambient_github_token: str | None = None,
     enable_managed_secret_fallback: bool = False,
-) -> Any:
+) -> "ManagedGitHubCredentialDescriptor | None":
     """Return a non-sensitive GitHub launch credential descriptor."""
 
     from moonmind.config.settings import settings as _mm_settings
