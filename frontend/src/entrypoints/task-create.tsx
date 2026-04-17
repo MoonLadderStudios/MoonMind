@@ -1904,6 +1904,16 @@ function CloseIcon() {
   );
 }
 
+function SaveIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M6 4h10l2 2v14H6z" />
+      <path d="M9 4v6h6V4" />
+      <path d="M9 17h6" />
+    </svg>
+  );
+}
+
 export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const dashboardConfig = readDashboardConfig(payload);
   const pageMode = useMemo(
@@ -5155,11 +5165,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           aria-busy={isTemporalFormBlocked}
         >
         <section
-          className="queue-steps-section stack"
+          className="card queue-steps-section stack"
           data-canonical-create-section="Steps"
           aria-label="Steps"
         >
-          <div id="queue-steps-list" className="stack">
+          <div id="queue-steps-list" className="stack queue-steps-list">
             <datalist id={SKILL_OPTIONS_DATALIST_ID}>
               <option value="auto" />
               {(skillsQuery.data || []).map((skillId) => (
@@ -5184,7 +5194,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               return (
                 <section
                   key={step.localId}
-                  className="card stack queue-step-section"
+                  className="stack queue-step-section"
                   data-step-index={index}
                 >
                   <div className="queue-step-header">
@@ -5509,6 +5519,46 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               );
             })}
 
+            <div className="queue-step-bottom-controls stack">
+              <label>
+                GitHub Repo
+                <input
+                  name="repository"
+                  value={repository}
+                  placeholder="owner/repo"
+                  onChange={(event) => setRepository(event.target.value)}
+                />
+                <span className="small">
+                  {defaultRepository
+                    ? `Leave blank to use default repository: ${defaultRepository}. `
+                    : "Set a repository in this form (no system default repository is configured). "}
+                  Accepted formats: owner/repo, https://&lt;host&gt;/&lt;path&gt;, or
+                  git@&lt;host&gt;:&lt;path&gt; (token-free).
+                </span>
+              </label>
+
+              <div className="grid-2">
+                <label>
+                  Starting Branch (optional)
+                  <input
+                    name="startingBranch"
+                    value={startingBranch}
+                    placeholder="repo default branch"
+                    onChange={(event) => setStartingBranch(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Target Branch (optional)
+                  <input
+                    name="targetBranch"
+                    value={targetBranch}
+                    placeholder="auto-generated unless starting branch is non-default"
+                    onChange={(event) => setTargetBranch(event.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+
             <div className="actions queue-step-add queue-step-actions">
               <button type="button" data-step-action="add" onClick={addStep}>
                 Add Step
@@ -5728,9 +5778,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 <button
                   type="button"
                   id="queue-template-save-current"
+                  className="queue-step-icon-button"
+                  aria-label="Save Current Steps as Preset"
+                  title="Save the current steps as a reusable preset"
                   onClick={handleSaveCurrentStepsAsPreset}
                 >
-                  Save Current Steps as Preset
+                  <SaveIcon />
                 </button>
               ) : null}
               <button
@@ -5898,44 +5951,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               value={effort}
               placeholder="runtime default"
               onChange={(event) => setEffort(event.target.value)}
-            />
-          </label>
-        </div>
-
-        <label>
-          GitHub Repo
-          <input
-            name="repository"
-            value={repository}
-            placeholder="owner/repo"
-            onChange={(event) => setRepository(event.target.value)}
-          />
-          <span className="small">
-            {defaultRepository
-              ? `Leave blank to use default repository: ${defaultRepository}. `
-              : "Set a repository in this form (no system default repository is configured). "}
-            Accepted formats: owner/repo, https://&lt;host&gt;/&lt;path&gt;, or
-            git@&lt;host&gt;:&lt;path&gt; (token-free).
-          </span>
-        </label>
-
-        <div className="grid-2">
-          <label>
-            Starting Branch (optional)
-            <input
-              name="startingBranch"
-              value={startingBranch}
-              placeholder="repo default branch"
-              onChange={(event) => setStartingBranch(event.target.value)}
-            />
-          </label>
-          <label>
-            Target Branch (optional)
-            <input
-              name="targetBranch"
-              value={targetBranch}
-              placeholder="auto-generated unless starting branch is non-default"
-              onChange={(event) => setTargetBranch(event.target.value)}
             />
           </label>
         </div>
