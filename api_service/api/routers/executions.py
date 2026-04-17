@@ -620,6 +620,7 @@ def _serialize_execution(
         params.get("publishMode") or publish_payload.get("mode") or ""
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
+    merge_automation_selected = _merge_automation_selected_from_parameters(params)
     pr_url = _extract_execution_pr_url(memo, search_attributes, params)
     is_admin = _is_execution_admin(user)
     steps_href = (
@@ -677,6 +678,7 @@ def _serialize_execution(
         repository=repository,
         pr_url=pr_url,
         publish_mode=publish_mode,
+        merge_automation_selected=merge_automation_selected,
         resolved_skillset_ref=resolved_skillset_ref,
         task_skills=task_skills,
         artifact_refs=(
@@ -1643,6 +1645,33 @@ def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
 
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
+
+
+def _merge_automation_selected_from_parameters(
+    parameters: Mapping[str, Any],
+) -> bool:
+    publish_payload = _normalize_publish_payload(parameters.get("publish"))
+    task_payload = (
+        parameters.get("task") if isinstance(parameters.get("task"), Mapping) else {}
+    )
+    task_publish = (
+        task_payload.get("publish")
+        if isinstance(task_payload.get("publish"), Mapping)
+        else {}
+    )
+    candidates = (
+        publish_payload.get("mergeAutomation")
+        or publish_payload.get("merge_automation"),
+        task_payload.get("mergeAutomation") or task_payload.get("merge_automation"),
+        task_publish.get("mergeAutomation") or task_publish.get("merge_automation"),
+        parameters.get("mergeAutomation") or parameters.get("merge_automation"),
+    )
+
+    return any(
+        isinstance(candidate, Mapping)
+        and _coerce_bool(candidate.get("enabled"), default=False)
+        for candidate in candidates
+    )
 
 
 def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:

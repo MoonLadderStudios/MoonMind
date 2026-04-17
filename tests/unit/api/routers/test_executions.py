@@ -1104,6 +1104,34 @@ def test_create_task_shaped_execution_preserves_nested_merge_automation_request(
     }
 
 
+def test_serialize_execution_exposes_merge_automation_selection() -> None:
+    record = _build_execution_record()
+    record.parameters = {
+        "publishMode": "pr",
+        "task": {
+            "publish": {
+                "mode": "pr",
+                "mergeAutomation": {"enabled": True},
+            },
+        },
+    }
+
+    payload = _serialize_execution(record)
+
+    assert payload.merge_automation_selected is True
+    assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is True
+
+
+def test_serialize_execution_defaults_merge_automation_selection_to_false() -> None:
+    record = _build_execution_record()
+    record.parameters = {"publishMode": "pr", "mergeAutomation": {"enabled": False}}
+
+    payload = _serialize_execution(record)
+
+    assert payload.merge_automation_selected is False
+    assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is False
+
+
 def test_create_task_shaped_execution_preserves_story_output_contract(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
