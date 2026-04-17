@@ -90,13 +90,13 @@ The page is a single composition form with these canonical sections, in this ord
 | Order | Section | Purpose |
 | --- | --- | --- |
 | 1 | Header | Identify the page as task creation, edit, or rerun |
-| 2 | Steps | Author the execution plan directly, including step-scoped image inputs |
+| 2 | Steps | Author the execution plan directly, including step-scoped image inputs, repository and branch targets, and the primary create/add-step actions |
 | 3 | Task Presets | Apply reusable step blueprints and define preset objective text and objective-scoped image inputs |
 | 4 | Dependencies | Block the new run on existing `MoonMind.Run` executions |
-| 5 | Execution context | Runtime, provider, model, effort, repository, branches, publish mode |
+| 5 | Execution context | Runtime, provider, model, effort, publish mode |
 | 6 | Execution controls | Priority, max attempts, propose tasks |
 | 7 | Schedule | Immediate, once, deferred minutes, recurring |
-| 8 | Submit | Create, save changes, or rerun |
+| 8 | Submit | Display submission status and error messages |
 
 Rules:
 
@@ -225,20 +225,23 @@ Rules:
 
 ### 7.1 Step list
 
-The step editor renders a list of step cards.
+The step editor renders one shared multi-step card. Individual steps are editable
+regions inside that card, not separate visual cards.
 
 Rules:
 
 - the first card is always **Step 1 (Primary)**
 - users may add, remove, and reorder steps
 - reordering changes authored order only; it does not create dependency edges between steps
-- the page must remain valid with exactly one step card present
-- each step card owns its own instructions and attachment state
+- the page must remain valid with exactly one step region present
+- each step region owns its own instructions and attachment state
 - moving or reordering a step moves its attachments with it
+- repository and branch target controls appear at the bottom of the shared Steps card
+- the Add Step and create/edit/rerun submit actions appear at the bottom of the shared Steps card
 
 ### 7.2 Step fields
 
-Each step card must expose:
+Each step region must expose:
 
 - `Instructions`
 - `Images` or `Input Attachments` when attachment policy is enabled
@@ -686,7 +689,7 @@ Rules:
 
 - all open, close, target, upload, remove, retry, and import actions must be keyboard accessible
 - image preview controls must expose meaningful labels to assistive technology
-- step cards must clearly identify when attachments are present
+- step regions must clearly identify when attachments are present
 - the Jira browser title must identify the current import target
 - after importing text or images from Jira, focus must return predictably to the updated field or to an explicit success notice
 - validation errors must be associated with the specific target that failed

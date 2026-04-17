@@ -4730,21 +4730,66 @@ describe("Task Create Entrypoint", () => {
     expect(payload).not.toHaveProperty("mergeAutomation");
   });
 
-  it("places the Create action at the right end of the step action row", async () => {
+  it("keeps step authoring and bottom controls inside one shared Steps card", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    await screen.findByText("Step 1 (Primary)");
+    const primaryStepLabel = await screen.findByText("Step 1 (Primary)");
+
+    const stepsSection = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Steps"]',
+    );
+    expect(stepsSection).not.toBeNull();
+    expect(stepsSection?.classList.contains("card")).toBe(true);
+    expect(
+      Array.from(document.querySelectorAll<HTMLElement>(".queue-step-section"))
+        .some((element) => element.classList.contains("card")),
+    ).toBe(false);
 
     const addStepButton = screen.getByRole("button", { name: "Add Step" });
     const createButton = screen.getByRole("button", { name: "Create" });
+    const repoInput = screen.getByLabelText(/GitHub Repo/);
+    const startingBranchInput = screen.getByLabelText("Starting Branch (optional)");
+    const targetBranchInput = screen.getByLabelText("Target Branch (optional)");
     const stepActionRow = addStepButton.closest(".queue-step-actions");
 
     expect(stepActionRow).not.toBeNull();
+    expect(addStepButton.closest('[data-canonical-create-section="Steps"]')).toBe(
+      stepsSection,
+    );
     expect(createButton.closest(".queue-step-actions")).toBe(stepActionRow);
+    expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBe(
+      stepsSection,
+    );
+    expect(
+      startingBranchInput.closest('[data-canonical-create-section="Steps"]'),
+    ).toBe(stepsSection);
+    expect(
+      targetBranchInput.closest('[data-canonical-create-section="Steps"]'),
+    ).toBe(stepsSection);
     expect(Array.from(stepActionRow?.children || [])).toEqual([
       addStepButton,
       createButton,
     ]);
+    expect(
+      primaryStepLabel.compareDocumentPosition(repoInput) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      repoInput.compareDocumentPosition(startingBranchInput) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      startingBranchInput.compareDocumentPosition(targetBranchInput) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      targetBranchInput.compareDocumentPosition(addStepButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      addStepButton.compareDocumentPosition(createButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("uses only MoonMind REST endpoints while submitting a manually authored task", async () => {
@@ -6771,6 +6816,71 @@ describe("Task Create Entrypoint", () => {
     expect(thirdStep.value).toBe("Keep tertiary instructions.");
   });
 
+  it("switches the Jira import target inside the browser before importing", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const primaryStep = await screen.findByLabelText("Instructions");
+    fireEvent.change(primaryStep, {
+      target: { value: "Keep the primary step." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const secondStep = screen.getAllByLabelText("Instructions")[1];
+    if (!secondStep) {
+      throw new Error("Expected second step instructions field.");
+    }
+    fireEvent.change(secondStep, {
+      target: { value: "Replace this secondary step." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for Step 1 instructions",
+      }),
+    );
+    fireEvent.change(await screen.findByLabelText("Import target"), {
+      target: { value: "step-text:step-2" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
+    expect((primaryStep as HTMLTextAreaElement).value).toBe(
+      "Keep the primary step.",
+    );
+    expect((secondStep as HTMLTextAreaElement).value).toBe(
+      "Replace this secondary step.\n\n---\n\nComplete Jira issue ENG-202: Build browser shell",
+    );
+  });
+
+  it("replaces step text when Jira text import mode is replace", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    fireEvent.change(stepInstructions, {
+      target: { value: "Replace this step text." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for Step 1 instructions",
+      }),
+    );
+    fireEvent.change(await screen.findByLabelText("Text import"), {
+      target: { value: "replace" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Complete Jira issue ENG-202: Build browser shell",
+    );
+  });
+
   it("uses execution brief text for step-target Jira imports", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
@@ -7246,7 +7356,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issue for objective attachments",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7266,7 +7376,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issue for Step 1 attachments",
       }),
     );
     expect(
@@ -7281,6 +7391,330 @@ describe("Task Create Entrypoint", () => {
     expect(
       screen.getByRole("dialog", { name: "Browse Jira issue" }),
     ).toBeTruthy();
+  });
+
+  it("imports Jira images into the objective attachment target without changing text", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "Let operators browse Jira stories.",
+            recommendedImports: {
+              presetInstructions:
+                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+              stepInstructions:
+                "Complete Jira issue ENG-202: Build browser shell",
+            },
+            attachments: [
+              {
+                id: "img-1",
+                filename: "wireframe.png",
+                contentType: "image/png",
+                sizeBytes: 10,
+                downloadUrl: "/api/jira/attachments/wireframe.png",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/attachments/wireframe.png") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["fake image"], { type: "image/png" }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(
+      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+    );
+
+    const presetInstructions = await screen.findByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.change(presetInstructions, {
+      target: { value: "Keep objective text." },
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for objective attachments",
+      }),
+    );
+    expect(
+      (await screen.findByLabelText("Import target") as HTMLSelectElement).value,
+    ).toBe("preset-attachments");
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep objective text.",
+    );
+    expect(await screen.findByText("wireframe.png")).toBeTruthy();
+  });
+
+  it("imports Jira images into a step attachment target", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "Let operators browse Jira stories.",
+            recommendedImports: {
+              presetInstructions:
+                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+              stepInstructions:
+                "Complete Jira issue ENG-202: Build browser shell",
+            },
+            attachments: [
+              {
+                id: "img-1",
+                filename: "wireframe.png",
+                contentType: "image/png",
+                sizeBytes: 10,
+                downloadUrl: "/api/jira/attachments/wireframe.png",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/attachments/wireframe.png") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["fake image"], { type: "image/png" }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(
+      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+    );
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    fireEvent.change(stepInstructions, {
+      target: { value: "Keep step text." },
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for Step 1 attachments",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Keep step text.",
+    );
+    expect(await screen.findByText("wireframe.png")).toBeTruthy();
+  });
+
+  it("does not import Jira images when importing into text targets", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    let attachmentDownloads = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "Let operators browse Jira stories.",
+            recommendedImports: {
+              presetInstructions:
+                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+              stepInstructions:
+                "Complete Jira issue ENG-202: Build browser shell",
+            },
+            attachments: [
+              {
+                id: "img-1",
+                filename: "wireframe.png",
+                contentType: "image/png",
+                sizeBytes: 10,
+                downloadUrl: "/api/jira/attachments/wireframe.png",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/attachments/wireframe.png") {
+        attachmentDownloads += 1;
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["fake image"], { type: "image/png" }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(
+      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira issue for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
+    expect(attachmentDownloads).toBe(0);
+    expect(screen.queryByText("wireframe.png")).toBeNull();
+    expect(
+      (screen.getByLabelText(
+        "Feature Request / Initial Instructions",
+      ) as HTMLTextAreaElement).value,
+    ).toBe("ENG-202: Build browser shell\n\nLet operators browse Jira stories.");
+    expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
+      "Complete Jira issue ENG-202: Build browser shell",
+    );
+  });
+
+  it("detaches template step identity and records provenance after Jira step attachment import", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            issueKey: "ENG-202",
+            summary: "Build browser shell",
+            issueType: "Story",
+            column: { id: "doing", name: "Doing" },
+            status: { id: "3", name: "In Progress" },
+            descriptionText: "Let operators browse Jira stories.",
+            recommendedImports: {
+              presetInstructions:
+                "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+              stepInstructions:
+                "Complete Jira issue ENG-202: Build browser shell",
+            },
+            attachments: [
+              {
+                id: "img-1",
+                filename: "wireframe.png",
+                contentType: "image/png",
+                sizeBytes: 10,
+                downloadUrl: "/api/jira/attachments/wireframe.png",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (path === "/api/jira/attachments/wireframe.png") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["fake image"], { type: "image/png" }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(
+      <TaskCreatePage payload={withAttachmentPolicy(withJiraIntegration())} />,
+    );
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for Step 1 attachments",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
+    expect(await screen.findByText("wireframe.png")).toBeTruthy();
+    expect(
+      screen.getByLabelText("Jira import provenance for Step 1 instructions")
+        .textContent,
+    ).toBe("Jira: ENG-202");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest();
+    const task = request.payload as {
+      task: { steps: Array<Record<string, unknown>> };
+    };
+    expect([undefined, null, ""]).toContain(task.task.steps[0]?.id);
+    expect(task.task.steps[0]?.inputAttachments).toEqual([
+      {
+        artifactId: "art-001",
+        filename: "wireframe.png",
+        contentType: "image/png",
+        sizeBytes: 10,
+      },
+    ]);
   });
 
   it("reopens Jira from an imported field with the prior issue selected", async () => {

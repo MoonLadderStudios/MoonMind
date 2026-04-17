@@ -59,6 +59,7 @@ ManagedSessionControlAction = Literal[
 ManagedSessionControlMode = Literal["remote_container"]
 ManagedSessionProtocol = Literal["codex_app_server"]
 ManagedSessionContainerBackend = Literal["docker"]
+ManagedGitHubCredentialSource = Literal["secret_ref", "managed_secret", "environment"]
 ManagedSessionHandleStatus = Literal[
     "launching",
     "ready",
@@ -930,6 +931,36 @@ class CodexManagedSessionLocator(_CodexManagedSessionRemoteContract):
     thread_id: NonBlankStr = Field(..., alias="threadId")
 
 
+class ManagedGitHubCredentialDescriptor(BaseModel):
+    """Non-sensitive launch-time GitHub credential materialization descriptor."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    source: ManagedGitHubCredentialSource
+    secret_ref: NonBlankStr | None = Field(None, alias="secretRef")
+    env_var: NonBlankStr | None = Field(None, alias="envVar")
+    required: bool = False
+
+    @model_validator(mode="after")
+    def _validate_descriptor(self) -> "ManagedGitHubCredentialDescriptor":
+        if self.source == "secret_ref" and not self.secret_ref:
+            raise ValueError("githubCredential.secretRef is required")
+        if self.source != "secret_ref" and self.secret_ref:
+            raise ValueError(
+                "githubCredential.secretRef is only valid for source=secret_ref"
+            )
+        if self.source == "environment":
+            self.env_var = require_non_blank(
+                self.env_var or "GITHUB_TOKEN",
+                field_name="githubCredential.envVar",
+            )
+        elif self.env_var:
+            raise ValueError(
+                "githubCredential.envVar is only valid for source=environment"
+            )
+        return self
+
+
 class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     """Launch contract for a task-scoped remote Codex session container."""
 
@@ -951,6 +982,10 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
         ge=1,
     )
     environment: dict[str, str] = Field(default_factory=dict, alias="environment")
+    github_credential: ManagedGitHubCredentialDescriptor | None = Field(
+        None,
+        alias="githubCredential",
+    )
     workspace_spec: dict[str, Any] = Field(default_factory=dict, alias="workspaceSpec")
 
     @model_validator(mode="after")
@@ -4615,6 +4650,8 @@ __all__ = [
     "FetchCodexManagedSessionSummaryRequest",
     "InterruptCodexManagedSessionTurnRequest",
     "LaunchCodexManagedSessionRequest",
+    "ManagedGitHubCredentialDescriptor",
+    "ManagedGitHubCredentialSource",
     "ManagedSessionContainerBackend",
     "ManagedSessionControlAction",
     "ManagedSessionControlMode",
