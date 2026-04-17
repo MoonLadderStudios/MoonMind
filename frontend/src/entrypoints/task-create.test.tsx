@@ -1806,7 +1806,10 @@ describe("Task Create Entrypoint", () => {
 
     expect(arrow).not.toBeNull();
     expect(arrow?.getAttribute("aria-hidden")).toBe("true");
-    expect(arrow?.textContent?.trim()).toBe(String.fromCharCode(8594));
+    const arrowIcon = arrow?.querySelector("svg");
+    expect(arrowIcon).not.toBeNull();
+    expect(arrowIcon?.getAttribute("aria-hidden")).toBe("true");
+    expect(arrowIcon?.getAttribute("focusable")).toBe("false");
     expect(createButton.classList.contains("queue-submit-primary")).toBe(true);
     expect(createButton.classList.contains("queue-submit-primary--with-arrow")).toBe(
       true,

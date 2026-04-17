@@ -982,9 +982,22 @@ button.secondary:hover {
 }
 
 .queue-submit-primary-arrow {
-  display: inline-block;
-  font-size: 1.08em;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.queue-submit-primary-arrow svg {
+  width: 100%;
+  height: 100%;
+  stroke: currentcolor;
+  stroke-width: 1.9;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .queue-action:hover,

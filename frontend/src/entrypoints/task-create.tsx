@@ -1896,6 +1896,14 @@ function ArrowDownIcon() {
   );
 }
 
+function ArrowRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 12h14m0 0-5-5m5 5-5 5" />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -5572,7 +5580,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     className="queue-submit-primary-arrow"
                     data-submit-arrow="right"
                   >
-                    &rarr;
+                    <ArrowRightIcon />
                   </span>
                 ) : null}
               </button>
