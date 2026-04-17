@@ -3175,6 +3175,27 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
     if (importTarget.attachmentsOnly) {
+      const provenance = createJiraProvenance(
+        issue,
+        selectedJiraBoardId,
+        jiraImportMode,
+        importTarget,
+      );
+      if (importTarget.kind === "preset") {
+        setPresetJiraProvenance(provenance);
+      } else {
+        setStepJiraProvenance((current) => {
+          if (provenance) {
+            return { ...current, [importTarget.localId]: provenance };
+          }
+          if (!current[importTarget.localId]) {
+            return current;
+          }
+          const { [importTarget.localId]: _removed, ...rest } = current;
+          return rest;
+        });
+        updateStep(importTarget.localId, { id: "" });
+      }
       await importSelectedJiraImages(issue, importTarget);
       return;
     }
@@ -3203,7 +3224,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         nextText,
         selectedObjectiveAttachmentFiles,
       );
-      await importSelectedJiraImages(issue, importTarget, nextText);
       return;
     }
 
@@ -3237,7 +3257,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const { [importTarget.localId]: _removed, ...rest } = current;
       return rest;
     });
-    await importSelectedJiraImages(issue, importTarget);
   }
 
   function updatePresetReapplyStateForObjective(
