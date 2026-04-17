@@ -73,19 +73,81 @@ async def resolve_managed_github_token_from_store() -> str | None:
 
 async def resolve_github_token_for_launch(
     environment: Mapping[str, str] | None = None,
+    *,
+    github_credential: Any | None = None,
 ) -> str | None:
     """Resolve the GitHub token used for launch-time auth seeding.
 
-    Precedence is:
-    1. Existing ``GITHUB_TOKEN`` already present in the launch environment.
-    2. Explicit ``settings.github.github_token_secret_ref``.
-    3. Managed secret store fallback (well-known GitHub token slugs).
+    When a non-sensitive descriptor is provided, the descriptor controls
+    resolution. Legacy environment ``GITHUB_TOKEN`` remains a launch-boundary
+    input only so older callers can still be scrubbed before container launch.
     """
 
     launch_environment = environment or {}
     token = str(launch_environment.get("GITHUB_TOKEN", "")).strip()
     if token:
         return token
+
+    if github_credential is not None:
+        source = str(getattr(github_credential, "source", "") or "").strip()
+        required = bool(getattr(github_credential, "required", False))
+        if source == "environment":
+            env_var = str(
+                getattr(github_credential, "env_var", None) or "GITHUB_TOKEN"
+            ).strip()
+            token = str(os.environ.get(env_var, "")).strip()
+            if token:
+                return token
+            if required:
+                raise ValueError(
+                    f"GitHub credential environment reference {env_var} is not set"
+                )
+            return None
+        if source == "secret_ref":
+            secret_ref = str(getattr(github_credential, "secret_ref", "") or "").strip()
+            if not secret_ref:
+                if required:
+                    raise ValueError("GitHub credential secretRef is not configured")
+                return None
+            try:
+                return await resolve_managed_api_key_reference(
+                    secret_ref,
+                    field_name="githubCredential.secretRef",
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if required:
+                    raise ValueError(
+                        "GitHub credential secretRef could not be resolved"
+                    ) from exc
+                logger.warning(
+                    "Failed to resolve GitHub credential secret ref for managed "
+                    "runtime launch",
+                    exc_info=True,
+                )
+                return None
+        if source == "managed_secret":
+            try:
+                resolved = await resolve_managed_github_token_from_store()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if required:
+                    raise ValueError(
+                        "GitHub credential managed secret could not be resolved"
+                    ) from exc
+                logger.warning(
+                    "Failed to resolve GitHub token from managed secrets store",
+                    exc_info=True,
+                )
+                return None
+            if resolved:
+                return resolved
+            if required:
+                raise ValueError("GitHub credential managed secret is not configured")
+            return None
+        raise ValueError(f"Unsupported GitHub credential source: {source or '<blank>'}")
 
     from moonmind.config.settings import settings as _mm_settings
 
@@ -113,6 +175,50 @@ async def resolve_github_token_for_launch(
             exc_info=True,
         )
         return None
+
+
+def build_github_credential_descriptor_for_launch(
+    environment: Mapping[str, str] | None = None,
+    *,
+    ambient_github_token: str | None = None,
+    enable_managed_secret_fallback: bool = False,
+) -> Any:
+    """Return a non-sensitive GitHub launch credential descriptor."""
+
+    from moonmind.config.settings import settings as _mm_settings
+    from moonmind.schemas.managed_session_models import (
+        ManagedGitHubCredentialDescriptor,
+    )
+
+    launch_environment = environment or {}
+    if str(launch_environment.get("GITHUB_TOKEN", "")).strip():
+        return ManagedGitHubCredentialDescriptor(
+            source="environment",
+            envVar="GITHUB_TOKEN",
+            required=False,
+        )
+
+    ambient_token = str(ambient_github_token or "").strip()
+    if enable_managed_secret_fallback and ambient_token:
+        return ManagedGitHubCredentialDescriptor(
+            source="environment",
+            envVar="GITHUB_TOKEN",
+            required=False,
+        )
+
+    secret_ref = str(
+        getattr(_mm_settings.github, "github_token_secret_ref", "") or ""
+    ).strip()
+    if enable_managed_secret_fallback and secret_ref:
+        return ManagedGitHubCredentialDescriptor(
+            source="secret_ref",
+            secretRef=secret_ref,
+            required=False,
+        )
+
+    if enable_managed_secret_fallback:
+        return ManagedGitHubCredentialDescriptor(source="managed_secret", required=False)
+    return None
 
 
 async def shape_launch_github_auth_environment(
@@ -218,6 +324,7 @@ async def resolve_managed_api_key_reference(
 
 
 __all__ = [
+    "build_github_credential_descriptor_for_launch",
     "resolve_github_token_for_launch",
     "resolve_managed_api_key_reference",
     "resolve_managed_github_token_from_store",

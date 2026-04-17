@@ -35,6 +35,9 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
+from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    resolve_github_token_for_launch,
+)
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
 
 from .managed_session_store import ManagedSessionStore
@@ -554,12 +557,25 @@ class DockerCodexManagedSessionController:
         return stdout, stderr
 
     @staticmethod
-    def _git_host_environment(
+    async def _git_host_environment(
         request: LaunchCodexManagedSessionRequest | None = None,
     ) -> dict[str, str]:
         env = dict(_GIT_COMMAND_LOCALE)
         request_env = request.environment if request is not None else {}
-        token = str(request_env.get("GITHUB_TOKEN") or "").strip()
+        try:
+            token = (
+                await resolve_github_token_for_launch(
+                    request_env,
+                    github_credential=(
+                        request.github_credential if request is not None else None
+                    ),
+                )
+                if request is not None
+                else None
+            )
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+        token = str(token or "").strip()
         if token:
             env["GITHUB_TOKEN"] = token
             env["GIT_TERMINAL_PROMPT"] = str(
@@ -585,9 +601,10 @@ class DockerCodexManagedSessionController:
         *,
         request: LaunchCodexManagedSessionRequest | None = None,
     ) -> tuple[str, str]:
+        git_env = await self._git_host_environment(request)
         return await self._run_host_command(
             command,
-            extra_env=self._git_host_environment(request),
+            extra_env=git_env,
             run_as_managed_session_user=True,
         )
 
@@ -613,9 +630,10 @@ class DockerCodexManagedSessionController:
         request: LaunchCodexManagedSessionRequest | None = None,
     ) -> tuple[int, str, str]:
         command_kwargs = self._managed_session_user_command_kwargs()
+        git_env = await self._git_host_environment(request)
         return await self._command_runner(
             tuple(command),
-            env=self._git_host_environment(request),
+            env=git_env,
             **command_kwargs,
         )
 
@@ -785,10 +803,11 @@ class DockerCodexManagedSessionController:
 
         failure_detail = stderr or stdout
         if not self._branch_missing_checkout_failure(failure_detail):
+            git_env = await self._git_host_environment(request)
             rendered_command, rendered_detail = self._scrub_command_failure(
                 checkout_command,
                 stderr.strip() or stdout.strip(),
-                extra_env=self._git_host_environment(request),
+                extra_env=git_env,
             )
             raise RuntimeError(
                 f"{rendered_command} failed with exit code {returncode}: "
@@ -820,10 +839,11 @@ class DockerCodexManagedSessionController:
 
         fetch_detail = fetch_stderr or fetch_stdout
         if not self._remote_branch_missing_failure(fetch_detail):
+            git_env = await self._git_host_environment(request)
             rendered_command, rendered_detail = self._scrub_command_failure(
                 fetch_command,
                 fetch_stderr.strip() or fetch_stdout.strip(),
-                extra_env=self._git_host_environment(request),
+                extra_env=git_env,
             )
             raise RuntimeError(
                 f"{rendered_command} failed with exit code {fetch_returncode}: "
@@ -1345,6 +1365,7 @@ class DockerCodexManagedSessionController:
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
         ]
         session_environment = dict(request.environment)
+        session_environment.pop("GITHUB_TOKEN", None)
         if self._moonmind_url:
             existing_moonmind_url = session_environment.get("MOONMIND_URL")
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
@@ -1400,7 +1421,10 @@ class DockerCodexManagedSessionController:
             raise RuntimeError("docker run returned a blank container id")
         try:
             await self._wait_ready(container_id=container_id)
-            container_payload = request.model_dump(
+            container_request = request.model_copy(
+                update={"environment": session_environment}
+            )
+            container_payload = container_request.model_dump(
                 by_alias=True,
                 exclude={"workspace_spec"},
             )
