@@ -5155,11 +5155,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           aria-busy={isTemporalFormBlocked}
         >
         <section
-          className="queue-steps-section stack"
+          className="card queue-steps-section stack"
           data-canonical-create-section="Steps"
           aria-label="Steps"
         >
-          <div id="queue-steps-list" className="stack">
+          <div id="queue-steps-list" className="stack queue-steps-list">
             <datalist id={SKILL_OPTIONS_DATALIST_ID}>
               <option value="auto" />
               {(skillsQuery.data || []).map((skillId) => (
@@ -5184,7 +5184,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               return (
                 <section
                   key={step.localId}
-                  className="card stack queue-step-section"
+                  className="stack queue-step-section"
                   data-step-index={index}
                 >
                   <div className="queue-step-header">
@@ -5508,6 +5508,46 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 </section>
               );
             })}
+
+            <div className="queue-step-bottom-controls stack">
+              <label>
+                GitHub Repo
+                <input
+                  name="repository"
+                  value={repository}
+                  placeholder="owner/repo"
+                  onChange={(event) => setRepository(event.target.value)}
+                />
+                <span className="small">
+                  {defaultRepository
+                    ? `Leave blank to use default repository: ${defaultRepository}. `
+                    : "Set a repository in this form (no system default repository is configured). "}
+                  Accepted formats: owner/repo, https://&lt;host&gt;/&lt;path&gt;, or
+                  git@&lt;host&gt;:&lt;path&gt; (token-free).
+                </span>
+              </label>
+
+              <div className="grid-2">
+                <label>
+                  Starting Branch (optional)
+                  <input
+                    name="startingBranch"
+                    value={startingBranch}
+                    placeholder="repo default branch"
+                    onChange={(event) => setStartingBranch(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Target Branch (optional)
+                  <input
+                    name="targetBranch"
+                    value={targetBranch}
+                    placeholder="auto-generated unless starting branch is non-default"
+                    onChange={(event) => setTargetBranch(event.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
 
             <div className="actions queue-step-add queue-step-actions">
               <button type="button" data-step-action="add" onClick={addStep}>
@@ -5898,44 +5938,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               value={effort}
               placeholder="runtime default"
               onChange={(event) => setEffort(event.target.value)}
-            />
-          </label>
-        </div>
-
-        <label>
-          GitHub Repo
-          <input
-            name="repository"
-            value={repository}
-            placeholder="owner/repo"
-            onChange={(event) => setRepository(event.target.value)}
-          />
-          <span className="small">
-            {defaultRepository
-              ? `Leave blank to use default repository: ${defaultRepository}. `
-              : "Set a repository in this form (no system default repository is configured). "}
-            Accepted formats: owner/repo, https://&lt;host&gt;/&lt;path&gt;, or
-            git@&lt;host&gt;:&lt;path&gt; (token-free).
-          </span>
-        </label>
-
-        <div className="grid-2">
-          <label>
-            Starting Branch (optional)
-            <input
-              name="startingBranch"
-              value={startingBranch}
-              placeholder="repo default branch"
-              onChange={(event) => setStartingBranch(event.target.value)}
-            />
-          </label>
-          <label>
-            Target Branch (optional)
-            <input
-              name="targetBranch"
-              value={targetBranch}
-              placeholder="auto-generated unless starting branch is non-default"
-              onChange={(event) => setTargetBranch(event.target.value)}
             />
           </label>
         </div>
