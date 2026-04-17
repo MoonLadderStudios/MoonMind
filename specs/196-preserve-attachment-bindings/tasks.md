@@ -11,9 +11,9 @@
 
 **Test Commands**:
 
-- Unit tests: `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and `pytest tests/unit/api/routers/test_executions.py -q`
+- Unit tests: `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and `pytest tests/unit/api/routers/test_executions.py -q`
 - Integration tests: `pytest tests/contract/test_temporal_execution_api.py -q`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -62,7 +62,7 @@
 - [X] T006 [P] Add failing frontend unit test for Create-page edit/rerun submission retaining unchanged persisted attachment refs in `frontend/src/entrypoints/task-create.test.tsx` covering FR-006, FR-008, SC-003, DESIGN-REQ-018
 - [X] T007 [P] Add failing frontend unit test for explicit reconstruction failure when snapshot attachment refs cannot be bound from `draft.task` in `frontend/src/entrypoints/task-create.test.tsx` covering FR-009, FR-010, SC-004, SC-005
 - [X] T008 [P] Add or extend backend unit coverage for snapshot descriptor/action availability with original snapshot requirements in `tests/unit/api/routers/test_executions.py` covering FR-009, DESIGN-REQ-018
-- [X] T009 Run `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and `pytest tests/unit/api/routers/test_executions.py -q` to confirm T005-T008 fail for the expected missing behavior
+- [X] T009 Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and `pytest tests/unit/api/routers/test_executions.py -q` to confirm T005-T008 fail for the expected missing behavior
 
 ### Integration Tests (write first)
 
@@ -75,8 +75,9 @@
 - [X] T013 Implement persisted attachment ref state fields and hydration from Temporal drafts in `frontend/src/entrypoints/task-create.tsx` covering FR-005, FR-006, DESIGN-REQ-015
 - [X] T014 Implement unchanged persisted ref submission and explicit add/remove behavior in `frontend/src/entrypoints/task-create.tsx` covering FR-006, FR-008, DESIGN-REQ-018
 - [X] T015 Backend snapshot payload/descriptor changes were not needed because `tests/unit/api/routers/test_executions.py` and `tests/contract/test_temporal_execution_api.py` already verify backend binding evidence for FR-001, FR-002, FR-009
-- [X] T016 Run focused unit commands `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and `pytest tests/unit/api/routers/test_executions.py -q`, then fix failures
+- [X] T016 Run focused unit commands `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and `pytest tests/unit/api/routers/test_executions.py -q`, then fix failures
 - [X] T017 Run focused contract command `pytest tests/contract/test_temporal_execution_api.py -q`, then fix failures
+- [X] T018 Validate the single MM-369 story against acceptance scenarios 1-5 using `frontend/src/entrypoints/task-create.test.tsx` and `tests/contract/test_temporal_execution_api.py`
 
 **Checkpoint**: The story is fully functional, covered by unit and contract tests, and testable independently.
 
@@ -86,10 +87,10 @@
 
 **Purpose**: Validate the completed story without adding hidden scope.
 
-- [X] T018 [P] Update `specs/196-preserve-attachment-bindings/quickstart.md` if final commands or blockers differ from the planned validation
-- [X] T019 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit verification
-- [X] T020 Run `./tools/test_integration.sh` when Docker is available, or record the exact Docker socket blocker
-- [X] T021 Run `/speckit.verify` and record verification evidence in the final response
+- [X] T019 [P] Update `specs/196-preserve-attachment-bindings/quickstart.md` if final commands or blockers differ from the planned validation
+- [X] T020 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit verification
+- [X] T021 Run `./tools/test_integration.sh` when Docker is available, or record the exact Docker socket blocker
+- [X] T022 Run `/moonspec-verify` and record verification evidence in the final response
 
 ---
 
@@ -109,12 +110,13 @@
 - Red-first confirmation T009 and T011 must complete before T012-T015.
 - Frontend draft model work T012 must precede Create-page state/submission work T013-T014.
 - Backend changes T015 are conditional and should be skipped if existing backend evidence already satisfies the contract.
+- Story validation T018 must follow focused unit and contract evidence.
 
 ### Parallel Opportunities
 
 - T001 and T002 can run in parallel.
 - T005, T006, T007, T008 can be authored in parallel because they cover distinct assertions.
-- T018 can run after implementation while final verification commands are queued.
+- T019 can run after implementation while final verification commands are queued.
 
 ---
 
@@ -129,4 +131,4 @@
 5. Update backend only if contract tests prove snapshot persistence is incomplete.
 6. Run focused unit and contract tests.
 7. Run final unit and feasible integration verification.
-8. Run `/speckit.verify`.
+8. Run `/moonspec-verify`.
