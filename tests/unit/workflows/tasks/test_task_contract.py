@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from moonmind.workflows.tasks.task_contract import (
+    build_canonical_task_view,
     TaskExecutionSpec,
     TaskStepSpec,
 )
@@ -82,3 +84,106 @@ def test_task_step_spec_with_step_skills() -> None:
     assert spec.skills is not None
     assert spec.skills.exclude == ["bad-skill"]
     assert spec.skills.materialization_mode == "none"
+
+
+def test_task_input_attachments_preserve_objective_and_step_targets() -> None:
+    """MM-367: objective and step refs remain distinct canonical fields."""
+
+    canonical = build_canonical_task_view(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Inspect the images.",
+                "inputAttachments": [
+                    {
+                        "artifactId": "art-objective",
+                        "filename": "same-name.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 10,
+                    }
+                ],
+                "steps": [
+                    {
+                        "instructions": "Inspect the step image.",
+                        "inputAttachments": [
+                            {
+                                "artifactId": "art-step",
+                                "filename": "same-name.png",
+                                "contentType": "image/png",
+                                "sizeBytes": 20,
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert canonical["task"]["inputAttachments"] == [
+        {
+            "artifactId": "art-objective",
+            "filename": "same-name.png",
+            "contentType": "image/png",
+            "sizeBytes": 10,
+        }
+    ]
+    assert canonical["task"]["steps"][0]["inputAttachments"] == [
+        {
+            "artifactId": "art-step",
+            "filename": "same-name.png",
+            "contentType": "image/png",
+            "sizeBytes": 20,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "attachment",
+    [
+        {"filename": "missing-id.png", "contentType": "image/png", "sizeBytes": 10},
+        {
+            "artifactId": "art-inline",
+            "filename": "inline.png",
+            "contentType": "image/png",
+            "sizeBytes": 10,
+            "dataUrl": "data:image/png;base64,AAAA",
+        },
+        {
+            "artifactId": "art-data-filename",
+            "filename": "data:image/png;base64,AAAA",
+            "contentType": "image/png",
+            "sizeBytes": 10,
+        },
+    ],
+)
+def test_task_input_attachments_reject_incomplete_or_embedded_data(
+    attachment: dict[str, object],
+) -> None:
+    """MM-367: refs stay compact and cannot carry inline image payloads."""
+
+    with pytest.raises(ValidationError):
+        TaskExecutionSpec.model_validate(
+            {
+                "instructions": "Inspect image.",
+                "inputAttachments": [attachment],
+            }
+        )
+
+
+def test_task_input_attachments_must_be_lists() -> None:
+    """MM-367: canonical attachment fields are arrays."""
+
+    with pytest.raises(ValidationError, match="task.inputAttachments must be a list"):
+        TaskExecutionSpec.model_validate(
+            {
+                "instructions": "Inspect image.",
+                "inputAttachments": {
+                    "artifactId": "art-objective",
+                    "filename": "objective.png",
+                    "contentType": "image/png",
+                    "sizeBytes": 10,
+                },
+            }
+        )
