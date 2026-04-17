@@ -5369,6 +5369,15 @@ export interface components {
             targetBranch?: string | null;
             /** Instructions */
             instructions?: string | null;
+            /** Presetprovenance */
+            presetProvenance?: string | null;
+            /**
+             * Authoredpresetcount
+             * @default 0
+             */
+            authoredPresetCount: number;
+            /** Stepsourcekinds */
+            stepSourceKinds?: string[];
         };
         /**
          * TaskTemplateAppliedMetadataSchema

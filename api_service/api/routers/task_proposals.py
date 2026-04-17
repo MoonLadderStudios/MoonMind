@@ -38,6 +38,8 @@ from moonmind.workflows.task_proposals.service import (
 
 router = APIRouter(prefix="/api/proposals", tags=["task-proposals"])
 
+_PRESET_SOURCE_KINDS = frozenset({"preset-derived", "preset-include", "detached"})
+
 
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
@@ -73,6 +75,27 @@ def _build_task_preview(
     raw_skills = task.get("skills") or payload.get("skills")
     task_skills = raw_skills if isinstance(raw_skills, list) else None
     instructions = task.get("instructions") or payload.get("instruction")
+    authored_presets = task.get("authoredPresets")
+    authored_preset_count = (
+        len(authored_presets) if isinstance(authored_presets, list) else 0
+    )
+    raw_steps = task.get("steps")
+    steps = raw_steps if isinstance(raw_steps, list) else []
+    step_source_kinds: list[str] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        source_node = step.get("source")
+        if not isinstance(source_node, dict):
+            continue
+        kind = str(source_node.get("kind") or "").strip()
+        if kind:
+            step_source_kinds.append(kind)
+    preset_provenance = "manual"
+    if authored_preset_count > 0:
+        preset_provenance = "preserved-binding"
+    elif any(kind in _PRESET_SOURCE_KINDS for kind in step_source_kinds):
+        preset_provenance = "flattened-only"
 
     runtime_value = (
         (str(runtime_mode).strip() or None) if runtime_mode is not None else None
@@ -100,6 +123,9 @@ def _build_task_preview(
         startingBranch=starting_value,
         targetBranch=target_branch_value,
         instructions=instructions_value,
+        presetProvenance=preset_provenance,
+        authoredPresetCount=authored_preset_count,
+        stepSourceKinds=step_source_kinds,
     )
 
 
