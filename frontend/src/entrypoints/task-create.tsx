@@ -4288,9 +4288,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack">
-      <div>
+      <section data-canonical-create-section="Header" aria-label="Header">
         <h2 className="page-title">{pageTitle}</h2>
-      </div>
+      </section>
 
       {pageMode.mode !== "create" && temporalDraftQuery.isLoading ? (
         <p className="notice" role="status">
@@ -4562,7 +4562,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           disabled={isTemporalFormBlocked}
           aria-busy={isTemporalFormBlocked}
         >
-        <section className="queue-steps-section stack">
+        <section
+          className="queue-steps-section stack"
+          data-canonical-create-section="Steps"
+          aria-label="Steps"
+        >
           <div id="queue-steps-list" className="stack">
             <datalist id={SKILL_OPTIONS_DATALIST_ID}>
               <option value="auto" />
@@ -4807,7 +4811,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </details>
 
         {taskTemplateCatalogEnabled ? (
-          <div className="card stack">
+          <section
+            className="card stack"
+            data-canonical-create-section="Task Presets"
+            aria-label="Task Presets"
+          >
             <div className="actions">
               <strong>Task Presets (optional)</strong>
             </div>
@@ -4882,10 +4890,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             <p className="small" id="queue-template-message">
               {presetStatusText}
             </p>
-          </div>
+          </section>
         ) : null}
 
-        <section className="card stack">
+        <section
+          className="card stack"
+          data-canonical-create-section="Dependencies"
+          aria-label="Dependencies"
+        >
           <div>
             <strong>Dependencies</strong>
             <p className="small">
@@ -4961,6 +4973,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           </p>
         </section>
 
+        <section
+          className="stack"
+          data-canonical-create-section="Execution context"
+          aria-label="Execution context"
+        >
         <label>
           Runtime
           <select
@@ -5098,7 +5115,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </span>
           </label>
         ) : null}
+        </section>
 
+        <section
+          className="stack"
+          data-canonical-create-section="Execution controls"
+          aria-label="Execution controls"
+        >
         <div className="grid-2" data-runtime-visibility="worker">
           <label>
             Priority
@@ -5135,9 +5158,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           />
           Propose Tasks
         </label>
+        </section>
 
         {pageMode.mode === "create" ? (
-        <details className="card" id="schedule-panel">
+        <details
+          className="card"
+          id="schedule-panel"
+          data-canonical-create-section="Schedule"
+          aria-label="Schedule"
+        >
           <summary>
             <strong>Schedule (optional)</strong>
           </summary>
@@ -5238,6 +5267,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         </details>
         ) : null}
 
+        <section
+          className="stack"
+          data-canonical-create-section="Submit"
+          aria-label="Submit"
+        >
         <div className="actions">
           <button
             type="submit"
@@ -5249,7 +5283,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             {primaryCta}
           </button>
         </div>
-        </fieldset>
 
         <p
           id="queue-submit-message"
@@ -5261,6 +5294,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         >
           {submitMessage || ""}
         </p>
+        </section>
+        </fieldset>
       </form>
     </div>
   );
