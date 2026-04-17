@@ -11,7 +11,7 @@
 
 - Unit tests: `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
 - Integration tests: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -36,28 +36,39 @@
 - [X] T005 Add failing task-detail UI test for target-grouped objective and step image inputs, MoonMind-owned download links, and preview failure fallback in frontend/src/entrypoints/task-detail.test.tsx.
 - [X] T006 Confirm existing edit/rerun tests cover persisted refs, explicit removal, and persisted-vs-local attachment distinctions in frontend/src/entrypoints/task-create.test.tsx.
 
+### Integration Tests
+
+- [X] T007 Confirm the focused UI tests exercise the task-detail artifact list integration boundary and edit/rerun draft reconstruction flow in frontend/src/entrypoints/task-detail.test.tsx and frontend/src/entrypoints/task-create.test.tsx.
+- [X] T008 Confirm the broader unit runner covers existing FastAPI artifact route contract tests relevant to MoonMind-owned download endpoints through ./tools/test_unit.sh.
+
+### Red-first Confirmation
+
+- [X] T009 Confirm the new task-detail test asserts behavior absent from the previous implementation: target-grouped Input Images, MoonMind-owned image URLs despite external download_url metadata, and preview failure fallback in frontend/src/entrypoints/task-detail.test.tsx.
+- [X] T010 Confirm existing edit/rerun regression tests fail if unchanged persisted refs are omitted or removed without explicit user action in frontend/src/entrypoints/task-create.test.tsx.
+
 ### Implementation
 
-- [X] T007 Parse artifact metadata in frontend/src/entrypoints/task-detail.tsx for task image input grouping.
-- [X] T008 Render Input Images groups by objective and step targets in frontend/src/entrypoints/task-detail.tsx.
-- [X] T009 Use MoonMind-owned `/api/artifacts/{artifactId}/download` URLs for task image preview and download controls in frontend/src/entrypoints/task-detail.tsx.
-- [X] T010 Preserve metadata and download actions when task image preview fails in frontend/src/entrypoints/task-detail.tsx.
-- [X] T011 Keep generic artifact table behavior for non-input artifacts and explicit non-input download URLs in frontend/src/entrypoints/task-detail.tsx.
+- [X] T011 Parse artifact metadata in frontend/src/entrypoints/task-detail.tsx for task image input grouping.
+- [X] T012 Render Input Images groups by objective and step targets in frontend/src/entrypoints/task-detail.tsx.
+- [X] T013 Use MoonMind-owned `/api/artifacts/{artifactId}/download` URLs for task image preview and download controls in frontend/src/entrypoints/task-detail.tsx.
+- [X] T014 Preserve metadata and download actions when task image preview fails in frontend/src/entrypoints/task-detail.tsx.
+- [X] T015 Keep generic artifact table behavior for non-input artifacts and explicit non-input download URLs in frontend/src/entrypoints/task-detail.tsx.
 
 ### Story Validation
 
-- [X] T012 Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`.
-- [X] T013 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` if local dependencies and time allow.
+- [X] T016 Run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`.
+- [X] T017 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` if local dependencies and time allow.
 
 ## Phase 4: Polish and Final Verification
 
-- [X] T014 Run `/speckit.verify`-style read-only verification against MM-373, spec.md, tasks.md, and test evidence.
+- [X] T018 Run `/moonspec-verify`-style read-only verification against MM-373, spec.md, tasks.md, and test evidence.
 
 ## Dependencies & Execution Order
 
 - T001-T004 before story implementation.
-- T005 before T007-T011.
-- T012 before T014.
+- T005-T008 before T009-T010 red-first confirmation.
+- T009-T010 before T011-T015 implementation.
+- T016-T017 before T018 final verification.
 
 ## Implementation Strategy
 
