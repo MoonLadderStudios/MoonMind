@@ -1510,6 +1510,13 @@ button.secondary:hover {
   margin-top: 0;
 }
 
+.queue-attachment-preview {
+  display: block;
+  max-width: min(100%, 16rem);
+  max-height: 10rem;
+  object-fit: contain;
+}
+
 .queue-advanced-settings-body {
   margin-top: 0.75rem;
 }

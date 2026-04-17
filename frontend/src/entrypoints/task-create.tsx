@@ -1183,24 +1183,26 @@ function AttachmentPreview({
   alt: string;
   onError: () => void;
 }) {
-  const previewUrl = useMemo(() => {
+  const [previewUrl, setPreviewUrl] = useState("");
+
+  useEffect(() => {
     if (
       !file.type.startsWith("image/") ||
       typeof URL === "undefined" ||
       typeof URL.createObjectURL !== "function"
     ) {
-      return "";
+      setPreviewUrl("");
+      return;
     }
-    return URL.createObjectURL(file);
-  }, [file]);
 
-  useEffect(() => {
+    const nextPreviewUrl = URL.createObjectURL(file);
+    setPreviewUrl(nextPreviewUrl);
     return () => {
-      if (previewUrl && typeof URL.revokeObjectURL === "function") {
-        URL.revokeObjectURL(previewUrl);
+      if (typeof URL.revokeObjectURL === "function") {
+        URL.revokeObjectURL(nextPreviewUrl);
       }
     };
-  }, [previewUrl]);
+  }, [file]);
 
   if (!previewUrl) {
     return null;
@@ -4256,61 +4258,116 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
     try {
       if (selectedAttachmentFiles.length > 0) {
-        for (const file of selectedObjectiveAttachmentFiles) {
-          try {
-            uploadedObjectiveAttachments.push(
-              await createInputAttachmentArtifact(
+        type AttachmentUploadResult =
+          | {
+              ok: true;
+              targetKey: string;
+              ref: StepAttachmentRef;
+            }
+          | {
+              ok: false;
+              targetKey: string;
+              message: string;
+            };
+        const objectiveTargetKey = attachmentTargetKey("objective");
+        const uploadPromises: Promise<AttachmentUploadResult>[] =
+          selectedObjectiveAttachmentFiles.map(async (file) => {
+            try {
+              const ref = await createInputAttachmentArtifact(
                 artifactCreateEndpoint,
                 file,
                 normalizedRepository,
                 { kind: "objective" },
-              ),
-            );
-          } catch (error) {
-            const failure =
-              error instanceof Error
-                ? error
-                : new Error("Failed to upload objective attachment.");
-            const message = `Feature Request / Initial Instructions: ${failure.message}`;
-            setAttachmentTargetErrors({
-              [attachmentTargetKey("objective")]: message,
-            });
-            setSubmitMessage(message);
-            setIsSubmitting(false);
-            return;
-          }
-        }
-        for (const [index, step] of steps.entries()) {
-          const files = selectedStepAttachmentFiles[step.localId] || [];
-          if (files.length === 0) {
-            continue;
-          }
-          const refs: StepAttachmentRef[] = [];
-          for (const file of files) {
-            try {
-              refs.push(
-                await createInputAttachmentArtifact(
-                  artifactCreateEndpoint,
-                  file,
-                  normalizedRepository,
-                  { kind: "step", stepLabel: `Step ${index + 1}` },
-                ),
               );
+              return {
+                ok: true,
+                targetKey: objectiveTargetKey,
+                ref,
+              } satisfies AttachmentUploadResult;
             } catch (error) {
               const failure =
                 error instanceof Error
                   ? error
-                  : new Error("Failed to upload step attachment.");
-              const message = `Step ${index + 1}: ${failure.message}`;
-              setAttachmentTargetErrors({
-                [attachmentTargetKey(step.localId)]: message,
-              });
-              setSubmitMessage(message);
-              setIsSubmitting(false);
-              return;
+                  : new Error("Failed to upload objective attachment.");
+              const message = `Feature Request / Initial Instructions: ${failure.message}`;
+              setAttachmentTargetErrors((current) => ({
+                ...current,
+                [objectiveTargetKey]: message,
+              }));
+              return {
+                ok: false,
+                targetKey: objectiveTargetKey,
+                message,
+              } satisfies AttachmentUploadResult;
             }
+          });
+
+        for (const [index, step] of steps.entries()) {
+          const files = selectedStepAttachmentFiles[step.localId] || [];
+          const targetKey = attachmentTargetKey(step.localId);
+          uploadPromises.push(
+            ...files.map(async (file) => {
+              try {
+                const ref = await createInputAttachmentArtifact(
+                  artifactCreateEndpoint,
+                  file,
+                  normalizedRepository,
+                  { kind: "step", stepLabel: `Step ${index + 1}` },
+                );
+                return {
+                  ok: true,
+                  targetKey,
+                  ref,
+                } satisfies AttachmentUploadResult;
+              } catch (error) {
+                const failure =
+                  error instanceof Error
+                    ? error
+                    : new Error("Failed to upload step attachment.");
+                const message = `Step ${index + 1}: ${failure.message}`;
+                setAttachmentTargetErrors((current) => ({
+                  ...current,
+                  [targetKey]: message,
+                }));
+                return {
+                  ok: false,
+                  targetKey,
+                  message,
+                } satisfies AttachmentUploadResult;
+              }
+            }),
+          );
+        }
+
+        const uploadResults = await Promise.all(uploadPromises);
+        const uploadFailure = uploadResults.find((result) => !result.ok);
+        if (uploadFailure && !uploadFailure.ok) {
+          setSubmitMessage(uploadFailure.message);
+          setIsSubmitting(false);
+          return;
+        }
+
+        for (const result of uploadResults) {
+          if (!result.ok) {
+            continue;
           }
-          uploadedStepAttachments[step.localId] = refs;
+          if (result.targetKey === objectiveTargetKey) {
+            uploadedObjectiveAttachments.push(result.ref);
+            continue;
+          }
+          const stepAttachmentRefs =
+            uploadedStepAttachments[result.targetKey] || [];
+          stepAttachmentRefs.push(result.ref);
+          uploadedStepAttachments[result.targetKey] = stepAttachmentRefs;
+        }
+
+        for (const step of steps) {
+          const targetKey = attachmentTargetKey(step.localId);
+          if (uploadedStepAttachments[targetKey]) {
+            uploadedStepAttachments[step.localId] =
+              uploadedStepAttachments[targetKey];
+            delete uploadedStepAttachments[targetKey];
+          }
         }
       }
     } catch (error) {
