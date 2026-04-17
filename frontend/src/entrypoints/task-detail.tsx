@@ -1325,8 +1325,10 @@ function InputImagesSection({
   const groups = Object.values(
     inputImages.reduce<Record<string, { key: string; label: string; items: InputImageArtifact[] }>>(
       (acc, item) => {
-        acc[item.targetKey] ||= { key: item.targetKey, label: item.targetLabel, items: [] };
-        acc[item.targetKey].items.push(item);
+        const group =
+          acc[item.targetKey] ||
+          (acc[item.targetKey] = { key: item.targetKey, label: item.targetLabel, items: [] });
+        group.items.push(item);
         return acc;
       },
       {},
