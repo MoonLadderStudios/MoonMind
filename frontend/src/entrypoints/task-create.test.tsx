@@ -4701,7 +4701,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -4801,7 +4801,7 @@ describe("Task Create Entrypoint", () => {
     const stepInstructions = await screen.findByLabelText("Instructions");
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -4860,7 +4860,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -6131,7 +6131,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -6147,7 +6147,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
 
@@ -6162,7 +6162,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -6230,7 +6230,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -6296,7 +6296,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -6313,7 +6313,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -6353,7 +6353,7 @@ describe("Task Create Entrypoint", () => {
     const stepInstructions = await screen.findByLabelText("Instructions");
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -6389,7 +6389,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -6417,7 +6417,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -6459,7 +6459,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -6501,7 +6501,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -6624,7 +6624,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -6661,7 +6661,7 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -6694,7 +6694,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -6745,7 +6745,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -6835,7 +6835,7 @@ describe("Task Create Entrypoint", () => {
     );
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -6849,7 +6849,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "To Do 1" }));
@@ -6889,7 +6889,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -6919,7 +6919,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -6961,7 +6961,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 2 instructions",
+        name: "Browse Jira issues for Step 2 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7001,7 +7001,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.change(await screen.findByLabelText("Import target"), {
@@ -7031,7 +7031,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.change(await screen.findByLabelText("Text import"), {
@@ -7054,7 +7054,7 @@ describe("Task Create Entrypoint", () => {
     const stepInstructions = await screen.findByLabelText("Instructions");
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7099,7 +7099,7 @@ describe("Task Create Entrypoint", () => {
     const stepInstructions = await screen.findByLabelText("Instructions");
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7153,7 +7153,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7188,7 +7188,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7229,7 +7229,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7292,7 +7292,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7336,7 +7336,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 2 instructions",
+        name: "Browse Jira issues for Step 2 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7400,7 +7400,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 2 instructions",
+        name: "Browse Jira issues for Step 2 instructions",
       }),
     );
 
@@ -7429,7 +7429,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7452,7 +7452,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7523,7 +7523,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for objective attachments",
+        name: "Browse Jira images for objective attachments",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7543,7 +7543,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 attachments",
+        name: "Browse Jira images for Step 1 attachments",
       }),
     );
     expect(
@@ -7613,7 +7613,7 @@ describe("Task Create Entrypoint", () => {
     });
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for objective attachments",
+        name: "Browse Jira images for objective attachments",
       }),
     );
     expect(
@@ -7682,7 +7682,7 @@ describe("Task Create Entrypoint", () => {
     });
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 attachments",
+        name: "Browse Jira images for Step 1 attachments",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7746,7 +7746,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7757,7 +7757,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7847,7 +7847,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 attachments",
+        name: "Browse Jira images for Step 1 attachments",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7889,7 +7889,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -7906,7 +7906,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -7931,7 +7931,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -7960,7 +7960,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -7985,7 +7985,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -8016,7 +8016,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -8042,7 +8042,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -8091,7 +8091,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -8113,7 +8113,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for Step 1 instructions",
+        name: "Browse Jira issues for Step 1 instructions",
       }),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
@@ -8181,7 +8181,7 @@ describe("Task Create Entrypoint", () => {
     });
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     expect(
@@ -8227,7 +8227,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -8253,7 +8253,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -8286,7 +8286,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -8317,7 +8317,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -8373,7 +8373,7 @@ describe("Task Create Entrypoint", () => {
 
       fireEvent.click(
         await screen.findByRole("button", {
-          name: "Browse Jira issue for preset instructions",
+          name: "Browse Jira issues for preset instructions",
         }),
       );
 
@@ -8435,7 +8435,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
 
@@ -8498,7 +8498,7 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Browse Jira issue for preset instructions",
+        name: "Browse Jira issues for preset instructions",
       }),
     );
     expect(

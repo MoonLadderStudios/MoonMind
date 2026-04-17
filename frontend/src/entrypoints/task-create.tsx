@@ -5307,7 +5307,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         <button
                           type="button"
                           className="secondary jira-browse-button"
-                          aria-label={`Browse Jira issue for Step ${index + 1} instructions`}
+                          aria-label={`Browse Jira issues for Step ${index + 1} instructions`}
                           title={`Browse Jira issues for Step ${index + 1} instructions`}
                           onClick={() =>
                             openJiraBrowser({
@@ -5364,7 +5364,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           <button
                             type="button"
                             className="secondary jira-browse-button"
-                            aria-label={`Browse Jira issue for Step ${index + 1} attachments`}
+                            aria-label={`Browse Jira images for Step ${index + 1} attachments`}
                             title={`Browse Jira images for Step ${index + 1} attachments`}
                             onClick={() =>
                               openJiraBrowser({
@@ -5711,7 +5711,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <button
                     type="button"
                     className="secondary jira-browse-button"
-                    aria-label="Browse Jira issue for preset instructions"
+                    aria-label="Browse Jira issues for preset instructions"
                     title="Browse Jira issues for preset instructions"
                     onClick={() => openJiraBrowser({ kind: "preset" })}
                   >
@@ -5759,7 +5759,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     <button
                       type="button"
                       className="secondary jira-browse-button"
-                      aria-label="Browse Jira issue for objective attachments"
+                      aria-label="Browse Jira images for objective attachments"
                       title="Browse Jira images for objective attachments"
                       onClick={() =>
                         openJiraBrowser({
