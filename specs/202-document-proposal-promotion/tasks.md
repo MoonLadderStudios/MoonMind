@@ -14,9 +14,9 @@
 
 ## Traceability Inventory
 
-- FR-001, DESIGN-REQ-023, DESIGN-REQ-025: preset-derived proposal metadata is advisory UX/reconstruction metadata, not a runtime dependency.
-- FR-002, FR-005, DESIGN-REQ-015: promotion validates and submits the reviewed flat payload without live preset catalog lookup or live re-expansion by default.
-- FR-003, DESIGN-REQ-019: proposal payload examples may include optional `task.authoredPresets` and per-step `source` provenance.
+- FR-001, SC-001, DESIGN-REQ-023, DESIGN-REQ-025: preset-derived proposal metadata is advisory UX/reconstruction metadata, not a runtime dependency.
+- FR-002, FR-005, SC-002, DESIGN-REQ-015: promotion validates and submits the reviewed flat payload without live preset catalog lookup or live re-expansion by default.
+- FR-003, SC-003, DESIGN-REQ-019: proposal payload examples may include optional `task.authoredPresets` and per-step `source` provenance.
 - FR-004, SC-004: promotion preserves authored preset metadata and per-step provenance by default.
 - FR-006: refresh-latest preset behavior is explicit and not default.
 - FR-007, SC-005: generators preserve reliable provenance and do not fabricate bindings.
@@ -56,9 +56,9 @@
 
 ### Implementation
 
-- [X] T008 Update Task Proposal System invariants in `docs/Tasks/TaskProposalSystem.md` to state preset-derived metadata is advisory UX/reconstruction metadata and not a runtime dependency (FR-001, DESIGN-REQ-023, DESIGN-REQ-025).
+- [X] T008 Update Task Proposal System invariants in `docs/Tasks/TaskProposalSystem.md` to state preset-derived metadata is advisory UX/reconstruction metadata and not a runtime dependency (FR-001, SC-001, DESIGN-REQ-023, DESIGN-REQ-025).
 - [X] T009 Update proposal generation guidance in `docs/Tasks/TaskProposalSystem.md` to preserve reliable parent-run preset provenance and forbid fabricated authored preset bindings (FR-007, SC-005).
-- [X] T010 Update canonical proposal payload example and rules in `docs/Tasks/TaskProposalSystem.md` to include optional `task.authoredPresets` and per-step `source` provenance alongside execution-ready flat steps (FR-003, DESIGN-REQ-019).
+- [X] T010 Update canonical proposal payload example and rules in `docs/Tasks/TaskProposalSystem.md` to include optional `task.authoredPresets` and per-step `source` provenance alongside execution-ready flat steps (FR-003, SC-003, DESIGN-REQ-019).
 - [X] T011 Update promotion flow in `docs/Tasks/TaskProposalSystem.md` to preserve authored preset metadata and per-step provenance by default while validating the flat task payload (FR-002, FR-004).
 - [X] T012 Update promotion behavior in `docs/Tasks/TaskProposalSystem.md` to forbid default live preset catalog lookup and live re-expansion, and document any refresh-latest workflow as explicit (FR-002, FR-005, FR-006, DESIGN-REQ-015).
 - [X] T013 Update proposal detail and observability guidance in `docs/Tasks/TaskProposalSystem.md` to distinguish manual, preset-derived with preserved binding metadata, and preset-derived flattened-only work (FR-008, DESIGN-REQ-026).

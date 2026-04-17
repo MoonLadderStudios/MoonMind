@@ -40,6 +40,18 @@
 | Explicit refresh-latest | `docs/Tasks/TaskProposalSystem.md` 7.3 | VERIFIED | Refresh-latest is explicit future behavior. |
 | MM-388 traceability | MoonSpec artifacts and orchestration input | VERIFIED | MM-388 remains present. |
 
+## Success Criteria Coverage
+
+| Criterion | Evidence | Status | Notes |
+|-----------|----------|--------|-------|
+| SC-001 | `docs/Tasks/TaskProposalSystem.md` Core Invariants | VERIFIED | Preset-derived metadata is advisory UX/reconstruction metadata and not a runtime dependency. |
+| SC-002 | `docs/Tasks/TaskProposalSystem.md` Core Invariants and 7.3 | VERIFIED | Default promotion has no required live preset catalog lookup or live re-expansion. |
+| SC-003 | `docs/Tasks/TaskProposalSystem.md` candidate example and payload rules | VERIFIED | Flat executable proposal payload may coexist with optional `task.authoredPresets` and per-step `source`. |
+| SC-004 | `docs/Tasks/TaskProposalSystem.md` 7.1 and 7.3 | VERIFIED | Authored preset metadata and per-step provenance are preserved by default when present. |
+| SC-005 | `docs/Tasks/TaskProposalSystem.md` 3.4 | VERIFIED | Generator guidance preserves reliable provenance and forbids fabricated bindings. |
+| SC-006 | `docs/Tasks/TaskProposalSystem.md` 8.2 | VERIFIED | Proposal detail/observability can distinguish manual, preserved-binding preset-derived, and flattened-only states. |
+| SC-007 | `specs/202-document-proposal-promotion/spec.md`; `docs/tmp/jira-orchestration-inputs/MM-388-moonspec-orchestration-input.md` | VERIFIED | Source design requirements map to functional requirements and MM-388 remains present. |
+
 ## Constitution And Source Design Coverage
 
 | Item | Evidence | Status | Notes |
