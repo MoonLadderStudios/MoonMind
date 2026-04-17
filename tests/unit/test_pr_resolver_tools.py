@@ -920,6 +920,73 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     assert int(raised_strict.value.code) == int(exit_code_blocked)
 
 
+def test_finalize_snapshot_auth_failure_reports_publish_unavailable(
+    pr_resolve_finalize_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    main = pr_resolve_finalize_module["main"]
+    globals_dict = main.__globals__
+    exit_code_blocked = pr_resolve_finalize_module["EXIT_CODE_BLOCKED"]
+
+    def _boom(
+        _snapshot_script: Path,
+        _pr: str | None,
+        _snapshot_path: Path,
+    ) -> None:
+        raise subprocess.CalledProcessError(
+            returncode=pr_resolve_finalize_module["EXIT_CODE_FAILED"],
+            cmd=["python3", "pr_resolve_snapshot.py"],
+            stderr=(
+                "You are not logged into any GitHub hosts. "
+                "Run gh auth login to authenticate."
+            ),
+        )
+
+    monkeypatch.setitem(globals_dict, "_run_snapshot", _boom)
+    monkeypatch.setitem(globals_dict, "_check_pr_merged", lambda _selector: False)
+
+    result_path = tmp_path / "pr_resolver_result.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--pr",
+            "feature/branch",
+            "--result-path",
+            str(result_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        main()
+    assert int(raised.value.code) == 0
+
+    import json
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "publish_unavailable"
+    assert payload["next_step"] == "manual_review"
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--strict-exit-codes",
+            "--pr",
+            "feature/branch",
+            "--result-path",
+            str(result_path),
+        ],
+    )
+    with pytest.raises(SystemExit) as raised_strict:
+        main()
+    assert int(raised_strict.value.code) == int(exit_code_blocked)
+
+
 def test_summarize_ci_treats_stale_rollup_as_running(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -1242,3 +1309,27 @@ def test_review_comment_with_thread_resolved_via_enrichment(
     assert summary["actionableCommentCount"] == 1
     assert summary["actionableCommentIds"] == [2]
     assert summary["nonActionableReasonCounts"].get("thread_resolved") == 1
+
+
+def test_pr_resolver_skill_requires_orchestrated_merge_completion() -> None:
+    skill_text = (
+        REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Primary Command (mandatory first action)" in skill_text
+    assert "Terminal Success Contract" in skill_text
+    assert "Main Loop" in skill_text
+    assert "A local fix, local commit" in skill_text
+    assert "status=merged" in skill_text
+    assert "merge_outcome=merged" in skill_text
+    assert "reason `publish_unavailable`" in skill_text
+    assert "branch is ahead of origin" in skill_text
+
+    repeated_blocker_step = (
+        "If the same blocker repeats after its specialized skill ran and no remote "
+        "PR branch change is visible"
+    )
+    skill_execution_step = "Execute the matching specialized skill exactly once"
+    assert skill_text.index(repeated_blocker_step) < skill_text.index(
+        skill_execution_step
+    )

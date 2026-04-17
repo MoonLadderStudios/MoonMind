@@ -13,6 +13,9 @@ const TaskPreviewSchema = z
     runtimeMode: z.string().nullable().optional(),
     skillId: z.string().nullable().optional(),
     taskSkills: z.array(z.string()).nullable().optional(),
+    presetProvenance: z.string().nullable().optional(),
+    authoredPresetCount: z.number().nullable().optional(),
+    stepSourceKinds: z.array(z.string()).nullable().optional(),
   })
   .passthrough();
 
@@ -40,6 +43,17 @@ function formatWhen(iso: string | null | undefined): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleString();
+}
+
+function formatPresetProvenance(preview: z.infer<typeof TaskPreviewSchema> | null | undefined): string {
+  const provenance = preview?.presetProvenance;
+  if (provenance === 'preserved-binding') {
+    const count = preview?.authoredPresetCount || 0;
+    return count > 0 ? `Preserved binding (${count})` : 'Preserved binding';
+  }
+  if (provenance === 'flattened-only') return 'Flattened only';
+  if (provenance === 'manual') return 'Manual';
+  return '—';
 }
 
 function replaceUrlQuery(params: URLSearchParams) {
@@ -274,6 +288,7 @@ export function ProposalsPage({ payload }: { payload: BootPayload }) {
                       <th>ID</th>
                       <th>Runtime</th>
                       <th>Skill</th>
+                      <th>Provenance</th>
                       <th>Repository</th>
                       <th>Status</th>
                       <th>Title</th>
@@ -292,6 +307,7 @@ export function ProposalsPage({ payload }: { payload: BootPayload }) {
                         </td>
                         <td>{row.taskPreview?.runtimeMode || '—'}</td>
                         <td>{formatTaskSkills(row.taskPreview?.taskSkills, row.taskPreview?.skillId)}</td>
+                        <td>{formatPresetProvenance(row.taskPreview)}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
                           <span className={executionStatusPillClasses(row.status)}>
@@ -366,6 +382,10 @@ export function ProposalsPage({ payload }: { payload: BootPayload }) {
                       <div>
                         <dt>Skill</dt>
                         <dd>{formatTaskSkills(row.taskPreview?.taskSkills, row.taskPreview?.skillId)}</dd>
+                      </div>
+                      <div>
+                        <dt>Provenance</dt>
+                        <dd>{formatPresetProvenance(row.taskPreview)}</dd>
                       </div>
                       <div>
                         <dt>Repository</dt>

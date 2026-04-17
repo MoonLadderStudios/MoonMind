@@ -493,6 +493,71 @@ async def test_promote_proposal_applies_runtime_override() -> None:
 
 
 @pytest.mark.asyncio
+async def test_promote_proposal_preserves_preset_provenance() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        task_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "task": {
+                    "instructions": "Add regression coverage",
+                    "authoredPresets": [
+                        {
+                            "presetId": "runtime-quality-followup",
+                            "version": "2026-04-17",
+                            "includePath": ["root", "regression-coverage"],
+                        }
+                    ],
+                    "steps": [
+                        {
+                            "title": "Add regression coverage",
+                            "instructions": "Write the regression test.",
+                            "source": {
+                                "kind": "preset-derived",
+                                "presetId": "runtime-quality-followup",
+                                "includePath": ["root", "regression-coverage"],
+                                "originalStepId": "add-regression-test",
+                            },
+                        }
+                    ],
+                },
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    updated_proposal, final_request = await service.promote_proposal(
+        proposal_id=proposal.id,
+        promoted_by_user_id=uuid4(),
+    )
+
+    repo.commit.assert_awaited()
+    assert updated_proposal.status is TaskProposalStatus.PROMOTED
+    task = final_request["payload"]["task"]
+    assert task["authoredPresets"] == [
+        {
+            "presetId": "runtime-quality-followup",
+            "version": "2026-04-17",
+            "includePath": ["root", "regression-coverage"],
+        }
+    ]
+    assert task["steps"][0]["source"] == {
+        "kind": "preset-derived",
+        "presetId": "runtime-quality-followup",
+        "includePath": ["root", "regression-coverage"],
+        "originalStepId": "add-regression-test",
+    }
+
+
+@pytest.mark.asyncio
 async def test_promote_proposal_override_normalizes_managed_runtime_ids() -> None:
     repo = AsyncMock()
     proposal = SimpleNamespace(
@@ -587,7 +652,6 @@ async def test_promote_proposal_override_normalizes_runtime_mapping_aliases(
     repo.commit.assert_awaited()
     assert updated_proposal.status is TaskProposalStatus.PROMOTED
     assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
-
 
 
 

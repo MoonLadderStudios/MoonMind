@@ -302,6 +302,44 @@ def test_get_proposal_includes_similar(client: tuple[TestClient, AsyncMock, Asyn
     assert body["similar"]
 
 
+def test_get_proposal_preview_includes_preset_provenance(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal = _build_proposal()
+    proposal.task_create_request = {
+        "type": "task",
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "Add regression coverage",
+                "authoredPresets": [
+                    {
+                        "presetId": "runtime-quality-followup",
+                        "includePath": ["root", "regression-coverage"],
+                    }
+                ],
+                "steps": [
+                    {
+                        "title": "Add regression coverage",
+                        "source": {"kind": "preset-derived"},
+                    }
+                ],
+            },
+        },
+    }
+    service.get_proposal.return_value = proposal
+    service.get_similar_proposals.return_value = []
+
+    response = test_client.get(f"/api/proposals/{proposal.id}")
+
+    assert response.status_code == 200
+    preview = response.json()["taskPreview"]
+    assert preview["presetProvenance"] == "preserved-binding"
+    assert preview["authoredPresetCount"] == 1
+    assert preview["stepSourceKinds"] == ["preset-derived"]
+
+
 def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()

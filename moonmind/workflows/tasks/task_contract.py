@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -825,6 +825,98 @@ class TaskInputAttachmentRef(BaseModel):
         return cleaned
 
 
+class TaskStepSource(BaseModel):
+    """Optional provenance for a step in a compiled task payload."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["manual", "preset-derived", "preset-include", "detached"] | None = (
+        Field(None, alias="kind")
+    )
+    preset_id: str | None = Field(None, alias="presetId")
+    preset_slug: str | None = Field(None, alias="presetSlug")
+    version: str | None = Field(None, alias="version")
+    include_path: list[str] | None = Field(None, alias="includePath")
+    original_step_id: str | None = Field(None, alias="originalStepId")
+
+    @field_validator(
+        "kind",
+        "preset_id",
+        "preset_slug",
+        "version",
+        "original_step_id",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_strings(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
+
+    @field_validator("include_path", mode="before")
+    @classmethod
+    def _normalize_include_path(cls, value: object) -> list[str] | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, list):
+            raise TaskContractError("task.steps[].source.includePath must be a list")
+        normalized = [
+            cleaned
+            for item in value
+            if (cleaned := _clean_optional_str(item)) is not None
+        ]
+        return normalized or None
+
+
+class AuthoredPresetBinding(BaseModel):
+    """Optional preset binding metadata used to compile a task payload."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    preset_id: str | None = Field(None, alias="presetId")
+    preset_slug: str | None = Field(None, alias="presetSlug")
+    version: str | None = Field(None, alias="version")
+    alias: str | None = Field(None, alias="alias")
+    include_path: list[str] | None = Field(None, alias="includePath")
+    input_mapping: dict[str, Any] | None = Field(None, alias="inputMapping")
+    scope: str | None = Field(None, alias="scope")
+
+    @field_validator(
+        "preset_id",
+        "preset_slug",
+        "version",
+        "alias",
+        "scope",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_strings(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
+
+    @field_validator("include_path", mode="before")
+    @classmethod
+    def _normalize_include_path(cls, value: object) -> list[str] | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, list):
+            raise TaskContractError("task.authoredPresets[].includePath must be a list")
+        normalized = [
+            cleaned
+            for item in value
+            if (cleaned := _clean_optional_str(item)) is not None
+        ]
+        return normalized or None
+
+    @field_validator("input_mapping", mode="before")
+    @classmethod
+    def _normalize_input_mapping(cls, value: object) -> dict[str, Any] | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, dict):
+            raise TaskContractError(
+                "task.authoredPresets[].inputMapping must be an object"
+            )
+        return dict(value)
+
+
 class TaskStepSpec(BaseModel):
     """Optional execution step contained within a canonical task payload."""
 
@@ -835,6 +927,7 @@ class TaskStepSpec(BaseModel):
     instructions: str | None = Field(None, alias="instructions")
     skill: TaskSkillSelection | None = Field(None, alias="skill")
     skills: TaskSkillSelectors | None = Field(None, alias="skills")
+    source: TaskStepSource | None = Field(None, alias="source")
     input_attachments: list[TaskInputAttachmentRef] = Field(
         default_factory=list, alias="inputAttachments"
     )
@@ -915,6 +1008,9 @@ class TaskExecutionSpec(BaseModel):
     )
     container: TaskContainerSelection | None = Field(None, alias="container")
     proposal_policy: TaskProposalPolicy | None = Field(None, alias="proposalPolicy")
+    authored_presets: list[AuthoredPresetBinding] | None = Field(
+        None, alias="authoredPresets"
+    )
 
     @field_validator("instructions", mode="before")
     @classmethod
@@ -929,6 +1025,15 @@ class TaskExecutionSpec(BaseModel):
             list_error="task.inputAttachments must be a list",
             target_kind="objective",
         )
+
+    @field_validator("authored_presets", mode="before")
+    @classmethod
+    def _normalize_authored_presets(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, list):
+            raise TaskContractError("task.authoredPresets must be a list")
+        return value
 
     @field_validator("propose_tasks", mode="before")
     @classmethod
@@ -1620,8 +1725,10 @@ __all__ = [
     "LEGACY_TASK_JOB_TYPES",
     "SUPPORTED_EXECUTION_RUNTIMES",
     "CanonicalTaskPayload",
+    "AuthoredPresetBinding",
     "TaskContractError",
     "TaskInputAttachmentRef",
+    "TaskStepSource",
     "build_task_stage_plan",
     "build_canonical_task_view",
     "has_attachment_mutation_fields",

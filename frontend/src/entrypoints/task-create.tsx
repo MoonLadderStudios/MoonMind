@@ -19,6 +19,7 @@ const ARTIFACT_COMPLETE_RETRY_MESSAGE = "artifact upload is not complete";
 const SKILL_OPTIONS_DATALIST_ID = "queue-skill-options";
 const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
 const EFFORT_OPTIONS_DATALIST_ID = "queue-effort-options";
+const REPOSITORY_OPTIONS_DATALIST_ID = "queue-repository-options";
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
@@ -123,6 +124,14 @@ interface DashboardConfig {
     defaultTaskModelByRuntime?: Record<string, string>;
     defaultTaskEffortByRuntime?: Record<string, string>;
     supportedTaskRuntimes?: string[];
+    repositoryOptions?: {
+      items?: Array<{
+        value?: string | null;
+        label?: string | null;
+        source?: string | null;
+      }>;
+      error?: string | null;
+    };
     providerProfiles?: {
       list?: string;
     };
@@ -1904,6 +1913,16 @@ function CloseIcon() {
   );
 }
 
+function SaveIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M6 4h10l2 2v14H6z" />
+      <path d="M9 4v6h6V4" />
+      <path d="M9 17h6" />
+    </svg>
+  );
+}
+
 export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const dashboardConfig = readDashboardConfig(payload);
   const pageMode = useMemo(
@@ -3526,6 +3545,27 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       runtime,
     ],
   );
+
+  const repositoryOptions = useMemo(() => {
+    const items = dashboardConfig.system?.repositoryOptions?.items;
+    const seen = new Set<string>();
+    return (Array.isArray(items) ? items : [])
+      .map((item) => ({
+        value: String(item?.value || "").trim(),
+        label: String(item?.label || item?.value || "").trim(),
+      }))
+      .filter((item) => {
+        if (!item.value) {
+          return false;
+        }
+        const key = item.value.toLowerCase();
+        if (seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      });
+  }, [dashboardConfig.system?.repositoryOptions?.items]);
 
   const presetStatusText = useMemo(() => {
     if (presetReapplyNeeded) {
@@ -5176,6 +5216,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 <option key={item} value={item} />
               ))}
             </datalist>
+            <datalist id={REPOSITORY_OPTIONS_DATALIST_ID}>
+              {repositoryOptions.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </datalist>
 
             {steps.map((step, index) => {
               const isPrimaryStep = index === 0;
@@ -5514,6 +5561,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 GitHub Repo
                 <input
                   name="repository"
+                  list={REPOSITORY_OPTIONS_DATALIST_ID}
                   value={repository}
                   placeholder="owner/repo"
                   onChange={(event) => setRepository(event.target.value)}
@@ -5768,9 +5816,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 <button
                   type="button"
                   id="queue-template-save-current"
+                  className="queue-step-icon-button"
+                  aria-label="Save Current Steps as Preset"
+                  title="Save the current steps as a reusable preset"
                   onClick={handleSaveCurrentStepsAsPreset}
                 >
-                  Save Current Steps as Preset
+                  <SaveIcon />
                 </button>
               ) : null}
               <button

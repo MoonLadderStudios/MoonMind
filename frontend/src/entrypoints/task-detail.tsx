@@ -186,6 +186,7 @@ const ExecutionDetailSchema = z
     resolvedSkillsetRef: z.string().nullable().optional(),
     taskSkills: z.array(z.string()).nullable().optional(),
     publishMode: z.string().nullable().optional(),
+    mergeAutomationSelected: z.boolean().optional().default(false),
     summaryArtifactRef: z.string().nullable().optional(),
     summary_artifact_ref: z.string().nullable().optional(),
     scheduledFor: z.string().nullable().optional(),
@@ -3160,6 +3161,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                 <code className="text-xs">{execution.publishMode}</code>
               </Card>
             ) : null}
+            <Card label="Merge Automation Selected">
+              {execution.mergeAutomationSelected ? 'Yes' : 'No'}
+            </Card>
             {prUrl ? (
               <Card label="PR Link">
                 <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">

@@ -310,6 +310,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Plan work')).toBeTruthy();
       expect(screen.getByText('Apply patch')).toBeTruthy();
       expect(screen.getByText('Verify tests')).toBeTruthy();
+      expect(screen.getByText('Merge Automation Selected:').closest('.card')?.textContent).toContain('No');
       expect(screen.getByText(/^Latest Run:?$/)).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
@@ -1476,6 +1477,7 @@ describe('Task Detail Entrypoint', () => {
       temporalStatus: 'running',
       closeStatus: null,
       summaryArtifactRef: 'art-summary-merge',
+      mergeAutomationSelected: true,
       createdAt: '2026-03-28T00:00:00Z',
       startedAt: '2026-03-28T00:00:01Z',
       updatedAt: '2026-03-28T00:00:02Z',
@@ -1525,6 +1527,7 @@ describe('Task Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Merge Automation')).toBeTruthy();
+      expect(screen.getByText('Merge Automation Selected:').closest('.card')?.textContent).toContain('Yes');
       expect(screen.getByText('blocked')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/354' })).toBeTruthy();
       expect(screen.getByText('abc123')).toBeTruthy();
