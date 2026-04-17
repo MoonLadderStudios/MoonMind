@@ -1623,6 +1623,7 @@ def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
         "prBody",
         "verificationSkipReason",
         "verification",
+        "mergeAutomation",
     ):
         if key not in publish_payload:
             continue
@@ -1638,6 +1639,10 @@ def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
     if "baseBranch" in normalized and "prBaseBranch" not in normalized:
         normalized["prBaseBranch"] = normalized["baseBranch"]
     return normalized
+
+
+def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
+    return _coerce_mapping(raw_merge_automation)
 
 
 def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
@@ -2198,6 +2203,12 @@ async def _create_execution_from_task_request(
         else {}
     )
     publish_payload = _normalize_publish_payload(task_payload.get("publish"))
+    merge_automation_payload = _normalize_merge_automation_payload(
+        payload.get("mergeAutomation") or payload.get("merge_automation")
+    )
+    task_merge_automation_payload = _normalize_merge_automation_payload(
+        task_payload.get("mergeAutomation") or task_payload.get("merge_automation")
+    )
     story_output_payload = _normalize_story_output_payload(
         task_payload.get("storyOutput") or task_payload.get("story_output")
     )
@@ -2250,6 +2261,10 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner["title"] = task_title
     if publish_payload:
         normalized_task_for_planner["publish"] = dict(publish_payload)
+    if task_merge_automation_payload:
+        normalized_task_for_planner["mergeAutomation"] = dict(
+            task_merge_automation_payload
+        )
     if story_output_payload:
         normalized_task_for_planner["storyOutput"] = dict(story_output_payload)
     git_payload = (
@@ -2358,6 +2373,8 @@ async def _create_execution_from_task_request(
     }
     if story_output_payload:
         initial_parameters["storyOutput"] = dict(story_output_payload)
+    if merge_automation_payload:
+        initial_parameters["mergeAutomation"] = dict(merge_automation_payload)
     if instructions:
         initial_parameters["instructions"] = instructions
     if normalized_task_for_planner:
