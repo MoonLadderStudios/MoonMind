@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -22,6 +23,21 @@ from api_service.api.routers.task_dashboard import (
     _resolve_user_dependency_overrides,
     router,
 )
+
+
+_BOOT_PAYLOAD_SCRIPT_RE = re.compile(
+    r"<script\b"
+    r"(?=[^>]*\bid=[\"']moonmind-ui-boot[\"'])"
+    r"(?=[^>]*\btype=[\"']application/json[\"'])"
+    r"[^>]*>(?P<payload>.*?)</script>",
+    re.DOTALL,
+)
+
+
+def _extract_boot_payload(response_text: str) -> dict[str, object]:
+    match = _BOOT_PAYLOAD_SCRIPT_RE.search(response_text)
+    assert match is not None
+    return json.loads(match.group("payload"))
 
 
 def _write_dashboard_test_manifest(root: Path) -> Path:
@@ -186,11 +202,7 @@ def test_task_create_route_uses_canonical_boot_payload(client: TestClient) -> No
 
     assert response.status_code == 200
     assert "moonmind-ui-boot" in response.text
-    boot_json = response.text.split(
-        '<script id="moonmind-ui-boot" type="application/json">',
-        maxsplit=1,
-    )[1].split("</script>", maxsplit=1)[0]
-    boot_payload = json.loads(boot_json)
+    boot_payload = _extract_boot_payload(response.text)
 
     assert boot_payload["page"] == "task-create"
     dashboard_config = boot_payload["initialData"]["dashboardConfig"]
