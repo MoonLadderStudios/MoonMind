@@ -780,7 +780,7 @@ Structural checks:
 
 ---
 
-## 11.3 Execution invariants
+### 11.3 Execution invariants
 
 Runtime execution consumes the flattened Plan graph only. Nested preset semantics
 do not exist at runtime, and provenance is never executable logic.
