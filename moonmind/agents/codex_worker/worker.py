@@ -1154,6 +1154,19 @@ class PreparedTaskWorkspace:
 
 
 @dataclass(frozen=True, slots=True)
+class InputAttachmentMaterializationTarget:
+    """One declared task input attachment with its canonical target binding."""
+
+    artifact_id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    target_kind: str
+    step_ref: str | None = None
+    step_ordinal: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProposalSubmissionReport:
     """Compact proposal-submission output used by task finish summaries."""
 
@@ -1708,6 +1721,17 @@ class QueueApiClient:
                 raise QueueClientError(
                     f"artifact upload failed for job {job_id}: {exc}"
                 ) from exc
+
+    async def download_artifact(self, *, artifact_id: str) -> bytes:
+        path = f"/api/artifacts/{artifact_id}/download"
+        try:
+            response = await self._client.get(path)
+            response.raise_for_status()
+            return bytes(response.content)
+        except httpx.HTTPError as exc:
+            raise QueueClientError(
+                f"artifact download failed for {artifact_id}: {exc}"
+            ) from exc
 
     async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -4354,6 +4378,16 @@ class CodexWorker:
                 # Symlink already exists; this is safe to ignore for idempotent setup.
                 pass
 
+            attachment_manifest_path = await self._materialize_input_attachments(
+                job_id=job_id,
+                canonical_payload=canonical_payload,
+                repo_dir=repo_dir,
+                prepare_log_path=prepare_log_path,
+            )
+            attachment_targets = self._collect_input_attachment_targets(
+                canonical_payload
+            )
+
             context_payload = {
                 "repository": repository,
                 "runtime": canonical_payload.get("targetRuntime"),
@@ -4403,6 +4437,14 @@ class CodexWorker:
                     "home": str(home_dir),
                     "skillsActive": str(skills_active_path),
                     "artifacts": str(artifacts_dir),
+                },
+                "attachments": {
+                    "count": len(attachment_targets),
+                    "manifestPath": (
+                        str(attachment_manifest_path)
+                        if attachment_manifest_path is not None
+                        else None
+                    ),
                 },
                 "rag": self._rag_capability_metadata(),
                 "timestamp": datetime.now(UTC).isoformat(),
@@ -4469,6 +4511,223 @@ class CodexWorker:
                 },
             )
             raise
+
+    @staticmethod
+    def _sanitize_attachment_workspace_segment(value: object, *, fallback: str) -> str:
+        text = str(value or "").replace("\\", "/").strip()
+        basename = Path(text).name
+        sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", basename).strip("._")
+        return sanitized or fallback
+
+    @classmethod
+    def _attachment_step_ref(cls, step: Mapping[str, Any], index: int) -> str:
+        explicit = str(step.get("id") or "").strip()
+        if explicit:
+            return cls._sanitize_attachment_workspace_segment(
+                explicit, fallback=f"step-{index + 1}"
+            )
+        return f"step-{index + 1}"
+
+    @staticmethod
+    def _require_attachment_ref_field(
+        ref: Mapping[str, Any], *, field: str, field_name: str
+    ) -> str:
+        value = str(ref.get(field) or "").strip()
+        if not value:
+            raise ValueError(f"{field_name}.{field} is required")
+        return value
+
+    @classmethod
+    def _build_attachment_target(
+        cls,
+        raw: Any,
+        *,
+        field_name: str,
+        target_kind: str,
+        step_ref: str | None = None,
+        step_ordinal: int | None = None,
+    ) -> InputAttachmentMaterializationTarget:
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"{field_name} must be an object")
+        artifact_id = cls._require_attachment_ref_field(
+            raw, field="artifactId", field_name=field_name
+        )
+        filename = cls._require_attachment_ref_field(
+            raw, field="filename", field_name=field_name
+        )
+        content_type = cls._require_attachment_ref_field(
+            raw, field="contentType", field_name=field_name
+        )
+        size_raw = raw.get("sizeBytes")
+        if isinstance(size_raw, bool):
+            raise ValueError(f"{field_name}.sizeBytes must be a non-negative integer")
+        try:
+            size_bytes = int(size_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{field_name}.sizeBytes must be a non-negative integer"
+            ) from exc
+        if size_bytes < 0:
+            raise ValueError(f"{field_name}.sizeBytes must be a non-negative integer")
+        return InputAttachmentMaterializationTarget(
+            artifact_id=artifact_id,
+            filename=filename,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            target_kind=target_kind,
+            step_ref=step_ref,
+            step_ordinal=step_ordinal,
+        )
+
+    @classmethod
+    def _collect_input_attachment_targets(
+        cls, canonical_payload: Mapping[str, Any]
+    ) -> list[InputAttachmentMaterializationTarget]:
+        task_node = canonical_payload.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+        targets: list[InputAttachmentMaterializationTarget] = []
+        objective_refs = task.get("inputAttachments")
+        if objective_refs is not None:
+            if not isinstance(objective_refs, list):
+                raise ValueError("task.inputAttachments must be a list")
+            for index, raw in enumerate(objective_refs):
+                targets.append(
+                    cls._build_attachment_target(
+                        raw,
+                        field_name=f"task.inputAttachments[{index}]",
+                        target_kind="objective",
+                    )
+                )
+
+        raw_steps = task.get("steps")
+        if raw_steps is None:
+            return targets
+        if not isinstance(raw_steps, list):
+            raise ValueError("task.steps must be a list")
+        for step_index, raw_step in enumerate(raw_steps):
+            if not isinstance(raw_step, Mapping):
+                continue
+            step_refs = raw_step.get("inputAttachments")
+            if step_refs is None:
+                continue
+            if not isinstance(step_refs, list):
+                raise ValueError(
+                    f"task.steps[{step_index}].inputAttachments must be a list"
+                )
+            step_ref = cls._attachment_step_ref(raw_step, step_index)
+            for ref_index, raw_ref in enumerate(step_refs):
+                targets.append(
+                    cls._build_attachment_target(
+                        raw_ref,
+                        field_name=(
+                            f"task.steps[{step_index}].inputAttachments[{ref_index}]"
+                        ),
+                        target_kind="step",
+                        step_ref=step_ref,
+                        step_ordinal=step_index,
+                    )
+                )
+        return targets
+
+    @classmethod
+    def _attachment_workspace_relative_path(
+        cls, target: InputAttachmentMaterializationTarget
+    ) -> Path:
+        filename = cls._sanitize_attachment_workspace_segment(
+            target.filename, fallback="attachment"
+        )
+        output_name = f"{target.artifact_id}-{filename}"
+        if target.target_kind == "objective":
+            return Path(".moonmind") / "inputs" / "objective" / output_name
+        if target.target_kind == "step" and target.step_ref:
+            step_ref = cls._sanitize_attachment_workspace_segment(
+                target.step_ref, fallback="step"
+            )
+            return Path(".moonmind") / "inputs" / "steps" / step_ref / output_name
+        raise ValueError(f"unsupported attachment target kind: {target.target_kind}")
+
+    @staticmethod
+    def _attachment_manifest_entry(
+        *,
+        target: InputAttachmentMaterializationTarget,
+        workspace_path: Path,
+    ) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "artifactId": target.artifact_id,
+            "filename": target.filename,
+            "contentType": target.content_type,
+            "sizeBytes": target.size_bytes,
+            "targetKind": target.target_kind,
+            "workspacePath": workspace_path.as_posix(),
+        }
+        if target.step_ref is not None:
+            entry["stepRef"] = target.step_ref
+        if target.step_ordinal is not None:
+            entry["stepOrdinal"] = target.step_ordinal
+        return entry
+
+    async def _materialize_input_attachments(
+        self,
+        *,
+        job_id: UUID,
+        canonical_payload: Mapping[str, Any],
+        repo_dir: Path,
+        prepare_log_path: Path,
+    ) -> Path | None:
+        targets = self._collect_input_attachment_targets(canonical_payload)
+        if not targets:
+            return None
+        manifest_entries: list[dict[str, Any]] = []
+        moonmind_dir = repo_dir / ".moonmind"
+        inputs_dir = moonmind_dir / "inputs"
+        inputs_dir.mkdir(parents=True, exist_ok=True)
+        for target in targets:
+            relative_path = self._attachment_workspace_relative_path(target)
+            absolute_path = repo_dir / relative_path
+            try:
+                payload = await self._queue_client.download_artifact(
+                    artifact_id=target.artifact_id
+                )
+                absolute_path.parent.mkdir(parents=True, exist_ok=True)
+                absolute_path.write_bytes(payload)
+            except Exception as exc:
+                self._append_stage_log(
+                    prepare_log_path,
+                    (
+                        "input attachment materialization failed: "
+                        f"{target.artifact_id} ({target.target_kind}): {exc}"
+                    ),
+                )
+                raise RuntimeError(
+                    "failed to materialize input attachment "
+                    f"{target.artifact_id}: {exc}"
+                ) from exc
+            manifest_entries.append(
+                self._attachment_manifest_entry(
+                    target=target, workspace_path=relative_path
+                )
+            )
+
+        manifest_path = moonmind_dir / "attachments_manifest.json"
+        manifest_payload = {"version": 1, "attachments": manifest_entries}
+        try:
+            manifest_path.write_text(
+                json.dumps(manifest_payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            self._append_stage_log(
+                prepare_log_path,
+                f"input attachment manifest write failed: {exc}",
+            )
+            raise RuntimeError(
+                f"failed to write input attachment manifest: {exc}"
+            ) from exc
+        self._append_stage_log(
+            prepare_log_path,
+            f"materialized {len(targets)} input attachment(s) for job {job_id}",
+        )
+        return manifest_path
 
     async def _run_prepare_git_identity_preflight(
         self,
