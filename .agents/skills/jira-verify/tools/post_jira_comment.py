@@ -47,6 +47,25 @@ def _scan(body: str) -> None:
             )
 
 
+def _headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    auth_header = os.environ.get("MOONMIND_AUTH_HEADER", "").strip()
+    bearer_token = (
+        os.environ.get("MOONMIND_API_TOKEN")
+        or os.environ.get("MOONMIND_AUTH_TOKEN")
+        or os.environ.get("MOONMIND_BEARER_TOKEN")
+        or ""
+    ).strip()
+    api_key = os.environ.get("MOONMIND_API_KEY", "").strip()
+    if auth_header:
+        headers["Authorization"] = auth_header
+    elif bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    if api_key:
+        headers["X-API-Key"] = api_key
+    return headers
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Post a Jira comment via MoonMind's trusted jira.add_comment tool."
@@ -60,7 +79,11 @@ def main() -> int:
     args = parser.parse_args()
 
     issue = args.issue.strip().upper()
-    body = Path(args.body_file).read_text(encoding="utf-8")
+    try:
+        body = Path(args.body_file).read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"Error reading body file {args.body_file}: {exc}", file=sys.stderr)
+        return 1
     _scan(body)
 
     payload = {
@@ -74,7 +97,7 @@ def main() -> int:
     request = urllib.request.Request(
         f"{_base_url(args.base_url)}/mcp/tools/call",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=_headers(),
         method="POST",
     )
 

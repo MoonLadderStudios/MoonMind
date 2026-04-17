@@ -32,47 +32,47 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
 ## Workflow
 
 1. Resolve the Jira issue.
-- Normalize the issue key from a key or URL.
-- Load trusted issue content from existing artifacts such as `var/artifacts/**/jira/<ISSUE>/issue.normalized.json` or `issue.md` when present.
-- Otherwise fetch through trusted Jira tooling.
-- Extract a requirements ledger: summary, description goals, acceptance criteria, constraints, explicit non-goals, linked issue dependencies, and any test or deployment expectations.
-- If requirements are ambiguous, mark them `unverifiable` instead of inventing criteria.
+   - Normalize the issue key from a key or URL.
+   - Load trusted issue content from existing artifacts such as `var/artifacts/**/jira/<ISSUE>/issue.normalized.json` or `issue.md` when present.
+   - Otherwise fetch through trusted Jira tooling.
+   - Extract a requirements ledger: summary, description goals, acceptance criteria, constraints, explicit non-goals, linked issue dependencies, and any test or deployment expectations.
+   - If requirements are ambiguous, mark them `unverifiable` instead of inventing criteria.
 
 2. Resolve the branch comparison.
-- Record `git branch --show-current`, `git rev-parse HEAD`, and `git status --short`.
-- Determine the comparison ref from user input, upstream tracking branch, `origin/main`, `origin/master`, `main`, or `master`.
-- Fetch the comparison ref only when needed and safe.
-- Use `git merge-base <base> HEAD`, then inspect `git diff --stat <merge-base>..HEAD`, `git diff --name-status <merge-base>..HEAD`, and relevant hunks.
-- If no meaningful diff exists, the likely verdict is `FAIL` or `BLOCKED` unless the Jira issue explicitly requires only verification/no code change.
+   - Record `git branch --show-current`, `git rev-parse HEAD`, and `git status --short`.
+   - Determine the comparison ref from user input, upstream tracking branch, `origin/main`, `origin/master`, `main`, or `master`.
+   - Fetch the comparison ref only when needed and safe.
+   - Use `git merge-base <base> HEAD`, then inspect `git diff --stat <merge-base>..HEAD`, `git diff --name-status <merge-base>..HEAD`, and relevant hunks.
+   - If no meaningful diff exists, the likely verdict is `FAIL` or `BLOCKED` unless the Jira issue explicitly requires only verification/no code change.
 
 3. Inspect implementation evidence.
-- Read changed source, tests, docs, workflow/config, migrations, and generated artifacts relevant to the Jira ledger.
-- Search the repository with `rg` for Jira terms, feature names, acceptance criteria keywords, old behavior, and new behavior.
-- Identify deleted or superseded paths so the verdict accounts for removals as well as additions.
-- Run local tests when required by repo instructions, user request, or when the verdict depends on unproven behavior. If tests cannot run, record exactly why.
+   - Read changed source, tests, docs, workflow/config, migrations, and generated artifacts relevant to the Jira ledger.
+   - Search the repository with `rg` for Jira terms, feature names, acceptance criteria keywords, old behavior, and new behavior.
+   - Identify deleted or superseded paths so the verdict accounts for removals as well as additions.
+   - Run local tests when required by repo instructions, user request, or when the verdict depends on unproven behavior. If tests cannot run, record exactly why.
 
 4. Build a traceability ledger before commenting.
-- For each Jira item, assign exactly one status:
-  - `met`
-  - `partially_met`
-  - `not_met`
-  - `out_of_scope`
-  - `unverifiable`
-- Include evidence for every non-`unverifiable` item: changed file, test, command output summary, commit, or repo search result.
-- Keep non-repo requirements separate from branch-verifiable requirements.
+   - For each Jira item, assign exactly one status:
+     - `met`
+     - `partially_met`
+     - `not_met`
+     - `out_of_scope`
+     - `unverifiable`
+   - Include evidence for every non-`unverifiable` item: changed file, test, command output summary, commit, or repo search result.
+   - Keep non-repo requirements separate from branch-verifiable requirements.
 
 5. Decide the overall result.
-- `PASS`: all in-scope, branch-verifiable Jira requirements are `met`.
-- `PARTIAL`: at least one in-scope item is `partially_met` or `unverifiable`, but no clear in-scope miss exists.
-- `FAIL`: at least one in-scope item is `not_met`.
-- `BLOCKED`: trusted Jira content, branch comparison, or Jira comment access is unavailable.
+   - `PASS`: all in-scope, branch-verifiable Jira requirements are `met`.
+   - `PARTIAL`: at least one in-scope item is `partially_met` or `unverifiable`, but no clear in-scope miss exists.
+   - `FAIL`: at least one in-scope item is `not_met`.
+   - `BLOCKED`: trusted Jira content, branch comparison, or Jira comment access is unavailable.
 
 6. Draft the Jira comment.
-- Start with the verdict, issue key, branch name, commit SHA, and comparison ref.
-- Include blockers or gaps first for `PARTIAL`, `FAIL`, or `BLOCKED`.
-- Include a compact coverage table and evidence references.
-- Include validation observed, clearly separating passing tests from tests not run.
-- Do not paste long private Jira text, raw command dumps, credentials, auth headers, cookies, or full environment/config dumps.
+   - Start with the verdict, issue key, branch name, commit SHA, and comparison ref.
+   - Include blockers or gaps first for `PARTIAL`, `FAIL`, or `BLOCKED`.
+   - Include a compact coverage table and evidence references.
+   - Include validation observed, clearly separating passing tests from tests not run.
+   - Do not paste long private Jira text, raw command dumps, credentials, auth headers, cookies, or full environment/config dumps.
 
 Suggested comment shape:
 
@@ -95,16 +95,17 @@ Validation:
 ```
 
 7. Scan and post to Jira.
-- Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
-- If any secret-like content appears, do not post. Redact and re-scan.
-- If the bundled helper is materialized, post with:
+   - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
+   - If any secret-like content appears, do not post. Redact and re-scan.
+   - If the bundled helper is materialized, post with:
 
 ```bash
 .agents/skills/jira-verify/tools/post_jira_comment.py --issue <ISSUE> --body-file <comment_file>
 ```
 
-- Otherwise call the trusted Jira tool directly with `jira.add_comment` and arguments `{"issueKey":"<ISSUE>","body":"<comment text>"}`.
-- If posting fails, keep the comment body artifact and report the exact trusted-tool blocker. Do not claim Jira was updated.
+   - When the MoonMind API requires auth, provide an existing runtime token via `MOONMIND_AUTH_HEADER`, `MOONMIND_API_TOKEN`, `MOONMIND_AUTH_TOKEN`, `MOONMIND_BEARER_TOKEN`, or `MOONMIND_API_KEY`; do not print those values.
+   - Otherwise call the trusted Jira tool directly with `jira.add_comment` and arguments `{"issueKey":"<ISSUE>","body":"<comment text>"}`.
+   - If posting fails, keep the comment body artifact and report the exact trusted-tool blocker. Do not claim Jira was updated.
 
 ## Outputs
 
