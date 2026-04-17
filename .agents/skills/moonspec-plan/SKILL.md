@@ -144,7 +144,7 @@ Use this table shape:
 | ID             | Status                 | Evidence                    | Planned Work                 | Required Tests           |
 | -------------- | ---------------------- | --------------------------- | ---------------------------- | ------------------------ |
 | FR-001         | missing                | none found                  | add code and tests           | unit + integration       |
-| SCN-001        | implemented_unverified | `src/...`, no scenario test | add verification tests first | integration              |
+| SCN-001        | implemented_unverified | `src/...`, no scenario test | add verification tests first, with implementation contingency if they fail | integration |
 | DESIGN-REQ-004 | implemented_verified   | `src/...`, `tests/...`      | no new implementation        | none beyond final verify |
 
 Allowed `Status` values:
@@ -191,7 +191,7 @@ For each in-scope item, inspect relevant code and tests, then classify it:
 
 - `missing` -> requires tests and implementation
 - `partial` -> requires tests and implementation changes
-- `implemented_unverified` -> requires tests or verification first; only add implementation work if tests expose a gap
+- `implemented_unverified` -> requires tests or verification first, plus an explicit implementation contingency to execute if verification exposes a gap
 - `implemented_verified` -> requires no new implementation work, but must remain traceable in the plan and final verification
 
 Use this format for each topic in `research.md`:
@@ -199,9 +199,9 @@ Use this format for each topic in `research.md`:
 ```markdown
 ## [Topic or Requirement ID]
 
-Decision: [status and planned work]
+Decision: [choice, status, and/or planned work]
 Evidence: [relevant file paths, tests, or contracts]
-Rationale: [why this status was chosen]
+Rationale: [why this choice or status was chosen]
 Alternatives considered: [what else was evaluated]
 Test implications: [unit, integration, both, or none beyond final verify]
 ```
@@ -234,7 +234,7 @@ Quickstart guidance:
 - Describe how to verify the single story end to end.
 - Reflect requirement status decisions:
   - `missing` and `partial`: tests first, then implementation
-  - `implemented_unverified`: verification tests first
+  - `implemented_unverified`: verification tests first, then a planned implementation contingency if those tests fail
   - `implemented_verified`: final verification only unless the user asks for stronger coverage
 
 ## Agent Context
@@ -314,7 +314,7 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Identify unit and integration testing separately.
 - Use `plan` to decide whether work is code + tests, tests only, or no new implementation.
 - Existing code never removes a requirement from `spec.md`; it only changes the planned work.
-- Prefer verification tests before implementation when behavior appears to already exist.
+- Prefer verification tests before implementation when behavior appears to already exist, but include fallback implementation work for `implemented_unverified` items when verification fails.
 - Resolve all planning clarifications through `research.md`.
 - Error on gate failures, multiple user stories, or unresolved clarifications.
 - Generate design artifacts only; leave task generation to `/speckit.tasks`.
