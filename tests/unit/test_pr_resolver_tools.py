@@ -1242,3 +1242,18 @@ def test_review_comment_with_thread_resolved_via_enrichment(
     assert summary["actionableCommentCount"] == 1
     assert summary["actionableCommentIds"] == [2]
     assert summary["nonActionableReasonCounts"].get("thread_resolved") == 1
+
+
+def test_pr_resolver_skill_requires_orchestrated_merge_completion() -> None:
+    skill_text = (
+        REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Primary Command (mandatory first action)" in skill_text
+    assert "Terminal Success Contract" in skill_text
+    assert "Main Loop" in skill_text
+    assert "A local fix, local commit" in skill_text
+    assert "status=merged" in skill_text
+    assert "merge_outcome=merged" in skill_text
+    assert "reason `publish_unavailable`" in skill_text
+    assert "branch is ahead of origin" in skill_text
