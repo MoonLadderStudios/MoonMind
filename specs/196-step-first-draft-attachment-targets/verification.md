@@ -1,8 +1,8 @@
 # MoonSpec Verification Report
 
-**Feature**: Step-First Draft and Attachment Targets  
-**Jira Issue**: MM-377  
-**Spec**: `specs/196-step-first-draft-attachment-targets/spec.md`  
+**Feature**: Step-First Draft and Attachment Targets
+**Jira Issue**: MM-377
+**Spec**: `specs/196-step-first-draft-attachment-targets/spec.md`
 **Verdict**: FULLY_IMPLEMENTED
 
 ## Evidence

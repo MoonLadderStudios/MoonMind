@@ -1,6 +1,6 @@
 # Tasks: Step-First Draft and Attachment Targets
 
-**Input**: Design documents from `specs/196-step-first-draft-attachment-targets/`  
+**Input**: Design documents from `specs/196-step-first-draft-attachment-targets/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Unit tests and integration-style Create page tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement production code until they pass.

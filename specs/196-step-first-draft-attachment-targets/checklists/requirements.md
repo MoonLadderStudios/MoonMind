@@ -1,7 +1,7 @@
 # Specification Quality Checklist: Step-First Draft and Attachment Targets
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning  
-**Created**: 2026-04-17  
+**Purpose**: Validate specification completeness and quality before proceeding to planning
+**Created**: 2026-04-17
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality

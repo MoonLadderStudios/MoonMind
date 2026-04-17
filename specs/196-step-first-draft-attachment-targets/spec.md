@@ -1,8 +1,8 @@
 # Feature Specification: Step-First Draft and Attachment Targets
 
-**Feature Branch**: `196-step-first-draft-attachment-targets`  
-**Created**: 2026-04-17  
-**Status**: Draft  
+**Feature Branch**: `196-step-first-draft-attachment-targets`
+**Created**: 2026-04-17
+**Status**: Draft
 **Input**: User description: "Use the Jira preset brief for MM-377 as the canonical Moon Spec orchestration input.
 
 Jira issue: MM-377 from MM project

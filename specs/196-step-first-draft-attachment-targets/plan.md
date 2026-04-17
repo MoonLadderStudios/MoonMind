@@ -1,6 +1,6 @@
 # Implementation Plan: Step-First Draft and Attachment Targets
 
-**Branch**: `mm-377-30189130` | **Date**: 2026-04-17 | **Spec**: [spec.md](./spec.md)  
+**Branch**: `mm-377-30189130` | **Date**: 2026-04-17 | **Spec**: [spec.md](./spec.md)
 **Input**: Single-story feature specification from `specs/196-step-first-draft-attachment-targets/spec.md`
 
 ## Summary
@@ -9,15 +9,15 @@ Implement MM-377 by making the Create page draft explicitly target-aware for obj
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for existing backend tests if payload contracts require server coverage  
-**Primary Dependencies**: React, Vite/Vitest, Testing Library, existing FastAPI execution/artifact APIs  
-**Storage**: Existing artifact metadata and execution payload storage only; no new persistent storage  
-**Unit Testing**: Vitest through `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and final `./tools/test_unit.sh`  
-**Integration Testing**: Existing Create page test harness exercises browser-to-API payload contracts; no Docker-backed integration required for this UI-only story  
-**Target Platform**: Mission Control browser UI served by FastAPI  
-**Project Type**: Web application UI with existing API contracts  
-**Performance Goals**: Attachment validation and step reorder remain immediate for ordinary task drafts within configured attachment limits  
-**Constraints**: Browser must call MoonMind APIs only; workflow payloads carry artifact refs and compact metadata, not image bytes; attachment targets must not be inferred from filenames or instruction text  
+**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for existing backend tests if payload contracts require server coverage
+**Primary Dependencies**: React, Vite/Vitest, Testing Library, existing FastAPI execution/artifact APIs
+**Storage**: Existing artifact metadata and execution payload storage only; no new persistent storage
+**Unit Testing**: Vitest through `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and final `./tools/test_unit.sh`
+**Integration Testing**: Existing Create page test harness exercises browser-to-API payload contracts; no Docker-backed integration required for this UI-only story
+**Target Platform**: Mission Control browser UI served by FastAPI
+**Project Type**: Web application UI with existing API contracts
+**Performance Goals**: Attachment validation and step reorder remain immediate for ordinary task drafts within configured attachment limits
+**Constraints**: Browser must call MoonMind APIs only; workflow payloads carry artifact refs and compact metadata, not image bytes; attachment targets must not be inferred from filenames or instruction text
 **Scale/Scope**: One Create page story covering objective and step attachment target behavior
 
 ## Constitution Check
