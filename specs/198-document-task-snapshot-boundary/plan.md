@@ -1,6 +1,6 @@
 # Implementation Plan: Document Task Snapshot And Compilation Boundary
 
-**Branch**: `198-document-task-snapshot-boundary` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md)  
+**Branch**: `198-document-task-snapshot-boundary` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md)
 **Input**: Single-story feature specification from `specs/198-document-task-snapshot-boundary/spec.md`
 
 ## Summary
@@ -9,15 +9,15 @@ Implement MM-385 by updating the canonical task architecture contract so preset 
 
 ## Technical Context
 
-**Language/Version**: Markdown documentation for MoonMind runtime architecture  
-**Primary Dependencies**: Existing `docs/Tasks/TaskArchitecture.md`, preserved MM-385 Jira preset brief, existing MoonSpec artifacts  
-**Storage**: No new persistent storage; documents describe existing task input snapshot and payload semantics  
-**Unit Testing**: Documentation contract checks with `rg` against `docs/Tasks/TaskArchitecture.md` and generated MoonSpec artifacts  
-**Integration Testing**: End-to-end documentation validation by reviewing the canonical task architecture contract against MM-385 acceptance scenarios and running final `/moonspec-verify`  
-**Target Platform**: MoonMind control plane and managed runtime documentation contract  
-**Project Type**: Runtime architecture contract documentation  
-**Performance Goals**: No runtime performance impact; documentation must identify compile-time preset composition boundaries without adding execution-plane work  
-**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `docs/tmp/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-385 in artifacts  
+**Language/Version**: Markdown documentation for MoonMind runtime architecture
+**Primary Dependencies**: Existing `docs/Tasks/TaskArchitecture.md`, preserved MM-385 Jira preset brief, existing MoonSpec artifacts
+**Storage**: No new persistent storage; documents describe existing task input snapshot and payload semantics
+**Unit Testing**: Documentation contract checks with `rg` against `docs/Tasks/TaskArchitecture.md` and generated MoonSpec artifacts
+**Integration Testing**: End-to-end documentation validation by reviewing the canonical task architecture contract against MM-385 acceptance scenarios and running final `/moonspec-verify`
+**Target Platform**: MoonMind control plane and managed runtime documentation contract
+**Project Type**: Runtime architecture contract documentation
+**Performance Goals**: No runtime performance impact; documentation must identify compile-time preset composition boundaries without adding execution-plane work
+**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `docs/tmp/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-385 in artifacts
 **Scale/Scope**: One canonical documentation file plus MoonSpec artifacts for one independently testable story
 
 ## Constitution Check

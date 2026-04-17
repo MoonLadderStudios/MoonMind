@@ -1,8 +1,8 @@
 # Feature Specification: Document Task Snapshot And Compilation Boundary
 
-**Feature Branch**: `198-document-task-snapshot-boundary`  
-**Created**: 2026-04-17  
-**Status**: Draft  
+**Feature Branch**: `198-document-task-snapshot-boundary`
+**Created**: 2026-04-17
+**Status**: Draft
 **Input**:
 
 ```text

@@ -1,6 +1,6 @@
 # Tasks: Document Task Snapshot And Compilation Boundary
 
-**Input**: Design documents from `specs/198-document-task-snapshot-boundary/`  
+**Input**: Design documents from `specs/198-document-task-snapshot-boundary/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Documentation contract checks and source traceability checks are REQUIRED before and after implementation. Write or define checks first, confirm they fail for missing contract language, then update canonical documentation.
