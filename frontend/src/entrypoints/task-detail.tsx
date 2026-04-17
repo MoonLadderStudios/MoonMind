@@ -3132,7 +3132,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             {execution.targetRuntime ? (
               <Card label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Card>
             ) : null}
-            <Card label="Skill">{formatTaskSkills(execution.taskSkills, execution.targetSkill)}</Card>
+            {execution.taskSkills?.length || execution.targetSkill ? (
+              <Card label="Skill">{formatTaskSkills(execution.taskSkills, execution.targetSkill)}</Card>
+            ) : null}
             {execution.model ? (
               <Card label="Model">
                 <code className="text-xs">{execution.model}</code>

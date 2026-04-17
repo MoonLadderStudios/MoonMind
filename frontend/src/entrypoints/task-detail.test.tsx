@@ -1321,6 +1321,53 @@ describe('Task Detail Entrypoint', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
   });
 
+  it('does not render a skill card when task skill metadata is missing', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Example task',
+      summary: 'Did work',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      closeStatus: 'COMPLETED',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      actions: { canSetTitle: true, canCancel: false, canRerun: false },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Example task')).toBeTruthy();
+    });
+
+    expect(screen.queryByText('Skill:')).toBeNull();
+  });
+
   it('renders structured run summary details from the summary artifact', async () => {
     const mockExecution = {
       taskId: 'test-123',
