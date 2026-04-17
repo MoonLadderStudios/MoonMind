@@ -4378,15 +4378,48 @@ class CodexWorker:
                 # Symlink already exists; this is safe to ignore for idempotent setup.
                 pass
 
+            attachment_diagnostic_events: list[dict[str, Any]] = []
             attachment_manifest_path = await self._materialize_input_attachments(
                 job_id=job_id,
                 canonical_payload=canonical_payload,
                 repo_dir=repo_dir,
                 prepare_log_path=prepare_log_path,
+                diagnostic_events=attachment_diagnostic_events,
             )
             attachment_targets = self._collect_input_attachment_targets(
                 canonical_payload
             )
+            attachment_diagnostic_targets = [
+                self._attachment_diagnostic_target_payload(target)
+                for target in attachment_targets
+            ]
+            attachment_diagnostics: dict[str, Any] = {
+                "attachmentCount": len(attachment_targets),
+                "manifestPath": (
+                    str(attachment_manifest_path)
+                    if attachment_manifest_path is not None
+                    else None
+                ),
+                "targets": attachment_diagnostic_targets,
+                "events": attachment_diagnostic_events,
+            }
+            context_index_path = (
+                repo_dir / ".moonmind" / "vision" / "image_context_index.json"
+            )
+            if context_index_path.exists():
+                attachment_diagnostics["contextIndexPath"] = str(context_index_path)
+                with suppress(OSError, json.JSONDecodeError):
+                    context_index_payload = json.loads(
+                        context_index_path.read_text(encoding="utf-8")
+                    )
+                    if isinstance(context_index_payload, Mapping):
+                        raw_context_targets = context_index_payload.get("targets")
+                        if isinstance(raw_context_targets, list):
+                            attachment_diagnostics["contextTargets"] = [
+                                target
+                                for target in raw_context_targets
+                                if isinstance(target, Mapping)
+                            ]
 
             context_payload = {
                 "repository": repository,
@@ -4445,6 +4478,7 @@ class CodexWorker:
                         if attachment_manifest_path is not None
                         else None
                     ),
+                    "diagnostics": attachment_diagnostics,
                 },
                 "rag": self._rag_capability_metadata(),
                 "timestamp": datetime.now(UTC).isoformat(),
@@ -4666,6 +4700,55 @@ class CodexWorker:
             entry["stepOrdinal"] = target.step_ordinal
         return entry
 
+    @staticmethod
+    def _attachment_diagnostic_target_payload(
+        target: InputAttachmentMaterializationTarget,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "artifactId": target.artifact_id,
+            "filename": target.filename,
+            "contentType": target.content_type,
+            "sizeBytes": target.size_bytes,
+            "targetKind": target.target_kind,
+        }
+        if target.step_ref is not None:
+            payload["stepRef"] = target.step_ref
+        if target.step_ordinal is not None:
+            payload["stepOrdinal"] = target.step_ordinal
+        return payload
+
+    async def _record_input_attachment_diagnostic_event(
+        self,
+        *,
+        job_id: UUID,
+        target: InputAttachmentMaterializationTarget,
+        event: str,
+        status: str,
+        diagnostic_events: list[dict[str, Any]] | None,
+        workspace_path: Path | None = None,
+        manifest_path: Path | None = None,
+        error: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "event": event,
+            "status": status,
+            **self._attachment_diagnostic_target_payload(target),
+        }
+        if workspace_path is not None:
+            payload["workspacePath"] = workspace_path.as_posix()
+        if manifest_path is not None:
+            payload["manifestPath"] = str(manifest_path)
+        if error:
+            payload["error"] = self._redact_text(error)
+        if diagnostic_events is not None:
+            diagnostic_events.append(payload)
+        await self._emit_event(
+            job_id=job_id,
+            level="error" if status == "failed" else "info",
+            message=f"image_input.{event}",
+            payload=payload,
+        )
+
     async def _materialize_input_attachments(
         self,
         *,
@@ -4673,6 +4756,7 @@ class CodexWorker:
         canonical_payload: Mapping[str, Any],
         repo_dir: Path,
         prepare_log_path: Path,
+        diagnostic_events: list[dict[str, Any]] | None = None,
     ) -> Path | None:
         targets = self._collect_input_attachment_targets(canonical_payload)
         if not targets:
@@ -4684,6 +4768,13 @@ class CodexWorker:
         for target in targets:
             relative_path = self._attachment_workspace_relative_path(target)
             absolute_path = repo_dir / relative_path
+            await self._record_input_attachment_diagnostic_event(
+                job_id=job_id,
+                target=target,
+                event="prepare_download_started",
+                status="started",
+                diagnostic_events=diagnostic_events,
+            )
             try:
                 payload = await self._queue_client.download_artifact(
                     artifact_id=target.artifact_id
@@ -4691,6 +4782,15 @@ class CodexWorker:
                 absolute_path.parent.mkdir(parents=True, exist_ok=True)
                 absolute_path.write_bytes(payload)
             except Exception as exc:
+                await self._record_input_attachment_diagnostic_event(
+                    job_id=job_id,
+                    target=target,
+                    event="prepare_download_failed",
+                    status="failed",
+                    diagnostic_events=diagnostic_events,
+                    workspace_path=relative_path,
+                    error=str(exc),
+                )
                 self._append_stage_log(
                     prepare_log_path,
                     (
@@ -4706,6 +4806,14 @@ class CodexWorker:
                 self._attachment_manifest_entry(
                     target=target, workspace_path=relative_path
                 )
+            )
+            await self._record_input_attachment_diagnostic_event(
+                job_id=job_id,
+                target=target,
+                event="prepare_download_completed",
+                status="completed",
+                diagnostic_events=diagnostic_events,
+                workspace_path=relative_path,
             )
 
         manifest_path = moonmind_dir / "attachments_manifest.json"
@@ -4727,6 +4835,10 @@ class CodexWorker:
             prepare_log_path,
             f"materialized {len(targets)} input attachment(s) for job {job_id}",
         )
+        if diagnostic_events is not None:
+            for event in diagnostic_events:
+                if event.get("event") == "prepare_download_completed":
+                    event["manifestPath"] = str(manifest_path)
         return manifest_path
 
     async def _run_prepare_git_identity_preflight(

@@ -103,6 +103,7 @@ class VisionContextArtifactBundle:
     artifacts: tuple[VisionTargetContextArtifact, ...]
     index: dict[str, object]
     index_path: Path
+    diagnostics: tuple[dict[str, object], ...] = ()
 
 
 class VisionService:
@@ -140,6 +141,7 @@ class VisionService:
     ) -> VisionContextArtifactBundle:
         artifacts: list[VisionTargetContextArtifact] = []
         index_targets: list[dict[str, object]] = []
+        diagnostics: list[dict[str, object]] = []
         context_path_owners: dict[Path, str] = {}
 
         for target in targets:
@@ -155,6 +157,13 @@ class VisionService:
                     f"{context_path.as_posix()}"
                 )
             context_path_owners[context_path] = target_label
+            diagnostics.append(
+                self._target_diagnostic_event(
+                    target,
+                    event="image_context_generation_started",
+                    status="started",
+                )
+            )
             context = self.render_context(target.attachments)
             artifacts.append(
                 VisionTargetContextArtifact(
@@ -178,6 +187,13 @@ class VisionService:
                     ],
                 }
             )
+            diagnostics.append(
+                self._target_completion_diagnostic_event(
+                    target=target,
+                    context=context,
+                    context_path=context_path,
+                )
+            )
 
         index: dict[str, object] = {
             "version": 1,
@@ -197,6 +213,7 @@ class VisionService:
             artifacts=tuple(artifacts),
             index=index,
             index_path=Path(".moonmind/vision/image_context_index.json"),
+            diagnostics=tuple(diagnostics),
         )
 
     def write_target_context_artifacts(
@@ -265,6 +282,69 @@ class VisionService:
         if target.target_kind == "step":
             return f"step_ref={target.step_ref!r}"
         return f"target_kind={target.target_kind!r}"
+
+    @staticmethod
+    def _target_diagnostic_event(
+        target: VisionContextTargetInput,
+        *,
+        event: str,
+        status: str,
+        context_path: Path | None = None,
+        error: str | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "event": event,
+            "status": status,
+            "targetKind": target.target_kind,
+            "attachmentRefs": [attachment.id for attachment in target.attachments],
+            "sourcePaths": [
+                attachment.local_path for attachment in target.attachments
+            ],
+        }
+        if target.step_ref is not None:
+            payload["stepRef"] = target.step_ref
+        if context_path is not None:
+            payload["contextPath"] = context_path.as_posix()
+        if error:
+            payload["error"] = error
+        return payload
+
+    def _target_completion_diagnostic_event(
+        self,
+        *,
+        target: VisionContextTargetInput,
+        context: VisionContext,
+        context_path: Path,
+    ) -> dict[str, object]:
+        if context.status is VisionContextStatus.OK:
+            return self._target_diagnostic_event(
+                target,
+                event="image_context_generation_completed",
+                status="completed",
+                context_path=context_path,
+            )
+        if context.status is VisionContextStatus.DISABLED:
+            return self._target_diagnostic_event(
+                target,
+                event="image_context_generation_disabled",
+                status="disabled",
+                context_path=context_path,
+            )
+        if context.status is VisionContextStatus.PROVIDER_UNAVAILABLE:
+            return self._target_diagnostic_event(
+                target,
+                event="image_context_generation_failed",
+                status="failed",
+                context_path=context_path,
+                error="vision provider credentials unavailable",
+            )
+        return self._target_diagnostic_event(
+            target,
+            event="image_context_generation_failed",
+            status="failed",
+            context_path=context_path,
+            error=f"vision context generation status: {context.status.value}",
+        )
 
     def _render_attachment(
         self,

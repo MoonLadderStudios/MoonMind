@@ -197,6 +197,91 @@ def test_collect_attachment_targets_rejects_malformed_refs(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_materialize_input_attachments_records_prepare_download_diagnostics(
+    tmp_path: Path,
+) -> None:
+    queue = _FakeQueueClient(
+        {
+            "art_objective": b"one",
+            "art_step": b"step",
+            "art_no_id": b"no-id",
+        }
+    )
+    worker = _worker(tmp_path, queue)
+    repo_dir = tmp_path / "job" / "repo"
+    repo_dir.mkdir(parents=True)
+    diagnostic_events: list[dict[str, object]] = []
+
+    await worker._materialize_input_attachments(
+        job_id=uuid4(),
+        canonical_payload=_canonical_payload(),
+        repo_dir=repo_dir,
+        prepare_log_path=tmp_path / "prepare.log",
+        diagnostic_events=diagnostic_events,
+    )
+
+    assert [event["event"] for event in diagnostic_events] == [
+        "prepare_download_started",
+        "prepare_download_completed",
+        "prepare_download_started",
+        "prepare_download_completed",
+        "prepare_download_started",
+        "prepare_download_completed",
+    ]
+    assert diagnostic_events[0] == {
+        "event": "prepare_download_started",
+        "status": "started",
+        "targetKind": "objective",
+        "artifactId": "art_objective",
+        "filename": "../Objective Diagram.png",
+        "contentType": "image/png",
+        "sizeBytes": 3,
+    }
+    assert diagnostic_events[3]["targetKind"] == "step"
+    assert diagnostic_events[3]["stepRef"] == "review-step"
+    assert diagnostic_events[3]["stepOrdinal"] == 0
+    assert diagnostic_events[3]["workspacePath"] == (
+        ".moonmind/inputs/steps/review-step/art_step-shot.png"
+    )
+    assert [event["payload"]["event"] for event in queue.events] == [
+        event["event"] for event in diagnostic_events
+    ]
+
+
+@pytest.mark.asyncio
+async def test_materialize_input_attachments_records_failed_step_diagnostics(
+    tmp_path: Path,
+) -> None:
+    payload = _canonical_payload()
+    task = payload["task"]
+    assert isinstance(task, dict)
+    task["inputAttachments"] = []
+    worker = _worker(tmp_path, _FakeQueueClient({"art_no_id": b"no-id"}))
+    repo_dir = tmp_path / "job" / "repo"
+    repo_dir.mkdir(parents=True)
+    diagnostic_events: list[dict[str, object]] = []
+
+    with pytest.raises(
+        RuntimeError, match="failed to materialize input attachment art_step"
+    ):
+        await worker._materialize_input_attachments(
+            job_id=uuid4(),
+            canonical_payload=payload,
+            repo_dir=repo_dir,
+            prepare_log_path=tmp_path / "prepare.log",
+            diagnostic_events=diagnostic_events,
+        )
+
+    failed = diagnostic_events[-1]
+    assert failed["event"] == "prepare_download_failed"
+    assert failed["status"] == "failed"
+    assert failed["targetKind"] == "step"
+    assert failed["stepRef"] == "review-step"
+    assert failed["artifactId"] == "art_step"
+    assert "missing artifact: art_step" in str(failed["error"])
+
+
+@pytest.mark.asyncio
 async def test_materialize_input_attachments_writes_files_and_manifest(
     tmp_path: Path,
 ) -> None:
@@ -322,3 +407,38 @@ async def test_prepare_stage_materializes_attachments_before_return(
     task_context = json.loads(prepared.task_context_path.read_text(encoding="utf-8"))
     assert task_context["attachments"]["manifestPath"] == str(manifest_path)
     assert task_context["attachments"]["count"] == 3
+    assert task_context["attachments"]["diagnostics"]["manifestPath"] == str(
+        manifest_path
+    )
+    assert task_context["attachments"]["diagnostics"]["attachmentCount"] == 3
+    assert task_context["attachments"]["diagnostics"]["targets"] == [
+        {
+            "artifactId": "art_objective",
+            "filename": "../Objective Diagram.png",
+            "contentType": "image/png",
+            "sizeBytes": 3,
+            "targetKind": "objective",
+        },
+        {
+            "artifactId": "art_step",
+            "filename": "screen/shot.png",
+            "contentType": "image/png",
+            "sizeBytes": 4,
+            "targetKind": "step",
+            "stepRef": "review-step",
+            "stepOrdinal": 0,
+        },
+        {
+            "artifactId": "art_no_id",
+            "filename": "same.png",
+            "contentType": "image/png",
+            "sizeBytes": 5,
+            "targetKind": "step",
+            "stepRef": "step-2",
+            "stepOrdinal": 1,
+        },
+    ]
+    assert [
+        event["event"]
+        for event in task_context["attachments"]["diagnostics"]["events"]
+    ].count("prepare_download_completed") == 3
