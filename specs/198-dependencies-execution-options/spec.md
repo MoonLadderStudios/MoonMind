@@ -1,6 +1,6 @@
 # Feature Specification: Dependencies and Execution Options
 
-**Feature Branch**: `197-dependencies-execution-options`
+**Feature Branch**: `198-dependencies-execution-options`
 **Created**: 2026-04-17
 **Status**: Draft
 **Input**: User description: "Use the Jira preset brief for MM-379 as the canonical Moon Spec orchestration input.

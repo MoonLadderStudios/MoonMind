@@ -1,7 +1,7 @@
 # Implementation Plan: Dependencies and Execution Options
 
-**Branch**: `197-dependencies-execution-options` | **Date**: 2026-04-17 | **Spec**: `specs/197-dependencies-execution-options/spec.md`  
-**Input**: Single-story feature specification from `specs/197-dependencies-execution-options/spec.md`
+**Branch**: `198-dependencies-execution-options` | **Date**: 2026-04-17 | **Spec**: `specs/198-dependencies-execution-options/spec.md`  
+**Input**: Single-story feature specification from `specs/198-dependencies-execution-options/spec.md`
 
 ## Summary
 
@@ -41,7 +41,7 @@ Implement MM-379 by hardening the existing Create page dependency picker and exe
 ### Documentation (this feature)
 
 ```text
-specs/197-dependencies-execution-options/
+specs/198-dependencies-execution-options/
 ├── spec.md
 ├── plan.md
 ├── research.md

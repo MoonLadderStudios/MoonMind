@@ -1017,6 +1017,93 @@ def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides
     assert initial_parameters["task"]["publish"]["prBody"] == "Adds integration tests and updates callback routing."
 
 
+def test_create_task_shaped_execution_preserves_merge_automation_request(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "publishMode": "pr",
+                "mergeAutomation": {
+                    "enabled": True,
+                    "mergeMethod": "squash",
+                    "fallbackPollSeconds": 60,
+                },
+                "task": {
+                    "instructions": "Implement and publish a pull request.",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {"mode": "pr"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["publishMode"] == "pr"
+    assert initial_parameters["task"]["publish"]["mode"] == "pr"
+    assert initial_parameters["mergeAutomation"] == {
+        "enabled": True,
+        "mergeMethod": "squash",
+        "fallbackPollSeconds": 60,
+    }
+
+
+def test_create_task_shaped_execution_preserves_nested_merge_automation_request(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex_cli",
+                "task": {
+                    "instructions": "Implement and publish a pull request.",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {
+                        "mode": "pr",
+                        "mergeAutomation": {
+                            "enabled": True,
+                            "mergeMethod": "rebase",
+                        },
+                    },
+                    "mergeAutomation": {
+                        "enabled": True,
+                        "automatedReview": "optional",
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["task"]["mergeAutomation"] == {
+        "enabled": True,
+        "automatedReview": "optional",
+    }
+    assert initial_parameters["task"]["publish"]["mergeAutomation"] == {
+        "enabled": True,
+        "mergeMethod": "rebase",
+    }
+
+
 def test_create_task_shaped_execution_preserves_story_output_contract(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

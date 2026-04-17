@@ -1,7 +1,7 @@
 # MoonSpec Verification Report
 
 **Feature**: Dependencies and Execution Options  
-**Spec**: `/work/agent_jobs/mm:7f5dce9d-6213-4fe5-899d-f10d0cf956be/repo/specs/197-dependencies-execution-options/spec.md`  
+**Spec**: `/work/agent_jobs/mm:7f5dce9d-6213-4fe5-899d-f10d0cf956be/repo/specs/198-dependencies-execution-options/spec.md`  
 **Original Request Source**: `spec.md` `Input`  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH
@@ -27,7 +27,7 @@
 | FR-007 | `frontend/src/entrypoints/task-create.tsx:2642`, `frontend/src/entrypoints/task-create.tsx:2648`, `frontend/src/entrypoints/task-create.test.tsx:4143`, `frontend/src/entrypoints/task-create.test.tsx:4166` | VERIFIED | Branch/none and resolver-style tasks omit enabled merge automation fields. |
 | FR-008 | `frontend/src/entrypoints/task-create.tsx:3838`, `frontend/src/entrypoints/task-create.tsx:3845`, `frontend/src/entrypoints/task-create.test.tsx:4373`, `frontend/src/entrypoints/task-create.test.tsx:4405`, `frontend/src/entrypoints/task-create.test.tsx:4435` | VERIFIED | Jira import and image upload do not bypass repository validation, artifact upload ordering, or resolver restrictions. |
 | FR-009 | `frontend/src/entrypoints/task-create.tsx:5409`, `frontend/src/entrypoints/task-create.test.tsx:4075` | VERIFIED | UI copy explains `pr-resolver` after readiness and does not advertise direct auto-merge. |
-| FR-010 | `specs/197-dependencies-execution-options/spec.md:6`, `specs/197-dependencies-execution-options/spec.md:87`, `specs/197-dependencies-execution-options/tasks.md:82`, this report | VERIFIED | MM-379 and the original Jira preset brief are preserved in spec, task, and verification artifacts. |
+| FR-010 | `specs/198-dependencies-execution-options/spec.md:6`, `specs/198-dependencies-execution-options/spec.md:87`, `specs/198-dependencies-execution-options/tasks.md:82`, this report | VERIFIED | MM-379 and the original Jira preset brief are preserved in spec, task, and verification artifacts. |
 
 ## Acceptance Scenario Coverage
 
@@ -48,7 +48,7 @@
 | DESIGN-REQ-013 | `frontend/src/entrypoints/task-create.tsx:2239`, `frontend/src/entrypoints/task-create.tsx:3072`, `frontend/src/entrypoints/task-create.test.tsx:5502`, `frontend/src/entrypoints/task-create.test.tsx:5541`, `frontend/src/entrypoints/task-create.test.tsx:5582` | VERIFIED | Bounded picker, duplicate rejection, 10-item limit, and fetch-failure manual continuation are covered. |
 | DESIGN-REQ-014 | `frontend/src/entrypoints/task-create.tsx:2040`, `frontend/src/entrypoints/task-create.tsx:3184`, `frontend/src/entrypoints/task-create.test.tsx:4530` | VERIFIED | Execution context controls and runtime-scoped provider profile options are covered. |
 | DESIGN-REQ-015 | `frontend/src/entrypoints/task-create.tsx:2642`, `frontend/src/entrypoints/task-create.tsx:3838`, `frontend/src/entrypoints/task-create.tsx:4307`, `frontend/src/entrypoints/task-create.test.tsx:4119`, `frontend/src/entrypoints/task-create.test.tsx:4373`, `frontend/src/entrypoints/task-create.test.tsx:4405`, `frontend/src/entrypoints/task-create.test.tsx:4435` | VERIFIED | Merge automation gating, resolver restrictions, and Jira/image validation isolation are covered. |
-| Constitution test discipline | `specs/197-dependencies-execution-options/tasks.md`, test commands above | VERIFIED | Unit and integration-style UI tests passed before completion. |
+| Constitution test discipline | `specs/198-dependencies-execution-options/tasks.md`, test commands above | VERIFIED | Unit and integration-style UI tests passed before completion. |
 
 ## Original Request Alignment
 

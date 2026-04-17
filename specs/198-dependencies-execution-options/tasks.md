@@ -1,6 +1,6 @@
 # Tasks: Dependencies and Execution Options
 
-**Input**: Design documents from `specs/197-dependencies-execution-options/`
+**Input**: Design documents from `specs/198-dependencies-execution-options/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Unit tests and integration-style Create page tests are REQUIRED. Write tests first, confirm they fail for the intended reason when implementation is absent, then implement production code until they pass.
@@ -15,8 +15,8 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-379 orchestration input exists in `docs/tmp/jira-orchestration-inputs/MM-379-moonspec-orchestration-input.md` and the original Jira preset brief is preserved in `specs/197-dependencies-execution-options/spec.md` (FR-010, SC-007)
-- [X] T002 Create Moon Spec artifact directory `specs/197-dependencies-execution-options/` with spec, plan, research, data model, contract, quickstart, and tasks
+- [X] T001 Confirm MM-379 orchestration input exists in `docs/tmp/jira-orchestration-inputs/MM-379-moonspec-orchestration-input.md` and the original Jira preset brief is preserved in `specs/198-dependencies-execution-options/spec.md` (FR-010, SC-007)
+- [X] T002 Create Moon Spec artifact directory `specs/198-dependencies-execution-options/` with spec, plan, research, data model, contract, quickstart, and tasks
 
 ## Phase 2: Foundational
 
@@ -62,7 +62,7 @@
 
 ## Phase 4: Polish
 
-- [X] T019 Run final `/moonspec-verify` work and record verification in `specs/197-dependencies-execution-options/verification.md`
+- [X] T019 Run final `/moonspec-verify` work and record verification in `specs/198-dependencies-execution-options/verification.md`
 
 ## Dependencies & Execution Order
 
