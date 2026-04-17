@@ -10,10 +10,11 @@ import pytest
 import yaml
 from sqlalchemy import UniqueConstraint, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import selectinload, sessionmaker
 
 from api_service.db.models import (
     Base,
+    TaskStepTemplate,
     TaskStepTemplateRecent,
     TaskTemplateReleaseStatus,
     TaskTemplateScopeType,
@@ -22,6 +23,7 @@ from api_service.services.task_templates.catalog import (
     ExpandOptions,
     TaskTemplateCatalogService,
     TaskTemplateNotFoundError,
+    TaskTemplateValidationError,
 )
 from api_service.services.task_templates.save import TaskTemplateSaveService
 from moonmind.config.settings import settings
@@ -107,6 +109,461 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
     assert set(expanded["capabilities"]) >= {"codex", "docker"}
     assert expanded["appliedTemplate"]["slug"] == "pr-check"
     assert expanded["appliedTemplate"]["version"] == "1.0.0"
+
+
+async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="child-checks",
+                title="Child Checks",
+                description="Reusable checks",
+                scope="global",
+                scope_ref=None,
+                tags=["checks"],
+                inputs_schema=[
+                    {
+                        "name": "target",
+                        "label": "Target",
+                        "type": "text",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "title": "Lint target",
+                        "instructions": "Lint {{ inputs.target }}",
+                        "skill": {
+                            "id": "auto",
+                            "args": {},
+                            "requiredCapabilities": ["docker"],
+                        },
+                    },
+                    {
+                        "title": "Test target",
+                        "instructions": "Test {{ inputs.target }}",
+                    },
+                ],
+                annotations={},
+                required_capabilities=["codex"],
+                created_by=None,
+            )
+            await service.create_template(
+                slug="parent-flow",
+                title="Parent Flow",
+                description="Composed flow",
+                scope="global",
+                scope_ref=None,
+                tags=["composed"],
+                inputs_schema=[
+                    {
+                        "name": "feature",
+                        "label": "Feature",
+                        "type": "text",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "child-checks",
+                        "version": "1.0.0",
+                        "alias": "quality",
+                        "scope": "global",
+                        "inputMapping": {"target": "{{ inputs.feature }}"},
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            expanded = await service.expand_template(
+                slug="parent-flow",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={"feature": "preset composition"},
+                context={},
+                options=ExpandOptions(should_enforce_step_limit=True),
+                user_id=user_id,
+            )
+
+    assert [step["title"] for step in expanded["steps"]] == [
+        "Lint target",
+        "Test target",
+    ]
+    assert expanded["steps"][0]["id"].startswith("tpl:parent-flow:1.0.0:01:")
+    assert expanded["steps"][1]["id"].startswith("tpl:parent-flow:1.0.0:02:")
+    assert "preset composition" in expanded["steps"][0]["instructions"]
+    assert set(expanded["capabilities"]) >= {"codex", "docker"}
+    provenance = expanded["steps"][0]["presetProvenance"]
+    assert provenance["root"] == {"slug": "parent-flow", "version": "1.0.0"}
+    assert provenance["source"]["slug"] == "child-checks"
+    assert provenance["source"]["version"] == "1.0.0"
+    assert provenance["alias"] == "quality"
+    assert provenance["path"] == [
+        "parent-flow@1.0.0",
+        "quality:child-checks@1.0.0",
+    ]
+    assert expanded["composition"]["includes"][0]["alias"] == "quality"
+    assert expanded["composition"]["includes"][0]["stepIds"] == [
+        step["id"] for step in expanded["steps"]
+    ]
+
+
+async def test_create_template_rejects_templated_include_version(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="include version must be a literal pinned version",
+            ):
+                await service.create_template(
+                    slug="runtime-selected-parent",
+                    title="Runtime Selected Parent",
+                    description="Invalid dynamic child selection",
+                    scope="global",
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[
+                        {
+                            "name": "child_version",
+                            "label": "Child version",
+                            "type": "text",
+                        }
+                    ],
+                    steps=[
+                        {
+                            "kind": "include",
+                            "slug": "child-checks",
+                            "version": "{{ inputs.child_version }}",
+                            "alias": "checks",
+                            "scope": "global",
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=None,
+                )
+
+
+async def test_create_template_rejects_unsupported_include_fields(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="include uses unsupported keys: instructions, skill",
+            ):
+                await service.create_template(
+                    slug="override-parent",
+                    title="Override Parent",
+                    description="Invalid child overrides",
+                    scope="global",
+                    scope_ref=None,
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "kind": "include",
+                            "slug": "child-checks",
+                            "version": "1.0.0",
+                            "alias": "checks",
+                            "scope": "global",
+                            "instructions": "Override child instructions",
+                            "skill": {"id": "moonspec-verify"},
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=None,
+                )
+
+
+async def test_expand_template_rejects_global_parent_personal_include(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="global-parent",
+                title="Global Parent",
+                description="Cannot include personal presets",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "personal-child",
+                        "version": "1.0.0",
+                        "alias": "private",
+                        "scope": "personal",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="Global presets cannot include personal presets.*private:personal-child@1.0.0",
+            ):
+                await service.expand_template(
+                    slug="global-parent",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={},
+                    context={},
+                    options=ExpandOptions(),
+                )
+
+
+async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="preset-a",
+                title="Preset A",
+                description="Starts cycle",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "preset-b",
+                        "version": "1.0.0",
+                        "alias": "b",
+                        "scope": "global",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+            await service.create_template(
+                slug="preset-b",
+                title="Preset B",
+                description="Completes cycle",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "preset-a",
+                        "version": "1.0.0",
+                        "alias": "a",
+                        "scope": "global",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="Preset include cycle detected.*preset-a@1.0.0.*b:preset-b@1.0.0.*a:preset-a@1.0.0",
+            ):
+                await service.expand_template(
+                    slug="preset-a",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={},
+                    context={},
+                    options=ExpandOptions(),
+                )
+
+
+async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="inactive-child",
+                title="Inactive Child",
+                description="Inactive child",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"instructions": "inactive"}],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+                release_status=TaskTemplateReleaseStatus.INACTIVE,
+            )
+            await service.create_template(
+                slug="input-child",
+                title="Input Child",
+                description="Requires input",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[
+                    {
+                        "name": "topic",
+                        "label": "Topic",
+                        "type": "text",
+                        "required": True,
+                    }
+                ],
+                steps=[{"instructions": "Handle {{ inputs.topic }}"}],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+            await service.create_template(
+                slug="bad-parent",
+                title="Bad Parent",
+                description="Invalid children",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "inactive-child",
+                        "version": "1.0.0",
+                        "alias": "inactive",
+                        "scope": "global",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+            await service.create_template(
+                slug="input-parent",
+                title="Input Parent",
+                description="Missing child input",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "input-child",
+                        "version": "1.0.0",
+                        "alias": "requires-topic",
+                        "scope": "global",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="inactive.*inactive:inactive-child@1.0.0",
+            ):
+                await service.expand_template(
+                    slug="bad-parent",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={},
+                    context={},
+                    options=ExpandOptions(),
+                )
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="requires-topic:input-child@1.0.0.*Missing required template input 'topic'",
+            ):
+                await service.expand_template(
+                    slug="input-parent",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={},
+                    context={},
+                    options=ExpandOptions(),
+                )
+
+
+async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="two-step-child",
+                title="Two Step Child",
+                description="Two concrete steps",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {"instructions": "first child step"},
+                    {"instructions": "second child step"},
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+            await service.create_template(
+                slug="limited-parent",
+                title="Limited Parent",
+                description="Limit should apply after flattening",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "two-step-child",
+                        "version": "1.0.0",
+                        "alias": "two",
+                        "scope": "global",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+            template = (
+                await session.execute(
+                    select(TaskStepTemplate)
+                    .where(TaskStepTemplate.slug == "limited-parent")
+                    .options(selectinload(TaskStepTemplate.latest_version))
+                )
+            ).scalar_one()
+            assert template.latest_version is not None
+            template.latest_version.max_step_count = 1
+            await session.commit()
+
+            with pytest.raises(
+                TaskTemplateValidationError,
+                match="max_step_count=1.*two:two-step-child@1.0.0",
+            ):
+                await service.expand_template(
+                    slug="limited-parent",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={},
+                    context={},
+                    options=ExpandOptions(should_enforce_step_limit=True),
+                )
 
 
 async def test_template_recents_declares_unique_user_version_constraint() -> None:
@@ -715,6 +1172,105 @@ async def test_sync_seed_templates_creates_missing_seed(tmp_path):
             assert template.title == "MoonSpec Orchestrate"
             assert template.latest_version is not None
             assert template.latest_version.steps[0]["skill"]["id"] == "moonspec-specify"
+
+
+async def test_sync_seed_templates_preserves_default_expansion_limit_for_includes(
+    tmp_path,
+):
+    seed_dir = tmp_path / "seeds"
+    seed_data = {
+        "slug": "composed-seed",
+        "title": "Composed Seed",
+        "description": "Seeded preset with child include",
+        "scope": "global",
+        "version": "1.0.0",
+        "steps": [
+            {
+                "kind": "include",
+                "slug": "shared-child",
+                "version": "1.0.0",
+                "alias": "shared",
+                "scope": "global",
+            }
+        ],
+        "inputs": [],
+        "annotations": {"sourceSkill": "composed-seed"},
+    }
+    _write_seed_template(seed_dir, seed_data)
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="composed-seed",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+
+    assert template.latest_version is not None
+    assert template.latest_version.max_step_count == 25
+
+
+async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_path):
+    seed_dir = tmp_path / "seeds"
+    seed_data = {
+        "slug": "composed-seed",
+        "title": "Composed Seed",
+        "description": "Seeded preset with child include",
+        "scope": "global",
+        "version": "1.0.0",
+        "steps": [
+            {
+                "kind": "include",
+                "slug": "shared-child",
+                "version": "1.0.0",
+                "alias": "shared",
+                "scope": "global",
+            }
+        ],
+        "inputs": [],
+        "annotations": {"sourceSkill": "composed-seed"},
+    }
+    _write_seed_template(seed_dir, seed_data)
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="composed-seed",
+                title="Composed Seed",
+                description="Seeded preset with child include",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=seed_data["steps"],
+                annotations={"sourceSkill": "composed-seed"},
+                required_capabilities=[],
+                created_by=None,
+            )
+            template = await service._get_template_for_scope(
+                slug="composed-seed",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.latest_version is not None
+            template.latest_version.max_step_count = 1
+            await session.commit()
+
+            result = await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="composed-seed",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+
+    assert result.updated == 1
+    assert template.latest_version is not None
+    assert template.latest_version.max_step_count == 25
 
 
 async def test_sync_seed_templates_updates_existing_seed(tmp_path):

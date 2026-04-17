@@ -5457,6 +5457,10 @@ export interface components {
             steps?: {
                 [key: string]: unknown;
             }[];
+            /** Composition */
+            composition?: {
+                [key: string]: unknown;
+            };
             appliedTemplate: components["schemas"]["TaskTemplateAppliedMetadataSchema"];
             /** Capabilities */
             capabilities?: string[];
@@ -5603,12 +5607,24 @@ export interface components {
          * @description Template step blueprint definition.
          */
         TaskTemplateStepBlueprintSchema: {
+            /** Kind */
+            kind?: ("step" | "include") | null;
             /** Slug */
             slug?: string | null;
             /** Title */
             title?: string | null;
             /** Instructions */
-            instructions: string;
+            instructions?: string | null;
+            /** Version */
+            version?: string | null;
+            /** Alias */
+            alias?: string | null;
+            /** Scope */
+            scope?: ("personal" | "global") | null;
+            /** Inputmapping */
+            inputMapping?: {
+                [key: string]: unknown;
+            };
             skill?: components["schemas"]["TaskTemplateStepSkillSchema"] | null;
             /** Annotations */
             annotations?: {

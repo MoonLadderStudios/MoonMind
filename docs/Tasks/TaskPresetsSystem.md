@@ -51,6 +51,11 @@ Plan Executor (MoonMind.Run workflow)
 | **Step** | A single node in a Plan that invokes one tool (skill subtype). See `Step` dataclass. |
 | **Tool / Skill** | An executable capability with input/output schemas, policies, and activity bindings. See `ToolDefinition`. |
 | **Expansion** | The server-side compilation of a preset + user inputs into a `PlanDefinition`. |
+| **Preset Include** | A compositional preset-version entry that references another preset by slug and pinned version. |
+| **Expansion Tree** | The recursive include graph resolved during expansion, including aliases and include paths. |
+| **Flattened Plan** | The ordered concrete step list produced after all includes are resolved. This is the execution-facing shape. |
+| **Preset Provenance** | Compact metadata attached to flattened steps identifying the root preset, source preset, pinned version, alias, and include path. |
+| **Detachment** | Save-as-preset behavior where customized, partial, or provenance-mismatched steps are serialized as concrete steps instead of preserving include semantics. |
 
 ---
 
@@ -166,10 +171,12 @@ Each entry in `inputs_schema` declares a parameterizable field:
 
 ### 4.4 Step blueprints
 
-Each entry in `steps` is a Jinja2 template that expands into a Plan node:
+Each entry in `steps` is a Jinja2 template that expands into a Plan node. Entries
+without an explicit `kind` are treated as `kind: step` for compatibility:
 
 ```yaml
 - title: Invoke moonspec-specify
+  kind: step
   instructions: |-
     Run moonspec-specify with the canonical feature request:
     {{ inputs.feature_request }}
@@ -183,11 +190,39 @@ Each entry in `steps` is a Jinja2 template that expands into a Plan node:
     phase: specification
 ```
 
-**Allowed keys**: `instructions`, `title`, `slug`, `skill`, `annotations`.
+**Allowed keys**: `kind`, `instructions`, `title`, `slug`, `skill`, `annotations`.
 
 **Forbidden keys** (prevent runtime override via presets): `runtime`, `targetRuntime`, `target_runtime`, `model`, `effort`, `repository`, `repo`, `git`, `publish`, `container`.
 
-### 4.5 YAML seed format
+### 4.5 Preset includes
+
+Preset versions MAY include other preset versions as compile-time composition
+entries:
+
+```yaml
+- kind: include
+  slug: shared-quality-checks
+  version: 1.0.0
+  alias: quality
+  scope: global
+  inputMapping:
+    feature_request: "{{ inputs.feature_request }}"
+```
+
+Rules:
+
+- `slug`, pinned `version`, and `alias` are required.
+- `inputMapping` supplies the child preset inputs after the parent entry is rendered.
+- Repeated child includes in one parent version MUST use distinct aliases.
+- Child step overrides are not supported in v1; a child preset expands from its own pinned version and mapped inputs only.
+- `scope` defaults to the parent preset scope when omitted. Personal presets MAY include global presets, but GLOBAL presets MUST NOT include PERSONAL presets.
+- Missing, unreadable, inactive, cyclic, or input-incompatible includes are rejected before executable steps are returned.
+
+Composition is control-plane behavior only. Includes are fully resolved before a
+`PlanDefinition` artifact is stored or submitted; the executor does not evaluate
+nested preset semantics.
+
+### 4.6 YAML seed format
 
 Global presets can be seeded from YAML files in `api_service/data/task_step_templates/`:
 
@@ -237,21 +272,36 @@ Expansion is a server-side, deterministic compilation that transforms a preset +
 3. Build Jinja2 variable context
    └── { inputs: {...}, context: {...}, now: ISO-timestamp, iso_today: YYYY-MM-DD }
 
-4. Render step blueprints
+4. Render step blueprints and includes
    └── Apply SandboxedEnvironment to each step's instructions/title
    └── Reject any unresolved {{ ... }} placeholders
    └── Reject any forbidden keys in rendered output
+   └── For `kind: include`, render `inputMapping` and resolve the child preset
+       version by slug, scope, and pinned version
 
-5. Generate deterministic step IDs
+5. Resolve composition
+   └── Recursively resolve include entries into an expansion tree
+   └── Reject cycles with a path such as parent@1.0.0 → child:shared@1.0.0
+   └── Reject GLOBAL → PERSONAL includes
+   └── Reject missing, unreadable, inactive, or child-input-incompatible includes
+   └── Enforce `max_step_count` after flattening
+
+6. Generate deterministic step IDs
    └── Format: tpl:{slug}:{version}:{index:02d}:{input_hash}
    └── input_hash = sha256(canonical JSON of inputs)[:8]
+   └── `index` is the flattened step index from the root preset expansion
 
-6. Resolve registry snapshot                              ← NEW
+7. Attach provenance
+   └── Each flattened step receives `presetProvenance`
+   └── Provenance includes root slug/version, source slug/version/scope,
+       source step index, include alias, and include path
+
+8. Resolve registry snapshot                              ← NEW
    └── Load current skill registry
    └── Compute snapshot digest
    └── Store snapshot as artifact, capture ArtifactRef
 
-7. Map steps to Plan nodes                                ← NEW
+9. Map steps to Plan nodes                                ← NEW
    └── For each rendered step:
    │   ├── Resolve skill.id → ToolDefinition(name, version) from registry
    │   ├── Validate step inputs against ToolDefinition.input_schema
@@ -259,7 +309,7 @@ Expansion is a server-side, deterministic compilation that transforms a preset +
    └── Infer edges from sequential ordering (linear chain)
        └── Future: support explicit dependency annotations in blueprints
 
-8. Assemble PlanDefinition                                ← NEW
+10. Assemble PlanDefinition                                ← NEW
    └── plan_version: "1.0"
    └── metadata: { title, created_at, registry_snapshot }
    └── policy: { failure_mode: from preset annotations or default FAIL_FAST,
@@ -267,11 +317,11 @@ Expansion is a server-side, deterministic compilation that transforms a preset +
    └── nodes: [Step, ...]
    └── edges: [PlanEdge, ...] (linear chain by default)
 
-9. Store Plan artifact                                    ← NEW
+11. Store Plan artifact                                    ← NEW
    └── Write PlanDefinition JSON as immutable artifact
    └── Return ArtifactRef for workflow submission
 
-10. Record audit metadata
+12. Record audit metadata
     └── Write appliedPreset { slug, version, inputs, planArtifactRef, appliedAt }
     └── Update recents table (top 5 per user)
 ```
@@ -327,6 +377,17 @@ The `skill.id` field in step blueprints maps to registered `ToolDefinition` entr
 | `repo.apply_patch@2.1.0` | Pinned to specific version. |
 
 Resolution failures (skill not found, version mismatch) produce expansion errors, not runtime failures.
+
+### 5.7 Composition output
+
+Expansion returns both:
+
+- `steps[]`: the flattened execution-facing step list.
+- `composition`: the expansion tree used for preview and audit.
+
+Flattened steps include `presetProvenance` so downstream audit, preview, and
+save-as-preset flows can understand the source of each concrete step without
+re-resolving the include graph.
 
 ---
 
@@ -468,6 +529,12 @@ The save service sanitizes steps (strips forbidden keys), scans for secrets (Git
 - Scrub detected secrets (highlighted in UI).
 - Parameterize repeated values as input placeholders.
 - Choose scope (personal; global requires admin promotion).
+- Preserve an include only when the selected steps exactly match an intact
+  provenance subtree from one include expansion and the source preset/version is
+  still readable.
+- Serialize detached, partial, reordered, or customized selections as concrete
+  `kind: step` entries so saved presets never silently retain stale nested
+  semantics.
 
 ---
 
