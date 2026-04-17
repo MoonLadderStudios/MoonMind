@@ -2364,6 +2364,10 @@ export interface components {
             content_type?: string | null;
             /** Encryption */
             encryption: string;
+            /** Diagnostics */
+            diagnostics?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * ArtifactSessionControlRequest
@@ -2964,6 +2968,10 @@ export interface components {
         CreateArtifactResponse: {
             artifact_ref: components["schemas"]["ArtifactRefModel"];
             upload: components["schemas"]["ArtifactUploadModel"];
+            /** Diagnostics */
+            diagnostics?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** CreateOAuthSessionRequest */
         CreateOAuthSessionRequest: {
