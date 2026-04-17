@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Sequence
 
 from moonmind.config.settings import settings
@@ -22,6 +25,31 @@ class AttachmentContextInput:
     digest: str | None
     local_path: str
     user_caption_hint: str | None = None
+
+
+@dataclass(frozen=True)
+class VisionContextTargetInput:
+    """Explicit target group for target-aware image context rendering."""
+
+    target_kind: str
+    attachments: tuple[AttachmentContextInput, ...]
+    step_ref: str | None = None
+
+    @classmethod
+    def objective(
+        cls, attachments: Sequence[AttachmentContextInput]
+    ) -> "VisionContextTargetInput":
+        return cls(target_kind="objective", attachments=tuple(attachments))
+
+    @classmethod
+    def step(
+        cls, step_ref: str, attachments: Sequence[AttachmentContextInput]
+    ) -> "VisionContextTargetInput":
+        return cls(
+            target_kind="step",
+            step_ref=step_ref,
+            attachments=tuple(attachments),
+        )
 
 
 @dataclass(frozen=True)
@@ -58,6 +86,25 @@ class VisionContext:
     attachments: tuple[RenderedAttachmentContext, ...]
 
 
+@dataclass(frozen=True)
+class VisionTargetContextArtifact:
+    """Rendered context artifact metadata for one explicit target."""
+
+    target_kind: str
+    step_ref: str | None
+    context_path: Path
+    context: VisionContext
+
+
+@dataclass(frozen=True)
+class VisionContextArtifactBundle:
+    """Target-aware vision context artifacts and deterministic index payload."""
+
+    artifacts: tuple[VisionTargetContextArtifact, ...]
+    index: dict[str, object]
+    index_path: Path
+
+
 class VisionService:
     """Render Markdown summaries for job attachments."""
 
@@ -88,6 +135,78 @@ class VisionService:
             attachments=rendered,
         )
 
+    def render_target_contexts(
+        self, targets: Sequence[VisionContextTargetInput]
+    ) -> VisionContextArtifactBundle:
+        artifacts: list[VisionTargetContextArtifact] = []
+        index_targets: list[dict[str, object]] = []
+
+        for target in targets:
+            if not target.attachments:
+                continue
+            context_path = self._target_context_path(target)
+            context = self.render_context(target.attachments)
+            artifacts.append(
+                VisionTargetContextArtifact(
+                    target_kind=target.target_kind,
+                    step_ref=target.step_ref,
+                    context_path=context_path,
+                    context=context,
+                )
+            )
+            index_targets.append(
+                {
+                    "targetKind": target.target_kind,
+                    "stepRef": target.step_ref,
+                    "status": context.status.value,
+                    "contextPath": context_path.as_posix(),
+                    "attachmentRefs": [
+                        attachment.id for attachment in target.attachments
+                    ],
+                    "sourcePaths": [
+                        attachment.local_path for attachment in target.attachments
+                    ],
+                }
+            )
+
+        index: dict[str, object] = {
+            "version": 1,
+            "generated": any(
+                artifact.context.status is VisionContextStatus.OK
+                for artifact in artifacts
+            ),
+            "config": {
+                "provider": self._config.provider,
+                "model": self._config.model,
+                "ocrEnabled": self._config.ocr_enabled,
+                "maxTokens": self._config.max_tokens,
+            },
+            "targets": index_targets,
+        }
+        return VisionContextArtifactBundle(
+            artifacts=tuple(artifacts),
+            index=index,
+            index_path=Path(".moonmind/vision/image_context_index.json"),
+        )
+
+    def write_target_context_artifacts(
+        self, workspace_root: str | Path, targets: Sequence[VisionContextTargetInput]
+    ) -> VisionContextArtifactBundle:
+        root = Path(workspace_root)
+        bundle = self.render_target_contexts(targets)
+        for artifact in bundle.artifacts:
+            path = root / artifact.context_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(artifact.context.markdown, encoding="utf-8")
+
+        index_path = root / bundle.index_path
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(
+            json.dumps(bundle.index, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return bundle
+
     def _resolve_status(self) -> VisionContextStatus:
         if not self._config.enabled or self._config.provider == "off":
             return VisionContextStatus.DISABLED
@@ -104,6 +223,29 @@ class VisionService:
         if provider == "anthropic":
             return bool(settings.anthropic.anthropic_api_key)
         return False
+
+    def _target_context_path(self, target: VisionContextTargetInput) -> Path:
+        if target.target_kind == "objective":
+            return Path(".moonmind/vision/task/image_context.md")
+        if target.target_kind == "step":
+            return (
+                Path(".moonmind/vision/steps")
+                / self._safe_step_ref(target.step_ref)
+                / "image_context.md"
+            )
+        raise ValueError("vision context target_kind must be objective or step")
+
+    @staticmethod
+    def _safe_step_ref(step_ref: str | None) -> str:
+        cleaned = str(step_ref or "").strip()
+        if not cleaned:
+            raise ValueError("step vision context target requires step_ref")
+        lowered = cleaned.lower()
+        sanitized = re.sub(r"[^a-z0-9._-]+", "-", lowered)
+        sanitized = re.sub(r"-+", "-", sanitized).strip(".-_")
+        if not sanitized:
+            raise ValueError("step vision context target requires a safe step_ref")
+        return sanitized
 
     def _render_attachment(
         self,
@@ -164,6 +306,7 @@ class VisionService:
         ]
         for entry in attachments:
             lines.append(f"{entry.index}) {entry.local_path}")
+            lines.append(f"   - artifactRef: {entry.id}")
             lines.append(f"   - filename: {entry.filename}")
             if entry.content_type:
                 lines.append(f"   - contentType: {entry.content_type}")
