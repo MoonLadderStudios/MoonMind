@@ -1717,6 +1717,26 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
+  it("shows the primary step requirement only after submit validation fails", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(
+      screen.queryByText("Primary step must include instructions or an explicit skill."),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText(
+        "Primary step must include instructions or an explicit skill.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
   it("reconstructs a create-form draft from Temporal execution fields", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:edit-123",
