@@ -5063,16 +5063,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 </div>
               ) : null}
             </div>
-            <div className="actions">
-              <button
-                type="button"
-                id="queue-template-apply"
-                onClick={handleApplyPreset}
-                aria-disabled={isApplyingPreset}
-                aria-busy={isApplyingPreset}
-              >
-                {presetReapplyNeeded ? "Reapply preset" : "Apply"}
-              </button>
+            <div className="actions queue-template-actions">
               {taskTemplateSaveEnabled ? (
                 <button
                   type="button"
@@ -5082,6 +5073,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   Save Current Steps as Preset
                 </button>
               ) : null}
+              <button
+                type="button"
+                id="queue-template-apply"
+                onClick={handleApplyPreset}
+                aria-disabled={isApplyingPreset}
+                aria-busy={isApplyingPreset}
+              >
+                {presetReapplyNeeded ? "Reapply preset" : "Apply"}
+              </button>
             </div>
             <p className="small" id="queue-template-message">
               {presetStatusText}
