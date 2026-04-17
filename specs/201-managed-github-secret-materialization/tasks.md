@@ -22,17 +22,17 @@
 
 **Independent Test**: Simulate launch requests through schema, activity, and controller boundaries and verify descriptor serialization, host git materialization, container omission, redaction, and MM-320 traceability.
 
-**Traceability**: FR-001 through FR-014, SC-001 through SC-006, DESIGN-REQ-001 through DESIGN-REQ-006.
+**Traceability**: FR-001 through FR-014, SC-001 through SC-006, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-006.
 
 ### Unit Tests (write first)
 
 - [X] T003 Add failing schema tests for `githubCredential` descriptor validation and no raw token serialization in `tests/unit/schemas/test_managed_session_models.py` (FR-001, FR-002, FR-003, SC-001).
-- [X] T004 Add failing activity boundary tests proving `agent_runtime.launch_session` carries a descriptor and not raw `GITHUB_TOKEN` in `tests/unit/workflows/temporal/test_agent_runtime_activities.py` (FR-004, FR-005, FR-014, SC-005).
+- [X] T004 Add failing activity boundary tests proving `agent_runtime.launch_session` carries a descriptor and not raw `GITHUB_TOKEN` in `tests/unit/workflows/temporal/test_agent_runtime_activities.py` (FR-004, FR-005, FR-014, SC-005, DESIGN-REQ-002).
 
 ### Integration Tests (write first)
 
-- [X] T005 Add failing integration-style controller boundary tests proving host git gets scoped credentials while docker/container payloads omit raw tokens in `tests/unit/services/temporal/runtime/test_managed_session_controller.py` (FR-006, FR-007, FR-008, SC-002, SC-003).
-- [X] T006 Add failing integration-style redaction/error boundary tests for missing or unresolvable required GitHub descriptors in `tests/unit/services/temporal/runtime/test_managed_session_controller.py` or `tests/unit/workflows/temporal/test_agent_runtime_activities.py` (FR-009, FR-010, SC-004).
+- [X] T005 Add failing integration-style controller boundary tests proving host git gets scoped credentials while docker/container payloads omit raw tokens in `tests/unit/services/temporal/runtime/test_managed_session_controller.py` (FR-006, FR-007, FR-008, SC-002, SC-003, DESIGN-REQ-003).
+- [X] T006 Add failing integration-style redaction/error boundary tests for missing or unresolvable required GitHub descriptors in `tests/unit/services/temporal/runtime/test_managed_session_controller.py` or `tests/unit/workflows/temporal/test_agent_runtime_activities.py` (FR-009, FR-010, SC-004, DESIGN-REQ-004).
 
 ### Red-First Confirmation
 
@@ -41,7 +41,7 @@
 ### Implementation
 
 - [X] T008 Add typed GitHub credential descriptor models to `moonmind/schemas/managed_session_models.py` (FR-001, FR-002, FR-003).
-- [X] T009 Refactor GitHub token resolution helpers in `moonmind/workflows/temporal/runtime/managed_api_key_resolve.py` to resolve descriptors late and preserve local-first `GITHUB_TOKEN`/`GITHUB_PAT` fallback (FR-004, FR-011).
+- [X] T009 Refactor GitHub token resolution helpers in `moonmind/workflows/temporal/runtime/managed_api_key_resolve.py` to resolve descriptors late and preserve local-first `GITHUB_TOKEN`/`GITHUB_PAT` fallback (FR-004, FR-011, DESIGN-REQ-002, DESIGN-REQ-005).
 - [X] T010 Update `moonmind/workflows/temporal/activity_runtime.py` so `agent_runtime.launch_session` shapes non-sensitive descriptors instead of injecting raw GitHub tokens into request environment (FR-005, FR-014).
 - [X] T011 Update `moonmind/workflows/temporal/runtime/managed_session_controller.py` so host git subprocesses materialize credentials from descriptors and container environment/payloads omit raw tokens (FR-006, FR-007, FR-008, FR-012).
 - [X] T012 Add redaction-safe diagnostics/metadata for GitHub credential materialization without exposing values (FR-010, FR-013).
