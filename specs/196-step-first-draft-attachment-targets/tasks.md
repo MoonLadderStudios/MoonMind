@@ -11,7 +11,7 @@
 
 - Unit tests: `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
 - Integration tests: `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -35,30 +35,38 @@
 - [X] T004 Add failing test for step attachment refs staying structured and out of instruction text in `frontend/src/entrypoints/task-create.test.tsx` (FR-003, FR-005, SC-002)
 - [X] T005 Add failing test for objective-scoped attachment submission through `task.inputAttachments` in `frontend/src/entrypoints/task-create.test.tsx` (FR-004, FR-005, SC-001)
 - [X] T006 Add failing test for step reorder preserving attachment ownership in `frontend/src/entrypoints/task-create.test.tsx` (FR-006, SC-003)
-- [X] T007 Run focused UI tests and confirm new tests fail before implementation
+
+### Integration Tests
+
+- [X] T007 Add failing integration-style Create page payload test for objective attachment upload, artifact metadata, and `/api/executions` task payload in `frontend/src/entrypoints/task-create.test.tsx` (FR-004, FR-005, SC-001)
+- [X] T008 Add failing integration-style Create page payload test for step reorder preserving owning `task.steps[n].inputAttachments` in `frontend/src/entrypoints/task-create.test.tsx` (FR-006, DESIGN-REQ-008, SC-003)
+
+### Red-First Confirmation
+
+- [X] T009 Run focused UI tests and confirm T004-T008 fail before implementation
 
 ### Implementation
 
-- [X] T008 Add objective attachment draft state and target-aware selected-file helpers in `frontend/src/entrypoints/task-create.tsx` (FR-001, FR-004, FR-007)
-- [X] T009 Submit objective and step attachments through structured target refs only in `frontend/src/entrypoints/task-create.tsx` (FR-003, FR-004, FR-005)
-- [X] T010 Render objective-scoped attachment controls and selected attachment removal actions in `frontend/src/entrypoints/task-create.tsx` (FR-004, FR-008)
-- [X] T011 Preserve step attachment ownership across add/remove/reorder operations in `frontend/src/entrypoints/task-create.tsx` (FR-006)
-- [X] T012 Route Jira image imports to the selected objective or step target in `frontend/src/entrypoints/task-create.tsx` (FR-004, FR-006)
+- [X] T010 Add objective attachment draft state and target-aware selected-file helpers in `frontend/src/entrypoints/task-create.tsx` (FR-001, FR-004, FR-007)
+- [X] T011 Submit objective and step attachments through structured target refs only in `frontend/src/entrypoints/task-create.tsx` (FR-003, FR-004, FR-005)
+- [X] T012 Render objective-scoped attachment controls and selected attachment removal actions in `frontend/src/entrypoints/task-create.tsx` (FR-004, FR-008)
+- [X] T013 Preserve step attachment ownership across add/remove/reorder operations in `frontend/src/entrypoints/task-create.tsx` (FR-006)
+- [X] T014 Route Jira image imports to the selected objective or step target in `frontend/src/entrypoints/task-create.tsx` (FR-004, FR-006)
 
-### Validation
+### Story Validation
 
-- [X] T013 Run focused UI validation `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
-- [X] T014 Run final repository unit validation `./tools/test_unit.sh`
+- [X] T015 Run focused UI validation `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
+- [X] T016 Run final repository unit validation `./tools/test_unit.sh`
 
 ## Phase 4: Polish
 
-- [X] T015 Run `/speckit.verify` equivalent and record verification in `specs/196-step-first-draft-attachment-targets/verification.md`
+- [X] T017 Run `/moonspec-verify` equivalent and record verification in `specs/196-step-first-draft-attachment-targets/verification.md`
 
 ## Dependencies & Execution Order
 
 - Setup and foundational review precede story implementation.
-- T004-T006 must fail before T008-T012 are considered complete.
-- T013 and T014 validate implementation before T015 verification.
+- T004-T008 must fail before T010-T014 are considered complete.
+- T015 and T016 validate implementation before T017 verification.
 
 ## Notes
 
