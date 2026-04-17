@@ -4892,6 +4892,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       : pageMode.mode === "rerun"
         ? "Rerun Task"
         : "Create";
+  const showPrimaryCtaArrow = pageMode.mode === "create";
   const modeLoadError =
     pageMode.mode !== "create" && !temporalTaskEditingEnabled
       ? "Temporal task editing is not enabled."
@@ -5555,12 +5556,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </button>
               <button
                 type="submit"
-                className="queue-submit-primary"
+                className={
+                  showPrimaryCtaArrow
+                    ? "queue-submit-primary queue-submit-primary--with-arrow"
+                    : "queue-submit-primary"
+                }
                 disabled={isTemporalFormBlocked}
                 aria-disabled={isSubmitting || isTemporalFormBlocked}
                 aria-busy={isSubmitting}
               >
-                {primaryCta}
+                <span>{primaryCta}</span>
+                {showPrimaryCtaArrow ? (
+                  <span
+                    aria-hidden="true"
+                    className="queue-submit-primary-arrow"
+                    data-submit-arrow="right"
+                  >
+                    &rarr;
+                  </span>
+                ) : null}
               </button>
             </div>
           </div>

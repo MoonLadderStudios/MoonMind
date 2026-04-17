@@ -29,15 +29,15 @@
 
 **Purpose**: Confirm the active feature context and existing Create Page test surface before writing red tests.
 
-- [ ] T001 Confirm MM-390 source input, single-story spec, and active feature locator in `docs/tmp/jira-orchestration-inputs/MM-390-moonspec-orchestration-input.md`, `specs/203-create-button-right-arrow/spec.md`, and `.specify/feature.json` (FR-009, SC-006).
-- [ ] T002 Confirm existing Create Page submit control and test harness locations in `frontend/src/entrypoints/task-create.tsx` and `frontend/src/entrypoints/task-create.test.tsx` (DESIGN-REQ-001, DESIGN-REQ-003).
+- [X] T001 Confirm MM-390 source input, single-story spec, and active feature locator in `docs/tmp/jira-orchestration-inputs/MM-390-moonspec-orchestration-input.md`, `specs/203-create-button-right-arrow/spec.md`, and `.specify/feature.json` (FR-009, SC-006).
+- [X] T002 Confirm existing Create Page submit control and test harness locations in `frontend/src/entrypoints/task-create.tsx` and `frontend/src/entrypoints/task-create.test.tsx` (DESIGN-REQ-001, DESIGN-REQ-003).
 
 ## Phase 2: Foundational
 
 **Purpose**: Confirm there are no blocking schema, fixture, or tooling prerequisites before story test work.
 
-- [ ] T003 Confirm no data model, migration, backend endpoint, or new dependency is required by `specs/203-create-button-right-arrow/plan.md` and `specs/203-create-button-right-arrow/contracts/create-button-right-arrow.md` (FR-005, DESIGN-REQ-003).
-- [ ] T004 Confirm focused frontend test command is available for `frontend/src/entrypoints/task-create.test.tsx` using `specs/203-create-button-right-arrow/quickstart.md` (FR-008).
+- [X] T003 Confirm no data model, migration, backend endpoint, or new dependency is required by `specs/203-create-button-right-arrow/plan.md` and `specs/203-create-button-right-arrow/contracts/create-button-right-arrow.md` (FR-005, DESIGN-REQ-003).
+- [X] T004 Confirm focused frontend test command is available for `frontend/src/entrypoints/task-create.test.tsx` using `specs/203-create-button-right-arrow/quickstart.md` (FR-008).
 
 **Checkpoint**: Foundation ready - story test and implementation work can now begin.
 
@@ -51,30 +51,30 @@
 
 ### Unit Tests
 
-- [ ] T005 Add failing unit-style render assertion for the Create action's right-pointing arrow and Create-oriented accessible name in `frontend/src/entrypoints/task-create.test.tsx` (FR-001, FR-002, FR-007, SC-001, SC-003, acceptance scenarios 1 and 4).
-- [ ] T006 Add failing unit-style state assertion for disabled or validation behavior preserving the Create action identity in `frontend/src/entrypoints/task-create.test.tsx` (FR-005, FR-007, SC-002, acceptance scenario 2).
-- [ ] T007 Add failing unit-style responsive/layout stability assertion for the Create action presentation in `frontend/src/entrypoints/task-create.test.tsx` (FR-006, SC-004, acceptance scenario 5).
+- [X] T005 Add failing unit-style render assertion for the Create action's right-pointing arrow and Create-oriented accessible name in `frontend/src/entrypoints/task-create.test.tsx` (FR-001, FR-002, FR-007, SC-001, SC-003, acceptance scenarios 1 and 4).
+- [X] T006 Add failing unit-style state assertion for disabled or validation behavior preserving the Create action identity in `frontend/src/entrypoints/task-create.test.tsx` (FR-005, FR-007, SC-002, acceptance scenario 2).
+- [X] T007 Add failing unit-style responsive/layout stability assertion for the Create action presentation in `frontend/src/entrypoints/task-create.test.tsx` (FR-006, SC-004, acceptance scenario 5).
 
 ### Integration Tests
 
-- [ ] T008 Add failing UI request-shape integration test proving a valid draft still submits through the existing create endpoint after the arrow presentation change in `frontend/src/entrypoints/task-create.test.tsx` (FR-003, FR-004, FR-005, DESIGN-REQ-002, DESIGN-REQ-003, SC-005, acceptance scenario 3).
-- [ ] T009 Add failing UI integration guardrail test proving Jira, preset, dependency, runtime, attachment, and publish controls are not changed by the Create action presentation in `frontend/src/entrypoints/task-create.test.tsx` (FR-005, DESIGN-REQ-003).
+- [X] T008 Add failing UI request-shape integration test proving a valid draft still submits through the existing create endpoint after the arrow presentation change in `frontend/src/entrypoints/task-create.test.tsx` (FR-003, FR-004, FR-005, DESIGN-REQ-002, DESIGN-REQ-003, SC-005, acceptance scenario 3).
+- [X] T009 Add failing UI integration guardrail test proving Jira, preset, dependency, runtime, attachment, and publish controls are not changed by the Create action presentation in `frontend/src/entrypoints/task-create.test.tsx` (FR-005, DESIGN-REQ-003).
 
 ### Red-First Confirmation
 
-- [ ] T010 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm T005-T009 fail for the expected missing right-arrow or unchanged-behavior assertions in `frontend/src/entrypoints/task-create.test.tsx`.
+- [X] T010 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm T005-T009 fail for the expected missing right-arrow or unchanged-behavior assertions in `frontend/src/entrypoints/task-create.test.tsx`.
 
 ### Implementation
 
-- [ ] T011 Implement the right-pointing arrow presentation on the primary Create action in `frontend/src/entrypoints/task-create.tsx` (FR-001, FR-002, DESIGN-REQ-001, SC-001).
-- [ ] T012 Preserve accessible name, disabled state, loading state, and validation behavior while adding the arrow in `frontend/src/entrypoints/task-create.tsx` (FR-005, FR-006, FR-007, SC-002, SC-003, acceptance scenarios 2 and 4).
-- [ ] T013 Preserve existing task submission and request payload behavior after the presentation change in `frontend/src/entrypoints/task-create.tsx` (FR-003, FR-004, FR-005, DESIGN-REQ-002, DESIGN-REQ-003, SC-005).
-- [ ] T014 Update test expectations to their final passing form without weakening coverage in `frontend/src/entrypoints/task-create.test.tsx` (FR-001 through FR-008, SC-001 through SC-005).
-- [ ] T015 Run focused unit and UI integration tests, then fix only MM-390-scoped failures in `frontend/src/entrypoints/task-create.tsx` and `frontend/src/entrypoints/task-create.test.tsx` (FR-001 through FR-008, DESIGN-REQ-001 through DESIGN-REQ-003).
+- [X] T011 Implement the right-pointing arrow presentation on the primary Create action in `frontend/src/entrypoints/task-create.tsx` (FR-001, FR-002, DESIGN-REQ-001, SC-001).
+- [X] T012 Preserve accessible name, disabled state, loading state, and validation behavior while adding the arrow in `frontend/src/entrypoints/task-create.tsx` (FR-005, FR-006, FR-007, SC-002, SC-003, acceptance scenarios 2 and 4).
+- [X] T013 Preserve existing task submission and request payload behavior after the presentation change in `frontend/src/entrypoints/task-create.tsx` (FR-003, FR-004, FR-005, DESIGN-REQ-002, DESIGN-REQ-003, SC-005).
+- [X] T014 Update test expectations to their final passing form without weakening coverage in `frontend/src/entrypoints/task-create.test.tsx` (FR-001 through FR-008, SC-001 through SC-005).
+- [X] T015 Run focused unit and UI integration tests, then fix only MM-390-scoped failures in `frontend/src/entrypoints/task-create.tsx` and `frontend/src/entrypoints/task-create.test.tsx` (FR-001 through FR-008, DESIGN-REQ-001 through DESIGN-REQ-003).
 
 ### Story Validation
 
-- [ ] T016 Validate the independent story manually or with test output evidence against `specs/203-create-button-right-arrow/spec.md` and `specs/203-create-button-right-arrow/contracts/create-button-right-arrow.md` (FR-001 through FR-009, SC-001 through SC-006).
+- [X] T016 Validate the independent story manually or with test output evidence against `specs/203-create-button-right-arrow/spec.md` and `specs/203-create-button-right-arrow/contracts/create-button-right-arrow.md` (FR-001 through FR-009, SC-001 through SC-006).
 
 **Checkpoint**: The story is fully functional, covered by unit and UI integration tests, and testable independently.
 
@@ -82,9 +82,9 @@
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [ ] T017 Run full unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and address only MM-390-scoped regressions in `frontend/src/entrypoints/task-create.tsx` or `frontend/src/entrypoints/task-create.test.tsx`.
-- [ ] T018 Run hermetic integration suite with `./tools/test_integration.sh` when Docker is available, or record the exact Docker/runtime blocker in `specs/203-create-button-right-arrow/verification.md` (SC-005).
-- [ ] T019 Confirm MM-390 traceability remains present in `specs/203-create-button-right-arrow/spec.md`, `specs/203-create-button-right-arrow/tasks.md`, implementation notes, commit text, and pull request metadata (FR-009, SC-006).
+- [X] T017 Run full unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and address only MM-390-scoped regressions in `frontend/src/entrypoints/task-create.tsx` or `frontend/src/entrypoints/task-create.test.tsx`.
+- [X] T018 Run hermetic integration suite with `./tools/test_integration.sh` when Docker is available, or record the exact Docker/runtime blocker in `specs/203-create-button-right-arrow/verification.md` (SC-005).
+- [X] T019 Confirm MM-390 traceability remains present in `specs/203-create-button-right-arrow/spec.md`, `specs/203-create-button-right-arrow/tasks.md`, implementation notes, commit text, and pull request metadata (FR-009, SC-006).
 - [ ] T020 Run `/moonspec-verify` and record final verification evidence in `specs/203-create-button-right-arrow/verification.md` after implementation and tests pass (FR-009, SC-006).
 
 ## Dependencies & Execution Order

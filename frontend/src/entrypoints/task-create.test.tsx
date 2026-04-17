@@ -1796,6 +1796,24 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
+  it("renders the create submit action with a right-pointing arrow and stable label", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const createButton = await screen.findByRole("button", { name: "Create" });
+    const arrow = createButton.querySelector<HTMLElement>(
+      "[data-submit-arrow='right']",
+    );
+
+    expect(arrow).not.toBeNull();
+    expect(arrow?.getAttribute("aria-hidden")).toBe("true");
+    expect(arrow?.textContent?.trim()).toBe(String.fromCharCode(8594));
+    expect(createButton.classList.contains("queue-submit-primary")).toBe(true);
+    expect(createButton.classList.contains("queue-submit-primary--with-arrow")).toBe(
+      true,
+    );
+    expect(createButton.textContent).toContain("Create");
+  });
+
   it("shows the primary step requirement only after submit validation fails", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
@@ -1806,6 +1824,9 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
+    const createButton = screen.getByRole("button", { name: "Create" });
+    expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
+    expect(createButton.getAttribute("aria-busy")).toBe("false");
     expect(
       await screen.findByText(
         "Primary step must include instructions or an explicit skill.",
@@ -1814,6 +1835,24 @@ describe("Task Create Entrypoint", () => {
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
     ).toBe(false);
+  });
+
+  it("keeps create page authoring controls available with the arrow submit action", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const createButton = await screen.findByRole("button", { name: "Create" });
+    expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Add Step" })).toBeTruthy();
+    expect(screen.getByLabelText("Runtime")).toBeTruthy();
+    expect(screen.getByLabelText("Publish Mode")).toBeTruthy();
+    expect(canonicalCreateSections()).toEqual(
+      expect.arrayContaining(["Task Presets", "Dependencies"]),
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for Step 1 instructions",
+      }),
+    ).toBeTruthy();
   });
 
   it("reconstructs a create-form draft from Temporal execution fields", () => {
@@ -3426,7 +3465,9 @@ describe("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const createButton = screen.getByRole("button", { name: "Create" });
+    expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
+    fireEvent.click(createButton);
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(

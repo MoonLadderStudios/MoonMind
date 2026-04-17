@@ -973,6 +973,20 @@ button.secondary:hover {
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 12px 24px -14px rgb(var(--queue-action-color) / 0.84);
 }
 
+.queue-submit-primary--with-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+
+.queue-submit-primary-arrow {
+  display: inline-block;
+  font-size: 1.08em;
+  line-height: 1;
+}
+
 .queue-action:hover,
 .queue-submit-primary:hover {
   background: linear-gradient(
