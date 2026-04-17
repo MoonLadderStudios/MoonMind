@@ -65,8 +65,8 @@ Repeat this state machine until a terminal success or manual blocker:
 2. Read `var/pr_resolver/result.json`.
 3. If `status=merged` and `merge_outcome=merged`, confirm the PR is merged and finish.
 4. If `status=blocked` or `status=attempts_exhausted`, inspect `next_step`.
-5. Execute the matching specialized skill exactly once for that blocker, then return to step 1.
-6. If the same blocker repeats after its specialized skill ran and no remote PR branch change is visible, stop as blocked and report the artifact details.
+5. If the same blocker repeats after its specialized skill ran and no remote PR branch change is visible, stop as blocked and report the artifact details.
+6. Execute the matching specialized skill exactly once for that blocker, then return to step 1.
 7. If the blocker is transient CI or mergeability state, wait only within the configured retry/backoff caps, then return to step 1.
 
 ## Retry Policy

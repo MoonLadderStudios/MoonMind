@@ -1257,3 +1257,12 @@ def test_pr_resolver_skill_requires_orchestrated_merge_completion() -> None:
     assert "merge_outcome=merged" in skill_text
     assert "reason `publish_unavailable`" in skill_text
     assert "branch is ahead of origin" in skill_text
+
+    repeated_blocker_step = (
+        "If the same blocker repeats after its specialized skill ran and no remote "
+        "PR branch change is visible"
+    )
+    skill_execution_step = "Execute the matching specialized skill exactly once"
+    assert skill_text.index(repeated_blocker_step) < skill_text.index(
+        skill_execution_step
+    )
