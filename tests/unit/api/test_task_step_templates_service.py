@@ -1017,6 +1017,7 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 "jira-issue-updater",
                 "auto",
                 "auto",
+                "auto",
                 "moonspec-specify",
                 "auto",
                 "moonspec-plan",
@@ -1044,26 +1045,40 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 context={},
             )
 
-            assert len(expanded["steps"]) == 12
+            assert len(expanded["steps"]) == 13
             assert expanded["steps"][0]["skill"]["id"] == "jira-issue-updater"
             assert "MM-328" in expanded["steps"][0]["instructions"]
             assert "In Progress" in expanded["steps"][0]["instructions"]
-            assert "Jira preset brief" in expanded["steps"][1]["instructions"]
-            assert "Keep the scope narrow." in expanded["steps"][2]["instructions"]
-            assert expanded["steps"][10]["title"] == "Create pull request"
-            assert "pull request title must include MM-328" in expanded["steps"][10][
+            assert expanded["steps"][1]["title"] == "Check Jira blockers before implementation"
+            assert "Fetch Jira issue MM-328" in expanded["steps"][1]["instructions"]
+            assert "trusted Jira tool surface" in expanded["steps"][1]["instructions"]
+            assert "blocker" in expanded["steps"][1]["instructions"]
+            assert "Done" in expanded["steps"][1]["instructions"]
+            assert "non-blocker" in expanded["steps"][1]["instructions"]
+            assert "status cannot be determined" in expanded["steps"][1][
                 "instructions"
             ]
-            assert "task.publish.mode=none" in expanded["steps"][10]["instructions"]
-            assert "artifacts/jira-orchestrate-pr.json" in expanded["steps"][10][
+            assert "raw Jira credentials" in expanded["steps"][1]["instructions"]
+            assert "web scraping" in expanded["steps"][1]["instructions"]
+            assert "stop the orchestration immediately" in expanded["steps"][1][
                 "instructions"
             ]
-            assert expanded["steps"][11]["skill"]["id"] == "jira-issue-updater"
-            assert "pull_request_url" in expanded["steps"][11]["instructions"]
-            assert "stop without changing Jira" in expanded["steps"][11][
+            assert "Jira preset brief" in expanded["steps"][2]["instructions"]
+            assert "Keep the scope narrow." in expanded["steps"][3]["instructions"]
+            assert expanded["steps"][11]["title"] == "Create pull request"
+            assert "pull request title must include MM-328" in expanded["steps"][11][
                 "instructions"
             ]
-            assert "Code Review" in expanded["steps"][11]["instructions"]
+            assert "task.publish.mode=none" in expanded["steps"][11]["instructions"]
+            assert "artifacts/jira-orchestrate-pr.json" in expanded["steps"][11][
+                "instructions"
+            ]
+            assert expanded["steps"][12]["skill"]["id"] == "jira-issue-updater"
+            assert "pull_request_url" in expanded["steps"][12]["instructions"]
+            assert "stop without changing Jira" in expanded["steps"][12][
+                "instructions"
+            ]
+            assert "Code Review" in expanded["steps"][12]["instructions"]
             assert all(
                 step["title"] != "Return Jira orchestration report"
                 for step in expanded["steps"]
