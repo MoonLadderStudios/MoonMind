@@ -1122,6 +1122,22 @@ def test_serialize_execution_exposes_merge_automation_selection() -> None:
     assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is True
 
 
+def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> None:
+    record = _build_execution_record()
+    record.parameters = {
+        "publishMode": "pr",
+        "publish": {
+            "mode": "pr",
+            "merge_automation": {"enabled": True},
+        },
+    }
+
+    payload = _serialize_execution(record)
+
+    assert payload.merge_automation_selected is True
+    assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is True
+
+
 def test_serialize_execution_defaults_merge_automation_selection_to_false() -> None:
     record = _build_execution_record()
     record.parameters = {"publishMode": "pr", "mergeAutomation": {"enabled": False}}

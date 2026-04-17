@@ -1650,18 +1650,13 @@ def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, 
 def _merge_automation_selected_from_parameters(
     parameters: Mapping[str, Any],
 ) -> bool:
-    publish_payload = _normalize_publish_payload(parameters.get("publish"))
-    task_payload = (
-        parameters.get("task") if isinstance(parameters.get("task"), Mapping) else {}
-    )
-    task_publish = (
-        task_payload.get("publish")
-        if isinstance(task_payload.get("publish"), Mapping)
-        else {}
-    )
+    raw_publish_payload = _coerce_mapping(parameters.get("publish"))
+    publish_payload = _normalize_publish_payload(raw_publish_payload)
+    task_payload = _coerce_mapping(parameters.get("task"))
+    task_publish = _coerce_mapping(task_payload.get("publish"))
     candidates = (
         publish_payload.get("mergeAutomation")
-        or publish_payload.get("merge_automation"),
+        or raw_publish_payload.get("merge_automation"),
         task_payload.get("mergeAutomation") or task_payload.get("merge_automation"),
         task_publish.get("mergeAutomation") or task_publish.get("merge_automation"),
         parameters.get("mergeAutomation") or parameters.get("merge_automation"),
