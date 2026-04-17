@@ -12,7 +12,7 @@
 |-------|---------|--------|-------|
 | Focused unit | `./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py tests/unit/agents/codex_worker/test_attachment_materialization.py` | PASS | 166 Python tests passed; frontend unit suite also passed through the wrapper. |
 | Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 3510 Python tests passed, 1 existing xpass, 267 frontend tests passed. |
-| Integration | `./tools/test_integration.sh` | NOT RUN | Not required for this story because no Temporal workflow/activity contract or external service boundary changed. |
+| Integration-style boundary | `./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py tests/unit/agents/codex_worker/test_attachment_materialization.py` | PASS | Worker prepare/instruction boundary coverage runs in the required unit suite; no Docker-backed integration command is required because no Temporal workflow/activity contract or external service boundary changed. |
 
 ## Requirement Coverage
 

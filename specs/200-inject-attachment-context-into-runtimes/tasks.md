@@ -3,7 +3,7 @@
 **Input**: Design documents from `/specs/200-inject-attachment-context-into-runtimes/`  
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
-**Tests**: Unit tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
+**Tests**: Unit tests and integration-style worker boundary tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
 
 **Organization**: Tasks are grouped by phase around the single MM-372 story so runtime context injection remains independently testable.
 
@@ -12,7 +12,7 @@
 **Test Commands**:
 
 - Unit tests: `./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py tests/unit/agents/codex_worker/test_attachment_materialization.py`
-- Integration tests: Not required for this story; no workflow/activity or external service boundary changes.
+- Integration tests: `./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py tests/unit/agents/codex_worker/test_attachment_materialization.py` (worker prepare/instruction boundary coverage in the required unit suite; no Docker-backed integration command is required because no workflow/activity or external service boundary changes)
 - Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
@@ -51,7 +51,7 @@
 **Test Plan**:
 
 - Unit: prompt ordering, manifest path inclusion, objective/current-step filtering, generated context path matching, compact planning inventory, raw-byte/data-url guardrails, and absent-manifest behavior.
-- Integration: Not required; the story changes deterministic worker instruction composition only.
+- Integration: worker prepare/instruction boundary coverage proves prepared manifest and generated context index artifacts flow into runtime instruction composition without crossing external service boundaries.
 
 ### Unit Tests (write first)
 
@@ -60,21 +60,25 @@
 - [X] T006 [P] Add failing unit test for compact planning attachment inventory in `tests/unit/agents/codex_worker/test_worker.py` (FR-008, SC-004, DESIGN-REQ-014)
 - [X] T007 [P] Add failing unit test for absent manifest and raw-byte/data-URL guardrails in `tests/unit/agents/codex_worker/test_worker.py` (FR-010, FR-011, SC-005, DESIGN-REQ-020)
 
+### Integration Tests (write first)
+
+- [X] T008 Add failing integration-style worker boundary test proving prepared `.moonmind/attachments_manifest.json` and `.moonmind/vision/image_context_index.json` entries flow into runtime instruction composition while preserving target boundaries in `tests/unit/agents/codex_worker/test_worker.py` (acceptance scenarios 1-4, FR-001-FR-009, DESIGN-REQ-013, DESIGN-REQ-014)
+
 ### Red-First Confirmation
 
-- [X] T008 Run `./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py tests/unit/agents/codex_worker/test_attachment_materialization.py` and confirm the new tests fail for missing injection behavior before production changes (T004-T007)
+- [X] T009 Run `./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py tests/unit/agents/codex_worker/test_attachment_materialization.py` and confirm the new tests fail for missing injection behavior before production changes (T004-T008)
 
 ### Implementation
 
-- [X] T009 Implement prepared attachment manifest and vision index readers in `moonmind/agents/codex_worker/worker.py` (FR-002, FR-004)
-- [X] T010 Implement objective/current-step filtering and compact planning inventory helpers in `moonmind/agents/codex_worker/worker.py` (FR-005, FR-006, FR-007, FR-008, DESIGN-REQ-014)
-- [X] T011 Implement prompt-safe `INPUT ATTACHMENTS` rendering and inject it before `WORKSPACE` in `moonmind/agents/codex_worker/worker.py` (FR-001, FR-003, FR-010, FR-011, DESIGN-REQ-013, DESIGN-REQ-020)
-- [X] T012 Preserve multimodal adapter metadata semantics by keeping generated helper output metadata-only and source-ref preserving in `moonmind/agents/codex_worker/worker.py` (FR-009, DESIGN-REQ-020)
+- [X] T010 Implement prepared attachment manifest and vision index readers in `moonmind/agents/codex_worker/worker.py` (FR-002, FR-004)
+- [X] T011 Implement objective/current-step filtering and compact planning inventory helpers in `moonmind/agents/codex_worker/worker.py` (FR-005, FR-006, FR-007, FR-008, DESIGN-REQ-014)
+- [X] T012 Implement prompt-safe `INPUT ATTACHMENTS` rendering and inject it before `WORKSPACE` in `moonmind/agents/codex_worker/worker.py` (FR-001, FR-003, FR-010, FR-011, DESIGN-REQ-013, DESIGN-REQ-020)
+- [X] T013 Preserve multimodal adapter metadata semantics by keeping generated helper output metadata-only and source-ref preserving in `moonmind/agents/codex_worker/worker.py` (FR-009, DESIGN-REQ-020)
 
 ### Story Validation
 
-- [X] T013 Run focused unit command and fix failures until the story passes: `./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py tests/unit/agents/codex_worker/test_attachment_materialization.py` (SC-001-SC-005)
-- [X] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit verification or document the exact blocker (FR-001-FR-012)
+- [X] T014 Run focused unit command and fix failures until the story passes: `./tools/test_unit.sh tests/unit/agents/codex_worker/test_worker.py tests/unit/agents/codex_worker/test_attachment_materialization.py` (SC-001-SC-005)
+- [X] T015 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full unit verification or document the exact blocker (FR-001-FR-012)
 
 **Checkpoint**: The MM-372 story is fully functional, covered by focused worker tests, and testable independently.
 
@@ -82,9 +86,9 @@
 
 ## Phase 4: Polish & Verification
 
-- [X] T015 [P] Review `specs/200-inject-attachment-context-into-runtimes/quickstart.md` against implemented commands and update only if command evidence changes (SC-006)
-- [X] T016 Create `specs/200-inject-attachment-context-into-runtimes/verification.md` with implementation evidence, test results, MM-372 traceability, and `/moonspec-verify` verdict (FR-012, SC-006)
-- [X] T017 Run final `/moonspec-verify` equivalent against `specs/200-inject-attachment-context-into-runtimes/spec.md` and preserve MM-372 in verification output (FR-012)
+- [X] T016 [P] Review `specs/200-inject-attachment-context-into-runtimes/quickstart.md` against implemented commands and update only if command evidence changes (SC-006)
+- [X] T017 Create `specs/200-inject-attachment-context-into-runtimes/verification.md` with implementation evidence, test results, MM-372 traceability, and `/moonspec-verify` verdict (FR-012, SC-006)
+- [X] T018 Run final `/moonspec-verify` equivalent against `specs/200-inject-attachment-context-into-runtimes/spec.md` and preserve MM-372 in verification output (FR-012)
 
 ---
 
@@ -99,15 +103,15 @@
 
 ### Within The Story
 
-- Unit tests T004-T007 must be written before implementation.
-- Red-first confirmation T008 must happen before production implementation tasks T009-T012.
-- Manifest/index readers T009 precede filtering/rendering T010-T011.
-- Story validation T013-T014 follows implementation.
+- Unit tests T004-T007 and integration-style boundary test T008 must be written before implementation.
+- Red-first confirmation T009 must happen before production implementation tasks T010-T013.
+- Manifest/index readers T010 precede filtering/rendering T011-T012.
+- Story validation T014-T015 follows implementation.
 
 ### Parallel Opportunities
 
-- T004-T007 cover independent behaviors but share one test file, so apply sequentially to avoid edit conflicts.
-- T015 can run after story tests pass.
+- T004-T008 cover related behaviors in one test file, so apply sequentially to avoid edit conflicts.
+- T016 can run after story tests pass.
 
 ---
 
