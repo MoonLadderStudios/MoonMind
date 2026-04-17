@@ -44,6 +44,13 @@ export type TemporalTaskEditingExecutionContract = {
   actions?: TemporalTaskEditingActions;
 };
 
+export type TemporalTaskInputAttachmentRef = {
+  artifactId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+};
+
 export type TemporalSubmissionDraft = {
   runtime: string | null;
   providerProfile: string | null;
@@ -55,6 +62,7 @@ export type TemporalSubmissionDraft = {
   publishMode: string | null;
   taskInstructions: string;
   primarySkill: string | null;
+  inputAttachments: TemporalTaskInputAttachmentRef[];
   steps: Array<{
     id: string;
     title: string;
@@ -64,6 +72,7 @@ export type TemporalSubmissionDraft = {
     skillRequiredCapabilities: string[];
     templateStepId: string;
     templateInstructions: string;
+    inputAttachments?: TemporalTaskInputAttachmentRef[];
     templateAttachments?: Array<{
       artifactId: string;
       filename: string;
@@ -302,6 +311,64 @@ function taskInstructionsFrom(...tasks: Record<string, unknown>[]): string {
   return '';
 }
 
+function normalizeAttachmentRefs(value: unknown): TemporalTaskInputAttachmentRef[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => objectValue(entry))
+    .map((entry) => ({
+      artifactId: stringValue(entry.artifactId, entry.artifact_id),
+      filename: stringValue(entry.filename, entry.name),
+      contentType: stringValue(entry.contentType, entry.content_type),
+      sizeBytes: Math.max(0, Number(entry.sizeBytes ?? entry.size_bytes ?? 0) || 0),
+    }))
+    .filter((entry) => entry.artifactId && entry.filename && entry.contentType);
+}
+
+function compactAttachmentBindingKey(
+  ref: Record<string, unknown>,
+): string | null {
+  const artifactId = stringValue(ref.artifactId, ref.artifact_id);
+  if (!artifactId) {
+    return null;
+  }
+  const targetKind = stringValue(
+    ref.targetKind,
+    ref.target_kind,
+    ref.target,
+  ).toLowerCase();
+  if (targetKind === 'objective' || targetKind === 'task') {
+    return `objective:${artifactId}`;
+  }
+  if (targetKind === 'step') {
+    const stepId = stringValue(ref.stepId, ref.step_id);
+    if (stepId) {
+      return `step:id:${stepId}:${artifactId}`;
+    }
+    const stepOrdinalValue = Number(ref.stepOrdinal ?? ref.step_ordinal);
+    if (Number.isInteger(stepOrdinalValue) && stepOrdinalValue >= 0) {
+      return `step:ordinal:${stepOrdinalValue}:${artifactId}`;
+    }
+    return null;
+  }
+  return null;
+}
+
+function stepAttachmentBindingKeys(
+  step: TemporalSubmissionDraft['steps'][number],
+  stepOrdinal: number,
+): string[] {
+  const refs = step.inputAttachments || step.templateAttachments || [];
+  return refs.flatMap((ref) => {
+    const keys = [`step:ordinal:${stepOrdinal}:${ref.artifactId}`];
+    if (step.id) {
+      keys.push(`step:id:${step.id}:${ref.artifactId}`);
+    }
+    return keys;
+  });
+}
+
 function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number] | null {
   const step = objectValue(value);
   if (Object.keys(step).length === 0) {
@@ -318,6 +385,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id.startsWith('tpl:') ? id : '',
   );
   const storyOutput = firstObjectValue(step.storyOutput, step.story_output);
+  const inputAttachments = normalizeAttachmentRefs(step.inputAttachments);
   const templateAttachments = attachmentRefsValue(
     step.templateAttachments,
     step.template_attachments,
@@ -341,6 +409,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
       step.template_instructions,
       templateStepId ? instructions : '',
     ),
+    ...(inputAttachments.length > 0 ? { inputAttachments } : {}),
     ...(templateAttachments.length > 0 ? { templateAttachments } : {}),
     ...(Object.keys(storyOutput).length > 0 ? { storyOutput } : {}),
   };
@@ -354,6 +423,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.skillRequiredCapabilities.length > 0 ||
     result.templateStepId ||
     result.templateInstructions ||
+    inputAttachments.length > 0 ||
     templateAttachments.length > 0 ||
     Object.keys(storyOutput).length > 0;
   return hasContent ? result : null;
@@ -379,6 +449,19 @@ function selectDraftSteps(
   taskSteps: TemporalSubmissionDraft['steps'],
   artifactTaskSteps: TemporalSubmissionDraft['steps'],
 ): TemporalSubmissionDraft['steps'] {
+  const artifactHasAttachments = artifactTaskSteps.some(
+    (step) =>
+      (step.inputAttachments || []).length > 0 ||
+      (step.templateAttachments || []).length > 0,
+  );
+  const taskHasAttachments = taskSteps.some(
+    (step) =>
+      (step.inputAttachments || []).length > 0 ||
+      (step.templateAttachments || []).length > 0,
+  );
+  if (artifactHasAttachments && !taskHasAttachments) {
+    return artifactTaskSteps;
+  }
   if (artifactTaskSteps.length > taskSteps.length) {
     return artifactTaskSteps;
   }
@@ -427,6 +510,39 @@ function normalizeAppliedTemplates(
         : [],
     }))
     .filter((entry) => entry.slug);
+}
+
+function assertSnapshotAttachmentBindings(
+  artifactParams: Record<string, unknown>,
+  artifactTask: Record<string, unknown>,
+  artifactTaskSteps: TemporalSubmissionDraft['steps'],
+): void {
+  const compactRefs = Array.isArray(artifactParams.attachmentRefs)
+    ? artifactParams.attachmentRefs.map((entry) => objectValue(entry))
+    : [];
+  if (compactRefs.length === 0) {
+    return;
+  }
+  const compactKeys = compactRefs.map(compactAttachmentBindingKey);
+  if (compactKeys.some((key) => key === null)) {
+    throw new Error(
+      'Attachment bindings could not be reconstructed from this execution.',
+    );
+  }
+  const boundKeys = new Set([
+    ...normalizeAttachmentRefs(artifactTask.inputAttachments).map(
+      (ref) => `objective:${ref.artifactId}`,
+    ),
+    ...artifactTaskSteps.flatMap(stepAttachmentBindingKeys),
+  ]);
+  const unbound = compactKeys.filter(
+    (key): key is string => key !== null && !boundKeys.has(key),
+  );
+  if (unbound.length > 0) {
+    throw new Error(
+      'Attachment bindings could not be reconstructed from this execution.',
+    );
+  }
 }
 
 function snapshotDraftTask(
@@ -509,6 +625,11 @@ export function buildTemporalSubmissionDraftFromExecution(
   const artifactSkill = objectValue(artifactTask.skill);
   const taskSteps = draftStepsFromTask(task);
   const artifactTaskSteps = draftStepsFromTask(artifactTask);
+  assertSnapshotAttachmentBindings(
+    artifactParams,
+    artifactTask,
+    artifactTaskSteps,
+  );
 
   const artifactRepository = stringValue(artifactParams.repository);
   const taskSkills = skillSelectorNames(task.skills);
@@ -583,7 +704,10 @@ export function buildTemporalSubmissionDraftFromExecution(
       publish.mode,
       artifactPublish.mode,
     ),
-    taskInstructions: taskInstructionsFrom(task, artifactTask),
+    taskInstructions:
+      Object.keys(snapshotDraft).length > 0
+        ? taskInstructionsFrom(artifactTask, task)
+        : taskInstructionsFrom(task, artifactTask),
     primarySkill: nullableStringValue(
       execution.targetSkill,
       tool.name,
@@ -596,6 +720,11 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactSkill.name,
       artifactTaskSkills[0],
     ),
+    inputAttachments: (() => {
+      const taskAttachments = normalizeAttachmentRefs(task.inputAttachments);
+      const artifactAttachments = normalizeAttachmentRefs(artifactTask.inputAttachments);
+      return taskAttachments.length > 0 ? taskAttachments : artifactAttachments;
+    })(),
     steps: selectDraftSteps(taskSteps, artifactTaskSteps),
     appliedTemplates: normalizeAppliedTemplates(
       task.appliedStepTemplates || artifactTask.appliedStepTemplates,
