@@ -33,6 +33,7 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.activity_runtime import TemporalProposalActivities
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
+from moonmind.workflows.temporal.activity_runtime import TemporalManifestActivities
 from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.workers import (
     build_all_worker_topologies,
@@ -145,6 +146,9 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
                 fleet=ARTIFACTS_FLEET,
                 catalog=catalog,
                 artifact_activities=TemporalArtifactActivities(service),
+                manifest_activities=TemporalManifestActivities(
+                    artifact_service=service,
+                ),
                 plan_activities=TemporalPlanActivities(artifact_service=service),
                 skill_activities=TemporalSkillActivities(
                     dispatcher=SkillActivityDispatcher()
@@ -168,6 +172,8 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
             assert "oauth_session.update_status" in activity_types
             assert "oauth_session.mark_failed" in activity_types
             assert "oauth_session.cleanup_stale" in activity_types
+            assert "manifest.compile" in activity_types
+            assert "manifest.write_summary" in activity_types
             assert {binding.task_queue for binding in bindings} == {
                 settings.temporal.activity_artifacts_task_queue
             }

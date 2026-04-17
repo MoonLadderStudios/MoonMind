@@ -1,6 +1,7 @@
 import pytest
 from temporalio import exceptions
 
+from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
 from moonmind.workflows.temporal.workflows import manifest_ingest as manifest_module
 from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow,
@@ -13,6 +14,7 @@ async def test_manifest_ingest_workflow_returns_compiled_refs(
 ) -> None:
     workflow = MoonMindManifestIngestWorkflow()
     calls: list[tuple[str, dict[str, object]]] = []
+    task_queues: list[str] = []
 
     async def fake_execute_activity(
         activity_type: str,
@@ -20,6 +22,7 @@ async def test_manifest_ingest_workflow_returns_compiled_refs(
         **_kwargs: object,
     ) -> object:
         calls.append((activity_type, payload))
+        task_queues.append(str(_kwargs.get("task_queue") or ""))
         if activity_type == "manifest.compile":
             return {"plan_ref": "art_plan_1", "manifest_digest": "sha256:digest"}
         if activity_type == "manifest.write_summary":
@@ -42,6 +45,7 @@ async def test_manifest_ingest_workflow_returns_compiled_refs(
     }
     assert calls[0][0] == "manifest.compile"
     assert calls[1][0] == "manifest.write_summary"
+    assert task_queues == [ARTIFACTS_TASK_QUEUE, ARTIFACTS_TASK_QUEUE]
     assert "nodes" not in calls[1][1]
     assert calls[1][1]["plan_ref"] == "art_plan_1"
 
