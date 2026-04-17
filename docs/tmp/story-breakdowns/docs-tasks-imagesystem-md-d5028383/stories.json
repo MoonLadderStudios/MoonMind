@@ -1,0 +1,819 @@
+{
+  "source": {
+    "title": "Task Image Input System",
+    "path": "docs/Tasks/ImageSystem.md",
+    "referencePath": "docs/Tasks/ImageSystem.md",
+    "originalDesignText": "# Task Image Input System\n\nStatus: Proposed\nOwners: MoonMind Engineering\nLast updated: 2026-04-16\n\n## 1. Purpose\n\nThis document defines the canonical desired-state contract for image inputs in MoonMind task executions.\n\nThe system exists to let users:\n\n- attach images to the task objective target or to individual steps from the Create page\n- store uploaded bytes securely in the Artifact Store\n- submit lightweight artifact references into `MoonMind.Run`\n- preserve attachment targeting through create, edit, and rerun flows\n- generate deterministic image-derived context for text-first runtimes\n- materialize raw image bytes into the workspace when a runtime or step requires direct file access\n- preview and download task images through MoonMind-owned APIs\n\nThis document is declarative. It defines the target system contract. It is not a rollout log.\n\n---\n\n## 2. Related docs\n\n- `docs/UI/CreatePage.md`\n- `docs/Tasks/TaskArchitecture.md`\n- `docs/Temporal/TemporalArchitecture.md`\n- `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`\n- `docs/Temporal/ArtifactPresentationContract.md`\n\n---\n\n## 3. Product stance and terminology\n\n### 3.1 Product stance\n\nMoonMind is artifact-first.\n\nRules:\n\n- uploaded image bytes must not be embedded in Temporal histories\n- uploaded image bytes must not be embedded directly in task instruction text\n- the control plane submits structured attachment references, not raw binaries\n- derived image summaries are secondary artifacts; they do not replace the source image refs\n- attachment targeting is explicit and durable\n\n### 3.2 Canonical terminology\n\nThe canonical control-plane field name is `inputAttachments`.\n\nThe default Create-page attachment policy currently authorizes image MIME types, so the product may label the UI as `Images` while still using the generic `inputAttachments` contract.\n\nCanonical target kinds:\n\n- **objective-scoped attachment**: a ref submitted through `task.inputAttachments`\n- **step-scoped attachment**: a ref submitted through `task.steps[n].inputAttachments`\n\nCanonical reference shape:\n\n```ts\ninterface TaskInputAttachmentRef {\n  artifactId: string;\n  filename: string;\n  contentType: string;\n  sizeBytes: number;\n}\n```\n\nCanonical prepared-manifest shape:\n\n```ts\ninterface AttachmentManifestEntry {\n  artifactId: string;\n  filename: string;\n  contentType: string;\n  sizeBytes: number;\n  targetKind: \"objective\" | \"step\";\n  stepRef?: string;\n  stepOrdinal?: number;\n  workspacePath: string;\n  visionContextPath?: string;\n  sourceArtifactPath?: string;\n}\n```\n\nRules:\n\n- target meaning comes from the field that contains the ref\n- attachment identity does not depend on filename conventions\n- image context generation must preserve target meaning\n\n---\n\n## 4. End-to-end desired-state flow\n\n```mermaid\nsequenceDiagram\n    participant U as User\n    participant C as Create Page\n    participant A as Artifact API\n    participant E as Executions API\n    participant W as MoonMind.Run\n    participant P as Prepare / Artifact Activities\n    participant V as Vision Activity\n    participant R as Runtime Step Executor\n\n    U->>C: Select images on objective target or step target\n    C->>A: Create artifact upload(s)\n    C->>A: Upload image bytes\n    C->>A: Complete upload(s)\n    C->>E: Submit task-shaped request with inputAttachments refs\n    E->>E: Validate policy + persist task input snapshot\n    E->>W: Start or update MoonMind.Run with refs\n    W->>P: Download and materialize image inputs\n    P->>P: Write attachments manifest\n    W->>V: Generate target-aware image context\n    V->>P: Write context artifacts\n    W->>R: Execute planning or step runtime with attachment context\n```\n\nRules:\n\n- upload completes before create, update, or rerun submission is accepted\n- the execution API persists the authoritative snapshot of attachment targeting\n- workflow prepare is responsible for deterministic local materialization and manifest generation\n- runtime adapters consume structured refs and derived context, not browser-local state\n\n---\n\n## 5. Control-plane contract\n\n### 5.1 Canonical submission path\n\nThe canonical submit path is task-shaped execution submission through `/api/executions`.\n\nRules:\n\n- image inputs are submitted through the task-shaped Temporal execution API\n- legacy queue-specific attachment submission routes are not the desired-state contract\n- all browser upload and download flows remain behind MoonMind-owned API endpoints\n\n### 5.2 Canonical task contract\n\nRepresentative task-shaped payload:\n\n```json\n{\n  \"type\": \"task\",\n  \"payload\": {\n    \"repository\": \"owner/repo\",\n    \"task\": {\n      \"instructions\": \"Resolved task objective text.\",\n      \"inputAttachments\": [\n        {\n          \"artifactId\": \"art_objective_123\",\n          \"filename\": \"overview.png\",\n          \"contentType\": \"image/png\",\n          \"sizeBytes\": 48213\n        }\n      ],\n      \"steps\": [\n        {\n          \"id\": \"step-1\",\n          \"instructions\": \"Inspect the screenshot and identify the issue.\",\n          \"inputAttachments\": [\n            {\n              \"artifactId\": \"art_step1_456\",\n              \"filename\": \"bug.png\",\n              \"contentType\": \"image/png\",\n              \"sizeBytes\": 72109\n            }\n          ]\n        }\n      ]\n    }\n  }\n}\n```\n\nRules:\n\n- `task.inputAttachments` is the objective-scoped attachment target\n- `task.steps[n].inputAttachments` is the step-scoped attachment target\n- the API must preserve target scoping through create, edit, and rerun\n- attachment refs are normalized before the workflow starts\n\n### 5.3 Authoritative snapshot contract\n\nThe original task input snapshot is the source of truth for edit and rerun reconstruction.\n\nRules:\n\n- the snapshot must preserve:\n  - text fields\n  - target attachment refs\n  - step identity and order\n  - runtime, publish, and repository settings\n  - applied preset metadata\n- attachment target binding is reconstructed from the snapshot, not inferred from artifact links alone\n- the system must fail explicitly rather than silently discarding attachment bindings during reconstruction\n\n---\n\n## 6. Artifact model and storage contract\n\nImage inputs are first-class artifacts.\n\nRules:\n\n- image bytes are stored in the Artifact Store\n- each submitted image is linked to the execution with an execution-owned artifact link\n- artifact link metadata may include target diagnostics, but execution payload and snapshot remain the authoritative source of target binding\n- worker-side uploads must not overwrite or impersonate input attachments in reserved namespaces\n\nCanonical properties:\n\n- supported content types come from attachment policy, with image types as the default desired-state allowlist\n- `image/svg+xml` remains forbidden\n- integrity is enforced at artifact completion time\n- retention follows the execution’s artifact retention policy unless overridden by a more specific policy\n\nRecommended artifact metadata keys:\n\n- `source: \"task-create\"`\n- `attachmentKind: \"input\"`\n- `targetKind: \"objective\" | \"step\"`\n- `stepRef`\n- `stepOrdinal`\n- `originalFilename`\n\nRules:\n\n- metadata is helpful for observability but not the source of truth for binding\n- target binding must still be derivable from the task snapshot even if metadata is incomplete\n\n---\n\n## 7. Validation and policy contract\n\nAttachment policy is server-defined and browser-enforced, then revalidated server-side.\n\nRules:\n\n- allowed content types are checked before upload and again when the API finalizes the artifact\n- signature sniffing must confirm the content is a supported image type\n- max count, per-file size, and total size limits are enforced\n- uploads with invalid or incomplete content are rejected before execution start\n- caption hints or other future fields that are not yet supported must fail fast rather than being silently ignored\n\nRepresentative policy shape:\n\n```json\n{\n  \"enabled\": true,\n  \"maxCount\": 10,\n  \"maxBytes\": 10485760,\n  \"totalBytes\": 26214400,\n  \"allowedContentTypes\": [\n    \"image/png\",\n    \"image/jpeg\",\n    \"image/webp\"\n  ]\n}\n```\n\nRules:\n\n- if the policy is disabled, image input entry points must be hidden and no image refs may be accepted from the Create page\n- if the policy is enabled but a runtime later cannot consume images, the create path must fail explicitly rather than silently dropping them\n\n---\n\n## 8. Prepare-time materialization contract\n\nWorkflow prepare owns deterministic local file materialization.\n\nRules:\n\n- prepare downloads all declared input attachments before the relevant runtime or step executes\n- prepare writes a canonical manifest at:\n\n```text\n.moonmind/attachments_manifest.json\n```\n\n- prepare writes raw files into stable target-aware locations:\n\n```text\n.moonmind/inputs/objective/<artifactId>-<sanitized-filename>\n.moonmind/inputs/steps/<stepRef>/<artifactId>-<sanitized-filename>\n```\n\n- target-aware workspace paths must be deterministic\n- the workspace path for one target must not depend on any unrelated target’s attachment ordering\n\nRules:\n\n- objective-scoped attachments are materialized under `.moonmind/inputs/objective/`\n- step-scoped attachments are materialized under `.moonmind/inputs/steps/<stepRef>/`\n- if a step has no explicit `id`, the control plane or prepare layer must assign a stable step reference for manifest and path purposes\n- partial materialization is a failure, not a best-effort success\n\n---\n\n## 9. Vision context generation contract\n\nImage-derived text context is generated as a deterministic secondary artifact.\n\nRules:\n\n- context generation is target-aware\n- context generation may be enabled or disabled by runtime configuration\n- when disabled, manifest generation and raw file materialization still occur\n- generated text must remain traceable back to the source image artifact refs\n\nDesired-state output paths:\n\n```text\n.moonmind/vision/task/image_context.md\n.moonmind/vision/steps/<stepRef>/image_context.md\n.moonmind/vision/image_context_index.json\n```\n\nRules:\n\n- objective-scoped images produce objective-scoped context\n- step-scoped images produce step-scoped context\n- the index artifact summarizes what context exists for which target\n- generated context may include OCR, captions, and safety notes, but must remain deterministic and auditable for a given source image set and model configuration\n\n---\n\n## 10. Prompt and runtime injection contract\n\n### 10.1 Text-first runtimes\n\nText-first runtimes consume image context through an injected `INPUT ATTACHMENTS` block.\n\nRules:\n\n- the `INPUT ATTACHMENTS` block appears before `WORKSPACE`\n- the block references:\n  - relevant workspace paths\n  - relevant manifest entries\n  - relevant generated context paths\n- step execution receives only:\n  - objective-scoped attachment context\n  - the current step’s attachment context\n- non-current step attachment context is not injected into a step unless the runtime or planner explicitly requests cross-step access\n\n### 10.2 Planning and task-level reasoning\n\nRules:\n\n- task-level planning receives objective-scoped attachment context\n- planning may also receive a compact inventory of step-scoped attachments so the planner understands later-step inputs without flattening them into the current step context\n- planning does not need full raw bytes for attachments that belong to later steps unless a planner-specific runtime explicitly requires them\n\n### 10.3 Multimodal runtimes\n\nRules:\n\n- multimodal adapters may choose to consume raw image refs directly\n- this does not change the control-plane contract\n- the same artifact refs, target bindings, and prepare-time manifest remain the source of truth\n- direct provider payload construction is a runtime-adapter concern, not a Create-page concern\n\n---\n\n## 11. UI preview and detail contract\n\nTask detail, edit, and rerun surfaces may preview and download image inputs.\n\nRules:\n\n- previews and downloads go through MoonMind-owned API endpoints\n- previews are organized by target:\n  - objective-scoped\n  - step-scoped\n- the UI must not infer target binding from filenames\n- preview failure must not remove access to metadata or download actions\n- edit and rerun surfaces must distinguish persisted attachments from new local files not yet uploaded\n\n---\n\n## 12. Authorization and security contract\n\nSecurity boundaries are artifact-first and execution-owned.\n\nRules:\n\n- end-user preview and download are governed by execution ownership and view permissions\n- the browser receives short-lived presigned download URLs or MoonMind proxy responses; it does not receive long-lived object-store credentials\n- worker-side access uses service credentials and execution authorization, not browser credentials\n- the system must not trust text extracted from images as executable instructions unless the authored task explicitly chooses to use it\n- images remain untrusted user input\n\nRules:\n\n- no direct browser access to object storage\n- no direct browser access to Jira or provider-specific file endpoints\n- no scriptable image types\n- no hidden compatibility transforms that silently rewrite attachment refs or retarget them to another step\n\n---\n\n## 13. Edit and rerun durability contract\n\nRules:\n\n- create, edit, and rerun all use the same authoritative attachment contract\n- unchanged attachment refs survive edit and rerun unchanged\n- removing an attachment is explicit\n- adding a new attachment is explicit\n- an attachment must never disappear merely because the browser reconstructed a text-only draft\n- historical source artifacts may continue to exist under retention policy even after the edited draft no longer references them\n\n---\n\n## 14. Observability and diagnostics contract\n\nThe image input system must expose enough evidence to debug failures without reading raw workflow history heuristics.\n\nRecommended event classes:\n\n- attachment upload started\n- attachment upload completed\n- attachment validation failed\n- prepare download started\n- prepare download completed\n- prepare download failed\n- image context generation started\n- image context generation completed\n- image context generation failed\n\nRules:\n\n- attachment manifest path and generated context paths should be discoverable from task diagnostics\n- task detail and debugging surfaces should expose target-aware attachment metadata\n- step-level failures must identify the affected step target\n\n---\n\n## 15. Non-goals\n\nThe desired-state image system does not require:\n\n- embedding raw image bytes in execution create payloads\n- embedding images into instruction markdown as data URLs\n- implicit attachment sharing across steps\n- live Jira sync\n- generic non-image attachment types by default\n- provider-specific multimodal message formats as the control-plane contract\n\n---\n\n## 16. Summary\n\nThe desired-state image system is simple in principle:\n\n1. the Create page binds images to an explicit target\n2. MoonMind stores those images as artifacts\n3. the execution API preserves the binding in the task contract and authoritative snapshot\n4. workflow prepare materializes the files and generates target-aware image context\n5. runtimes consume only the context that belongs to the objective or step they are executing\n\nThat is the canonical contract.\n"
+  },
+  "extractedAt": "2026-04-17T01:29:41Z",
+  "outputMode": "jira",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "designSummary": "The Task Image Input System defines an artifact-first, target-aware contract for image inputs across task creation, execution, preparation, runtime injection, preview, security, durability, and diagnostics. Users bind images to either the task objective or individual steps; MoonMind stores bytes in the Artifact Store, submits only structured refs through /api/executions, preserves target bindings in authoritative snapshots, materializes deterministic workspace files and manifests, optionally generates auditable vision context, and exposes previews/downloads through MoonMind-owned APIs. The design explicitly excludes raw image payloads in execution requests, instruction data URLs, implicit cross-step sharing, live Jira sync, generic non-image attachments by default, and provider-specific multimodal formats as control-plane contracts.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Artifact-first image input purpose",
+      "type": "requirement",
+      "source_section": "1. Purpose",
+      "explanation": "Users can attach images to task objectives or individual steps, store bytes securely as artifacts, submit lightweight refs into MoonMind.Run, preserve targeting through create/edit/rerun, generate deterministic context, materialize raw files when needed, and preview/download through MoonMind-owned APIs."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Structured attachment terminology and reference shapes",
+      "type": "state-model",
+      "source_section": "3. Product stance and terminology",
+      "explanation": "The canonical field is inputAttachments; objective and step attachment scopes have explicit meanings; TaskInputAttachmentRef and AttachmentManifestEntry define the core contract and target meaning comes from containing fields, not filenames."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "No raw binaries in histories or instruction text",
+      "type": "constraint",
+      "source_section": "3.1 Product stance",
+      "explanation": "Uploaded bytes must not be embedded in Temporal histories or task instruction text; control-plane submissions carry structured refs and derived summaries remain secondary artifacts."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "End-to-end upload-to-runtime flow",
+      "type": "integration",
+      "source_section": "4. End-to-end desired-state flow",
+      "explanation": "Upload completion precedes create/update/rerun acceptance; the execution API persists authoritative targeting; workflow prepare materializes files and manifests; runtime adapters consume refs and derived context."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Canonical task-shaped submission path",
+      "type": "integration",
+      "source_section": "5. Control-plane contract",
+      "explanation": "Image inputs are submitted through /api/executions using the task-shaped Temporal execution API; legacy queue-specific routes are not desired state and browser upload/download remain behind MoonMind-owned endpoints."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Objective and step attachment scoping",
+      "type": "state-model",
+      "source_section": "5.2 Canonical task contract",
+      "explanation": "task.inputAttachments are objective-scoped; task.steps[n].inputAttachments are step-scoped; the API preserves target scoping through create, edit, and rerun and normalizes refs before workflow start."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Authoritative task input snapshot",
+      "type": "durability",
+      "source_section": "5.3 Authoritative snapshot contract",
+      "explanation": "The original task input snapshot preserves text, target refs, step identity/order, runtime, publish, repository settings, and preset metadata; reconstruction uses the snapshot and fails explicitly if bindings would be discarded."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "First-class artifact storage and metadata",
+      "type": "artifact",
+      "source_section": "6. Artifact model and storage contract",
+      "explanation": "Image bytes are stored in the Artifact Store, linked to executions, retain optional target diagnostic metadata, and follow artifact retention policy; payload and snapshot remain source of truth for binding."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Attachment policy validation",
+      "type": "security",
+      "source_section": "7. Validation and policy contract",
+      "explanation": "Policy is server-defined and browser-enforced, then revalidated server-side with allowed content types, signature sniffing, count and size limits, artifact completion integrity, invalid upload rejection, and fail-fast handling for unsupported future fields."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Policy-disabled and unsupported-runtime behavior",
+      "type": "constraint",
+      "source_section": "7. Validation and policy contract",
+      "explanation": "When policy is disabled, Create-page image entry points are hidden and refs are rejected; if enabled but the selected runtime cannot consume images, create fails explicitly rather than dropping attachments."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Deterministic prepare-time materialization",
+      "type": "artifact",
+      "source_section": "8. Prepare-time materialization contract",
+      "explanation": "Prepare downloads all declared attachments, writes .moonmind/attachments_manifest.json, materializes objective and step files under stable target-aware paths, assigns stable step refs when needed, and treats partial materialization as failure."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Target-aware vision context generation",
+      "type": "artifact",
+      "source_section": "9. Vision context generation contract",
+      "explanation": "Image-derived text context is deterministic, target-aware, configurable, traceable to source image refs, emits objective/step context files plus an index, and leaves manifest and raw materialization intact when disabled."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Text-first runtime injection rules",
+      "type": "integration",
+      "source_section": "10.1 Text-first runtimes",
+      "explanation": "Text-first runtimes receive an INPUT ATTACHMENTS block before WORKSPACE with relevant workspace paths, manifest entries, and context paths; step execution receives objective plus current-step context only unless cross-step access is explicitly requested."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Planning and multimodal runtime contract",
+      "type": "integration",
+      "source_section": "10.2 Planning and task-level reasoning; 10.3 Multimodal runtimes",
+      "explanation": "Planning gets objective context and a compact inventory of later step attachments; multimodal adapters may consume raw refs directly without changing the control-plane contract or source of truth."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Target-aware preview, download, edit, and rerun UI",
+      "type": "requirement",
+      "source_section": "11. UI preview and detail contract; 13. Edit and rerun durability contract",
+      "explanation": "Task detail, edit, and rerun surfaces preview/download through MoonMind APIs, organize images by target, avoid filename inference, retain metadata/actions on preview failure, and distinguish persisted refs from new local files."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Execution-owned authorization boundaries",
+      "type": "security",
+      "source_section": "12. Authorization and security contract",
+      "explanation": "Preview/download are governed by execution ownership and permissions; browsers receive short-lived URLs or proxy responses, not object-store credentials; worker access uses service credentials and execution authorization."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Untrusted image and extracted-text handling",
+      "type": "security",
+      "source_section": "12. Authorization and security contract",
+      "explanation": "Images and extracted text remain untrusted; extracted text is not executable instructions unless explicitly authored; scriptable image types, direct browser object/Jira/provider file access, and hidden compatibility retargeting transforms are forbidden."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Edit and rerun attachment durability",
+      "type": "durability",
+      "source_section": "13. Edit and rerun durability contract",
+      "explanation": "Create, edit, and rerun use the same attachment contract; unchanged refs survive, removing or adding attachments is explicit, browser text-only reconstruction cannot drop attachments, and old artifacts may remain under retention."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Observable diagnostics and event evidence",
+      "type": "observability",
+      "source_section": "14. Observability and diagnostics contract",
+      "explanation": "The system emits upload, validation, prepare, and context-generation events; diagnostics expose manifest/context paths and target-aware metadata; step-level failures identify the affected step target."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Explicit non-goals",
+      "type": "non-goal",
+      "source_section": "15. Non-goals",
+      "explanation": "The design excludes raw image bytes in create payloads, data URLs in instruction markdown, implicit step sharing, live Jira sync, generic non-image attachments by default, and provider-specific multimodal message formats as the control-plane contract."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Create targeted image attachment submission",
+      "shortName": "targeted-image-submission",
+      "description": "As a task author, I need the Create page and task-shaped execution submission to bind images to the objective or a specific step using structured inputAttachments refs so MoonMind.Run receives explicit lightweight references instead of raw image data.",
+      "sourceReference": {
+        "path": "docs/Tasks/ImageSystem.md",
+        "title": "Task Image Input System",
+        "sections": [
+          "1. Purpose",
+          "3. Product stance and terminology",
+          "4. End-to-end desired-state flow",
+          "5. Control-plane contract",
+          "15. Non-goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "scope": [
+        "Create-page objective and step image target selection",
+        "Task-shaped /api/executions payloads using inputAttachments",
+        "TaskInputAttachmentRef normalization before workflow start",
+        "Rejection of legacy/raw-binary/data-URL submission patterns as desired-state behavior"
+      ],
+      "outOfScope": [
+        "Artifact byte validation and retention",
+        "Edit/rerun reconstruction",
+        "Runtime prompt injection"
+      ],
+      "independentTest": "Submit a task-shaped payload containing one objective image ref and one step image ref, then assert the API starts/updates the run with normalized refs under the same targets and no raw binary or data URL content in the workflow input.",
+      "acceptanceCriteria": [
+        "Create flow supports image refs on the task objective and on individual steps.",
+        "Submitted payloads use task.inputAttachments and task.steps[n].inputAttachments as the only canonical target fields.",
+        "Attachment identity and target meaning are not inferred from filenames.",
+        "The workflow input carries artifact refs and compact metadata, not embedded image bytes or image data URLs.",
+        "Legacy queue-specific attachment routes are not treated as the desired-state submission contract."
+      ],
+      "requirements": [
+        "Use inputAttachments as the canonical control-plane field name.",
+        "Preserve objective-scoped and step-scoped target meaning from the containing field.",
+        "Normalize TaskInputAttachmentRef objects before workflow start.",
+        "Keep all browser upload and download flows behind MoonMind-owned API endpoints.",
+        "Represent explicit image-system non-goals in validation or documentation for this contract surface."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Owns the author-facing ability to attach images to objective and step targets and submit refs into MoonMind.Run."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Owns canonical inputAttachments terminology and TaskInputAttachmentRef shape for submission."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Owns the no raw binaries/no instruction-text embedding rule at submission time."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Owns the front half of the end-to-end flow through execution submission and workflow start."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "Owns the canonical /api/executions task-shaped submission path."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "Owns objective and step scoping in task-shaped payloads."
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "ownership": "Owns non-goals that directly affect submission shape: no raw bytes, no data URLs, no implicit step sharing, and no provider-specific control-plane format."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing Artifact API upload primitives can provide completed artifact refs before task submission."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Enforce image artifact storage and policy",
+      "shortName": "image-artifact-policy",
+      "description": "As an operator, I need uploaded image bytes stored as first-class execution artifacts and governed by server-defined attachment policy so invalid or unsupported image inputs never start an execution.",
+      "sourceReference": {
+        "path": "docs/Tasks/ImageSystem.md",
+        "title": "Task Image Input System",
+        "sections": [
+          "6. Artifact model and storage contract",
+          "7. Validation and policy contract",
+          "12. Authorization and security contract"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "scope": [
+        "Artifact Store persistence for uploaded image bytes",
+        "Execution-owned artifact links and recommended metadata",
+        "Policy allowlist and limits with browser enforcement plus server revalidation",
+        "Completion-time integrity and signature checks",
+        "Fail-fast behavior for disabled policy, unsupported fields, invalid content, and unsupported runtimes"
+      ],
+      "outOfScope": [
+        "Prompt injection format",
+        "Task detail preview UI",
+        "Vision summarization"
+      ],
+      "independentTest": "Attempt uploads for allowed PNG/JPEG/WebP files, forbidden SVG, mismatched MIME/signature content, over-limit files, disabled policy, and a runtime-declared unsupported image case; assert only valid completed artifacts can be referenced by an execution.",
+      "acceptanceCriteria": [
+        "Image bytes are stored in the Artifact Store and linked to the execution as input attachments.",
+        "Allowed content types default to image/png, image/jpeg, and image/webp; image/svg+xml is rejected.",
+        "Browser checks are repeated server-side before artifact completion or execution start.",
+        "Max count, per-file size, total size, and integrity constraints are enforced.",
+        "Worker-side uploads cannot overwrite or impersonate reserved input attachment namespaces.",
+        "Disabled policy hides Create-page entry points and rejects submitted image refs.",
+        "Unsupported future fields and incompatible runtimes fail explicitly rather than being ignored or dropped."
+      ],
+      "requirements": [
+        "Persist uploaded image bytes as artifacts rather than execution payload data.",
+        "Attach execution-owned artifact links for submitted images.",
+        "Treat artifact metadata as observability, not as binding source of truth.",
+        "Revalidate content type, signature, counts, sizes, and completion integrity server-side.",
+        "Reject scriptable image content types and other untrusted image risks."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "Owns first-class artifact storage, execution links, retention, metadata, and reserved namespace protection."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "Owns server-defined attachment policy, MIME/signature validation, counts, sizes, integrity, and fail-fast future fields."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Owns disabled-policy and unsupported-runtime rejection semantics."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Owns the scriptable-image prohibition at validation time."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Preserve attachment bindings in snapshots and reruns",
+      "shortName": "attachment-snapshot-durability",
+      "description": "As a user editing or rerunning a task, I need MoonMind to reconstruct attachments from the authoritative task input snapshot so unchanged bindings survive and changes are always explicit.",
+      "sourceReference": {
+        "path": "docs/Tasks/ImageSystem.md",
+        "title": "Task Image Input System",
+        "sections": [
+          "5.3 Authoritative snapshot contract",
+          "11. UI preview and detail contract",
+          "13. Edit and rerun durability contract"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "scope": [
+        "Authoritative task input snapshot fields",
+        "Reconstruction of objective and step attachment bindings from snapshot data",
+        "Edit and rerun preservation of unchanged refs",
+        "Explicit add/remove semantics",
+        "Failure when reconstruction would discard bindings"
+      ],
+      "outOfScope": [
+        "Initial artifact upload policy",
+        "Prepare-time file download",
+        "Preview byte authorization"
+      ],
+      "independentTest": "Create a task with objective and step attachments, edit text only, rerun it, remove one attachment, and add one new attachment; assert unchanged refs and target bindings survive exactly while explicit changes are reflected.",
+      "acceptanceCriteria": [
+        "The snapshot preserves text fields, target attachment refs, step identity/order, runtime, publish, repository settings, and applied preset metadata.",
+        "Attachment target binding is reconstructed from the snapshot, not inferred from artifact links or filenames.",
+        "Unchanged attachment refs survive edit and rerun unchanged.",
+        "Removing an attachment and adding a new attachment are explicit user actions.",
+        "A text-only draft reconstruction cannot silently drop attachments.",
+        "The system fails explicitly if attachment bindings cannot be reconstructed.",
+        "Historical artifacts may remain according to retention even after an edited draft stops referencing them."
+      ],
+      "requirements": [
+        "Persist target attachment refs in the task input snapshot.",
+        "Use the same attachment contract for create, edit, and rerun.",
+        "Keep step identity and ordering stable enough to bind step-scoped attachments.",
+        "Distinguish persisted attachment refs from new local files in edit/rerun flows."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Owns the authoritative snapshot fields and fail-explicit reconstruction requirement."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Owns the edit/rerun distinction between persisted attachments and new local files."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Owns durable unchanged refs, explicit add/remove actions, no browser-induced disappearance, and historical retention semantics."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Materialize attachment manifest and workspace files",
+      "shortName": "prepare-attachment-materialization",
+      "description": "As a runtime executor, I need workflow prepare to deterministically download declared input attachments, write a canonical manifest, and place files in target-aware workspace paths before the relevant runtime or step executes.",
+      "sourceReference": {
+        "path": "docs/Tasks/ImageSystem.md",
+        "title": "Task Image Input System",
+        "sections": [
+          "3.2 Canonical terminology",
+          "4. End-to-end desired-state flow",
+          "8. Prepare-time materialization contract"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "scope": [
+        "AttachmentManifestEntry generation",
+        "Download of all declared input attachments before relevant execution",
+        "Canonical .moonmind/attachments_manifest.json output",
+        "Stable objective and step workspace paths",
+        "Stable step reference assignment when step ids are absent",
+        "Partial materialization failure semantics"
+      ],
+      "outOfScope": [
+        "Vision context generation",
+        "Provider-specific multimodal payload construction",
+        "Task detail preview UI"
+      ],
+      "independentTest": "Run prepare against a task with multiple objective and step attachments, including a step with no explicit id, and assert manifest entries, stable paths, target fields, step refs, and failure on a simulated missing download.",
+      "acceptanceCriteria": [
+        "Prepare downloads all declared input attachments before the relevant runtime or step executes.",
+        "Prepare writes .moonmind/attachments_manifest.json using the canonical manifest entry shape.",
+        "Objective images are materialized under .moonmind/inputs/objective/.",
+        "Step images are materialized under .moonmind/inputs/steps/<stepRef>/.",
+        "Workspace paths are deterministic and target-aware; one target path does not depend on unrelated target ordering.",
+        "A stable step reference is assigned when a step has no explicit id.",
+        "Partial materialization is reported as failure, not best-effort success."
+      ],
+      "requirements": [
+        "Include artifactId, filename, contentType, sizeBytes, targetKind, optional stepRef/stepOrdinal, workspacePath, and optional context/source paths in manifest entries.",
+        "Sanitize filenames while preserving deterministic artifactId-prefixed paths.",
+        "Treat execution payload and snapshot refs as the source for materialization."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Owns AttachmentManifestEntry materialization shape."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Owns prepare responsibilities in the end-to-end flow."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Owns deterministic manifest and raw workspace materialization rules."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Generate target-aware vision context artifacts",
+      "shortName": "vision-context-artifacts",
+      "description": "As a text-first runtime user, I need deterministic image-derived context artifacts that remain traceable to source image refs and preserve objective versus step target meaning.",
+      "sourceReference": {
+        "path": "docs/Tasks/ImageSystem.md",
+        "title": "Task Image Input System",
+        "sections": [
+          "9. Vision context generation contract"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-012"
+        ]
+      },
+      "scope": [
+        "Configurable enable/disable of vision context generation",
+        "Objective and step context files",
+        "Context index artifact",
+        "Traceability from generated context to source artifact refs",
+        "Deterministic and auditable output for a given image set and model configuration"
+      ],
+      "outOfScope": [
+        "Raw file materialization when context generation is disabled",
+        "Prompt block placement",
+        "Provider-specific multimodal payloads"
+      ],
+      "independentTest": "Prepare a task with objective and step images with context enabled and disabled; assert enabled runs write target-specific context files and index entries, disabled runs still produce manifest/raw files, and context records reference source artifact ids.",
+      "acceptanceCriteria": [
+        "Context generation is target-aware and may be enabled or disabled by runtime configuration.",
+        "When disabled, manifest generation and raw file materialization still occur.",
+        "Objective-scoped images produce .moonmind/vision/task/image_context.md.",
+        "Step-scoped images produce .moonmind/vision/steps/<stepRef>/image_context.md.",
+        ".moonmind/vision/image_context_index.json summarizes which context exists for each target.",
+        "Generated text remains traceable to source image artifact refs and deterministic/auditable for a given source image set and model configuration."
+      ],
+      "requirements": [
+        "Support OCR, captions, and safety notes only as deterministic auditable content.",
+        "Keep derived image summaries secondary to source image refs.",
+        "Preserve target meaning during context generation."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Owns all target-aware vision context generation, disablement, traceability, and output path requirements."
+        }
+      ],
+      "dependencies": [
+        "STORY-004"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Inject attachment context into runtimes",
+      "shortName": "runtime-attachment-injection",
+      "description": "As a runtime adapter, I need a clear contract for text-first, planning, and multimodal image inputs so each execution receives only the attachment context appropriate to its target.",
+      "sourceReference": {
+        "path": "docs/Tasks/ImageSystem.md",
+        "title": "Task Image Input System",
+        "sections": [
+          "10. Prompt and runtime injection contract",
+          "15. Non-goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "scope": [
+        "INPUT ATTACHMENTS prompt block for text-first runtimes",
+        "Step-scoped context filtering rules",
+        "Task-level planning attachment inventory",
+        "Multimodal adapter direct-ref option",
+        "Control-plane source-of-truth invariants across runtime modes"
+      ],
+      "outOfScope": [
+        "Vision generation implementation",
+        "Create-page upload UX",
+        "Provider-specific message format details"
+      ],
+      "independentTest": "Execute a planning turn and two step turns with objective plus per-step images; assert prompt/context payloads include objective context, current step context only, compact later-step inventory for planning, and no provider-specific format leakage into control-plane contracts.",
+      "acceptanceCriteria": [
+        "Text-first runtimes receive an INPUT ATTACHMENTS block before WORKSPACE.",
+        "The block references relevant workspace paths, manifest entries, and generated context paths.",
+        "Step execution receives objective-scoped context and only the current step attachment context by default.",
+        "Non-current step context is omitted unless explicitly requested by the runtime or planner.",
+        "Task-level planning receives objective context and a compact inventory of step-scoped attachments without flattening later-step context.",
+        "Multimodal adapters may consume raw refs directly without changing artifact refs, target bindings, manifest source of truth, or control-plane contract.",
+        "Provider-specific multimodal message formats remain runtime-adapter concerns, not the control-plane contract."
+      ],
+      "requirements": [
+        "Place attachment context before WORKSPACE for text-first runtimes.",
+        "Use prepared manifest and generated context paths as injection inputs.",
+        "Preserve source artifact refs and target bindings across direct multimodal payload construction."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "Owns text-first prompt block placement, contents, and current-step filtering."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "Owns planning inventory and multimodal adapter direct-ref contract."
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "ownership": "Owns non-goals around implicit step sharing and provider-specific message formats as the control-plane contract."
+        }
+      ],
+      "dependencies": [
+        "STORY-004",
+        "STORY-005"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Preview and download task images by target",
+      "shortName": "targeted-image-preview",
+      "description": "As a task reviewer, I need task detail, edit, and rerun surfaces to preview and download image inputs by their persisted target through MoonMind-owned APIs without losing metadata when previews fail.",
+      "sourceReference": {
+        "path": "docs/Tasks/ImageSystem.md",
+        "title": "Task Image Input System",
+        "sections": [
+          "11. UI preview and detail contract",
+          "13. Edit and rerun durability contract"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "scope": [
+        "Task detail image preview and download surfaces",
+        "Target grouping for objective and step images",
+        "Filename-independent target binding display",
+        "Preview-failure fallback to metadata and download actions",
+        "Persisted-versus-new local file distinction in edit/rerun UI"
+      ],
+      "outOfScope": [
+        "Artifact upload validation",
+        "Worker-side materialization",
+        "Vision OCR/caption content"
+      ],
+      "independentTest": "Open task detail/edit/rerun for a task with objective and step attachments, force one preview failure, and assert grouping, metadata, download actions, and persisted/new file distinctions remain correct.",
+      "acceptanceCriteria": [
+        "Previews and downloads use MoonMind-owned API endpoints.",
+        "Preview and detail surfaces organize attachments by objective and step target.",
+        "The UI never infers target binding from filenames.",
+        "A preview failure does not remove metadata visibility or download actions.",
+        "Edit and rerun surfaces distinguish persisted attachments from new local files not yet uploaded.",
+        "Unchanged persisted refs remain available unless explicitly removed."
+      ],
+      "requirements": [
+        "Use authoritative snapshot target bindings for UI reconstruction.",
+        "Keep download actions available through execution-owned APIs.",
+        "Expose enough target-aware metadata for reviewers to understand attachment scope."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Owns preview/download UI, target grouping, filename-independent binding, preview-failure fallback, and persisted/new file distinction."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Owns edit/rerun UI preservation of unchanged refs and explicit removal/addition behavior."
+        }
+      ],
+      "dependencies": [
+        "STORY-002",
+        "STORY-003"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-008",
+      "summary": "Protect image access and untrusted content boundaries",
+      "shortName": "image-security-boundaries",
+      "description": "As a security-conscious operator, I need image preview, download, worker access, and extracted text handling to respect execution ownership, short-lived credentials, and untrusted-content boundaries.",
+      "sourceReference": {
+        "path": "docs/Tasks/ImageSystem.md",
+        "title": "Task Image Input System",
+        "sections": [
+          "12. Authorization and security contract",
+          "15. Non-goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "scope": [
+        "Execution ownership and view-permission checks for preview/download",
+        "Short-lived presigned URLs or MoonMind proxy responses",
+        "Worker-side service credentials with execution authorization",
+        "Untrusted extracted text and image input handling",
+        "Prohibition of direct browser object/Jira/provider file access and hidden retargeting transforms"
+      ],
+      "outOfScope": [
+        "Attachment policy size/count validation",
+        "Diagnostic event taxonomy",
+        "Jira live sync implementation"
+      ],
+      "independentTest": "Use two users/executions and worker access paths to assert unauthorized preview/download is denied, browser responses do not expose long-lived credentials, worker access is execution-scoped, and extracted image text is not treated as instructions by default.",
+      "acceptanceCriteria": [
+        "End-user preview/download are governed by execution ownership and view permissions.",
+        "Browsers receive only short-lived presigned download URLs or MoonMind proxy responses, never long-lived object-store credentials.",
+        "Worker-side access uses service credentials and execution authorization, not browser credentials.",
+        "Extracted text from images is not trusted as executable instructions unless the authored task explicitly chooses to use it.",
+        "Images remain untrusted user input.",
+        "Direct browser access to object storage, Jira, or provider-specific file endpoints is not allowed.",
+        "Hidden compatibility transforms must not silently rewrite attachment refs or retarget them to another step.",
+        "Live Jira sync remains out of scope for the image input system."
+      ],
+      "requirements": [
+        "Apply execution-scoped authorization to all image byte access.",
+        "Avoid exposing durable storage or provider credentials to the browser.",
+        "Preserve attachment refs exactly rather than rewriting them through compatibility transforms."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "Owns execution-owned preview/download authorization and browser/worker credential separation."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Owns untrusted image/text treatment, direct-access prohibitions, no scriptable images, and no hidden retargeting transforms."
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "ownership": "Owns live Jira sync and provider-specific file endpoint exclusions as non-goals."
+        }
+      ],
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-009",
+      "summary": "Expose image diagnostics and failure evidence",
+      "shortName": "image-diagnostics-evidence",
+      "description": "As an operator debugging image-input failures, I need target-aware events, manifest/context path discovery, and step-specific failure evidence without scraping raw workflow history heuristics.",
+      "sourceReference": {
+        "path": "docs/Tasks/ImageSystem.md",
+        "title": "Task Image Input System",
+        "sections": [
+          "14. Observability and diagnostics contract"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-019"
+        ]
+      },
+      "scope": [
+        "Recommended event classes for upload, validation, prepare, and context generation",
+        "Discoverability of attachment manifest and generated context paths from task diagnostics",
+        "Target-aware attachment metadata on task detail/debugging surfaces",
+        "Step target identification on step-level failures"
+      ],
+      "outOfScope": [
+        "Raw image preview rendering",
+        "Vision model output quality",
+        "Provider-specific telemetry beyond the image contract"
+      ],
+      "independentTest": "Trigger successful and failing upload, validation, prepare, and context-generation paths, then assert diagnostics include the expected event classes, artifact/context paths, target metadata, and affected step target for failures.",
+      "acceptanceCriteria": [
+        "Events are emitted for attachment upload started/completed and attachment validation failed.",
+        "Events are emitted for prepare download started/completed/failed.",
+        "Events are emitted for image context generation started/completed/failed.",
+        "Task diagnostics expose the attachment manifest path and generated context paths.",
+        "Task detail and debugging surfaces expose target-aware attachment metadata.",
+        "Step-level failures identify the affected step target."
+      ],
+      "requirements": [
+        "Make diagnostics sufficient to debug image failures without relying on raw workflow history heuristics.",
+        "Connect diagnostic evidence to the same target bindings used by task execution."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-019",
+          "ownership": "Owns image input observability, event taxonomy, diagnostic path discovery, target-aware metadata, and step-level failure evidence."
+        }
+      ],
+      "dependencies": [
+        "STORY-002",
+        "STORY-004",
+        "STORY-005"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-003",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-002",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-003",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-009"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-001",
+      "STORY-006",
+      "STORY-008"
+    ]
+  }
+}
