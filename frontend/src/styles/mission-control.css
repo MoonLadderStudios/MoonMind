@@ -1521,6 +1521,22 @@ button.secondary:hover {
   margin-top: 0.75rem;
 }
 
+.queue-steps-section {
+  gap: 1rem;
+}
+
+.queue-steps-list {
+  gap: 1rem;
+}
+
+.queue-step-section {
+  padding: 0;
+}
+
+.queue-step-bottom-controls {
+  margin-top: 0.2rem;
+}
+
 .queue-step-header {
   display: flex;
   justify-content: space-between;
