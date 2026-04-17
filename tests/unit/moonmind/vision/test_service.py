@@ -347,3 +347,48 @@ def test_render_target_contexts_sanitizes_step_ref_for_context_path(base_config)
     assert bundle.index["targets"][0]["contextPath"] == (
         ".moonmind/vision/steps/review-step/image_context.md"
     )
+
+
+def test_render_target_contexts_rejects_colliding_sanitized_step_refs(base_config):
+    service = VisionService(config=base_config)
+    attachment_a = AttachmentContextInput(
+        id="artifact-a",
+        filename="shared.png",
+        content_type="image/png",
+        size_bytes=300,
+        digest=None,
+        local_path=".moonmind/inputs/steps/a-b/artifact-a-shared.png",
+    )
+    attachment_b = AttachmentContextInput(
+        id="artifact-b",
+        filename="shared.png",
+        content_type="image/png",
+        size_bytes=300,
+        digest=None,
+        local_path=".moonmind/inputs/steps/a-b/artifact-b-shared.png",
+    )
+
+    with pytest.raises(ValueError, match="target path collision"):
+        service.render_target_contexts(
+            [
+                VisionContextTargetInput.step("A B", [attachment_a]),
+                VisionContextTargetInput.step("A-B", [attachment_b]),
+            ]
+        )
+
+
+def test_render_target_contexts_rejects_unusable_step_ref_with_value(base_config):
+    service = VisionService(config=base_config)
+    attachment = AttachmentContextInput(
+        id="artifact-unsafe",
+        filename="unsafe.png",
+        content_type="image/png",
+        size_bytes=300,
+        digest=None,
+        local_path=".moonmind/inputs/steps/unsafe/artifact-unsafe-unsafe.png",
+    )
+
+    with pytest.raises(ValueError, match="got unusable value: '!!!'"):
+        service.render_target_contexts(
+            [VisionContextTargetInput.step("!!!", [attachment])]
+        )

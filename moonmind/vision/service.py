@@ -140,11 +140,21 @@ class VisionService:
     ) -> VisionContextArtifactBundle:
         artifacts: list[VisionTargetContextArtifact] = []
         index_targets: list[dict[str, object]] = []
+        context_path_owners: dict[Path, str] = {}
 
         for target in targets:
             if not target.attachments:
                 continue
             context_path = self._target_context_path(target)
+            target_label = self._target_label(target)
+            existing_owner = context_path_owners.get(context_path)
+            if existing_owner is not None:
+                raise ValueError(
+                    "vision context target path collision: "
+                    f"{target_label} and {existing_owner} both map to "
+                    f"{context_path.as_posix()}"
+                )
+            context_path_owners[context_path] = target_label
             context = self.render_context(target.attachments)
             artifacts.append(
                 VisionTargetContextArtifact(
@@ -244,8 +254,17 @@ class VisionService:
         sanitized = re.sub(r"[^a-z0-9._-]+", "-", lowered)
         sanitized = re.sub(r"-+", "-", sanitized).strip(".-_")
         if not sanitized:
-            raise ValueError("step vision context target requires a safe step_ref")
+            raise ValueError(
+                "step vision context target requires a safe step_ref, "
+                f"got unusable value: {step_ref!r}"
+            )
         return sanitized
+
+    @staticmethod
+    def _target_label(target: VisionContextTargetInput) -> str:
+        if target.target_kind == "step":
+            return f"step_ref={target.step_ref!r}"
+        return f"target_kind={target.target_kind!r}"
 
     def _render_attachment(
         self,
