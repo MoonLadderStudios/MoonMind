@@ -143,6 +143,64 @@ function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
   };
 }
 
+function withImageOnlyAttachmentPolicy(
+  payload: BootPayload = mockPayload,
+): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      system?: Record<string, unknown>;
+    };
+  };
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...initialData.dashboardConfig.system,
+          attachmentPolicy: {
+            enabled: true,
+            maxCount: 4,
+            maxBytes: 1024 * 1024,
+            totalBytes: 2 * 1024 * 1024,
+            allowedContentTypes: ["image/png", "image/jpeg", "image/webp"],
+          },
+        },
+      },
+    },
+  };
+}
+
+function withDisabledAttachmentPolicy(
+  payload: BootPayload = mockPayload,
+): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      system?: Record<string, unknown>;
+    };
+  };
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...initialData.dashboardConfig.system,
+          attachmentPolicy: {
+            enabled: false,
+            maxCount: 4,
+            maxBytes: 1024 * 1024,
+            totalBytes: 2 * 1024 * 1024,
+            allowedContentTypes: ["image/png", "image/jpeg", "image/webp"],
+          },
+        },
+      },
+    },
+  };
+}
+
 function withoutDefaultRepository(payload: BootPayload = mockPayload): BootPayload {
   const initialData = payload.initialData as {
     dashboardConfig: {
@@ -3559,6 +3617,165 @@ describe("Task Create Entrypoint", () => {
         body: expect.stringContaining("input.attachment"),
       }),
     );
+  });
+
+  it("hides attachment entry points when policy is disabled and preserves text-only authoring", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withDisabledAttachmentPolicy()} />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Create a text-only task while image inputs are disabled." },
+    });
+
+    expect(screen.queryByLabelText("Step 1 attachments")).toBeNull();
+    expect(
+      screen.queryByLabelText("Feature Request / Initial Instructions attachments"),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+  });
+
+  it("uses image-specific labels when policy allows only image MIME types", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    expect(await screen.findByText("Step 1 Images (optional)")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Feature Request / Initial Instructions Images",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("reports attachment validation failures at the affected target before upload", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Validate unsupported attachment types." },
+    });
+    const file = new File(["not an image"], "notes.txt", {
+      type: "text/plain",
+    });
+    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+      target: { files: [file] },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText("Step 1: Unsupported file type for notes.txt.")
+          .length,
+      ).toBeGreaterThanOrEqual(1);
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/artifacts"),
+    ).toBe(false);
+  });
+
+  it("keeps step upload failures target-scoped with retry and remove actions", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/artifacts/art-001/content") {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          text: async () =>
+            JSON.stringify({
+              detail: { message: "Object storage rejected the upload." },
+            }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Upload a step attachment and handle failure." },
+    });
+    const file = new File(["fake image"], "wireframe.png", {
+      type: "image/png",
+    });
+    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+      target: { files: [file] },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText("Step 1: Object storage rejected the upload.")
+          .length,
+      ).toBeGreaterThanOrEqual(1);
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "Retry upload for Step 1 attachment wireframe.png",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Remove Step 1 attachment wireframe.png",
+      }),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("preserves attachment metadata and remove action when preview fails", async () => {
+    const originalCreateObjectUrl = URL.createObjectURL;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:preview-wireframe"),
+    });
+    try {
+      renderWithClient(
+        <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+      );
+
+      const file = new File(["fake image"], "wireframe.png", {
+        type: "image/png",
+      });
+      fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+        target: { files: [file] },
+      });
+
+      const preview = await screen.findByAltText(
+        "Preview of Step 1 attachment wireframe.png",
+      );
+      fireEvent.error(preview);
+
+      expect(
+        await screen.findByText(
+          "Step 1: Preview unavailable for wireframe.png. Attachment metadata remains available.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByText("wireframe.png")).toBeTruthy();
+      expect(
+        screen.getByRole("button", {
+          name: "Remove Step 1 attachment wireframe.png",
+        }),
+      ).toBeTruthy();
+    } finally {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: originalCreateObjectUrl,
+      });
+    }
   });
 
   it("uploads an objective-scoped attachment only as a task input attachment", async () => {
