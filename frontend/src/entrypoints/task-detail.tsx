@@ -1266,10 +1266,7 @@ type InputImageArtifact = {
   filename: string;
 };
 
-function inputImageArtifactFrom(
-  artifact: z.infer<typeof ArtifactSummarySchema>,
-  index: number,
-): InputImageArtifact | null {
+function inputImageArtifactFrom(artifact: z.infer<typeof ArtifactSummarySchema>): InputImageArtifact | null {
   const contentType = String(artifact.contentType || '').trim().toLowerCase();
   if (!contentType.startsWith('image/')) {
     return null;
@@ -1300,7 +1297,7 @@ function inputImageArtifactFrom(
     }
     return {
       artifact,
-      targetKey: `step:${stepLabel}:${index}`,
+      targetKey: `step:${stepLabel}`,
       targetLabel: stepLabel,
       filename: metadataString(metadata, 'filename', 'name', 'label') || artifact.artifactId,
     };
@@ -1318,24 +1315,22 @@ function InputImagesSection({
 }) {
   const [failedPreviewIds, setFailedPreviewIds] = useState<Record<string, boolean>>({});
   const inputImages = artifacts
-    .map((artifact, index) => inputImageArtifactFrom(artifact, index))
+    .map((artifact) => inputImageArtifactFrom(artifact))
     .filter((item): item is InputImageArtifact => item !== null);
 
   if (inputImages.length === 0) {
     return null;
   }
 
-  const groups = inputImages.reduce<Array<{ key: string; label: string; items: InputImageArtifact[] }>>(
-    (acc, item) => {
-      const existing = acc.find((group) => group.key === item.targetKey);
-      if (existing) {
-        existing.items.push(item);
-      } else {
-        acc.push({ key: item.targetKey, label: item.targetLabel, items: [item] });
-      }
-      return acc;
-    },
-    [],
+  const groups = Object.values(
+    inputImages.reduce<Record<string, { key: string; label: string; items: InputImageArtifact[] }>>(
+      (acc, item) => {
+        acc[item.targetKey] ||= { key: item.targetKey, label: item.targetLabel, items: [] };
+        acc[item.targetKey].items.push(item);
+        return acc;
+      },
+      {},
+    ),
   );
 
   return (

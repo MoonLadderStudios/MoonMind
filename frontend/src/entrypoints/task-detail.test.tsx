@@ -1847,6 +1847,18 @@ describe('Task Detail Entrypoint', () => {
                   filename: 'step.webp',
                 },
               },
+              {
+                artifact_id: 'art-step-second',
+                content_type: 'image/jpeg',
+                size_bytes: 7890,
+                status: 'complete',
+                download_url: 'https://storage.example/step-second.jpg',
+                metadata: {
+                  source: 'task-dashboard-step-attachment',
+                  stepLabel: 'Step 2',
+                  filename: 'step-second.jpg',
+                },
+              },
             ],
           }),
         } as Response);
@@ -1863,8 +1875,10 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Input Images' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Objective' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Step 2' })).toBeTruthy();
+      expect(screen.getAllByRole('heading', { name: 'Step 2' })).toHaveLength(1);
       expect(screen.getByText('objective.png')).toBeTruthy();
       expect(screen.getByText('step.webp')).toBeTruthy();
+      expect(screen.getByText('step-second.jpg')).toBeTruthy();
     });
 
     const objectivePreview = screen.getByAltText('Preview of Objective attachment objective.png');
@@ -1885,6 +1899,7 @@ describe('Task Detail Entrypoint', () => {
     expect(imageDownloadLinks.map((link) => link.getAttribute('href'))).toEqual([
       '/api/artifacts/art-objective/download',
       '/api/artifacts/art-step/download',
+      '/api/artifacts/art-step-second/download',
     ]);
   });
 
