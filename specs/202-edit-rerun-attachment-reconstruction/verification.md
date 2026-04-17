@@ -13,7 +13,7 @@
 | Focused UI unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` | PASS | 1 file passed, 146 tests passed. The runner prepared frontend dependencies with `npm ci` because `node_modules` was missing. |
 | Focused API unit | `pytest tests/unit/api/routers/test_executions.py -q` | PASS | 86 passed, 12 warnings. |
 | Focused contract | `pytest tests/contract/test_temporal_execution_api.py -q` | PASS | 8 passed, 1 warning. |
-| Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 3523 Python tests passed, 1 xpassed, 16 subtests passed; 10 UI files passed with 267 UI tests. |
+| Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 3531 Python tests passed, 1 xpassed, 16 subtests passed; 10 UI files passed with 273 UI tests. |
 | Hermetic integration | `./tools/test_integration.sh` | NOT RUN | Blocked by unavailable Docker socket in the managed container: `failed to connect to the docker API at unix:///var/run/docker.sock ... connect: no such file or directory`. |
 | Moon Spec prerequisite helper | `SPECIFY_FEATURE=202-edit-rerun-attachment-reconstruction .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` | PASS | Returned the numbered MM-382 feature directory with `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `tasks.md`. |
 
