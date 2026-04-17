@@ -9,7 +9,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/schemas/test_managed_session_models.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/services/temporal/runtime/test_managed_session_controller.py`
 - Integration tests: `./tools/test_integration.sh`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -28,8 +28,14 @@
 
 - [X] T003 Add failing schema tests for `githubCredential` descriptor validation and no raw token serialization in `tests/unit/schemas/test_managed_session_models.py` (FR-001, FR-002, FR-003, SC-001).
 - [X] T004 Add failing activity boundary tests proving `agent_runtime.launch_session` carries a descriptor and not raw `GITHUB_TOKEN` in `tests/unit/workflows/temporal/test_agent_runtime_activities.py` (FR-004, FR-005, FR-014, SC-005).
-- [X] T005 Add failing controller tests proving host git gets scoped credentials while docker/container payloads omit raw tokens in `tests/unit/services/temporal/runtime/test_managed_session_controller.py` (FR-006, FR-007, FR-008, SC-002, SC-003).
-- [X] T006 Add failing redaction/error tests for missing or unresolvable required GitHub descriptors in `tests/unit/services/temporal/runtime/test_managed_session_controller.py` or `tests/unit/workflows/temporal/test_agent_runtime_activities.py` (FR-009, FR-010, SC-004).
+
+### Integration Tests (write first)
+
+- [X] T005 Add failing integration-style controller boundary tests proving host git gets scoped credentials while docker/container payloads omit raw tokens in `tests/unit/services/temporal/runtime/test_managed_session_controller.py` (FR-006, FR-007, FR-008, SC-002, SC-003).
+- [X] T006 Add failing integration-style redaction/error boundary tests for missing or unresolvable required GitHub descriptors in `tests/unit/services/temporal/runtime/test_managed_session_controller.py` or `tests/unit/workflows/temporal/test_agent_runtime_activities.py` (FR-009, FR-010, SC-004).
+
+### Red-First Confirmation
+
 - [X] T007 Run focused unit test command and confirm T003-T006 fail for expected missing descriptor/materialization behavior.
 
 ### Implementation
@@ -45,4 +51,4 @@
 
 - [X] T014 Run `rg -n "MM-320|githubCredential|GITHUB_TOKEN|GITHUB_PAT|SecretRef" specs/201-managed-github-secret-materialization docs/tmp/jira-orchestration-inputs/MM-320-moonspec-orchestration-input.md` (SC-006).
 - [X] T015 Run full `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` or document exact blocker.
-- [X] T016 Run `/speckit.verify` and record final verification evidence in `verification.md`.
+- [X] T016 Run `/moonspec-verify` and record final verification evidence in `verification.md`.
