@@ -46,6 +46,7 @@ _RESERVED_INPUT_ATTACHMENT_PREFIXES = (
     ".moonmind/inputs/",
     "/.moonmind/inputs/",
 )
+_NORMALIZED_RESERVED_INPUT_ATTACHMENT_PREFIXES: frozenset[str]
 
 
 class TemporalArtifactError(Exception):
@@ -220,6 +221,32 @@ def _is_task_input_attachment_metadata(metadata: Mapping[str, Any]) -> bool:
     return source in _TASK_INPUT_ATTACHMENT_SOURCES or attachment_kind == "input"
 
 
+def _normalize_reserved_input_attachment_path(raw_path: str) -> str:
+    path = raw_path.strip().replace("\\", "/").lower()
+    is_absolute = path.startswith("/")
+    parts: list[str] = []
+    for part in path.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    normalized = "/".join(parts)
+    if is_absolute:
+        normalized = f"/{normalized}" if normalized else "/"
+    if normalized and not normalized.endswith("/"):
+        normalized = f"{normalized}/"
+    return normalized
+
+
+_NORMALIZED_RESERVED_INPUT_ATTACHMENT_PREFIXES = frozenset(
+    _normalize_reserved_input_attachment_path(prefix)
+    for prefix in _RESERVED_INPUT_ATTACHMENT_PREFIXES
+)
+
+
 def _assert_not_reserved_input_attachment_metadata(
     metadata: Mapping[str, Any] | None,
 ) -> None:
@@ -237,12 +264,12 @@ def _assert_not_reserved_input_attachment_metadata(
         raw_value = source.get(key)
         if not isinstance(raw_value, str):
             continue
-        candidate = raw_value.strip().replace("\\", "/").lower().lstrip("./")
+        candidate = _normalize_reserved_input_attachment_path(raw_value)
         if not candidate:
             continue
         if any(
-            candidate.startswith(prefix.lstrip("/").lstrip("./"))
-            for prefix in _RESERVED_INPUT_ATTACHMENT_PREFIXES
+            candidate.startswith(prefix)
+            for prefix in _NORMALIZED_RESERVED_INPUT_ATTACHMENT_PREFIXES
         ):
             raise TemporalArtifactValidationError(
                 "worker artifact uploads may not target the reserved input attachment namespace"
@@ -272,6 +299,15 @@ def _validate_image_attachment_payload(
         len(payload) < 12 or not payload.startswith(b"RIFF") or payload[8:12] != b"WEBP"
     ):
         raise TemporalArtifactValidationError("image/webp signature validation failed")
+
+
+def _requires_image_payload_validation(
+    *, content_type: str | None, metadata: Mapping[str, Any] | None
+) -> bool:
+    normalized = _normalized_content_type(content_type)
+    return _is_task_input_attachment_metadata(metadata or {}) or normalized.startswith(
+        "image/"
+    )
 
 
 def _expires_at_for_retention(
@@ -1334,7 +1370,10 @@ class TemporalArtifactService:
             artifact.status = db_models.TemporalArtifactStatus.FAILED
             await self._repository.commit()
             raise
-        if _is_task_input_attachment_metadata(artifact.metadata_json or {}):
+        if _requires_image_payload_validation(
+            content_type=content_type or artifact.content_type,
+            metadata=artifact.metadata_json,
+        ):
             try:
                 _validate_image_attachment_payload(
                     content_type=content_type or artifact.content_type,
@@ -1477,7 +1516,10 @@ class TemporalArtifactService:
             artifact.status = db_models.TemporalArtifactStatus.FAILED
             await self._repository.commit()
             raise
-        if _is_task_input_attachment_metadata(artifact.metadata_json or {}):
+        if _requires_image_payload_validation(
+            content_type=artifact.content_type,
+            metadata=artifact.metadata_json,
+        ):
             try:
                 _validate_image_attachment_payload(
                     content_type=artifact.content_type,

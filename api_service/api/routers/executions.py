@@ -1410,8 +1410,18 @@ async def _validate_and_collect_task_input_attachments(
         )
 
     if session is not None:
+        artifact_ids = list(unique)
+        artifact_result = await session.execute(
+            select(TemporalArtifact).where(
+                TemporalArtifact.artifact_id.in_(artifact_ids)
+            )
+        )
+        artifacts_by_id = {
+            artifact.artifact_id: artifact
+            for artifact in artifact_result.scalars().all()
+        }
         for ref in unique.values():
-            artifact = await session.get(TemporalArtifact, ref["artifactId"])
+            artifact = artifacts_by_id.get(ref["artifactId"])
             if artifact is None:
                 raise _invalid_task_request(
                     f"input attachment artifact was not found: {ref['artifactId']}."
