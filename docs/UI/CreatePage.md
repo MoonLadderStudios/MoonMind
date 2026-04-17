@@ -245,7 +245,7 @@ Rules:
 - `StepDraft.source` records whether a step is local, preset-bound, preset-detached, or flat-reconstructed
 - preset binding state is draft metadata for authoring, preview, reapply, save-as-preset, edit, and rerun; runtime submission still uses flattened resolved steps
 - `branch` is the only authored branch field in the Create-page draft
-- `targetBranch` is not part of the desired-state Create-page draft model
+- `targetBranch` is not part of the browser-authored Create-page draft model; submit preparation maps the draft into the canonical `task.git.startingBranch` and `task.git.targetBranch` runtime contract where required
 - branch catalog state is fetched UI state, not task authoring state
 - branch catalog options come from a MoonMind API call scoped to the selected repository
 - legacy edit/rerun snapshots may contain older starting/target branch fields, but Create-page reconstruction must normalize them into the single authored `branch` field described here
@@ -355,14 +355,14 @@ Rules:
 - when the repository branch catalog includes a default branch and the author has not picked a branch yet, the page may preselect the default branch
 - `Branch` and `Publish Mode` use compact inline controls in the Steps footer with no visible label rendered above the dropdown itself
 - those compact controls must still expose accessible names through standard form labeling or equivalent assistive markup
-- the compact branch control should feel visually similar to the uploaded Codex example in overall density and placement, but it must use MoonMind styling and a distinct icon; it must not reuse the Codex icon asset or exact icon geometry
+- the compact branch control should use dense inline placement, a repository-branch affordance, and MoonMind styling; it must use an in-repository or locally defined icon rather than reusing external agent assets
 - `Publish Mode` appears immediately to the right of `Branch` in the Steps footer when there is room; on smaller widths it may wrap responsively while remaining part of the same control group
-- Create-page skills, backend submit logic, and runtime launch preparation must not require `targetBranch`
-- the authored branch contract is single-value:
-  - for `publishMode: none`, `branch` identifies the checkout branch only
-  - for `publishMode: branch`, `branch` is both the checkout branch and the publish destination branch
-  - for `publishMode: pr`, `branch` is the PR base branch and the runtime generates the work/head branch deterministically
-- cross-branch publish authoring using separate start and target branches is not part of the desired-state Create-page contract
+- Create-page skills and browser authoring must not require a user-authored `targetBranch`
+- backend submit logic and runtime launch preparation must preserve the canonical publishing contract from `docs/Tasks/TaskPublishing.md`:
+  - for `publishMode: none`, `branch` maps to `task.git.startingBranch` when a checkout branch is explicitly selected
+  - for `publishMode: branch`, the Create page supports same-branch publishing by mapping `branch` to both `task.git.startingBranch` and `task.git.targetBranch`
+  - for `publishMode: pr`, `branch` maps to `task.git.startingBranch` as the PR base branch, while the runtime planner generates or otherwise resolves the distinct work/head `targetBranch`
+- cross-branch publishing and explicit PR head-branch selection remain part of the broader task publishing contract, but they are not authored by this Create-page control bar
 
 ---
 
@@ -620,7 +620,7 @@ Rules:
 - legacy snapshots that contain both `startingBranch` and `targetBranch` must be normalized into the single authored `branch` field
 - normalization rules for legacy snapshots are:
   - if only one branch-like value is present, use that value as `branch`
-  - for legacy PR snapshots, prefer the old base/start branch as the authored `branch`
+  - for legacy PR snapshots, prefer the old `startingBranch` as the authored branch because it is the canonical PR base branch
   - for legacy `branch`-publish snapshots where start and target were equal, use that shared value as `branch`
   - for legacy `branch`-publish snapshots where start and target differed, the page must surface a clear migration warning and require the user to choose a single authored branch before submit
 - legacy cross-branch publish is a migration case, not a first-class authoring state on the desired-state Create page
@@ -652,13 +652,13 @@ Rules:
 - oversized task text continues to use existing artifact fallback behavior for text payloads
 - attachment upload completion is required before the execution becomes eligible to start
 - attachment selection alone does not create a task; submit remains explicit
-- `task.git.branch` is the single authored branch input when a branch is explicitly selected
-- absence of `task.git.branch` means the runtime may use the repository default branch
-- Create-page submission must not author or require `targetBranch`
-- publish behavior is derived from `publishMode` plus `task.git.branch`:
+- `TaskDraft.branch` is the single browser-authored branch input when a branch is explicitly selected
+- absence of `TaskDraft.branch` means the runtime may use the repository default branch
+- Create-page submission must map authored branch intent into the canonical `task.git.startingBranch` and `task.git.targetBranch` fields before runtime launch
+- publish behavior is derived from `publishMode` plus `TaskDraft.branch`:
   - `none`: checkout only
-  - `branch`: checkout and publish to the same branch
-  - `pr`: use the selected branch as PR base and generate the work/head branch deterministically
+  - `branch`: checkout and publish to the same branch by setting `startingBranch` and `targetBranch` to the selected branch
+  - `pr`: use the selected branch as PR base by setting `startingBranch`; the runtime planner generates or resolves a distinct `targetBranch` for the work/head branch
 
 Representative task-shaped payload:
 
@@ -674,7 +674,7 @@ Representative task-shaped payload:
         "mode": "pr"
       },
       "git": {
-        "branch": "main"
+        "startingBranch": "main"
       },
       "inputAttachments": [
         {
@@ -814,7 +814,7 @@ The Create page test suite should cover:
 21. the branch dropdown requests branches through a MoonMind API when the repository changes and never requires a direct browser-to-GitHub call
 22. the branch dropdown resets invalid selections when the repository changes
 23. branch loading, empty, and error states render explicitly and do not corrupt unrelated draft state
-24. the submit payload authors at most one explicit branch field and does not author `targetBranch`
+24. the submit payload maps the single browser-authored branch into canonical `startingBranch` and `targetBranch` fields without exposing a `Target Branch` control
 25. `Publish Mode` renders adjacent to `Branch` in the Steps card control group and does not render a visible label above the compact dropdown
 26. edit/rerun correctly normalize legacy starting/target branch data into the single authored `branch` field, including the explicit migration warning for legacy cross-branch publish snapshots
 
