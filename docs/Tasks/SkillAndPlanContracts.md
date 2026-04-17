@@ -527,6 +527,17 @@ If Jira output succeeds, workflow PR output is skipped because Jira is the reque
 
 A **Plan** is a DAG of tool invocations (Steps) with explicit dependencies and policy.
 
+Preset composition is an authoring concern. Preset includes and nested preset
+trees MUST be resolved before a Plan is stored as an execution artifact. The
+stored Plan is the flattened execution contract after expansion: executable
+nodes, dependency edges, policies, artifact references, and tool contracts.
+An unresolved preset include is invalid in a stored Plan artifact.
+
+Optional source provenance may be retained on executable nodes for audit,
+diagnostics, and reconstruction. Provenance is metadata only. It does not select
+tools, alter inputs, change dependency behavior, override policies, or otherwise
+participate in execution.
+
 ### 6.2 Plan schema (DAG-first)
 
 ```json
@@ -549,7 +560,13 @@ A **Plan** is a DAG of tool invocations (Steps) with explicit dependencies and p
       "id": "n1",
       "title": "Run test suite",
       "tool": { "type": "skill", "name": "repo.run_tests", "version": "1.2.0" },
-      "inputs": { "repo_ref": "git:org/repo#branch" }
+      "inputs": { "repo_ref": "git:org/repo#branch" },
+      "source": {
+        "binding_id": "preset-binding-123",
+        "include_path": ["release-readiness", "test-suite"],
+        "blueprint_step_slug": "run-tests",
+        "detached": false
+      }
     },
     {
       "id": "n2",
@@ -576,6 +593,12 @@ Operator-facing plan rule:
 * every node must have a stable `id`
 * every node should have a display-safe `title`
 * dependency information must be sufficient to reconstruct `dependsOn` for the step ledger
+* every stored node must be executable; unresolved preset include objects are invalid in stored plan artifacts
+* source provenance is optional; absent provenance is valid when the executable node is otherwise valid
+
+Plan producers MAY be manual authoring flows, preset expansion flows, or other
+tools that generate Plans. Regardless of authoring origin, all producers MUST
+emit the same flattened node-and-edge graph shape for execution.
 
 ### 6.4 Data references between nodes
 
@@ -747,11 +770,34 @@ Structural checks:
 * node IDs unique
 * edges reference existing nodes
 * acyclic graph required
+* nodes are executable plan nodes only; unresolved preset include entries are rejected before execution
 * referenced tools exist in the pinned tool registry snapshot
 * node inputs validate against the tool input schema
 * data references point to valid nodes + output pointers
+* absent provenance is allowed
+* structurally valid provenance is accepted as metadata only
+* invalid claimed preset provenance is rejected rather than silently ignored
 
 ---
+
+### 11.3 Execution invariants
+
+Runtime execution consumes the flattened Plan graph only. Nested preset semantics
+do not exist at runtime, and provenance is never executable logic.
+
+The executor uses:
+
+* node readiness from dependency edges
+* failure behavior from policy
+* tool invocation details from node tool contracts and inputs
+* artifact references from node inputs or prior outputs
+
+The executor does not use:
+
+* live preset includes
+* nested preset trees
+* source provenance to select tools, alter inputs, or change dependencies
+* authoring-time fallback semantics
 
 ## 12) Open questions — resolved with recommended solutions
 

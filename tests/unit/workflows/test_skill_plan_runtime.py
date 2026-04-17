@@ -259,6 +259,75 @@ def test_parse_plan_definition_accepts_tool_nodes():
     assert parsed.nodes[0].to_payload()["tool"]["type"] == "skill"
 
 
+def test_parse_plan_definition_accepts_optional_source_provenance():
+    store = InMemoryArtifactStore()
+    snapshot = _snapshot(store)
+    plan_payload = _plan_payload(
+        snapshot_digest=snapshot.digest,
+        snapshot_ref=snapshot.artifact_ref,
+    )
+    plan_payload["nodes"][0]["source"] = {
+        "binding_id": "preset-binding-123",
+        "include_path": ["release-readiness", "test-suite"],
+        "blueprint_step_slug": "run-tests",
+        "detached": False,
+    }
+
+    parsed = parse_plan_definition(plan_payload)
+
+    assert parsed.nodes[0].source is not None
+    assert parsed.nodes[0].source.include_path == (
+        "release-readiness",
+        "test-suite",
+    )
+    assert parsed.nodes[0].to_payload()["source"] == plan_payload["nodes"][0]["source"]
+    assert parsed.nodes[1].source is None
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {},
+        {"include_path": "release-readiness"},
+        {"include_path": ["release-readiness", ""]},
+        {"detached": "false"},
+        {"preset_id": "legacy-preset"},
+    ],
+)
+def test_parse_plan_definition_rejects_invalid_source_provenance(source):
+    store = InMemoryArtifactStore()
+    snapshot = _snapshot(store)
+    plan_payload = _plan_payload(
+        snapshot_digest=snapshot.digest,
+        snapshot_ref=snapshot.artifact_ref,
+    )
+    plan_payload["nodes"][0]["source"] = source
+
+    with pytest.raises(ValueError, match="node.source"):
+        parse_plan_definition(plan_payload)
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        {"id": "include-release", "kind": "preset-include", "include": "release"},
+        {"id": "include-release", "type": "preset_include", "include": "release"},
+        {"id": "include-release", "include": {"preset": "release"}},
+    ],
+)
+def test_parse_plan_definition_rejects_unresolved_preset_include_nodes(node):
+    store = InMemoryArtifactStore()
+    snapshot = _snapshot(store)
+    plan_payload = _plan_payload(
+        snapshot_digest=snapshot.digest,
+        snapshot_ref=snapshot.artifact_ref,
+    )
+    plan_payload["nodes"][0] = node
+
+    with pytest.raises(ValueError, match="unresolved preset include"):
+        parse_plan_definition(plan_payload)
+
+
 def test_plan_validate_activity_persists_validated_plan_artifact():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
