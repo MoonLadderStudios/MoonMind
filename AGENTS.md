@@ -187,6 +187,8 @@ Key diagnostics:
 - Existing Temporal artifact metadata tables and configured artifact store; no new persistent storage (195-enforce-image-artifact-policy)
 - Python 3.12; TypeScript/React for Mission Control Create-page behavior + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal artifact service, React, Vitest, existing task editing helpers (196-preserve-attachment-bindings)
 - Existing Temporal artifact metadata tables and original task input snapshot artifacts; no new persistent storage (196-preserve-attachment-bindings)
+- TypeScript/React for Mission Control Create Page behavior; Python 3.12 for API and integration test context + React, Vite/Vitest, Testing Library, existing Mission Control UI components and styles, FastAPI execution API surface (203-create-button-right-arrow)
+- No new persistent storage; this story changes only the Create Page submit action presentation (203-create-button-right-arrow)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
