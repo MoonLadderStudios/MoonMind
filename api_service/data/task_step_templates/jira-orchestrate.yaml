@@ -46,6 +46,22 @@ steps:
     skill:
       id: jira-issue-updater
       args: {}
+  - title: Check Jira blockers before implementation
+    instructions: |-
+      Fetch Jira issue {{ inputs.jira_issue_key }} through the trusted Jira tool surface before any MoonSpec implementation work starts.
+
+      Inspect Jira issue links or relationships for blockers where another issue blocks {{ inputs.jira_issue_key }}. If blocker status is not embedded in the first response, fetch each linked blocking issue through the trusted Jira tool surface before deciding whether to continue.
+
+      Ignore non-blocker issue links for the blocker decision.
+
+      Continue only when no blocker links exist or every detected blocking issue is status Done.
+
+      If any blocking issue is not Done, or if a blocker relationship exists but blocker status cannot be determined from trusted Jira data, stop before MoonSpec specify, plan, tasks, implement, pull request creation, and Code Review transition. Report an operator-readable blocked outcome that includes {{ inputs.jira_issue_key }}, each available blocking issue key, and each available blocking issue status.
+
+      Do not use raw Jira credentials, web scraping, hardcoded transition IDs, or prompt text alone to decide blocker state.
+    skill:
+      id: auto
+      args: {}
   - title: Load Jira preset brief
     instructions: |-
       Fetch Jira issue {{ inputs.jira_issue_key }} through the trusted Jira tool surface.

@@ -24,8 +24,8 @@
 
 **Purpose**: Confirm the active feature context and the existing seeded preset/test surfaces before changing behavior.
 
-- [ ] T001 Confirm `.specify/feature.json` points to `specs/202-jira-orchestrate-blocker-preflight` and that `specs/202-jira-orchestrate-blocker-preflight/spec.md` defines exactly one user story for MM-398.
-- [ ] T002 Review existing Jira Orchestrate preset shape in `api_service/data/task_step_templates/jira-orchestrate.yaml` and existing assertions in `tests/unit/api/test_task_step_templates_service.py` and `tests/integration/test_startup_task_template_seeding.py`.
+- [X] T001 Confirm `.specify/feature.json` points to `specs/202-jira-orchestrate-blocker-preflight` and that `specs/202-jira-orchestrate-blocker-preflight/spec.md` defines exactly one user story for MM-398.
+- [X] T002 Review existing Jira Orchestrate preset shape in `api_service/data/task_step_templates/jira-orchestrate.yaml` and existing assertions in `tests/unit/api/test_task_step_templates_service.py` and `tests/integration/test_startup_task_template_seeding.py`.
 
 ---
 
@@ -35,7 +35,7 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T003 Confirm the bounded seeded-preset scope by reviewing `specs/202-jira-orchestrate-blocker-preflight/plan.md`, `specs/202-jira-orchestrate-blocker-preflight/research.md`, and `api_service/data/task_step_templates/jira-orchestrate.yaml`; stop before story work if discovery shows a database migration, route, persistent model, or raw Jira credential path is needed. (FR-010, DESIGN-REQ-008)
+- [X] T003 Confirm the bounded seeded-preset scope by reviewing `specs/202-jira-orchestrate-blocker-preflight/plan.md`, `specs/202-jira-orchestrate-blocker-preflight/research.md`, and `api_service/data/task_step_templates/jira-orchestrate.yaml`; stop before story work if discovery shows a database migration, route, persistent model, or raw Jira credential path is needed. (FR-010, DESIGN-REQ-008)
 
 **Checkpoint**: Foundation ready; story test and implementation work can begin.
 
@@ -56,25 +56,25 @@
 
 ### Unit Tests (write first)
 
-- [ ] T004 Update failing Jira Orchestrate expansion assertions in `tests/unit/api/test_task_step_templates_service.py` for the new blocker preflight step order and step count. (FR-001, FR-002, FR-007, FR-009, SC-001, SC-004, DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-004)
-- [ ] T005 Add failing Jira Orchestrate expansion assertions in `tests/unit/api/test_task_step_templates_service.py` that the blocker preflight instructions include the selected issue key, trusted Jira fetch, blocker-link inspection, Done-only continuation, missing-status fail-closed behavior, and no raw credential or scraping path. (FR-003, FR-004, FR-005, FR-006, FR-010, SC-002, SC-003, SC-005, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008)
-- [ ] T006 Run `pytest tests/unit/api/test_task_step_templates_service.py -q` and confirm T004-T005 fail for the expected missing blocker preflight behavior before implementation.
+- [X] T004 Update failing Jira Orchestrate expansion assertions in `tests/unit/api/test_task_step_templates_service.py` for the new blocker preflight step order and step count. (FR-001, FR-002, FR-007, FR-009, SC-001, SC-004, DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-004)
+- [X] T005 Add failing Jira Orchestrate expansion assertions in `tests/unit/api/test_task_step_templates_service.py` that the blocker preflight instructions include the selected issue key, trusted Jira fetch, blocker-link inspection, Done-only continuation, missing-status fail-closed behavior, and no raw credential or scraping path. (FR-003, FR-004, FR-005, FR-006, FR-010, SC-002, SC-003, SC-005, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008)
+- [X] T006 Run `pytest tests/unit/api/test_task_step_templates_service.py -q` and confirm T004-T005 fail for the expected missing blocker preflight behavior before implementation.
 
 ### Integration Tests (write first)
 
-- [ ] T007 Update failing startup seed assertions in `tests/integration/test_startup_task_template_seeding.py` so the persisted global `jira-orchestrate` template includes the blocker preflight after In Progress and before MoonSpec lifecycle steps. (FR-001, FR-002, FR-007, FR-009, SC-001, SC-004, DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-004)
-- [ ] T008 Run `pytest tests/integration/test_startup_task_template_seeding.py -q` and confirm T007 fails for the expected missing seeded blocker preflight before implementation.
+- [X] T007 Update failing startup seed assertions in `tests/integration/test_startup_task_template_seeding.py` so the persisted global `jira-orchestrate` template includes the blocker preflight after In Progress and before MoonSpec lifecycle steps. (FR-001, FR-002, FR-007, FR-009, SC-001, SC-004, DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-004)
+- [X] T008 Run `pytest tests/integration/test_startup_task_template_seeding.py -q` and confirm T007 fails for the expected missing seeded blocker preflight before implementation.
 
 ### Implementation
 
-- [ ] T009 Add the Jira blocker preflight step to `api_service/data/task_step_templates/jira-orchestrate.yaml` after `Move Jira issue to In Progress` and before `Load Jira preset brief`, with trusted Jira fetch, blocker-link inspection, Done-only continuation, fail-closed status handling, and operator-readable blocked output instructions. (FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-010, SC-001, SC-002, SC-003, SC-004, SC-005, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008)
-- [ ] T010 Preserve existing Jira Orchestrate lifecycle wording in `api_service/data/task_step_templates/jira-orchestrate.yaml` for In Progress transition, Jira preset brief loading, MoonSpec stages, pull request handoff, and Code Review transition. (FR-007, FR-008, FR-009, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003)
-- [ ] T011 Run `pytest tests/unit/api/test_task_step_templates_service.py -q` and update only the intentional Jira Orchestrate expectations until the focused unit suite passes. (FR-001-FR-010)
-- [ ] T012 Run `pytest tests/integration/test_startup_task_template_seeding.py -q` and update only the intentional seeded Jira Orchestrate expectations until the focused integration suite passes. (FR-001-FR-010)
+- [X] T009 Add the Jira blocker preflight step to `api_service/data/task_step_templates/jira-orchestrate.yaml` after `Move Jira issue to In Progress` and before `Load Jira preset brief`, with trusted Jira fetch, blocker-link inspection, Done-only continuation, fail-closed status handling, and operator-readable blocked output instructions. (FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-010, SC-001, SC-002, SC-003, SC-004, SC-005, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008)
+- [X] T010 Preserve existing Jira Orchestrate lifecycle wording in `api_service/data/task_step_templates/jira-orchestrate.yaml` for In Progress transition, Jira preset brief loading, MoonSpec stages, pull request handoff, and Code Review transition. (FR-007, FR-008, FR-009, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003)
+- [X] T011 Run `pytest tests/unit/api/test_task_step_templates_service.py -q` and update only the intentional Jira Orchestrate expectations until the focused unit suite passes. (FR-001-FR-010)
+- [X] T012 Run `pytest tests/integration/test_startup_task_template_seeding.py -q` and update only the intentional seeded Jira Orchestrate expectations until the focused integration suite passes. (FR-001-FR-010)
 
 ### Story Validation
 
-- [ ] T013 Validate the expanded `jira-orchestrate` preset from `tests/unit/api/test_task_step_templates_service.py` covers unresolved blocker, resolved blocker, no blocker, missing blocker-status, non-blocker-link, In Progress preservation, and Code Review preservation semantics from `specs/202-jira-orchestrate-blocker-preflight/spec.md`. (Acceptance Scenarios 1-5, Edge Cases, SC-001-SC-005)
+- [X] T013 Validate the expanded `jira-orchestrate` preset from `tests/unit/api/test_task_step_templates_service.py` covers unresolved blocker, resolved blocker, no blocker, missing blocker-status, non-blocker-link, In Progress preservation, and Code Review preservation semantics from `specs/202-jira-orchestrate-blocker-preflight/spec.md`. (Acceptance Scenarios 1-5, Edge Cases, SC-001-SC-005)
 
 **Checkpoint**: The story is fully covered by red-first unit and integration tests, implemented in the seeded preset, and independently testable through focused commands.
 
@@ -84,11 +84,11 @@
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [ ] T014 [P] Review `specs/202-jira-orchestrate-blocker-preflight/quickstart.md` and update it only if final commands or environment blockers differ from the implemented validation path. (SC-005)
-- [ ] T015 [P] Review `specs/202-jira-orchestrate-blocker-preflight/contracts/jira-orchestrate-blocker-preflight.md` against the implemented preset wording and update it only if the contract needs clarification. (DESIGN-REQ-004, DESIGN-REQ-007)
-- [ ] T016 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full required unit verification or record the exact environment blocker in `specs/202-jira-orchestrate-blocker-preflight/verification.md`. (SC-005)
-- [ ] T017 Run `./tools/test_integration.sh` when Docker is available, or record the exact Docker socket blocker and focused integration evidence in `specs/202-jira-orchestrate-blocker-preflight/verification.md`. (SC-005)
-- [ ] T018 Run `/speckit.verify` against `specs/202-jira-orchestrate-blocker-preflight/spec.md` after implementation and tests pass, then record the final verdict and evidence in `specs/202-jira-orchestrate-blocker-preflight/verification.md`. (FR-001-FR-010, SC-001-SC-005, DESIGN-REQ-001-DESIGN-REQ-008)
+- [X] T014 [P] Review `specs/202-jira-orchestrate-blocker-preflight/quickstart.md` and update it only if final commands or environment blockers differ from the implemented validation path. (SC-005)
+- [X] T015 [P] Review `specs/202-jira-orchestrate-blocker-preflight/contracts/jira-orchestrate-blocker-preflight.md` against the implemented preset wording and update it only if the contract needs clarification. (DESIGN-REQ-004, DESIGN-REQ-007)
+- [X] T016 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for full required unit verification or record the exact environment blocker in `specs/202-jira-orchestrate-blocker-preflight/verification.md`. (SC-005)
+- [X] T017 Run `./tools/test_integration.sh` when Docker is available, or record the exact Docker socket blocker and focused integration evidence in `specs/202-jira-orchestrate-blocker-preflight/verification.md`. (SC-005)
+- [X] T018 Run `/speckit.verify` against `specs/202-jira-orchestrate-blocker-preflight/spec.md` after implementation and tests pass, then record the final verdict and evidence in `specs/202-jira-orchestrate-blocker-preflight/verification.md`. (FR-001-FR-010, SC-001-SC-005, DESIGN-REQ-001-DESIGN-REQ-008)
 
 ---
 
