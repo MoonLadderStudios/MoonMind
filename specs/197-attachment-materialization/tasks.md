@@ -13,7 +13,7 @@
 
 - Unit tests: `./tools/test_unit.sh tests/unit/agents/codex_worker/test_attachment_materialization.py`
 - Integration tests: `./tools/test_unit.sh tests/unit/agents/codex_worker/test_attachment_materialization.py`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -89,8 +89,8 @@
 ## Phase 4: Polish & Verification
 
 - [X] T018 [P] Review `specs/197-attachment-materialization/quickstart.md` against the implemented commands and update only if command evidence changes (SC-007)
-- [X] T019 Create `specs/197-attachment-materialization/verification.md` with implementation evidence, test results, MM-370 traceability, and `/speckit.verify` verdict (FR-012, SC-007)
-- [X] T020 Run final `/speckit.verify` equivalent against `specs/197-attachment-materialization/spec.md` and preserve MM-370 in verification output (FR-012)
+- [X] T019 Create `specs/197-attachment-materialization/verification.md` with implementation evidence, test results, MM-370 traceability, and `/moonspec-verify` verdict (FR-012, SC-007)
+- [X] T020 Run final `/moonspec-verify` equivalent against `specs/197-attachment-materialization/spec.md` and preserve MM-370 in verification output (FR-012)
 
 ---
 

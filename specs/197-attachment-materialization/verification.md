@@ -55,4 +55,4 @@
 
 ## Final Verdict
 
-The MM-370 single-story runtime feature is implemented and verified against the preserved Jira preset brief. The implementation satisfies the one-story spec, source design mappings, and required unit/worker-boundary evidence.
+The MM-370 single-story runtime feature is implemented and verified against the preserved Jira preset brief. The implementation satisfies the one-story spec, source design mappings, and required unit/worker-boundary evidence through the `/moonspec-verify` equivalent recorded here.
