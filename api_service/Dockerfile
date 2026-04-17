@@ -220,10 +220,6 @@ ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
 
 WORKDIR /app
 
-RUN build_id="${MOONMIND_BUILD_ID:-}" \
-    && if [ -z "${build_id}" ]; then build_id="$(date -u +%Y%m%d.%H%M)"; fi \
-    && printf '%s\n' "${build_id}" > /app/.moonmind-build-id
-
 # Copy Codex and Gemini/Claude artifacts from the tooling builder so the runtime
 # image retains only the compiled CLIs and minimal Node runtime needed to
 # execute them.
@@ -338,6 +334,10 @@ COPY --from=frontend-builder /build/api_service/static/task_dashboard/ /opt/moon
 
 RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh
+
+RUN build_id="${MOONMIND_BUILD_ID:-}" \
+    && if [ -z "${build_id}" ]; then build_id="$(date -u +%Y%m%d.%H%M)"; fi \
+    && printf '%s\n' "${build_id}" > /app/.moonmind-build-id
 
 EXPOSE 5000
 
