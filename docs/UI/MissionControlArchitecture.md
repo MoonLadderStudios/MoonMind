@@ -258,7 +258,20 @@ The detail page is the right place for:
 - managed-run observability (artifact-backed logs, diagnostics — not terminal embeds)
 - action surfaces
 
-## 9.3 Advanced/debug information stays secondary
+## 9.3 Preset provenance on task surfaces
+
+Mission Control may explain preset-derived work in task list, task detail, and edit/rerun reconstruction surfaces, but **Preset provenance** is explanatory metadata, not a runtime execution model.
+
+Rules:
+
+* task list rows may show compact preset-derived context only when it helps scanning and does not crowd out title, status, workflow label, runtime, and timing fields
+* task detail may show provenance summaries and chips for **Manual**, **Preset**, and **Preset path**
+* edit/rerun reconstruction may show preserved preset bindings, detached state, and include-path context when those values are available from the submitted task snapshot
+* flat steps remain the primary execution ordering model, even when the UI groups or labels steps by preset origin
+* if preset provenance is unavailable, stale, or policy-hidden, the UI falls back to the flat step presentation without implying missing runtime work
+* preset grouping must never imply nested runtime behavior, subtasks, sub-plans, or separate workflow runs for preset includes
+
+## 9.4 Advanced/debug information stays secondary
 
 Advanced metadata may be shown in a dedicated facts rail, metadata drawer, or debug section, but it should not dominate the normal operator-facing layout.
 
@@ -470,6 +483,7 @@ Rules:
 * step rows may carry `childWorkflowId`, `childRunId`, and `taskRunId`
 * when a step has `taskRunId`, the Logs & Diagnostics area should embed or deep-link the existing `/api/task-runs/*` observability surfaces for that step
 * the client must not infer step completion or “latest output” by parsing logs or sorting raw artifacts locally
+* preset-derived step metadata may be rendered as Manual, Preset, or Preset path chips, but those chips explain provenance only and do not change step order, dependency semantics, or completion rules
 
 The task detail page must include a dedicated **Observability** area for managed-run evidence. This is the canonical UI hierarchy:
 
@@ -745,6 +759,9 @@ Rollout order:
 * do not expose raw source-precedence logic directly to ordinary users
 * keep submit flows organized around task-shaped product language
 * let the backend decide the workflow type and execution routing
+* `/tasks/new` may preview composed presets and show preset grouping before submission
+* unresolved preset includes must be rejected before runtime submission; they must not be sent as task work for a worker or adapter to resolve later
+* submit previews may explain preset provenance, but the submitted execution payload remains flat resolved steps plus durable task snapshot metadata
 
 ## 15.3 Backend mapping for submit
 
@@ -852,6 +869,9 @@ Mission Control should support:
 * respect preview/raw access policy signals
 * do not assume all artifacts are safe for inline display
 * treat artifacts as immutable references
+* Expansion summaries or preset include-tree artifacts are secondary explanatory evidence
+* flat steps, step logs, diagnostics, and output artifacts remain the canonical execution evidence
+* the UI must not infer execution order, step completion, or latest output from Expansion summaries
 
 ## 17.4 Run scoping
 
@@ -875,6 +895,9 @@ The generic artifact panel remains secondary to the step-expander artifact group
 * advanced/debug term: **workflow execution**
 * use **agent skill** or **skill set** for instruction bundles
 * never present Temporal Task Queues as the UI meaning of “queue”
+* use **preset** for operator-facing authored preset concepts
+* use **binding** or **provenance** for internal preset metadata
+* do not describe preset includes as subtasks, sub-plans, or separate workflow runs
 
 ## 18.2 Identifier policy
 
