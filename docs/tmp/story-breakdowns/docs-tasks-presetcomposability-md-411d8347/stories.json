@@ -1,0 +1,682 @@
+{
+  "source": {
+    "title": "Preset Composability",
+    "path": "docs/Tasks/PresetComposability.md",
+    "referencePath": "docs/Tasks/PresetComposability.md",
+    "originalDesignText": "# Preset Composability\n\nThis document proposes desired-state updates for the MoonMind documents that should change to make preset composability a first-class feature.\n\nDesign posture throughout:\n\n- Presets are authoring-time control-plane objects.\n- A preset may contain concrete steps and preset includes.\n- Preset composition resolves recursively at expansion time.\n- Execution still consumes a flat `PlanDefinition` / flat step set.\n- Runtime and workflow behavior do not become recursively preset-aware.\n- The authoritative edit/rerun snapshot preserves both:\n  - the authored preset composition tree, and\n  - the flattened resolved steps that were actually submitted.\n\n---\n\n## 1. `docs/Tasks/TaskPresetsSystem.md`\n\n### 1.1 Update the purpose and relationship-to-plans sections\n\nReplace the current “preset = parameterized blueprint of steps” posture with:\n\n> A **Preset** is a versioned, parameterized authoring object that may contain:\n>\n> - concrete step blueprints\n> - includes of other presets\n>\n> Preset composition is a control-plane compile step. It is resolved recursively into a flat `PlanDefinition` before execution. Temporal workflows and runtime adapters never execute nested presets directly.\n\nAdd these explicit rules:\n\n- Preset composition is **compile-time only**.\n- The executor consumes only flattened plan nodes and edges.\n- Preset includes exist to reduce duplication and support reuse.\n- Preset composition does **not** introduce inheritance-based runtime behavior.\n- Preset composition does **not** require runtime catalog lookups after plan creation.\n\n### 1.2 Add terminology\n\nAdd these terms:\n\n| Term | Definition |\n| --- | --- |\n| **Preset Include** | A step-list entry that references another preset and contributes its resolved steps into the parent preset. |\n| **Expansion Tree** | The recursively resolved tree of root preset plus included presets before flattening. |\n| **Flattened Plan** | The ordered set of concrete plan nodes produced after recursive expansion. This is the only plan form sent to execution. |\n| **Preset Provenance** | Metadata carried on flattened steps describing which preset/include path produced the step. |\n| **Detachment** | The state in which a step that originated from a preset has been manually edited and no longer exactly matches the authored preset expansion. |\n\n### 1.3 Update goals and non-goals\n\nAdd goals:\n\n- allow presets to reuse other presets without copy-paste duplication\n- preserve deterministic expansion despite recursive composition\n- preserve enough source metadata for edit, rerun, reapply, and observability\n- make preset reuse first-class without changing runtime semantics\n\nAdd non-goals:\n\n- no runtime execution of nested presets\n- no child-preset step override/patch semantics in v1\n- no implicit inheritance where a parent preset edits the internals of a child preset\n- no silent re-expansion of already submitted runs against newer preset versions\n\n### 1.4 Replace the preset version model for `steps`\n\nKeep the top-level `steps` field, but redefine it as an ordered list of **preset entries**.\n\nCanonical union:\n\n```yaml\nsteps:\n  - kind: step\n    slug: analyze\n    title: Analyze issue\n    instructions: |-\n      Review the request:\n      {{ inputs.feature_request }}\n    skill:\n      id: moonspec-analyze\n      args: {}\n    annotations:\n      phase: analysis\n\n  - kind: include\n    preset: review-core\n    version: 1.2.0\n    as: core\n    inputs:\n      feature_request: \"{{ inputs.feature_request }}\"\n      repository: \"{{ inputs.repository }}\"\n    annotations:\n      role: reusable-review-block\n\n  - kind: step\n    slug: publish\n    title: Publish branch or PR\n    instructions: |-\n      Publish the result using the selected mode.\n    skill:\n      id: publish\n      args: {}\n```\n\nRules:\n\n- `kind: step` produces one concrete step blueprint.\n- `kind: include` references another preset version and contributes its resolved steps.\n- `version` on an include is required in the stored immutable preset version contract. Expansion-time “latest active” resolution is not a durable storage contract.\n- `as` is the include alias used for provenance, namespacing, debugging, and deterministic ID generation.\n- A parent preset may include the same child preset multiple times only when each include has a distinct `as`.\n- Includes are resolved server-side only.\n- Parent presets may pass mapped inputs to child presets.\n- Child presets may not be modified in-place by parent overrides in v1.\n\n### 1.5 Add scope and visibility rules for includes\n\nAdd:\n\n- `GLOBAL` presets may include only `GLOBAL` presets.\n- `PERSONAL` presets may include:\n  - visible `GLOBAL` presets\n  - the owner’s own `PERSONAL` presets\n- A preset must never include a preset the current author or expansion context cannot read.\n- Expansion fails fast if an included preset is missing, inactive, unreadable, or version-incompatible.\n\n### 1.6 Add recursive expansion rules\n\nAdd a new section, **Composable expansion pipeline**:\n\n1. Resolve the root preset version.\n2. Validate root inputs.\n3. Build an expansion tree by recursively resolving `kind: include` entries.\n4. Detect cycles before rendering child content.\n5. Enforce maximum expansion depth.\n6. Enforce maximum flattened step count after expansion.\n7. Render all concrete step blueprints in resolved input context.\n8. Flatten the expansion tree into ordered concrete plan steps.\n9. Assign deterministic resolved step IDs.\n10. Attach preset provenance metadata to each flattened step.\n11. Infer edges from flattened ordering unless explicit dependency support is later enabled.\n12. Store:\n   - the flattened `PlanDefinition`\n   - the expansion tree or expansion summary artifact\n   - audit metadata linking the root preset application to the flattened result\n\n### 1.7 Add cycle detection and limits\n\nAdd explicit validation rules:\n\n- direct and indirect cycles are invalid\n- cycle detection uses the effective include chain, not just slug equality\n- the error must report the full include path that formed the cycle\n- the server must reject expansions that exceed:\n  - `max_include_depth`\n  - `max_expanded_step_count`\n  - `max_total_rendered_instruction_bytes`\n\nRepresentative failure:\n\n```json\n{\n  \"error\": \"PRESET_INCLUDE_CYCLE\",\n  \"message\": \"Preset include cycle detected\",\n  \"details\": {\n    \"path\": [\n      \"review-with-publish@1.0.0\",\n      \"review-core@1.2.0\",\n      \"review-with-publish@1.0.0\"\n    ]\n  }\n}\n```\n\n### 1.8 Replace deterministic step ID rules\n\nReplace index-only language with a path-aware rule:\n\n> Deterministic resolved step IDs are derived from:\n>\n> - the root preset slug and version\n> - the include alias path from the root to the producing blueprint\n> - the producing blueprint step slug or local index\n> - the canonical root input hash\n\nRepresentative rule:\n\n```text\ntpl:{root_slug}:{root_version}:{include_path}:{local_step_slug}:{input_hash8}\n```\n\nRepresentative flattened IDs:\n\n- `tpl:review-with-publish:1.0.0:core.analyze:a1b2c3d4`\n- `tpl:review-with-publish:1.0.0:core.test:a1b2c3d4`\n- `tpl:review-with-publish:1.0.0:publish:a1b2c3d4`\n\nRules:\n\n- IDs must be stable for the same stored preset version + include tree + inputs.\n- IDs must not depend on transient database ordering.\n- The include alias path is part of the stable identity of a resolved step.\n\n### 1.9 Add flattened step provenance\n\nAdd a canonical provenance shape on each resolved step before plan storage:\n\n```json\n{\n  \"source\": {\n    \"kind\": \"preset_step\",\n    \"rootPreset\": {\n      \"slug\": \"review-with-publish\",\n      \"version\": \"1.0.0\"\n    },\n    \"includePath\": [\n      { \"slug\": \"review-with-publish\", \"version\": \"1.0.0\", \"alias\": \"root\" },\n      { \"slug\": \"review-core\", \"version\": \"1.2.0\", \"alias\": \"core\" }\n    ],\n    \"blueprintStepSlug\": \"test\"\n  }\n}\n```\n\nRules:\n\n- source provenance is carried for edit/rerun/debugging\n- source provenance must not change execution semantics\n- manual steps remain `source.kind = \"manual\"`\n\n### 1.10 Update the expand API contract\n\nExtend the expand response to optionally return both tree and flat views.\n\nRepresentative response:\n\n```json\n{\n  \"composition\": {\n    \"rootPreset\": { \"slug\": \"review-with-publish\", \"version\": \"1.0.0\" },\n    \"includes\": [\n      {\n        \"alias\": \"core\",\n        \"preset\": { \"slug\": \"review-core\", \"version\": \"1.2.0\" },\n        \"expandedStepCount\": 3\n      }\n    ],\n    \"expandedStepCount\": 4,\n    \"expansionDigest\": \"presetexp:sha256:abc123...\"\n  },\n  \"plan\": {\n    \"plan_version\": \"1.0\",\n    \"metadata\": {\n      \"title\": \"review-with-publish v1.0.0\",\n      \"created_at\": \"2026-04-16T00:00:00Z\"\n    },\n    \"nodes\": [\n      {\n        \"id\": \"tpl:review-with-publish:1.0.0:core.test:a1b2c3d4\",\n        \"title\": \"Run tests\",\n        \"tool\": { \"type\": \"skill\", \"name\": \"repo.run_tests\", \"version\": \"1.2.0\" },\n        \"inputs\": {},\n        \"source\": {\n          \"kind\": \"preset_step\",\n          \"includePath\": [\n            { \"slug\": \"review-with-publish\", \"version\": \"1.0.0\", \"alias\": \"root\" },\n            { \"slug\": \"review-core\", \"version\": \"1.2.0\", \"alias\": \"core\" }\n          ],\n          \"blueprintStepSlug\": \"test\"\n        }\n      }\n    ],\n    \"edges\": []\n  },\n  \"planArtifactRef\": \"art:sha256:789abc...\",\n  \"warnings\": []\n}\n```\n\nRules:\n\n- `plan` remains the execution contract\n- `composition` is control-plane introspection and preview data\n- preview callers may request tree-only, flat-only, or both\n- expansion output must be deterministic for the same pinned preset versions and inputs\n\n### 1.11 Add save-as-preset preservation semantics\n\nAdd:\n\n- When saving current steps as a preset, MoonMind should preserve preset includes where intact preset provenance still exists.\n- Detached or custom steps are serialized as `kind: step`.\n- A saved preset must not claim an include if the saved content no longer matches the included preset’s authored expansion.\n- Preservation of composition is opportunistic and exact-match based, not fuzzy.\n\n### 1.12 Add execution boundary language\n\nAdd a direct statement:\n\n> The executor never interprets nested preset semantics. Recursive composition is completely resolved before the `PlanDefinition` artifact is written. Runtime execution remains flat, deterministic, and plan-based.\n\n---\n\n## 2. `docs/UI/CreatePage.md`\n\n### 2.1 Update product stance\n\nReplace “presets are reusable step blueprints” with:\n\n> Presets are reusable authoring objects that may contain concrete steps and other presets. The Create page may present preset composition to the user, but execution is always based on flattened resolved steps.\n\nAdd:\n\n- the Create page is allowed to show preset-group structure\n- the draft must preserve both authored preset binding state and flat step state\n- manual steps and preset-derived steps may coexist in one ordered draft\n\n### 2.2 Update the draft model\n\nReplace `appliedTemplates` emphasis with first-class preset bindings.\n\nAdd representative browser model:\n\n```ts\ninterface PresetIncludeRef {\n  slug: string;\n  version: string;\n  alias: string;\n}\n\ninterface AppliedPresetBinding {\n  localId: string;\n  slug: string;\n  version: string;\n  alias: string;\n  inputs: Record<string, unknown>;\n  expansionDigest: string;\n  state: \"applied\" | \"needs_reapply\" | \"partially_detached\" | \"detached\";\n  includeTree: Array<{\n    slug: string;\n    version: string;\n    alias: string;\n    children: unknown[];\n  }>;\n}\n\ninterface StepSource {\n  kind: \"manual\" | \"preset\";\n  bindingLocalId?: string;\n  includePath?: PresetIncludeRef[];\n  blueprintStepSlug?: string;\n  detached?: boolean;\n}\n\ninterface StepDraft {\n  localId: string;\n  id: string;\n  title: string;\n  instructions: string;\n  source: StepSource;\n  skillId: string;\n  skillArgs: string;\n  skillRequiredCapabilities: string;\n  attachments: DraftAttachment[];\n}\n```\n\nRules:\n\n- `AppliedPresetBinding` is the draft-level source of preset authoring truth\n- `StepDraft.source` preserves resolved provenance for each step\n- the browser must not rely on text matching alone to understand preset origin\n- a preset-derived step may become detached without deleting the overall binding\n\n### 2.3 Replace “template-bound” with “preset-bound”\n\nRename the behavioral concept throughout:\n\n- `template-bound step` → `preset-bound step`\n- compatibility aliases may exist in implementation, but docs should use preset language\n\nDesired-state rules:\n\n- a preset-bound step is one whose authored content still exactly matches the resolved output of a preset binding\n- manual edits detach only the edited step by default\n- a root preset binding becomes `partially_detached` when some but not all of its produced steps are detached\n- a root preset binding becomes `detached` only when none of its produced steps remain preset-bound\n\n### 2.4 Add preset group rendering rules\n\nUnder the step editor and preset area, add:\n\n- the UI may render applied presets as collapsible groups\n- nested preset structure may be shown in preview or edit affordances\n- the canonical editable execution order remains the flattened step list\n- users may insert manual steps:\n  - before a preset group\n  - between preset groups\n  - after a preset group\n- users do not directly drag child steps across preset boundaries while they remain preset-bound unless the system detaches those steps\n\n### 2.5 Replace preset application behavior\n\nCurrent desired state should become:\n\n- selecting a preset alone does not modify the draft\n- `Apply` creates a new root preset binding in the draft\n- applying a preset resolves the preset composition recursively through the server\n- the page receives:\n  - preset binding metadata\n  - the flattened resolved step list\n  - source provenance for each step\n- when the form contains only the initial placeholder step, that placeholder may be replaced\n- otherwise, the newly applied preset contributes a new grouped block of resolved steps at the insertion point\n\nAdd a new preview rule:\n\n- before apply, the UI should be able to show:\n  - a structured preset composition preview\n  - the flattened resolved step preview\n\n### 2.6 Add reapply semantics for composed presets\n\nReapply rules:\n\n- changing root preset input values marks the root binding `needs_reapply`\n- if the root preset passes those values into included presets, the root binding still remains the single dirty object the user re-applies\n- manual edits to child steps do not automatically disappear on input change\n- `Reapply preset` must clearly state whether it will:\n  - update only still-bound steps, or\n  - replace the full contributed block\n- desired-state behavior: reapply updates only steps that are still preset-bound; detached steps remain untouched unless the user explicitly requests full replacement\n\nRepresentative copy:\n\n- `Reapply will update 3 preset-bound steps. 1 customized step will remain unchanged.`\n\n### 2.7 Add save-current-steps-as-preset behavior\n\nDesired-state rules:\n\n- save-as-preset preserves intact preset includes where exact provenance remains available\n- detached/custom steps are saved as concrete `kind: step` entries\n- the UI should not silently flatten intact composition during save\n- the user may optionally choose “flatten before save” as an explicit advanced option, not the default\n\n### 2.8 Update edit and rerun contract\n\nAdd:\n\n- edit and rerun reconstruct:\n  - applied preset bindings\n  - binding state (`applied`, `needs_reapply`, `partially_detached`, `detached`)\n  - flattened steps with source provenance\n- edit and rerun must not degrade every preset-authored run into manual flat steps if preserved authoring metadata exists\n- if preset binding metadata is unavailable but flat step provenance exists, the page may reconstruct a degraded flat draft and must surface that degradation explicitly\n- if neither binding metadata nor usable source provenance exists, the page falls back to manual flat-step reconstruction and must not imply that reapply is available\n\nRepresentative degraded copy:\n\n- `This task was reconstructed from flat steps. Original preset binding metadata is unavailable, so preset reapply is not supported for this draft.`\n\n### 2.9 Update submission contract\n\nAdd a sharper boundary:\n\n- the Create page submits flat resolved steps for execution readiness\n- the same request or its authoritative snapshot also preserves authored preset bindings and step provenance for edit/rerun UX\n- the execution plane must not require a preset catalog lookup to start the run\n- preset composition is therefore preserved for UX and observability, not as a runtime dependency\n\n### 2.10 Add testing requirements\n\nAdd tests for:\n\n1. recursively composed preset preview returns both tree and flat views\n2. applying a preset with included presets creates one root binding and multiple resolved steps\n3. cycle or missing-include errors are surfaced without corrupting the draft\n4. editing one preset-derived step detaches only that step\n5. reapply updates only still-bound steps\n6. save-as-preset preserves intact composition when available\n7. edit/rerun reconstructs preset binding state when snapshot metadata exists\n8. degraded reconstruction falls back to flat steps with explicit user notice\n\n---\n\n## 3. `docs/Tasks/TaskArchitecture.md`\n\n### 3.1 Update the system snapshot\n\nAdd these desired-state bullets:\n\n- presets are recursively composable authoring objects\n- preset composition resolves entirely in the control plane\n- the authoritative snapshot preserves both authored preset bindings and flattened resolved steps\n- execution remains flat-step / flat-plan based\n\n### 3.2 Add a control-plane compilation phase\n\nAdd a new subsection after authoring and validation:\n\n> **Preset compilation**\n>\n> The control plane resolves preset bindings, expands included presets recursively, validates the expansion tree, flattens the result into concrete steps, and preserves provenance metadata before the execution contract is finalized.\n\nRules:\n\n- recursive preset resolution is a control-plane concern\n- cycle detection and include visibility checks happen before execution submission\n- runtime workers never perform recursive preset expansion\n- edit/rerun reconstruction relies on snapshot data, not on re-reading live preset definitions by default\n\n### 3.3 Update task contract normalization\n\nExtend normalization responsibilities:\n\n- preserve authored preset binding metadata in the authoritative snapshot\n- preserve flattened step provenance\n- normalize manual and preset-derived steps into one ordered execution contract\n- guarantee that the execution payload is already fully resolved\n\n### 3.4 Update the canonical task-shaped contract\n\nAdd optional authored preset metadata and per-step provenance:\n\n```ts\ninterface AppliedPresetBindingSnapshot {\n  bindingId: string;\n  slug: string;\n  version: string;\n  alias: string;\n  inputs: Record<string, unknown>;\n  expansionDigest: string;\n  state: \"applied\" | \"needs_reapply\" | \"partially_detached\" | \"detached\";\n}\n\ninterface TaskStepSource {\n  kind: \"manual\" | \"preset\";\n  bindingId?: string;\n  includePath?: Array<{ slug: string; version: string; alias: string }>;\n  blueprintStepSlug?: string;\n  detached?: boolean;\n}\n\ninterface TaskStepPayload {\n  id?: string;\n  title?: string;\n  instructions?: string;\n  inputAttachments?: TaskInputAttachmentRef[];\n  source?: TaskStepSource;\n  skill?: {\n    id?: string;\n    args?: Record<string, unknown>;\n    requiredCapabilities?: string[];\n  };\n}\n\ninterface TaskPayload {\n  instructions?: string;\n  inputAttachments?: TaskInputAttachmentRef[];\n  steps?: TaskStepPayload[];\n  authoredPresets?: AppliedPresetBindingSnapshot[];\n  runtime?: {\n    mode?: string;\n    profileId?: string;\n    model?: string;\n    effort?: string;\n  };\n}\n```\n\nRules:\n\n- `authoredPresets` is for control-plane durability and reconstruction\n- `steps[]` is the execution-ready flattened step list\n- `steps[].source` is optional execution metadata and is ignored for runtime semantics\n- absence of `authoredPresets` is valid for manual tasks\n\n### 3.5 Add snapshot durability requirements\n\nStrengthen the snapshot section:\n\nThe authoritative snapshot must preserve:\n\n- root preset bindings and pinned versions\n- include-tree summary or equivalent binding reconstruction data\n- per-step source provenance\n- detachment state when a preset-derived step has been customized\n- the final flat step order actually submitted\n\nRules:\n\n- a run must remain executable even if the preset catalog later changes\n- edit/rerun reconstruction should prefer the preserved snapshot over live preset lookups\n- live preset lookups are a preview/reapply aid, not the authoritative record of what was submitted\n\n### 3.6 Add execution-plane boundary language\n\nAdd a strong statement:\n\n> The execution plane receives already resolved steps. It does not execute preset trees, perform recursive preset expansion, or depend on the preset catalog for correctness.\n\n### 3.7 Update invariants\n\nAdd two new invariants:\n\n11. **Preset composition is compile-time only**  \n   Nested presets are resolved in the control plane before plan submission.\n\n12. **Execution does not depend on live preset lookup**  \n   A submitted run remains executable and reconstructible from its stored snapshot and artifacts even if preset definitions later change.\n\n---\n\n## 4. `docs/Tasks/SkillAndPlanContracts.md`\n\n### 4.1 Update the document boundary\n\nAdd:\n\n- preset composition is an authoring concern, not an execution concern\n- this document defines only the flattened execution contract after preset expansion\n- plans must not contain unresolved preset includes\n\n### 4.2 Add a rule under plan production\n\nAdd a subsection:\n\n> **Preset expansion boundary**\n>\n> A preset compiler or expansion service may produce a `PlanDefinition`, but a `PlanDefinition` itself contains only concrete nodes and edges. Nested preset includes are invalid inside the runtime plan contract.\n\nRules:\n\n- `PlanDefinition.nodes[]` must be executable plan nodes only\n- preset include objects must not appear in the stored plan artifact\n- recursive composition must be fully resolved before validation and execution\n\n### 4.3 Extend the plan node contract with optional provenance\n\nAdd optional node metadata:\n\n```json\n{\n  \"id\": \"tpl:review-with-publish:1.0.0:core.test:a1b2c3d4\",\n  \"title\": \"Run tests\",\n  \"tool\": {\n    \"type\": \"skill\",\n    \"name\": \"repo.run_tests\",\n    \"version\": \"1.2.0\"\n  },\n  \"inputs\": {},\n  \"source\": {\n    \"kind\": \"preset_step\",\n    \"binding_id\": \"preset-binding-1\",\n    \"include_path\": [\n      { \"slug\": \"review-with-publish\", \"version\": \"1.0.0\", \"alias\": \"root\" },\n      { \"slug\": \"review-core\", \"version\": \"1.2.0\", \"alias\": \"core\" }\n    ],\n    \"blueprint_step_slug\": \"test\",\n    \"detached\": false\n  }\n}\n```\n\nRules:\n\n- `source` metadata is optional\n- `source` metadata is for UI, observability, and reconstruction\n- executor scheduling, readiness, concurrency, and failure handling do not depend on `source`\n\n### 4.4 Update validation rules\n\nAdd to plan validation:\n\n- plans must not contain unresolved preset include entries\n- if `source.kind = \"preset_step\"`, its fields must be structurally valid when present\n- invalid source provenance is a validation error only if the plan claims preset provenance; absence of provenance is allowed\n\n### 4.5 Update examples and semantics\n\nAdd a note after the DAG example:\n\n> A plan may originate from manual step authoring, preset expansion, or another plan-producing tool. Regardless of origin, the plan contract is always the same flattened node-and-edge graph.\n\n### 4.6 Add an explicit execution invariant\n\nAdd:\n\n- nested preset semantics do not exist at runtime\n- runtime behavior is defined only by nodes, edges, policies, artifacts, and tool contracts\n- preset provenance may be visible, but it is never executable logic\n\n---\n\n## 5. `docs/UI/MissionControlArchitecture.md`\n\n### 5.1 Update the implementation snapshot / purpose\n\nAdd preset-composition scope to Mission Control:\n\n- Mission Control must support preview, edit, and detail rendering of preset-derived work without making preset composition a runtime concept\n- Create and detail surfaces may show preset provenance and grouping\n- list pages remain flat and high-signal; they do not need nested preset structure\n\n### 5.2 Update task detail page architecture\n\nAdd to the detail page behavior:\n\n- task detail may show a compact preset provenance summary in the metadata or authoring section\n- step rows may show chips such as:\n  - `Manual`\n  - `Preset: review-with-publish`\n  - `Preset path: review-with-publish > core > test`\n- the Steps section remains execution-first; preset grouping is explanatory metadata, not the primary ordering model\n\nRules:\n\n- detail pages do not reconstruct runtime semantics from preset provenance\n- detail pages should make it easy to understand whether a run came from manual authoring or preset composition\n- if the run was created from preserved binding metadata, the Edit action should reopen a composed draft when possible\n\n### 5.3 Update submit integration\n\nAdd:\n\n- `/tasks/new` may preview composed presets through the preset expansion API before create\n- direct execution submit still uses flat resolved task intent\n- Mission Control must not submit unresolved preset includes as runtime work\n\n### 5.4 Update artifact / evidence posture\n\nAdd:\n\n- preset expansion tree artifacts or expansion summaries may be shown as secondary evidence when available\n- the canonical execution evidence remains:\n  - flat steps\n  - logs\n  - diagnostics\n  - output artifacts\n\n### 5.5 Update compatibility vocabulary\n\nAdd a small clarification:\n\n- user-facing term: `preset`\n- internal expansion/debug term: `preset binding` or `preset provenance`\n- do not call preset includes “subtasks”, “sub-plans”, or separate workflow runs\n\n---\n\n## 6. `docs/Tasks/TaskProposalSystem.md`\n\n### 6.1 Update core invariants\n\nAdd these invariants:\n\n11. When proposal payloads preserve preset-derived authoring intent, that metadata must be advisory UX/reconstruction metadata, not a runtime dependency.\n12. Proposal promotion must not require a live preset catalog lookup for correctness.\n13. If proposal payloads carry preset provenance, the flattened step contract remains the canonical execution input.\n\n### 6.2 Update canonical payload contract\n\nAdd optional preserved preset authoring metadata:\n\n```json\n{\n  \"taskCreateRequest\": {\n    \"type\": \"task\",\n    \"payload\": {\n      \"repository\": \"owner/repo\",\n      \"task\": {\n        \"instructions\": \"Resolved task objective text.\",\n        \"authoredPresets\": [\n          {\n            \"bindingId\": \"preset-binding-1\",\n            \"slug\": \"review-with-publish\",\n            \"version\": \"1.0.0\",\n            \"alias\": \"root\",\n            \"inputs\": {\n              \"feature_request\": \"Review and publish this change\"\n            },\n            \"expansionDigest\": \"presetexp:sha256:abc123...\",\n            \"state\": \"partially_detached\"\n          }\n        ],\n        \"steps\": [\n          {\n            \"id\": \"tpl:review-with-publish:1.0.0:core.test:a1b2c3d4\",\n            \"instructions\": \"Run tests\",\n            \"source\": {\n              \"kind\": \"preset\",\n              \"bindingId\": \"preset-binding-1\",\n              \"includePath\": [\n                { \"slug\": \"review-with-publish\", \"version\": \"1.0.0\", \"alias\": \"root\" },\n                { \"slug\": \"review-core\", \"version\": \"1.2.0\", \"alias\": \"core\" }\n              ],\n              \"blueprintStepSlug\": \"test\",\n              \"detached\": false\n            }\n          }\n        ]\n      }\n    }\n  }\n}\n```\n\nRules:\n\n- proposal payloads may preserve authored preset metadata\n- proposal payloads must still carry execution-ready flat steps\n- preserving preset metadata is optional and must not weaken execution determinism\n\n### 6.3 Add promotion rules for preset-derived proposals\n\nAdd:\n\n- promotion preserves `authoredPresets` and per-step provenance by default\n- promotion validates the flat task payload as usual\n- promotion does **not** re-expand live presets by default\n- a future explicit “refresh against latest preset version” workflow may exist, but it is not the default promotion path\n\nThis avoids drift between proposal review time and proposal promotion time.\n\n### 6.4 Update proposal-generation guidance\n\nAdd:\n\n- generators may preserve preset provenance from the parent run when it materially improves later review/edit ergonomics\n- generators should not fabricate preset bindings for work that was not actually authored from a preset\n- if the generated proposal does not preserve reliable preset metadata, it should emit a normal flat task payload only\n\n### 6.5 Update UI/observability section\n\nAdd:\n\n- proposal detail may show whether the proposed work is:\n  - manual\n  - preset-derived with preserved binding metadata\n  - preset-derived but flattened-only\n- proposal promotion UI may disclose when preset reapply/edit affordances are expected to survive after promotion\n\n---\n\n## 7. `docs/Temporal/101-PlansOverview.md` (or the equivalent plans overview/index doc)\n\nThis update is intentionally minimal.\n\nAdd one alignment paragraph near the overview/index section for plans:\n\n> Preset composition belongs to the control plane and is resolved before `PlanDefinition` creation. Plans remain flattened execution graphs of concrete nodes and edges. For authoring-time composition semantics, see `docs/Tasks/TaskPresetsSystem.md`. For runtime plan semantics, see `docs/Tasks/SkillAndPlanContracts.md`.\n\nAdd or update cross-links so the overview makes this boundary obvious.\n\n---\n\n## 8. Cross-document invariants that should match everywhere\n\nThese statements should read consistently across the updated documents.\n\n### 8.1 Authoring vs execution boundary\n\n- Presets may include other presets.\n- Recursive preset composition is resolved before execution.\n- Execution consumes flat steps / flat plans only.\n\n### 8.2 Determinism boundary\n\n- Submitted work must remain executable without a live preset catalog lookup.\n- Pinned preset versions and stored snapshots/provenance must be sufficient for reconstruction.\n\n### 8.3 UX durability boundary\n\n- Edit/rerun should preserve composed authoring intent when snapshot metadata exists.\n- If it does not exist, the system may degrade to flat-step editing, but must say so explicitly.\n\n### 8.4 No inheritance-based child override in v1\n\n- Parent presets may include child presets and pass inputs.\n- Parent presets do not patch or surgically override child internals in v1.\n\n### 8.5 Provenance is metadata, not runtime logic\n\n- Preset provenance exists for explanation, debugging, and reconstruction.\n- Executor semantics do not depend on provenance.\n\n---\n\n## 9. Recommended implementation order implied by the docs\n\n1. Update `TaskPresetsSystem.md` first.\n2. Update `CreatePage.md` next.\n3. Update `TaskArchitecture.md` to codify snapshot + control-plane compilation.\n4. Update `SkillAndPlanContracts.md` to harden the execution boundary.\n5. Align `MissionControlArchitecture.md`.\n6. Align `TaskProposalSystem.md`.\n7. Add the one-paragraph overview/index clarification in the plans overview doc.\n"
+  },
+  "extractedAt": "2026-04-17T02:24:46Z",
+  "outputMode": "jira",
+  "designSummary": "The design makes preset composability a first-class authoring capability while preserving a flat execution model. Preset includes are resolved recursively in the control plane into deterministic PlanDefinition artifacts with provenance, cycle/limit validation, and durable snapshots. Create, Mission Control, task architecture, plan contracts, proposal promotion, and overview documentation must all preserve the same boundary: composed authoring metadata improves edit, rerun, observability, and save-as-preset workflows, but runtime workers execute only resolved flat steps and never depend on live preset catalog lookup.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Preset composition posture",
+      "type": "requirement",
+      "source_section": "Design posture throughout",
+      "explanation": "Presets are authoring-time control-plane objects that may contain concrete steps and includes; execution remains flat and runtime behavior is not recursively preset-aware."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "TaskPresets purpose and terminology",
+      "type": "requirement",
+      "source_section": "1.1-1.3",
+      "explanation": "Task preset documentation must define includes, expansion trees, flattened plans, provenance, detachment, goals, and non-goals for composability."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Preset entries union",
+      "type": "state-model",
+      "source_section": "1.4",
+      "explanation": "Preset versions keep a top-level steps list but redefine it as an ordered union of kind: step and kind: include entries with pinned include versions, aliases, input mapping, and no v1 child overrides."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Include visibility and failure rules",
+      "type": "security",
+      "source_section": "1.5",
+      "explanation": "GLOBAL and PERSONAL presets have constrained include visibility, and expansion fails fast for unreadable, missing, inactive, or incompatible includes."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Composable expansion pipeline",
+      "type": "integration",
+      "source_section": "1.6",
+      "explanation": "Expansion resolves root inputs, recursively builds a tree, validates limits, renders steps, flattens plans, assigns deterministic IDs, attaches provenance, infers ordering edges, and stores plan plus summary artifacts."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Cycle detection and expansion limits",
+      "type": "constraint",
+      "source_section": "1.7",
+      "explanation": "Direct and indirect cycles are invalid, include paths must be reported, and depth, step count, and rendered instruction byte limits must be enforced."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Deterministic resolved step IDs",
+      "type": "artifact",
+      "source_section": "1.8",
+      "explanation": "Resolved step IDs are derived from root preset slug/version, include alias path, local step identity, and canonical input hash instead of transient indexes or database ordering."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Flattened step provenance",
+      "type": "artifact",
+      "source_section": "1.9",
+      "explanation": "Each resolved step may carry source provenance for edit, rerun, and debugging while manual steps remain manual and runtime semantics do not change."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Expand API tree and flat response",
+      "type": "integration",
+      "source_section": "1.10",
+      "explanation": "The expand API can return composition metadata and flat PlanDefinition views, with deterministic output for pinned versions and inputs."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Save-as-preset composition preservation",
+      "type": "state-model",
+      "source_section": "1.11 and 2.7",
+      "explanation": "Saving current steps as a preset preserves intact includes only when exact provenance remains; detached or custom steps serialize as concrete steps and flattening must be explicit."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Create page composed draft model",
+      "type": "state-model",
+      "source_section": "2.1-2.3",
+      "explanation": "Create page drafts preserve AppliedPresetBinding state and per-step source provenance, use preset-bound terminology, and support partial detachment without deleting the root binding."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Create page group rendering and apply flow",
+      "type": "ui",
+      "source_section": "2.4-2.5",
+      "explanation": "The UI may render applied presets as groups, supports manual steps around groups, applies presets through server-side recursive expansion, and previews both tree and flat views before apply."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Reapply and detachment UX",
+      "type": "state-model",
+      "source_section": "2.6",
+      "explanation": "Root input changes mark one binding dirty, reapply updates still-bound steps by default, detached steps remain untouched, and user copy must disclose the effect."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Edit/rerun reconstruction and degradation",
+      "type": "durability",
+      "source_section": "2.8",
+      "explanation": "Edit and rerun reconstruct bindings, state, and flattened provenance when available, degrade explicitly when metadata is missing, and must not imply reapply support without usable metadata."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Create submission boundary",
+      "type": "integration",
+      "source_section": "2.9",
+      "explanation": "Create submits flat resolved steps for execution while preserving authored bindings and provenance in the request or authoritative snapshot for UX and observability."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Create page test coverage",
+      "type": "test",
+      "source_section": "2.10",
+      "explanation": "Tests must cover composed preview, apply, cycle/missing errors, detachment, reapply, save-as-preset preservation, edit/rerun reconstruction, and degraded reconstruction."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "TaskArchitecture control-plane compilation",
+      "type": "integration",
+      "source_section": "3.1-3.3",
+      "explanation": "Task architecture must add preset compilation as a control-plane phase and normalize manual and preset-derived steps into one fully resolved execution contract."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Task payload authored preset snapshot",
+      "type": "state-model",
+      "source_section": "3.4-3.5",
+      "explanation": "TaskPayload gains optional authoredPresets and per-step source metadata, and authoritative snapshots preserve bindings, include summaries, provenance, detachment, and submitted order."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "TaskArchitecture execution invariants",
+      "type": "constraint",
+      "source_section": "3.6-3.7",
+      "explanation": "The execution plane receives already resolved steps, does not expand presets, and submitted runs remain executable and reconstructible without live preset lookup."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "SkillAndPlan flattened plan contract",
+      "type": "integration",
+      "source_section": "4.1-4.2",
+      "explanation": "SkillAndPlanContracts must define preset composition as outside execution; PlanDefinition artifacts contain only concrete nodes and edges and reject unresolved includes."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Plan node provenance validation",
+      "type": "state-model",
+      "source_section": "4.3-4.6",
+      "explanation": "Plan nodes may include optional source provenance for UI, observability, and reconstruction, but runtime scheduling and behavior depend only on nodes, edges, policies, artifacts, and tool contracts."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Mission Control provenance rendering",
+      "type": "ui",
+      "source_section": "5.1-5.5",
+      "explanation": "Mission Control supports preview, edit, detail provenance, chips, secondary expansion evidence, flat list posture, submit boundary, and vocabulary that avoids subtask/sub-plan language."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "TaskProposal preset metadata preservation",
+      "type": "integration",
+      "source_section": "6.1-6.5",
+      "explanation": "TaskProposalSystem may carry authored preset metadata and step provenance, promotes flat task payloads without re-expanding live presets by default, and never fabricates unreliable bindings."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Plans overview alignment",
+      "type": "documentation",
+      "source_section": "7",
+      "explanation": "The plans overview must clarify that preset composition is resolved before PlanDefinition creation and link authoring semantics to TaskPresetsSystem and runtime semantics to SkillAndPlanContracts."
+    },
+    {
+      "id": "DESIGN-REQ-025",
+      "title": "Cross-document invariant alignment",
+      "type": "constraint",
+      "source_section": "8",
+      "explanation": "All updated documents must consistently state authoring/execution, determinism, UX durability, no v1 child override inheritance, and provenance-as-metadata boundaries."
+    },
+    {
+      "id": "DESIGN-REQ-026",
+      "title": "Recommended implementation order",
+      "type": "migration",
+      "source_section": "9",
+      "explanation": "The docs imply an implementation order: TaskPresetsSystem, CreatePage, TaskArchitecture, SkillAndPlanContracts, MissionControlArchitecture, TaskProposalSystem, then plans overview."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Document composable preset expansion contracts",
+      "shortName": "preset-expansion",
+      "description": "As a task platform engineer, I want TaskPresetsSystem to define composable preset entries and deterministic expansion so presets can reuse other presets without changing runtime execution semantics.",
+      "sourceReference": {
+        "path": "docs/Tasks/PresetComposability.md",
+        "title": "Preset Composability",
+        "sections": [
+          "Design posture throughout",
+          "1. docs/Tasks/TaskPresetsSystem.md",
+          "8. Cross-document invariants"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-026"
+        ]
+      },
+      "independentTest": "Review the updated TaskPresetsSystem documentation and a representative expansion contract to confirm a composed preset with one include expands deterministically into flat steps with provenance, while invalid include visibility and cycles fail before plan creation.",
+      "acceptanceCriteria": [
+        "TaskPresetsSystem defines Preset Include, Expansion Tree, Flattened Plan, Preset Provenance, and Detachment.",
+        "Preset version steps are documented as a union of kind: step and kind: include entries with required pinned include versions and distinct aliases for repeated child includes.",
+        "Scope rules prevent GLOBAL presets from including PERSONAL presets and reject unreadable, missing, inactive, or incompatible includes.",
+        "The composable expansion pipeline documents recursive resolution, cycle detection, limit enforcement, deterministic ID assignment, provenance attachment, flattening, and artifact/audit storage.",
+        "Cycle and limit failures include enough detail to identify the include path that caused rejection.",
+        "Save-as-preset semantics preserve intact includes only when exact provenance remains and serialize detached or custom steps as concrete steps.",
+        "The executor boundary explicitly states that nested preset semantics are resolved before PlanDefinition storage."
+      ],
+      "requirements": [
+        "Define preset composition as compile-time control-plane behavior only.",
+        "Document kind: include storage semantics with pinned version, alias, input mapping, and no v1 child override behavior.",
+        "Document deterministic resolved step ID inputs and per-step provenance shape.",
+        "Document expand API output that can return composition and flat plan views.",
+        "Document exact-match preservation semantics for save-as-preset."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the base posture that presets compose at authoring time and execution remains flat.",
+        "DESIGN-REQ-002": "Owns TaskPresetsSystem purpose, terminology, goals, and non-goals.",
+        "DESIGN-REQ-003": "Owns the preset entries union and include semantics.",
+        "DESIGN-REQ-004": "Owns include scope, visibility, and fail-fast behavior.",
+        "DESIGN-REQ-005": "Owns the recursive expansion pipeline.",
+        "DESIGN-REQ-006": "Owns cycle detection and expansion limits.",
+        "DESIGN-REQ-007": "Owns deterministic ID rules.",
+        "DESIGN-REQ-008": "Owns flattened step provenance shape.",
+        "DESIGN-REQ-009": "Owns expand API tree and flat response semantics.",
+        "DESIGN-REQ-010": "Owns save-as-preset composition preservation at the preset contract level.",
+        "DESIGN-REQ-025": "Owns the cross-document invariants as the primary contract story.",
+        "DESIGN-REQ-026": "Appears first in the implementation order and enables the following stories."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "This story is documentation and contract oriented; implementation tasks are generated later by specify/plan/tasks."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Document Create page composed preset drafts",
+      "shortName": "create-preset-drafts",
+      "description": "As a Mission Control user, I want the Create page to preserve preset bindings, grouped preview, detachment, reapply, save-as-preset, and edit/rerun reconstruction so composed preset authoring remains understandable and durable.",
+      "sourceReference": {
+        "path": "docs/Tasks/PresetComposability.md",
+        "title": "Preset Composability",
+        "sections": [
+          "2. docs/UI/CreatePage.md",
+          "8. Cross-document invariants"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-026"
+        ]
+      },
+      "independentTest": "Use Create page documentation and UI contract tests to validate that applying a composed preset creates one root binding plus multiple sourced steps, editing one step only detaches that step, and edit/rerun either reconstructs bindings or shows explicit degraded-copy fallback.",
+      "acceptanceCriteria": [
+        "CreatePage describes presets as authoring objects that may include other presets while execution uses flattened resolved steps.",
+        "Draft state includes AppliedPresetBinding and StepDraft.source fields sufficient to track bindings, include paths, blueprint slugs, detachment, and expansion digest.",
+        "Docs use preset-bound terminology instead of template-bound terminology.",
+        "Preset application is server-expanded and receives binding metadata, flat steps, and per-step provenance; selecting a preset alone does not mutate the draft.",
+        "Reapply updates still-bound steps by default, leaves detached steps untouched, and discloses the exact effect to the user.",
+        "Save-as-preset preserves intact composition by default and requires explicit advanced action to flatten before save.",
+        "Edit/rerun reconstruction preserves binding state when possible and clearly warns when only flat reconstruction is available.",
+        "Testing requirements cover preview, apply, error handling, detachment, reapply, save-as-preset, reconstruction, and degraded fallback."
+      ],
+      "requirements": [
+        "Define browser-side draft bindings as the source of preset authoring truth.",
+        "Define preset grouping and insertion behavior without making the flattened execution order ambiguous.",
+        "Define reapply, detachment, save-as-preset, edit/rerun, and submission boundaries for composed presets.",
+        "Specify UI tests for success, error, and degraded reconstruction paths."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-011": "Owns the composed draft model and preset-bound terminology.",
+        "DESIGN-REQ-012": "Owns group rendering, insertion behavior, server-side apply, and preview modes.",
+        "DESIGN-REQ-013": "Owns reapply and detachment UX.",
+        "DESIGN-REQ-014": "Owns edit/rerun reconstruction and degraded-copy behavior.",
+        "DESIGN-REQ-015": "Owns Create submission boundary and snapshot preservation at the UI edge.",
+        "DESIGN-REQ-016": "Owns the Create page test list.",
+        "DESIGN-REQ-010": "Owns the UI-facing save-as-preset behavior.",
+        "DESIGN-REQ-025": "Reinforces UX durability and provenance-as-metadata invariants.",
+        "DESIGN-REQ-026": "Follows TaskPresetsSystem in the recommended implementation order."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Create page implementation will call the preset expansion API rather than resolving includes in the browser."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Document task snapshot and compilation boundary",
+      "shortName": "task-snapshot",
+      "description": "As a control-plane maintainer, I want TaskArchitecture to treat preset compilation as a control-plane phase and preserve authored preset metadata alongside flat steps so submitted work remains executable and reconstructible without live preset lookup.",
+      "sourceReference": {
+        "path": "docs/Tasks/PresetComposability.md",
+        "title": "Preset Composability",
+        "sections": [
+          "3. docs/Tasks/TaskArchitecture.md",
+          "8. Cross-document invariants"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-026"
+        ]
+      },
+      "independentTest": "Review the TaskArchitecture contract and validation tests to confirm a task payload can carry authoredPresets plus flat steps, and that the execution-ready payload is valid without reading the preset catalog.",
+      "acceptanceCriteria": [
+        "TaskArchitecture system snapshot says presets are recursively composable authoring objects resolved entirely in the control plane.",
+        "A Preset compilation subsection defines recursive resolution, tree validation, flattening, and provenance preservation before execution contract finalization.",
+        "Task contract normalization preserves authored preset binding metadata, flattened step provenance, manual and preset-derived step order, and fully resolved execution payloads.",
+        "TaskPayload includes optional authoredPresets and steps[].source metadata with documented runtime semantics.",
+        "Snapshot durability requirements preserve pinned bindings, include-tree summary, per-step provenance, detachment state, and final submitted order.",
+        "Execution-plane boundary language states that workers do not expand presets or depend on live preset catalog correctness."
+      ],
+      "requirements": [
+        "Document preset compilation as a control-plane phase.",
+        "Document task payload snapshot fields for authored presets and step source provenance.",
+        "Document durability rules that keep submitted runs executable after catalog changes.",
+        "Add invariants for compile-time-only composition and no live preset lookup dependency."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-017": "Owns control-plane compilation and normalization responsibilities.",
+        "DESIGN-REQ-018": "Owns authoredPresets and per-step source metadata in TaskPayload.",
+        "DESIGN-REQ-019": "Owns execution-plane boundary and invariants in TaskArchitecture.",
+        "DESIGN-REQ-015": "Owns the architecture side of preserving UI-submitted authored metadata plus flat steps.",
+        "DESIGN-REQ-025": "Reinforces determinism, UX durability, and provenance-as-metadata invariants.",
+        "DESIGN-REQ-026": "Follows CreatePage and precedes plan-contract hardening in the recommended order."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Stored snapshot shape is documented before concrete persistence implementation is specified."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Document flattened plan execution contract",
+      "shortName": "flat-plan-contract",
+      "description": "As a runtime contract owner, I want SkillAndPlanContracts to reject unresolved preset includes and treat provenance as optional metadata so the executor remains a flat graph executor regardless of authoring origin.",
+      "sourceReference": {
+        "path": "docs/Tasks/PresetComposability.md",
+        "title": "Preset Composability",
+        "sections": [
+          "4. docs/Tasks/SkillAndPlanContracts.md",
+          "8. Cross-document invariants"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-026"
+        ]
+      },
+      "independentTest": "Validate the plan contract documentation and plan validation tests by checking that concrete nodes with optional valid source provenance pass and unresolved preset include objects fail before execution.",
+      "acceptanceCriteria": [
+        "SkillAndPlanContracts states preset composition is an authoring concern and defines only the flattened execution contract after expansion.",
+        "PlanDefinition production rules state nodes are executable plan nodes only and include objects are invalid in stored plan artifacts.",
+        "Plan node examples include optional source metadata with binding_id, include_path, blueprint_step_slug, and detached fields.",
+        "Plan validation rejects unresolved preset include entries and structurally invalid claimed preset provenance while allowing absent provenance.",
+        "DAG semantics clarify that manual authoring, preset expansion, and other plan-producing tools all produce the same flattened node-and-edge graph.",
+        "Execution invariants state nested preset semantics do not exist at runtime and provenance is never executable logic."
+      ],
+      "requirements": [
+        "Document the preset expansion boundary in SkillAndPlanContracts.",
+        "Document optional source provenance on plan nodes.",
+        "Document validation rules for absent, valid, and invalid provenance.",
+        "Document that runtime behavior depends only on nodes, edges, policies, artifacts, and tool contracts."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-020": "Owns the flattened PlanDefinition contract boundary.",
+        "DESIGN-REQ-021": "Owns optional plan node provenance and validation semantics.",
+        "DESIGN-REQ-001": "Reinforces that runtime is not recursively preset-aware.",
+        "DESIGN-REQ-019": "Owns the plan-contract side of execution no-live-lookup behavior.",
+        "DESIGN-REQ-025": "Reinforces authoring/execution and provenance-as-metadata invariants.",
+        "DESIGN-REQ-026": "Follows TaskArchitecture in the recommended implementation order."
+      },
+      "dependencies": [
+        "STORY-001",
+        "STORY-003"
+      ],
+      "assumptions": [
+        "Plan validation can treat claimed invalid provenance as an error without requiring all plans to carry provenance."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Document Mission Control preset provenance surfaces",
+      "shortName": "mission-provenance",
+      "description": "As a Mission Control operator, I want task lists, detail pages, and create/edit flows to explain preset-derived work without implying nested runtime behavior.",
+      "sourceReference": {
+        "path": "docs/Tasks/PresetComposability.md",
+        "title": "Preset Composability",
+        "sections": [
+          "5. docs/UI/MissionControlArchitecture.md",
+          "8. Cross-document invariants"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-026"
+        ]
+      },
+      "independentTest": "Review Mission Control architecture and UI expectations to confirm detail pages can show preset provenance chips and expansion evidence while list pages and execution ordering remain flat and high-signal.",
+      "acceptanceCriteria": [
+        "MissionControlArchitecture includes preset-composition scope for preview, edit, and detail rendering without making composition a runtime concept.",
+        "Task detail behavior may show provenance summaries and chips for Manual, Preset, and Preset path.",
+        "Steps remain execution-first; preset grouping is explanatory metadata, not the primary ordering model.",
+        "Submit integration allows `/tasks/new` to preview composed presets but forbids unresolved preset includes as runtime work.",
+        "Expansion tree artifacts or summaries are secondary evidence; flat steps, logs, diagnostics, and output artifacts remain canonical execution evidence.",
+        "Vocabulary distinguishes user-facing preset from internal preset binding/provenance and forbids subtask, sub-plan, or separate workflow-run labels for includes."
+      ],
+      "requirements": [
+        "Document Mission Control preview, detail, edit, and submit behavior for preset-derived work.",
+        "Document detail-page provenance affordances and execution-first ordering.",
+        "Document artifact/evidence hierarchy for expansion summaries versus execution evidence.",
+        "Document compatibility vocabulary for preset includes."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-022": "Owns Mission Control provenance rendering, submit boundary, evidence posture, and vocabulary.",
+        "DESIGN-REQ-014": "Owns the UI architecture side of reopening composed drafts from preserved metadata.",
+        "DESIGN-REQ-015": "Owns the Mission Control submit boundary that sends flat resolved intent.",
+        "DESIGN-REQ-025": "Reinforces provenance as explanatory metadata only.",
+        "DESIGN-REQ-026": "Follows SkillAndPlanContracts in the recommended implementation order."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Detail-page rendering can initially be compact and metadata-focused rather than a full nested editor."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Document proposal promotion with preset provenance",
+      "shortName": "proposal-provenance",
+      "description": "As a proposal reviewer, I want task proposals to preserve reliable preset metadata when available while promoting the reviewed flat task payload without live re-expansion drift.",
+      "sourceReference": {
+        "path": "docs/Tasks/PresetComposability.md",
+        "title": "Preset Composability",
+        "sections": [
+          "6. docs/Tasks/TaskProposalSystem.md",
+          "8. Cross-document invariants"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-026"
+        ]
+      },
+      "independentTest": "Review TaskProposalSystem documentation and representative proposal payloads to confirm authoredPresets and source provenance can be preserved, promotion validates flat steps, and no live preset re-expansion is required by default.",
+      "acceptanceCriteria": [
+        "TaskProposalSystem invariants state preset-derived metadata is advisory UX/reconstruction metadata, not a runtime dependency.",
+        "Proposal promotion does not require live preset catalog lookup for correctness.",
+        "Canonical proposal payload examples may include task.authoredPresets and per-step source provenance alongside execution-ready flat steps.",
+        "Promotion preserves authoredPresets and per-step provenance by default while validating the flat task payload as usual.",
+        "Promotion does not re-expand live presets by default and documents any future refresh-latest workflow as explicit, not default.",
+        "Proposal generators may preserve reliable parent-run preset provenance but must not fabricate bindings for work not authored from a preset.",
+        "Proposal detail can distinguish manual, preset-derived with preserved binding metadata, and preset-derived flattened-only work."
+      ],
+      "requirements": [
+        "Document proposal payload support for optional authored preset metadata.",
+        "Document promotion behavior that avoids drift between review and promotion.",
+        "Document generator guidance for reliable versus fabricated provenance.",
+        "Document UI/observability treatment of proposal provenance states."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-023": "Owns TaskProposalSystem invariants, payload, promotion, generator, and UI/observability changes.",
+        "DESIGN-REQ-015": "Reinforces flat task payload as the execution-ready promotion input.",
+        "DESIGN-REQ-019": "Reinforces no live lookup for correctness.",
+        "DESIGN-REQ-025": "Reinforces determinism and provenance-as-metadata invariants.",
+        "DESIGN-REQ-026": "Follows MissionControlArchitecture in the recommended implementation order."
+      },
+      "dependencies": [
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Proposal payloads can remain valid when authoredPresets is absent."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Document plans overview preset boundary",
+      "shortName": "plans-overview",
+      "description": "As a documentation reader, I want the plans overview to link authoring-time preset composition to TaskPresetsSystem and runtime plan semantics to SkillAndPlanContracts so the boundary is discoverable.",
+      "sourceReference": {
+        "path": "docs/Tasks/PresetComposability.md",
+        "title": "Preset Composability",
+        "sections": [
+          "7. docs/Temporal/101-PlansOverview.md",
+          "8. Cross-document invariants"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-024",
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-026"
+        ]
+      },
+      "independentTest": "Inspect the equivalent plans overview/index documentation and confirm it contains a concise paragraph stating that preset composition is resolved before PlanDefinition creation and links to TaskPresetsSystem and SkillAndPlanContracts.",
+      "acceptanceCriteria": [
+        "The plans overview or equivalent index includes the requested alignment paragraph near plan overview content.",
+        "The paragraph states preset composition belongs to the control plane and is resolved before PlanDefinition creation.",
+        "The paragraph states plans remain flattened execution graphs of concrete nodes and edges.",
+        "The paragraph links authoring-time composition semantics to TaskPresetsSystem and runtime plan semantics to SkillAndPlanContracts.",
+        "No additional migration checklist is added to canonical docs beyond the requested concise boundary clarification."
+      ],
+      "requirements": [
+        "Add or update cross-links in the plans overview so the authoring/runtime boundary is obvious.",
+        "Keep the update intentionally minimal."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-024": "Owns the overview/index alignment paragraph.",
+        "DESIGN-REQ-001": "Reinforces control-plane composition and flat runtime posture.",
+        "DESIGN-REQ-020": "Reinforces that runtime plan semantics belong in SkillAndPlanContracts.",
+        "DESIGN-REQ-025": "Reinforces cross-document invariant alignment.",
+        "DESIGN-REQ-026": "Represents the final recommended documentation alignment step."
+      },
+      "dependencies": [
+        "STORY-001",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "If docs/Temporal/101-PlansOverview.md does not exist, the equivalent plans overview/index document should receive the paragraph."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001",
+      "STORY-004",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-004",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-025": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-026": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007"
+    ]
+  }
+}
