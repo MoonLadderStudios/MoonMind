@@ -4285,6 +4285,25 @@ describe("Task Create Entrypoint", () => {
     expect(screen.getByText("Schedule (optional)")).not.toBeNull();
   });
 
+  it("right-aligns Task Presets actions with Apply last", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetsSection = await screen.findByLabelText("Task Presets");
+    const saveButton = within(presetsSection).getByRole("button", {
+      name: "Save Current Steps as Preset",
+    });
+    const applyButton = within(presetsSection).getByRole("button", {
+      name: "Apply",
+    });
+    const actionRow = applyButton.closest(".actions");
+
+    expect(actionRow?.classList.contains("queue-template-actions")).toBe(true);
+    expect(
+      saveButton.compareDocumentPosition(applyButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("exposes the canonical Create page section order in create mode", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 

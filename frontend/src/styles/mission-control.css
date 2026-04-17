@@ -1774,6 +1774,10 @@ button.secondary:hover {
   flex-wrap: wrap;
 }
 
+.queue-template-actions {
+  justify-content: flex-end;
+}
+
 .queue-step-actions {
   align-items: center;
   justify-content: space-between;
