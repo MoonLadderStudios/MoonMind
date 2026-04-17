@@ -40,7 +40,9 @@ Desired-state additions clarified by this document:
 
 - image inputs are first-class structured task inputs
 - attachment targeting is explicit and durable
+- presets are recursively composable authoring objects resolved entirely in the control plane
 - create, edit, and rerun preserve attachment bindings through an authoritative task input snapshot
+- submitted tasks preserve authored preset metadata and flattened step provenance alongside resolved execution payloads
 - runtime preparation and prompt composition are target-aware rather than attachment-bucket-driven
 
 ---
@@ -125,8 +127,8 @@ flowchart LR
 
 Key boundary:
 
-- the control plane owns authoring intent, artifact refs, target binding, runtime choice, and snapshot durability
-- the execution plane owns lifecycle and step execution
+- the control plane owns authoring intent, artifact refs, target binding, runtime choice, preset compilation, and snapshot durability
+- the execution plane owns lifecycle and step execution over already resolved payloads
 - runtime adapters own provider-specific realization details
 
 ---
@@ -154,15 +156,30 @@ The control plane is responsible for all of the following.
 - preserve `task.inputAttachments` and `task.steps[].inputAttachments`
 - preserve step identity and order
 - preserve runtime and publish intent
-- preserve preset and Jira provenance when those contracts allow it
+- preserve authored preset binding metadata, flattened step provenance, manual and preset-derived step order, and fully resolved execution payloads
+- preserve Jira provenance when those contracts allow it
 
-### 5.4 Snapshot durability
+### 5.4 Preset compilation
+
+Preset compilation is a control-plane phase that completes before execution contract finalization.
+
+Rules:
+
+- presets are authoring objects, not execution-plane instructions
+- recursive preset composition is resolved in the control plane
+- preset compilation validates the include tree before producing worker-facing steps
+- compilation flattens manual and preset-derived steps into the final submitted order
+- compilation preserves provenance for preset-derived steps and detached template state
+- the resolved execution payload must remain executable without live preset catalog lookup
+
+### 5.5 Snapshot durability
 
 - persist an authoritative task input snapshot for edit and rerun
 - reconstruct from that snapshot rather than from lossy derived projections
 - preserve attachment target binding in the snapshot
+- preserve pinned preset bindings, include-tree summary, per-step provenance, detachment state, and final submitted order in the snapshot
 
-### 5.5 User-facing reads
+### 5.6 User-facing reads
 
 - expose previews and downloads through MoonMind APIs
 - surface attachment metadata by target in detail, edit, and rerun flows
@@ -182,11 +199,31 @@ interface TaskInputAttachmentRef {
   sizeBytes: number;
 }
 
+interface TaskStepSource {
+  kind?: "manual" | "preset-derived" | "preset-include" | "detached";
+  presetId?: string;
+  presetSlug?: string;
+  version?: string;
+  includePath?: string[];
+  originalStepId?: string;
+}
+
+interface AuthoredPresetBinding {
+  presetId?: string;
+  presetSlug?: string;
+  version?: string;
+  alias?: string;
+  includePath?: string[];
+  inputMapping?: Record<string, unknown>;
+  scope?: string;
+}
+
 interface TaskStepPayload {
   id?: string;
   title?: string;
   instructions?: string;
   inputAttachments?: TaskInputAttachmentRef[];
+  source?: TaskStepSource;
   skill?: {
     id?: string;
     args?: Record<string, unknown>;
@@ -201,6 +238,7 @@ interface TaskPayload {
   instructions?: string;
   inputAttachments?: TaskInputAttachmentRef[];
   steps?: TaskStepPayload[];
+  authoredPresets?: AuthoredPresetBinding[];
   runtime?: {
     mode?: string;
     profileId?: string;
@@ -223,9 +261,12 @@ Rules:
 
 - `task.inputAttachments` is the objective-scoped input target
 - `task.steps[n].inputAttachments` is the step-scoped input target
+- `task.authoredPresets` preserves optional preset binding metadata used to compile the submitted task
+- `task.steps[n].source` preserves optional source provenance for manual, preset-derived, included, or detached steps
 - these fields are part of the task contract, not incidental UI metadata
 - the absence of attachments is valid
 - the presence of attachments must be preserved across create, detail, edit, and rerun
+- the execution-facing payload is resolved before workers consume it; `authoredPresets` and `source` metadata are for reconstruction, audit, diagnostics, and safe rerun semantics
 
 ---
 
@@ -243,8 +284,14 @@ Rules:
   - step order and identity
   - runtime and publish selections
   - preset application metadata
+  - pinned preset bindings
+  - include-tree summary
+  - per-step provenance
+  - detachment state
+  - final submitted order after manual and preset-derived steps are flattened
   - dependency declarations that remain part of the editable contract
 - edit and rerun derive their initial browser state from this snapshot
+- edit and rerun must not depend on current live preset catalog correctness to reconstruct already submitted work
 - fallback evidence refs may assist diagnostics, but they are not an authoritative replacement for the snapshot
 - an attachment-aware execution without a reconstructible snapshot is degraded and must be treated as such explicitly
 
@@ -252,7 +299,14 @@ Rules:
 
 ## 8. Execution-plane responsibilities
 
-The execution plane consumes the normalized task contract.
+The execution plane consumes the normalized task contract after control-plane preset compilation has produced a resolved execution payload.
+
+Rules:
+
+- workers consume resolved steps and structured input refs
+- workers do not expand presets
+- workers do not read the live preset catalog to recover missing task structure
+- workers do not depend on live preset catalog correctness for already submitted work
 
 ### 8.1 Workflow responsibilities
 
@@ -352,19 +406,25 @@ The following invariants define the desired-state task system.
 5. **Snapshot-based durability**
    Attachment-aware edit and rerun require an authoritative task input snapshot.
 
-6. **Server-defined policy**
+6. **Compile-time preset composition**
+   Preset composition is compile-time control-plane behavior. Submitted execution payloads must not require live preset lookup.
+
+7. **Preset provenance durability**
+   Task snapshots preserve pinned bindings, include-tree summary, per-step provenance, detachment state, and final submitted order.
+
+8. **Server-defined policy**
    Attachment policy is defined by server configuration and enforced by both browser and API.
 
-7. **MoonMind-owned browser APIs**
+9. **MoonMind-owned browser APIs**
    The browser talks only to MoonMind APIs, not directly to Jira, object storage, or provider-specific file endpoints.
 
-8. **Target-aware runtime consumption**
+10. **Target-aware runtime consumption**
    By default, step execution receives only its own step-scoped attachment context plus relevant objective-scoped context.
 
-9. **No hidden retargeting**
+11. **No hidden retargeting**
    Reordering steps, applying presets, or changing text must not silently retarget an existing attachment to another step.
 
-10. **Compatibility without semantic drift**
+12. **Compatibility without semantic drift**
    Compatibility aliases and migration layers may exist, but they must not change the canonical meaning of objective-scoped versus step-scoped attachments.
 
 ---
