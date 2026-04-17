@@ -13,7 +13,7 @@
 
 - Unit tests: `./tools/test_unit.sh tests/unit/moonmind/vision/test_service.py`
 - Integration tests: `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/integration/vision/test_context_artifacts.py -q`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -71,7 +71,7 @@
 - [X] T011 Add target-aware dataclasses and path/index helpers for FR-001, FR-004, FR-009, FR-010 in `moonmind/vision/service.py`
 - [X] T012 Implement per-target Markdown rendering and artifact writing for FR-002, FR-003, FR-005, FR-008 in `moonmind/vision/service.py`
 - [X] T013 Export target-aware vision context types for runtime callers in `moonmind/vision/__init__.py`
-- [X] T014 Run focused unit and integration commands, fix failures, and verify story behavior
+- [X] T014 Run focused unit and integration commands, fix failures, and complete story validation for FR-001 through FR-010 in `specs/197-generate-target-aware-vision-context/quickstart.md`
 
 **Checkpoint**: The story is fully functional, covered by unit and integration tests, and testable independently.
 
@@ -82,7 +82,7 @@
 **Purpose**: Strengthen completed story without changing core scope.
 
 - [X] T015 Run quickstart validation commands from `specs/197-generate-target-aware-vision-context/quickstart.md`
-- [X] T016 Run `/speckit.verify` equivalent read-only verification against MM-371 source requirements and implemented evidence
+- [X] T016 Run `/moonspec-verify` read-only verification against MM-371 source requirements and implemented evidence
 
 ---
 
@@ -118,4 +118,4 @@
 4. Export the new service types.
 5. Run focused unit and integration validation.
 6. Run final unit verification where feasible.
-7. Perform `/speckit.verify` equivalent coverage check against MM-371 and DESIGN-REQ-012.
+7. Perform `/moonspec-verify` coverage check against MM-371 and DESIGN-REQ-012.
