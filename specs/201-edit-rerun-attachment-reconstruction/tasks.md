@@ -11,7 +11,7 @@
 
 **Test Commands**:
 
-- Unit tests: `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and `pytest tests/unit/api/routers/test_executions.py -q`
+- Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx && pytest tests/unit/api/routers/test_executions.py -q`
 - Integration/contract tests: `pytest tests/contract/test_temporal_execution_api.py -q`
 - Final verification: `/moonspec-verify`
 
@@ -76,7 +76,7 @@
 - [X] T014 Verify `frontend/src/entrypoints/task-create.tsx` hydrates persisted objective and step attachments distinctly from local files, covering FR-005, FR-006, DESIGN-REQ-020, DESIGN-REQ-021
 - [X] T015 Verify `frontend/src/entrypoints/task-create.tsx` preserves unchanged refs and supports explicit add/remove/replace behavior in submitted payloads, covering FR-007, FR-008, FR-009, FR-011
 - [X] T016 Verify `tests/unit/api/routers/test_executions.py` and `tests/contract/test_temporal_execution_api.py` provide backend snapshot and API contract evidence for FR-003, FR-008, FR-009
-- [X] T017 Run focused unit commands `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` and `pytest tests/unit/api/routers/test_executions.py -q`, then fix failures
+- [X] T017 Run focused unit commands `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx && pytest tests/unit/api/routers/test_executions.py -q`, then fix failures
 - [X] T018 Run focused contract command `pytest tests/contract/test_temporal_execution_api.py -q`, then fix failures
 - [X] T019 Validate the single MM-382 story against acceptance scenarios 1-5 using `frontend/src/entrypoints/task-create.test.tsx` and `tests/contract/test_temporal_execution_api.py`
 

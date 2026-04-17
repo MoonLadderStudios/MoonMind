@@ -1,6 +1,7 @@
 # Feature Specification: Edit and Rerun Attachment Reconstruction
 
-**Feature Branch**: `mm-382-8aa2c304`  
+**Feature ID**: `201-edit-rerun-attachment-reconstruction`  
+**Managed PR Branch**: `mm-382-8aa2c304`  
 **Created**: 2026-04-17  
 **Status**: Draft  
 **Input**: User description: "Use the Jira preset brief for MM-382 as the canonical Moon Spec orchestration input.

@@ -3,7 +3,7 @@
 ## Focused Unit Checks
 
 ```bash
-./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx
 pytest tests/unit/api/routers/test_executions.py -q
 ```
 
@@ -27,10 +27,12 @@ Expected coverage:
 ## Full Local Verification
 
 ```bash
+SPECIFY_FEATURE=201-edit-rerun-attachment-reconstruction .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
 ./tools/test_integration.sh
 ```
 
 Notes:
+- The `SPECIFY_FEATURE` prefix is required when running Moon Spec helpers from managed PR branches that do not use the numbered feature-branch form.
 - `./tools/test_unit.sh` is the required final unit-test runner.
 - `./tools/test_integration.sh` requires Docker access; record the exact blocker if Docker is unavailable in the managed-agent container.
