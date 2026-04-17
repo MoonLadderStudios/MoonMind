@@ -248,6 +248,7 @@ const ArtifactSummarySchema = z
     sizeBytes: z.number().nullable().optional(),
     status: z.string().optional(),
     downloadUrl: z.string().nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).default({}),
   })
   .passthrough();
 
@@ -276,10 +277,10 @@ const ArtifactSessionProjectionSchema = z.object({
               })
               .passthrough()
               .transform((artifact) =>
-                ArtifactSummarySchema.parse({
-                  ...artifact,
-                  artifactId: artifact.artifactId ?? artifact.artifact_id,
-                }),
+          ArtifactSummarySchema.parse({
+            ...artifact,
+            artifactId: artifact.artifactId ?? artifact.artifact_id,
+          }),
               ),
           )
           .default([]),
@@ -392,10 +393,11 @@ const ArtifactListSchema = z.object({
             ...artifact,
             artifactId: artifact.artifactId ?? artifact.artifact_id,
             contentType: artifact.contentType ?? artifact.content_type ?? null,
-            sizeBytes: artifact.sizeBytes ?? artifact.size_bytes ?? null,
-            downloadUrl: artifact.downloadUrl ?? artifact.download_url ?? null,
-          }),
-        ),
+          sizeBytes: artifact.sizeBytes ?? artifact.size_bytes ?? null,
+          downloadUrl: artifact.downloadUrl ?? artifact.download_url ?? null,
+          metadata: artifact.metadata ?? {},
+        }),
+      ),
     )
     .default([]),
 });
@@ -1231,6 +1233,168 @@ function coerceArtifactRef(value: unknown): string | null {
 
 function buildArtifactDownloadHref(apiBase: string, artifactId: string): string {
   return joinApiBasePath(apiBase, `/artifacts/${encodeURIComponent(artifactId)}/download`);
+}
+
+function artifactDownloadHref(
+  apiBase: string,
+  artifact: z.infer<typeof ArtifactSummarySchema>,
+  options: { preferMoonMindEndpoint?: boolean } = {},
+): string {
+  if (!options.preferMoonMindEndpoint && artifact.downloadUrl) {
+    return artifact.downloadUrl;
+  }
+  return buildArtifactDownloadHref(apiBase, artifact.artifactId);
+}
+
+function metadataString(metadata: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === 'string') {
+      const normalized = value.trim();
+      if (normalized) {
+        return normalized;
+      }
+    }
+  }
+  return '';
+}
+
+type InputImageArtifact = {
+  artifact: z.infer<typeof ArtifactSummarySchema>;
+  targetKey: string;
+  targetLabel: string;
+  filename: string;
+};
+
+function inputImageArtifactFrom(
+  artifact: z.infer<typeof ArtifactSummarySchema>,
+  index: number,
+): InputImageArtifact | null {
+  const contentType = String(artifact.contentType || '').trim().toLowerCase();
+  if (!contentType.startsWith('image/')) {
+    return null;
+  }
+  const metadata = artifact.metadata || {};
+  const source = metadataString(metadata, 'source');
+  if (
+    source !== 'task-dashboard-objective-attachment' &&
+    source !== 'task-dashboard-step-attachment'
+  ) {
+    return null;
+  }
+
+  const target = metadataString(metadata, 'target', 'targetKind', 'target_kind').toLowerCase();
+  if (target === 'objective') {
+    return {
+      artifact,
+      targetKey: 'objective',
+      targetLabel: 'Objective',
+      filename: metadataString(metadata, 'filename', 'name', 'label') || artifact.artifactId,
+    };
+  }
+
+  if (source === 'task-dashboard-step-attachment') {
+    const stepLabel = metadataString(metadata, 'stepLabel', 'step_label');
+    if (!stepLabel) {
+      return null;
+    }
+    return {
+      artifact,
+      targetKey: `step:${stepLabel}:${index}`,
+      targetLabel: stepLabel,
+      filename: metadataString(metadata, 'filename', 'name', 'label') || artifact.artifactId,
+    };
+  }
+
+  return null;
+}
+
+function InputImagesSection({
+  artifacts,
+  apiBase,
+}: {
+  artifacts: z.infer<typeof ArtifactSummarySchema>[];
+  apiBase: string;
+}) {
+  const [failedPreviewIds, setFailedPreviewIds] = useState<Record<string, boolean>>({});
+  const inputImages = artifacts
+    .map((artifact, index) => inputImageArtifactFrom(artifact, index))
+    .filter((item): item is InputImageArtifact => item !== null);
+
+  if (inputImages.length === 0) {
+    return null;
+  }
+
+  const groups = inputImages.reduce<Array<{ key: string; label: string; items: InputImageArtifact[] }>>(
+    (acc, item) => {
+      const existing = acc.find((group) => group.key === item.targetKey);
+      if (existing) {
+        existing.items.push(item);
+      } else {
+        acc.push({ key: item.targetKey, label: item.targetLabel, items: [item] });
+      }
+      return acc;
+    },
+    [],
+  );
+
+  return (
+    <section className="stack">
+      <h3>Input Images</h3>
+      <p className="small">
+        Images are grouped by the persisted task target from the execution snapshot.
+      </p>
+      <div className="queue-step-attachments">
+        {groups.map((group) => (
+          <div key={group.key} className="queue-attachment-target">
+            <h4>{group.label}</h4>
+            <ul className="list queue-step-attachments-list">
+              {group.items.map(({ artifact, filename }) => {
+                const href = artifactDownloadHref(apiBase, artifact, {
+                  preferMoonMindEndpoint: true,
+                });
+                const failed = Boolean(failedPreviewIds[artifact.artifactId]);
+                return (
+                  <li key={artifact.artifactId}>
+                    <span>
+                      <strong>{filename}</strong>{' '}
+                      <span className="small">
+                        {`${artifact.contentType || 'image'}, ${artifact.sizeBytes ?? '—'} bytes`}
+                      </span>
+                    </span>
+                    {!failed ? (
+                      <img
+                        alt={`Preview of ${group.label} attachment ${filename}`}
+                        className="queue-attachment-preview"
+                        src={href}
+                        onError={() =>
+                          setFailedPreviewIds((current) => ({
+                            ...current,
+                            [artifact.artifactId]: true,
+                          }))
+                        }
+                      />
+                    ) : (
+                      <p className="small notice error">
+                        {`${group.label}: Preview unavailable for ${filename}. Attachment metadata remains available.`}
+                      </p>
+                    )}
+                    <a
+                      className="button secondary"
+                      href={href}
+                      download={filename}
+                    >
+                      Download
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function buildTimelineArtifactLinks(row: TimelineRow, apiBase: string): TimelineArtifactLink[] {
@@ -3375,6 +3539,11 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             />
           ) : null}
 
+          <InputImagesSection
+            artifacts={artifactsQuery.data?.artifacts || []}
+            apiBase={payload.apiBase}
+          />
+
           <section className="stack">
             <h3>Timeline</h3>
             <div className="queue-table-wrapper" data-layout="table">
@@ -3450,19 +3619,13 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                           <td>{artifact.sizeBytes ?? '—'}</td>
                           <td>{String(artifact.status ?? '—')}</td>
                           <td>
-                            {artifact.downloadUrl ? (
-                              <a className="button secondary" href={artifact.downloadUrl}>
-                                Download
-                              </a>
-                            ) : (
-                              <a
-                                className="button secondary"
-                                href={`${payload.apiBase}/artifacts/${encodeURIComponent(artifact.artifactId)}/download`}
-                                title="Download artifact"
-                              >
-                                Download
-                              </a>
-                            )}
+                            <a
+                              className="button secondary"
+                              href={artifactDownloadHref(payload.apiBase, artifact)}
+                              title="Download artifact"
+                            >
+                              Download
+                            </a>
                           </td>
                         </tr>
                       ))
