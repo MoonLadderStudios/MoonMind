@@ -807,11 +807,7 @@ function createStepStateEntriesFromTemporalDraft(
       skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
-      templateAttachments: Array.isArray(
-        (step as { templateAttachments?: StepAttachmentRef[] }).templateAttachments,
-      )
-        ? (step as { templateAttachments?: StepAttachmentRef[] }).templateAttachments || []
-        : [],
+      templateAttachments: step.templateAttachments || [],
       ...(step.storyOutput && Object.keys(step.storyOutput).length > 0
         ? { storyOutput: step.storyOutput }
         : {}),
@@ -906,20 +902,20 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
 }
 
 function attachmentIdentity(item: StepAttachmentRef | File): string {
-  if ("artifactId" in item && item.artifactId) {
-    return `artifact:${item.artifactId}`;
-  }
   if (item instanceof File) {
     return ["file", item.name, item.type || "", String(item.size || 0)].join(
       ":",
     );
   }
-  return [
-    "file",
-    item.filename,
-    item.contentType || "",
-    String(item.sizeBytes || 0),
-  ].join(":");
+  if (item.filename || item.contentType || item.sizeBytes) {
+    return [
+      "file",
+      item.filename,
+      item.contentType || "",
+      String(item.sizeBytes || 0),
+    ].join(":");
+  }
+  return `artifact:${item.artifactId}`;
 }
 
 function attachmentSignature(items: Array<StepAttachmentRef | File>): string {
@@ -4202,12 +4198,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           )
             ? (entry.payload.inputAttachments as StepAttachmentRef[])
             : [];
+          const effectivePayloadAttachments =
+            Array.isArray(entry.payload.inputAttachments) ||
+            !sourceStep.templateStepId ||
+            sourceStep.id !== sourceStep.templateStepId
+              ? payloadAttachments
+              : sourceStep.templateAttachments;
           const shouldPreserveStepId =
             !sourceStep.templateStepId ||
             sourceStep.id !== sourceStep.templateStepId ||
             (String(entry.payload.instructions || sourceStep.instructions) ===
               sourceStep.templateInstructions &&
-              isTemplateBoundStepForAttachments(sourceStep, payloadAttachments));
+              isTemplateBoundStepForAttachments(
+                sourceStep,
+                effectivePayloadAttachments,
+              ));
           return {
             ...(shouldPreserveStepId && sourceStep.id.trim()
               ? { id: sourceStep.id.trim() }

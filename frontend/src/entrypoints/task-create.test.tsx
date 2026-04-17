@@ -1884,6 +1884,43 @@ describe("Task Create Entrypoint", () => {
     ]);
   });
 
+  it("reconstructs template attachments for editable Temporal steps", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:template-attachments",
+      workflowType: "MoonMind.Run",
+      inputParameters: {
+        task: {
+          instructions: "Edit a template-backed task.",
+          steps: [
+            {
+              id: "tpl:speckit-demo:1.2.3:01",
+              instructions: "Clarify the template scope.",
+              templateStepId: "tpl:speckit-demo:1.2.3:01",
+              templateInstructions: "Clarify the template scope.",
+              inputAttachments: [
+                {
+                  artifactId: "art-template",
+                  filename: "template.png",
+                  contentType: "image/png",
+                  sizeBytes: 14,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.steps[0]?.templateAttachments).toEqual([
+      {
+        artifactId: "art-template",
+        filename: "template.png",
+        contentType: "image/png",
+        sizeBytes: 14,
+      },
+    ]);
+  });
+
   it("does not synthesize a task objective into an editable step", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:objective-differs",
@@ -4526,6 +4563,95 @@ describe("Task Create Entrypoint", () => {
     expect([undefined, null, ""]).toContain(
       request.payload.task.steps[0]?.id,
     );
+  });
+
+  it("preserves template step identity when template attachments remain unchanged", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:speckit-demo:1.2.3:01",
+                title: "Clarify spec",
+                instructions: "Clarify the {{ inputs.feature_name }} scope.",
+                inputAttachments: [
+                  {
+                    artifactId: "art-template",
+                    filename: "template.png",
+                    contentType: "image/png",
+                    sizeBytes: 10,
+                  },
+                ],
+                skill: {
+                  id: "speckit-clarify",
+                  args: { feature: "Task Create" },
+                },
+              },
+            ],
+            appliedTemplate: {
+              slug: "speckit-demo",
+              version: "1.2.3",
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.steps[0]).toEqual(
+      expect.objectContaining({
+        id: "tpl:speckit-demo:1.2.3:01",
+        instructions: "Clarify the {{ inputs.feature_name }} scope.",
+      }),
+    );
+    expect(request.payload.task.steps[0].inputAttachments).toBeUndefined();
   });
 
   it("derives the task objective from feature-request template input aliases", () => {
