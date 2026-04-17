@@ -2,7 +2,7 @@
 
 Status: Proposed
 Owners: MoonMind Engineering
-Last updated: 2026-04-16
+Last updated: 2026-04-17
 
 ## 1. Purpose
 
@@ -15,7 +15,7 @@ The Create page is the single task-authoring surface for:
 - applying reusable task presets
 - importing Jira text and, when allowed, Jira images into declared draft targets
 - selecting run dependencies
-- configuring runtime, repository, publish, and schedule options
+- configuring runtime, repository, branch, publish, and schedule options
 - creating, editing, and rerunning task-shaped Temporal executions
 
 This document is declarative. It defines the contract the product must satisfy. It is not an implementation changelog or rollout log.
@@ -29,6 +29,7 @@ This document is declarative. It defines the contract the product must satisfy. 
 - `docs/UI/TypeScriptSystem.md`
 - `docs/Tasks/ImageSystem.md`
 - `docs/Tasks/TaskArchitecture.md`
+- `docs/Tasks/TaskPublishing.md`
 - `docs/Tasks/AgentSkillSystem.md`
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
@@ -46,9 +47,10 @@ Core posture:
 - presets are reusable step blueprints and objective helpers, not a separate task type
 - Jira is an external instruction source, not a runtime, not an execution substrate, and not a primary task source
 - input images are structured task inputs, not pasted binary content and not part of the instruction text body
-- browser clients call only MoonMind APIs; they never call Jira, object storage, or model providers directly
-- manual authoring remains first-class even when presets, Jira, or image upload are unavailable
+- browser clients call only MoonMind APIs; they never call Jira, GitHub, object storage, or model providers directly
+- manual authoring remains first-class even when presets, Jira, image upload, or branch lookup are unavailable
 - edit and rerun must preserve the authored task draft, including attachment targeting, unless the user explicitly changes it
+- the Create page authors exactly one explicit branch value; it does not author a separate target branch
 
 Important distinctions:
 
@@ -58,6 +60,8 @@ Important distinctions:
 - **applied preset steps** are expanded step blueprints, not live bindings to a preset definition
 - **imported Jira text** is a one-time copy into a text field, not a live sync
 - **imported Jira images** are structured attachment selections, not inline embedded images
+- **branch** is the single authored branch input for repository checkout and publish intent on this page
+- **target branch** is not part of the desired-state Create-page authoring contract
 
 ---
 
@@ -75,6 +79,8 @@ Rules:
 - runtime configuration is generated server-side and passed through the boot payload
 - all page actions go through MoonMind REST APIs
 - artifact upload, preview, and download all remain behind MoonMind-controlled API surfaces
+- repository branch lookup is a MoonMind-controlled API surface backed by GitHub branch discovery for the selected repository
+- the browser must never call GitHub directly to populate the branch picker
 
 Representative implementation surfaces:
 
@@ -90,10 +96,10 @@ The page is a single composition form with these canonical sections, in this ord
 | Order | Section | Purpose |
 | --- | --- | --- |
 | 1 | Header | Identify the page as task creation, edit, or rerun |
-| 2 | Steps | Author the execution plan directly, including step-scoped image inputs, repository and branch targets, and the primary create/add-step actions |
+| 2 | Steps | Author the execution plan directly, including step-scoped image inputs, repository selection, GitHub-backed branch selection, inline publish mode, and the primary create/add-step actions |
 | 3 | Task Presets | Apply reusable step blueprints and define preset objective text and objective-scoped image inputs |
 | 4 | Dependencies | Block the new run on existing `MoonMind.Run` executions |
-| 5 | Execution context | Runtime, provider, model, effort, publish mode |
+| 5 | Execution context | Runtime, provider, model, effort, and merge automation eligibility |
 | 6 | Execution controls | Priority, max attempts, propose tasks |
 | 7 | Schedule | Immediate, once, deferred minutes, recurring |
 | 8 | Submit | Display submission status and error messages |
@@ -106,7 +112,10 @@ Rules:
   - the Jira browser
   - provider/profile selectors
   - attachment preview and removal affordances
+  - the repository branch picker
 - image selection belongs with the field it informs, not with unrelated page controls
+- branch and publish authoring lives in the Steps card; it is not duplicated in Execution context
+- the Create page exposes no separate `Target Branch` field
 
 ---
 
@@ -167,7 +176,12 @@ type StepDraftSource =
   | {
       kind: "preset-detached";
       bindingId: string;
-      detachedReason: "instructions-edited" | "attachments-edited" | "reordered" | "partial-selection" | "unknown";
+      detachedReason:
+        | "instructions-edited"
+        | "attachments-edited"
+        | "reordered"
+        | "partial-selection"
+        | "unknown";
     }
   | {
       kind: "flat-reconstructed";
@@ -188,6 +202,19 @@ interface StepDraft {
   sourceAttachments: DraftAttachment[];
 }
 
+interface RepositoryBranchOption {
+  name: string;
+  isDefault: boolean;
+}
+
+interface RepositoryBranchCatalog {
+  repository: string;
+  status: "idle" | "loading" | "loaded" | "failed";
+  defaultBranch?: string;
+  options: RepositoryBranchOption[];
+  errorMessage?: string | null;
+}
+
 interface TaskDraft {
   presetObjectiveText: string;
   presetObjectiveAttachments: DraftAttachment[];
@@ -198,8 +225,7 @@ interface TaskDraft {
   model: string;
   effort: string;
   repository: string;
-  startingBranch: string;
-  targetBranch: string;
+  branch: string;
   publishMode: "none" | "branch" | "pr";
   dependencies: string[];
 }
@@ -218,6 +244,11 @@ Rules:
 - `AppliedPresetBinding` is the browser-side source of truth for applied composed preset authoring state
 - `StepDraft.source` records whether a step is local, preset-bound, preset-detached, or flat-reconstructed
 - preset binding state is draft metadata for authoring, preview, reapply, save-as-preset, edit, and rerun; runtime submission still uses flattened resolved steps
+- `branch` is the only authored branch field in the Create-page draft
+- `targetBranch` is not part of the desired-state Create-page draft model
+- branch catalog state is fetched UI state, not task authoring state
+- branch catalog options come from a MoonMind API call scoped to the selected repository
+- legacy edit/rerun snapshots may contain older starting/target branch fields, but Create-page reconstruction must normalize them into the single authored `branch` field described here
 
 ---
 
@@ -236,7 +267,7 @@ Rules:
 - the page must remain valid with exactly one step region present
 - each step region owns its own instructions and attachment state
 - moving or reordering a step moves its attachments with it
-- repository and branch target controls appear at the bottom of the shared Steps card
+- repository selection, branch selection, and publish mode controls appear at the bottom of the shared Steps card
 - the Add Step and create/edit/rerun submit actions appear at the bottom of the shared Steps card
 
 ### 7.2 Step fields
@@ -302,6 +333,36 @@ Rules:
 - `sourceAttachments` stores the preset-authored attachment set used for detachment comparisons
 - importing Jira text or Jira images into a preset-bound step counts as a manual edit
 - detached steps preserve authored content and are not overwritten by default reapply
+
+### 7.6 Repository, branch, and publish control bar
+
+The shared Steps card owns the repository and publishing authoring controls.
+
+Rules:
+
+- the Steps footer contains:
+  - `GitHub Repo`
+  - `Branch`
+  - `Publish Mode`
+- `Branch` replaces the previous `Starting Branch` label in Create-page authoring
+- the Create page exposes no `Target Branch` control
+- the branch control is a dropdown, not a free-text field
+- the branch dropdown retrieves real branch options from GitHub for the selected repository through a MoonMind API
+- the browser must never call GitHub directly; MoonMind remains the integration boundary
+- the branch dropdown is disabled until the repository value is valid enough to resolve a repository target
+- when repository selection changes, the page must refresh the branch catalog for that repository
+- if the previously selected branch is not present in the newly loaded repository branch catalog, the page must clear the authored branch value
+- when the repository branch catalog includes a default branch and the author has not picked a branch yet, the page may preselect the default branch
+- `Branch` and `Publish Mode` use compact inline controls in the Steps footer with no visible label rendered above the dropdown itself
+- those compact controls must still expose accessible names through standard form labeling or equivalent assistive markup
+- the compact branch control should feel visually similar to the uploaded Codex example in overall density and placement, but it must use MoonMind styling and a distinct icon; it must not reuse the Codex icon asset or exact icon geometry
+- `Publish Mode` appears immediately to the right of `Branch` in the Steps footer when there is room; on smaller widths it may wrap responsively while remaining part of the same control group
+- Create-page skills, backend submit logic, and runtime launch preparation must not require `targetBranch`
+- the authored branch contract is single-value:
+  - for `publishMode: none`, `branch` identifies the checkout branch only
+  - for `publishMode: branch`, `branch` is both the checkout branch and the publish destination branch
+  - for `publishMode: pr`, `branch` is the PR base branch and the runtime generates the work/head branch deterministically
+- cross-branch publish authoring using separate start and target branches is not part of the desired-state Create-page contract
 
 ---
 
@@ -378,7 +439,7 @@ Rules:
 - users may add up to 10 direct dependencies
 - duplicate dependencies are rejected client-side
 - dependency fetch failure must not block manual task creation
-- dependency selection is independent from image attachments, Jira, and presets
+- dependency selection is independent from image attachments, Jira, presets, and branch lookup
 
 ---
 
@@ -390,10 +451,6 @@ The Create page preserves these execution-context controls:
 - `Provider profile` when profiles exist for the selected runtime
 - `Model`
 - `Effort`
-- `GitHub Repo`
-- `Starting Branch (optional)`
-- `Target Branch (optional)`
-- `Publish Mode`
 - `Enable merge automation` when publish mode is `pr` for an ordinary task
 
 Rules:
@@ -402,6 +459,8 @@ Rules:
 - attachment policy also comes from server-provided runtime configuration
 - provider-profile options are runtime-specific
 - repository validation rules are unaffected by attachments or Jira
+- repository branch lookup uses MoonMind API surfaces and is unaffected by attachments or Jira
+- publish mode is authored in the Steps card and must not be duplicated here
 - resolver-style skills may still force publish mode to `none`
 - merge automation is available only for ordinary PR-publishing tasks
 - when merge automation is selected, the submitted task creation payload must
@@ -543,7 +602,7 @@ Rules:
   - objective-scoped attachments
   - step instructions
   - step-scoped attachments
-  - runtime and publish settings
+  - runtime, repository, branch, and publish settings
   - applied preset bindings and their dirty or reapply state
   - per-step source state when binding metadata is recoverable
   - dependencies that remain part of the editable contract
@@ -558,6 +617,13 @@ Rules:
 - when binding state is recoverable, edit and rerun preserve `AppliedPresetBinding` and `StepDraft.source`
 - when only flat reconstruction is available, edit and rerun show a clear flat reconstruction warning and set affected steps to `flat-reconstructed`
 - flat reconstruction must not claim that steps remain preset-bound
+- legacy snapshots that contain both `startingBranch` and `targetBranch` must be normalized into the single authored `branch` field
+- normalization rules for legacy snapshots are:
+  - if only one branch-like value is present, use that value as `branch`
+  - for legacy PR snapshots, prefer the old base/start branch as the authored `branch`
+  - for legacy `branch`-publish snapshots where start and target were equal, use that shared value as `branch`
+  - for legacy `branch`-publish snapshots where start and target differed, the page must surface a clear migration warning and require the user to choose a single authored branch before submit
+- legacy cross-branch publish is a migration case, not a first-class authoring state on the desired-state Create page
 
 ---
 
@@ -586,6 +652,13 @@ Rules:
 - oversized task text continues to use existing artifact fallback behavior for text payloads
 - attachment upload completion is required before the execution becomes eligible to start
 - attachment selection alone does not create a task; submit remains explicit
+- `task.git.branch` is the single authored branch input when a branch is explicitly selected
+- absence of `task.git.branch` means the runtime may use the repository default branch
+- Create-page submission must not author or require `targetBranch`
+- publish behavior is derived from `publishMode` plus `task.git.branch`:
+  - `none`: checkout only
+  - `branch`: checkout and publish to the same branch
+  - `pr`: use the selected branch as PR base and generate the work/head branch deterministically
 
 Representative task-shaped payload:
 
@@ -594,8 +667,15 @@ Representative task-shaped payload:
   "type": "task",
   "payload": {
     "repository": "owner/repo",
+    "publishMode": "pr",
     "task": {
       "instructions": "Resolved task objective text.",
+      "publish": {
+        "mode": "pr"
+      },
+      "git": {
+        "branch": "main"
+      },
       "inputAttachments": [
         {
           "artifactId": "art_objective_123",
@@ -667,6 +747,11 @@ Attachment rules:
 Rules:
 
 - if attachment policy is disabled, the page hides attachment entry points and remains fully usable
+- if repository validation fails, the branch picker must not attempt branch lookup
+- if branch lookup is loading, the page must present a clear loading state for the branch control
+- if branch lookup fails, the page must preserve the rest of the draft and show an explicit branch-specific error
+- if a repository has no returned branch options, the page must show an explicit empty state rather than a silently blank control
+- if a legacy cross-branch snapshot cannot be represented by the single-branch authoring model, the page must fail explicitly or require migration rather than silently rewriting branch semantics
 - if an upload fails, the failure remains local to the affected target and the rest of the draft remains intact
 - if attachment preview fails, metadata remains visible and the user can still remove the attachment
 - if edit or rerun cannot reconstruct attachments, the page must fail explicitly rather than silently dropping them
@@ -676,6 +761,10 @@ Rules:
 
 Representative copy:
 
+- `Select a repository before choosing a branch.`
+- `Loading branches for owner/repo...`
+- `Failed to load branches for owner/repo. You can retry or continue with the repository default branch.`
+- `This legacy task used separate start and target branches. Choose a single branch before saving or rerunning.`
 - `Image upload failed. Remove the image or retry before submitting.`
 - `This runtime does not currently allow image inputs.`
 - `The task draft could not be reconstructed because one or more attachment bindings were missing.`
@@ -693,6 +782,8 @@ Rules:
 - the Jira browser title must identify the current import target
 - after importing text or images from Jira, focus must return predictably to the updated field or to an explicit success notice
 - validation errors must be associated with the specific target that failed
+- the compact `Branch` and `Publish Mode` controls must have accessible names even though they do not render visible labels above the dropdown chrome
+- branch loading, empty, and failure states must be announced in a way that is perceivable to assistive technology
 
 ---
 
@@ -719,6 +810,13 @@ The Create page test suite should cover:
 17. save-as-preset preserves intact composition by default and uses explicit advanced flattening
 18. edit and rerun preserve binding state when possible and warn when only flat reconstruction is available
 19. degraded preset metadata, expansion, or reconstruction failures do not corrupt unrelated draft state
+20. the Steps footer renders a single `Branch` dropdown and does not render a `Target Branch` control
+21. the branch dropdown requests branches through a MoonMind API when the repository changes and never requires a direct browser-to-GitHub call
+22. the branch dropdown resets invalid selections when the repository changes
+23. branch loading, empty, and error states render explicitly and do not corrupt unrelated draft state
+24. the submit payload authors at most one explicit branch field and does not author `targetBranch`
+25. `Publish Mode` renders adjacent to `Branch` in the Steps card control group and does not render a visible label above the compact dropdown
+26. edit/rerun correctly normalize legacy starting/target branch data into the single authored `branch` field, including the explicit migration warning for legacy cross-branch publish snapshots
 
 ---
 
@@ -731,6 +829,12 @@ Images are supported as explicit structured inputs attached either to:
 - the preset objective target, or
 - a specific step target
 
+Repository publishing is authored with:
+
+- a repository selection
+- one explicit `Branch` dropdown populated from GitHub through MoonMind
+- an inline `Publish Mode` control in the Steps card
+
 That is the desired-state contract.
 
-The page does not become an image editor, a Jira-native surface, or a binary transport layer. It remains MoonMind-native and task-first while allowing users to author text and image inputs together in the same draft.
+The page does not become an image editor, a Jira-native surface, a direct GitHub client, or a binary transport layer. It remains MoonMind-native and task-first while allowing users to author text, images, branch intent, and publish intent together in the same draft.
