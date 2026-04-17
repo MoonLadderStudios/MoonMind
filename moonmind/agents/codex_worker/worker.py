@@ -4408,7 +4408,7 @@ class CodexWorker:
             )
             if context_index_path.exists():
                 attachment_diagnostics["contextIndexPath"] = str(context_index_path)
-                with suppress(OSError, json.JSONDecodeError):
+                try:
                     context_index_payload = json.loads(
                         context_index_path.read_text(encoding="utf-8")
                     )
@@ -4420,6 +4420,13 @@ class CodexWorker:
                                 for target in raw_context_targets
                                 if isinstance(target, Mapping)
                             ]
+                except (OSError, json.JSONDecodeError) as exc:
+                    logger.warning(
+                        "Failed to read image context index diagnostics from %s: %s",
+                        context_index_path,
+                        exc,
+                        exc_info=True,
+                    )
 
             context_payload = {
                 "repository": repository,

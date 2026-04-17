@@ -139,6 +139,60 @@ def test_task_input_attachments_preserve_objective_and_step_targets() -> None:
     ]
 
 
+def test_task_input_attachments_accept_field_name_keys() -> None:
+    """MM-375: pre-validation preserves populate_by_name attachment payloads."""
+
+    canonical = build_canonical_task_view(
+        job_type="task",
+        payload={
+            "repository": "Moon/Mind",
+            "targetRuntime": "codex",
+            "task": {
+                "instructions": "Inspect the images.",
+                "input_attachments": [
+                    {
+                        "artifact_id": "art-objective",
+                        "filename": "objective.png",
+                        "content_type": "image/png",
+                        "size_bytes": 10,
+                    }
+                ],
+                "steps": [
+                    {
+                        "id": "review-step",
+                        "instructions": "Inspect the step image.",
+                        "input_attachments": [
+                            {
+                                "artifact_id": "art-step",
+                                "filename": "step.png",
+                                "content_type": "image/png",
+                                "size_bytes": 20,
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    assert canonical["task"]["inputAttachments"] == [
+        {
+            "artifactId": "art-objective",
+            "filename": "objective.png",
+            "contentType": "image/png",
+            "sizeBytes": 10,
+        }
+    ]
+    assert canonical["task"]["steps"][0]["inputAttachments"] == [
+        {
+            "artifactId": "art-step",
+            "filename": "step.png",
+            "contentType": "image/png",
+            "sizeBytes": 20,
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     "attachment",
     [
@@ -186,6 +240,38 @@ def test_task_input_attachment_validation_error_carries_objective_diagnostic() -
                         "contentType": "image/png",
                         "sizeBytes": 10,
                         "dataUrl": "data:image/png;base64,AAAA",
+                    }
+                ],
+            }
+        )
+
+    error = exc_info.value.errors()[0]["ctx"]["error"]
+    assert error.diagnostic == {
+        "event": "attachment_validation_failed",
+        "status": "failed",
+        "targetKind": "objective",
+        "artifactId": "art-inline",
+        "filename": "inline.png",
+        "contentType": "image/png",
+        "sizeBytes": 10,
+        "error": "inputAttachments entries must not include embedded image data",
+    }
+
+
+def test_task_input_attachment_validation_diagnostic_accepts_field_names() -> None:
+    """MM-375: field-name payloads still produce canonical diagnostic keys."""
+
+    with pytest.raises(ValidationError) as exc_info:
+        TaskExecutionSpec.model_validate(
+            {
+                "instructions": "Inspect image.",
+                "input_attachments": [
+                    {
+                        "artifact_id": "art-inline",
+                        "filename": "inline.png",
+                        "content_type": "image/png",
+                        "size_bytes": 10,
+                        "data_url": "data:image/png;base64,AAAA",
                     }
                 ],
             }

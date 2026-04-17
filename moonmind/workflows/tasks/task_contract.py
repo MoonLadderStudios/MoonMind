@@ -107,16 +107,34 @@ def _attachment_validation_failed_diagnostic(
     if step_ref:
         payload["stepRef"] = step_ref
     if attachment is not None:
-        for source_key, output_key in (
-            ("artifactId", "artifactId"),
-            ("filename", "filename"),
-            ("contentType", "contentType"),
-            ("sizeBytes", "sizeBytes"),
+        for source_keys, output_key in (
+            (("artifactId", "artifact_id"), "artifactId"),
+            (("filename",), "filename"),
+            (("contentType", "content_type"), "contentType"),
+            (("sizeBytes", "size_bytes"), "sizeBytes"),
         ):
-            value = attachment.get(source_key)
+            value = next(
+                (
+                    attachment.get(source_key)
+                    for source_key in source_keys
+                    if attachment.get(source_key) is not None
+                    and attachment.get(source_key) != ""
+                ),
+                None,
+            )
             if value is not None and value != "":
                 payload[output_key] = value
     return payload
+
+
+def _attachment_payload_value(
+    payload: Mapping[str, object], *field_names: str
+) -> object:
+    for field_name in field_names:
+        value = payload.get(field_name)
+        if _clean_optional_str(value):
+            return value
+    return None
 
 
 def _raise_attachment_validation_error(
@@ -175,9 +193,13 @@ def _validate_input_attachment_payloads(
                 step_ref=step_ref,
             )
         missing = [
-            field
-            for field in ("artifactId", "filename", "contentType")
-            if not _clean_optional_str(payload.get(field))
+            field_name
+            for field_name, aliases in (
+                ("artifactId", ("artifactId", "artifact_id")),
+                ("filename", ("filename",)),
+                ("contentType", ("contentType", "content_type")),
+            )
+            if _attachment_payload_value(payload, *aliases) is None
         ]
         if missing:
             _raise_attachment_validation_error(
