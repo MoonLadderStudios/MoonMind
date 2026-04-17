@@ -143,6 +143,27 @@ function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
   };
 }
 
+function withoutDefaultRepository(payload: BootPayload = mockPayload): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      system?: Record<string, unknown>;
+    };
+  };
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...initialData.dashboardConfig.system,
+          defaultRepository: "",
+        },
+      },
+    },
+  };
+}
+
 function withoutOptionalAuthoringIntegrations(
   payload: BootPayload = mockPayload,
 ): BootPayload {
@@ -1714,6 +1735,26 @@ describe("Task Create Entrypoint", () => {
       fetchSpy.mock.calls.some(([url]) =>
         /^\/api\/executions\/[^?]+\?source=temporal$/.test(String(url)),
       ),
+    ).toBe(false);
+  });
+
+  it("shows the primary step requirement only after submit validation fails", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(await screen.findByText("Step 1 (Primary)")).toBeTruthy();
+    expect(
+      screen.queryByText("Primary step must include instructions or an explicit skill."),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText(
+        "Primary step must include instructions or an explicit skill.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
     ).toBe(false);
   });
 
@@ -4368,6 +4409,110 @@ describe("Task Create Entrypoint", () => {
     expect(screen.getByRole("button", { name: "Create" })).not.toBeNull();
   });
 
+  it("does not let Jira import bypass repository validation", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withJiraIntegration(withoutDefaultRepository())} />,
+    );
+
+    const stepInstructions = await screen.findByLabelText("Instructions");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+    expect((stepInstructions as HTMLTextAreaElement).value).toBe(
+      "Complete Jira issue ENG-202: Build browser shell",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText(
+        "Repository is required because no system default repository is configured.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("does not let image upload bypass repository validation or upload artifacts first", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withAttachmentPolicy(withoutDefaultRepository())} />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Review the provided screenshot." },
+    });
+    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+      target: {
+        files: [
+          new File(["fake image"], "wireframe.png", { type: "image/png" }),
+        ],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(
+      await screen.findByText(
+        "Repository is required because no system default repository is configured.",
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/artifacts"),
+    ).toBe(false);
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("keeps resolver publish restrictions after Jira import", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira issue for Step 1 instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "pr-resolver" },
+      },
+    );
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(task.publish).toMatchObject({ mode: "none" });
+    expect(payload).not.toHaveProperty("mergeAutomation");
+  });
+
   it("places the Create action at the right end of the step action row", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
@@ -5471,6 +5616,59 @@ describe("Task Create Entrypoint", () => {
     expect(
       screen.getByText(/at most 10 direct dependencies/),
     ).toBeTruthy();
+  });
+
+  it("keeps manual task submission available when dependency options fail to load", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/executions?source=temporal&pageSize=50&workflowType=MoonMind.Run&entry=run",
+        )
+      ) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          text: async () =>
+            JSON.stringify({
+              detail: {
+                message: "Temporal visibility is unavailable.",
+              },
+            }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    expect(
+      await screen.findByText(
+        /Failed to load recent runs\. You can still create the task without dependencies/,
+      ),
+    ).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Create the task manually after dependency lookup fails." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const request = latestCreateRequest();
+    const task = (request.payload as Record<string, unknown>).task as Record<
+      string,
+      unknown
+    >;
+    expect(task.instructions).toBe(
+      "Create the task manually after dependency lookup fails.",
+    );
+    expect(task).not.toHaveProperty("dependsOn");
   });
 
   it("shows validation message when adding dependency without selection", async () => {
