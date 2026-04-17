@@ -269,8 +269,46 @@ function normalizeAttachmentRefs(value: unknown): TemporalTaskInputAttachmentRef
     .filter((entry) => entry.artifactId && entry.filename && entry.contentType);
 }
 
-function attachmentKey(ref: TemporalTaskInputAttachmentRef): string {
-  return ref.artifactId;
+function compactAttachmentBindingKey(
+  ref: Record<string, unknown>,
+): string | null {
+  const artifactId = stringValue(ref.artifactId, ref.artifact_id);
+  if (!artifactId) {
+    return null;
+  }
+  const targetKind = stringValue(
+    ref.targetKind,
+    ref.target_kind,
+    ref.target,
+  ).toLowerCase();
+  if (targetKind === 'objective' || targetKind === 'task') {
+    return `objective:${artifactId}`;
+  }
+  if (targetKind === 'step') {
+    const stepId = stringValue(ref.stepId, ref.step_id);
+    if (stepId) {
+      return `step:id:${stepId}:${artifactId}`;
+    }
+    const stepOrdinalValue = Number(ref.stepOrdinal ?? ref.step_ordinal);
+    if (Number.isInteger(stepOrdinalValue) && stepOrdinalValue >= 0) {
+      return `step:ordinal:${stepOrdinalValue}:${artifactId}`;
+    }
+    return null;
+  }
+  return null;
+}
+
+function stepAttachmentBindingKeys(
+  step: TemporalSubmissionDraft['steps'][number],
+  stepOrdinal: number,
+): string[] {
+  return (step.inputAttachments || []).flatMap((ref) => {
+    const keys = [`step:ordinal:${stepOrdinal}:${ref.artifactId}`];
+    if (step.id) {
+      keys.push(`step:id:${step.id}:${ref.artifactId}`);
+    }
+    return keys;
+  });
 }
 
 function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number] | null {
@@ -408,16 +446,27 @@ function assertSnapshotAttachmentBindings(
   artifactTask: Record<string, unknown>,
   artifactTaskSteps: TemporalSubmissionDraft['steps'],
 ): void {
-  const compactRefs = normalizeAttachmentRefs(artifactParams.attachmentRefs);
+  const compactRefs = Array.isArray(artifactParams.attachmentRefs)
+    ? artifactParams.attachmentRefs.map((entry) => objectValue(entry))
+    : [];
   if (compactRefs.length === 0) {
     return;
   }
-  const boundRefs = [
-    ...normalizeAttachmentRefs(artifactTask.inputAttachments),
-    ...artifactTaskSteps.flatMap((step) => step.inputAttachments || []),
-  ];
-  const boundKeys = new Set(boundRefs.map(attachmentKey));
-  const unbound = compactRefs.filter((ref) => !boundKeys.has(attachmentKey(ref)));
+  const compactKeys = compactRefs.map(compactAttachmentBindingKey);
+  if (compactKeys.some((key) => key === null)) {
+    throw new Error(
+      'Attachment bindings could not be reconstructed from this execution.',
+    );
+  }
+  const boundKeys = new Set([
+    ...normalizeAttachmentRefs(artifactTask.inputAttachments).map(
+      (ref) => `objective:${ref.artifactId}`,
+    ),
+    ...artifactTaskSteps.flatMap(stepAttachmentBindingKeys),
+  ]);
+  const unbound = compactKeys.filter(
+    (key): key is string => key !== null && !boundKeys.has(key),
+  );
   if (unbound.length > 0) {
     throw new Error(
       'Attachment bindings could not be reconstructed from this execution.',
@@ -603,11 +652,7 @@ export function buildTemporalSubmissionDraftFromExecution(
     inputAttachments: (() => {
       const taskAttachments = normalizeAttachmentRefs(task.inputAttachments);
       const artifactAttachments = normalizeAttachmentRefs(artifactTask.inputAttachments);
-      return artifactAttachments.length > 0 && taskAttachments.length === 0
-        ? artifactAttachments
-        : taskAttachments.length > 0
-          ? taskAttachments
-          : artifactAttachments;
+      return taskAttachments.length > 0 ? taskAttachments : artifactAttachments;
     })(),
     steps: selectDraftSteps(taskSteps, artifactTaskSteps),
     appliedTemplates: normalizeAppliedTemplates(

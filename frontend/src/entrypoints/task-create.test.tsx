@@ -1963,6 +1963,65 @@ describe("Task Create Entrypoint", () => {
     ).toThrow("Attachment bindings could not be reconstructed from this execution.");
   });
 
+  it("fails reconstruction when a repeated artifact loses one target binding", () => {
+    expect(() =>
+      buildTemporalSubmissionDraftFromExecution(
+        {
+          workflowId: "mm:duplicate-artifact-binding",
+          workflowType: "MoonMind.Run",
+          taskInputSnapshot: {
+            available: true,
+            artifactRef: "art-snapshot",
+            snapshotVersion: 1,
+            sourceKind: "create",
+            reconstructionMode: "authoritative",
+            disabledReasons: {},
+            fallbackEvidenceRefs: [],
+          },
+          inputParameters: {
+            task: {},
+          },
+        },
+        {
+          snapshotVersion: 1,
+          source: { kind: "create" },
+          draft: {
+            taskShape: "multi_step",
+            task: {
+              instructions: "The artifact is still objective-scoped.",
+              inputAttachments: [
+                {
+                  artifactId: "art-shared",
+                  filename: "shared.png",
+                  contentType: "image/png",
+                  sizeBytes: 100,
+                },
+              ],
+            },
+          },
+          attachmentRefs: [
+            {
+              artifactId: "art-shared",
+              filename: "shared.png",
+              contentType: "image/png",
+              sizeBytes: 100,
+              targetKind: "objective",
+            },
+            {
+              artifactId: "art-shared",
+              filename: "shared.png",
+              contentType: "image/png",
+              sizeBytes: 100,
+              targetKind: "step",
+              stepId: "missing-step-binding",
+              stepOrdinal: 0,
+            },
+          ],
+        },
+      ),
+    ).toThrow("Attachment bindings could not be reconstructed from this execution.");
+  });
+
   it("reconstructs primary skill from object-shaped task skill selectors", () => {
     const draft = buildTemporalSubmissionDraftFromExecution({
       workflowId: "mm:skill-selectors",
@@ -3003,6 +3062,72 @@ describe("Task Create Entrypoint", () => {
         },
       },
     });
+  });
+
+  it("serializes an explicit empty objective attachment list when refs are removed during edit", async () => {
+    renderForEdit("mm:attachment-edit", withAttachmentPolicy());
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Preserve the existing attachments.");
+    });
+
+    const objectiveItem = (await screen.findByText("objective.png (1.2 KB)"))
+      .closest("li") as HTMLElement;
+    fireEvent.click(within(objectiveItem).getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aattachment-edit/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) => String(url) === "/api/executions/mm%3Aattachment-edit/update",
+      )
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request.parametersPatch.task.inputAttachments).toEqual([]);
+    expect(request.parametersPatch.task.steps[0].inputAttachments).toEqual([
+      {
+        artifactId: "art-step",
+        filename: "step.webp",
+        contentType: "image/webp",
+        sizeBytes: 4567,
+      },
+    ]);
+  });
+
+  it("counts persisted refs in client attachment policy validation", async () => {
+    renderForEdit("mm:attachment-edit", withAttachmentPolicy());
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Preserve the existing attachments.");
+    });
+
+    const attachmentInput = await screen.findByLabelText("Step 1 attachments");
+    fireEvent.change(attachmentInput, {
+      target: {
+        files: [
+          new File(["a"], "one.png", { type: "image/png" }),
+          new File(["b"], "two.png", { type: "image/png" }),
+          new File(["c"], "three.png", { type: "image/png" }),
+        ],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(await screen.findByText("Too many attachments (5/4).")).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/artifacts"),
+    ).toBe(false);
   });
 
   it("externalizes oversized edited input before sending UpdateInputs", async () => {

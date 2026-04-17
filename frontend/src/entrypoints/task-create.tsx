@@ -1012,16 +1012,21 @@ function formatAttachmentBytes(value: number): string {
 function validateAttachmentFiles(
   files: File[],
   policy: AttachmentPolicy,
+  persistedRefs: StepAttachmentRef[] = [],
 ): {
   ok: boolean;
   errors: string[];
   totalBytes: number;
 } {
   const errors: string[] = [];
-  if (files.length > policy.maxCount) {
-    errors.push(`Too many attachments (${files.length}/${policy.maxCount}).`);
+  const totalCount = files.length + persistedRefs.length;
+  if (totalCount > policy.maxCount) {
+    errors.push(`Too many attachments (${totalCount}/${policy.maxCount}).`);
   }
   let totalBytes = 0;
+  persistedRefs.forEach((attachment) => {
+    totalBytes += Math.max(0, Number(attachment.sizeBytes) || 0);
+  });
   files.forEach((file) => {
     const type = String(file.type || "")
       .trim()
@@ -2875,6 +2880,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         const validation = validateAttachmentFiles(
           Object.values(nextFilesByStep).flat(),
           attachmentPolicy,
+          persistedAttachmentRefs,
         );
         if (!validation.ok) {
           setSubmitMessage(validation.errors.join(" "));
@@ -3037,16 +3043,31 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   function removePersistedStepAttachment(localId: string, artifactId: string) {
-    updateStep(localId, {
-      inputAttachments: (
-        steps.find((step) => step.localId === localId)?.inputAttachments || []
-      ).filter((attachment) => attachment.artifactId !== artifactId),
-    });
+    setSteps((current) =>
+      current.map((step) =>
+        step.localId === localId
+          ? {
+              ...step,
+              inputAttachments: step.inputAttachments.filter(
+                (attachment) => attachment.artifactId !== artifactId,
+              ),
+            }
+          : step,
+      ),
+    );
   }
 
   const selectedAttachmentFiles = useMemo(
     () => Object.values(selectedStepAttachmentFiles).flat(),
     [selectedStepAttachmentFiles],
+  );
+
+  const persistedAttachmentRefs = useMemo(
+    () => [
+      ...persistedObjectiveAttachments,
+      ...steps.flatMap((step) => step.inputAttachments),
+    ],
+    [persistedObjectiveAttachments, steps],
   );
 
   const providerOptions = [...(providerProfilesQuery.data || [])]
@@ -3067,8 +3088,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }));
 
   const attachmentValidation = useMemo(
-    () => validateAttachmentFiles(selectedAttachmentFiles, attachmentPolicy),
-    [attachmentPolicy, selectedAttachmentFiles],
+    () =>
+      validateAttachmentFiles(
+        selectedAttachmentFiles,
+        attachmentPolicy,
+        persistedAttachmentRefs,
+      ),
+    [attachmentPolicy, persistedAttachmentRefs, selectedAttachmentFiles],
   );
 
   const modelOptions = useMemo(
@@ -3708,7 +3734,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       );
       return;
     }
-    if (selectedAttachmentFiles.length > 0) {
+    if (selectedAttachmentFiles.length > 0 || persistedAttachmentRefs.length > 0) {
       if (!attachmentPolicy.enabled) {
         setSubmitMessage("Attachments are disabled for this runtime.");
         return;
@@ -3814,6 +3840,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const hasStepContent =
         Boolean(step.instructions) ||
         stepAttachmentFiles.length > 0 ||
+        step.inputAttachments.length > 0 ||
         Boolean(stepSkillId) ||
         Boolean(stepSkillArgsRaw) ||
         stepSkillCaps.length > 0;
@@ -4002,6 +4029,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       if (stepAttachments.length > 0) {
         stepPayload.inputAttachments = stepAttachments;
+      } else if (pageMode.mode !== "create") {
+        stepPayload.inputAttachments = [];
       }
       if (step.title.trim()) {
         stepPayload.title = step.title.trim();
@@ -4048,6 +4077,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 : {}),
               ...(primaryStepAttachmentRefs.length > 0
                 ? { inputAttachments: primaryStepAttachmentRefs }
+                : pageMode.mode !== "create"
+                  ? { inputAttachments: [] }
                 : {}),
               ...(primaryStepHasSkillOverride
                 ? { tool: primaryStepTool, skill: primaryStepSkill }
@@ -4147,6 +4178,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       skill: resolvedSkill,
       ...(objectiveAttachmentRefs.length > 0
         ? { inputAttachments: objectiveAttachmentRefs }
+        : pageMode.mode !== "create"
+          ? { inputAttachments: [] }
         : {}),
       ...(taskSkillSelectors ? { skills: taskSkillSelectors } : {}),
       ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
