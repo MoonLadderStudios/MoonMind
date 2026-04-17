@@ -366,6 +366,8 @@ interface ExpandedStepPayload {
   instructions?: string;
   skill?: TaskTemplateStepSkill;
   tool?: TaskTemplateStepSkill;
+  inputAttachments?: StepAttachmentRef[];
+  attachments?: StepAttachmentRef[];
   storyOutput?: Record<string, unknown>;
   story_output?: Record<string, unknown>;
 }
@@ -416,6 +418,7 @@ interface StepState {
   skillRequiredCapabilities: string;
   templateStepId: string;
   templateInstructions: string;
+  templateAttachments: StepAttachmentRef[];
   storyOutput?: Record<string, unknown>;
 }
 
@@ -771,6 +774,7 @@ function createStepStateEntry(
     skillRequiredCapabilities: "",
     templateStepId: "",
     templateInstructions: "",
+    templateAttachments: [],
     ...overrides,
   };
 }
@@ -803,6 +807,7 @@ function createStepStateEntriesFromTemporalDraft(
       skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
+      templateAttachments: step.templateAttachments || [],
       ...(step.storyOutput && Object.keys(step.storyOutput).length > 0
         ? { storyOutput: step.storyOutput }
         : {}),
@@ -891,8 +896,30 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
     !step.skillArgs.trim() &&
     !step.skillRequiredCapabilities.trim() &&
     !step.templateStepId.trim() &&
-    !step.templateInstructions.trim()
+    !step.templateInstructions.trim() &&
+    step.templateAttachments.length === 0
   );
+}
+
+function attachmentIdentity(item: StepAttachmentRef | File): string {
+  if (item instanceof File) {
+    return ["file", item.name, item.type || "", String(item.size || 0)].join(
+      ":",
+    );
+  }
+  if (item.filename || item.contentType || item.sizeBytes) {
+    return [
+      "file",
+      item.filename,
+      item.contentType || "",
+      String(item.sizeBytes || 0),
+    ].join(":");
+  }
+  return `artifact:${item.artifactId}`;
+}
+
+function attachmentSignature(items: Array<StepAttachmentRef | File>): string {
+  return items.map(attachmentIdentity).sort().join("|");
 }
 
 function isTemplateBoundStepForInstructions(
@@ -902,6 +929,18 @@ function isTemplateBoundStepForInstructions(
     step?.templateStepId &&
       step.id === step.templateStepId &&
       step.instructions === step.templateInstructions,
+  );
+}
+
+function isTemplateBoundStepForAttachments(
+  step: StepState | null | undefined,
+  attachments: Array<StepAttachmentRef | File>,
+): boolean {
+  return Boolean(
+    step?.templateStepId &&
+      step.id === step.templateStepId &&
+      attachmentSignature(attachments) ===
+        attachmentSignature(step.templateAttachments),
   );
 }
 
@@ -1089,6 +1128,11 @@ function mapExpandedStepToState(
       : step.story_output && typeof step.story_output === "object"
         ? step.story_output
         : undefined;
+  const templateAttachments = Array.isArray(step.inputAttachments)
+    ? step.inputAttachments
+    : Array.isArray(step.attachments)
+      ? step.attachments
+      : [];
   return createStepStateEntry(index, {
     id: stepId,
     title: String(step.title || "").trim(),
@@ -1098,6 +1142,7 @@ function mapExpandedStepToState(
     skillRequiredCapabilities: extractCapabilityCsv(tool.requiredCapabilities),
     templateStepId: stepId,
     templateInstructions: instructions,
+    templateAttachments,
     ...(storyOutput ? { storyOutput } : {}),
   });
 }
@@ -1832,6 +1877,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
   const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
     useState("");
+  const [
+    appliedTemplateObjectiveAttachmentSignature,
+    setAppliedTemplateObjectiveAttachmentSignature,
+  ] = useState("");
   const [appliedTemplates, setAppliedTemplates] = useState<
     AppliedTemplateState[]
   >([]);
@@ -2769,6 +2818,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   async function importSelectedJiraImages(
     issue: JiraIssueDetail,
     target: JiraImportTarget,
+    objectiveTextForReapply?: string,
   ): Promise<void> {
     const attachments = Array.isArray(issue.attachments) ? issue.attachments : [];
     if (!attachmentPolicy.enabled || attachments.length === 0) {
@@ -2859,6 +2909,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         }
         if (target.kind === "preset") {
           setSelectedObjectiveAttachmentFiles(nextObjectiveFiles);
+          updatePresetReapplyStateForObjective(
+            objectiveTextForReapply ?? templateFeatureRequest,
+            nextObjectiveFiles,
+          );
         } else {
           setSelectedStepAttachmentFiles(nextFilesByStep);
         }
@@ -2919,10 +2973,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           importTarget,
         ),
       );
-      if (appliedTemplates.length > 0) {
-        setPresetReapplyNeeded(true);
-      }
-      await importSelectedJiraImages(issue, importTarget);
+      updatePresetReapplyStateForObjective(
+        nextText,
+        selectedObjectiveAttachmentFiles,
+      );
+      await importSelectedJiraImages(issue, importTarget, nextText);
       return;
     }
 
@@ -2959,16 +3014,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     await importSelectedJiraImages(issue, importTarget);
   }
 
+  function updatePresetReapplyStateForObjective(
+    nextText: string,
+    nextFiles: File[],
+  ) {
+    if (appliedTemplates.length === 0) {
+      setPresetReapplyNeeded(false);
+      return;
+    }
+    setPresetReapplyNeeded(
+      nextText.trim() !== appliedTemplateFeatureRequest.trim() ||
+        attachmentSignature(nextFiles) !==
+          appliedTemplateObjectiveAttachmentSignature,
+    );
+  }
+
   function handleTemplateFeatureRequestChange(value: string) {
     setTemplateFeatureRequest(value);
     setPresetJiraProvenance(null);
-    if (
-      presetReapplyNeeded &&
-      (!value.trim() ||
-        value.trim() === appliedTemplateFeatureRequest.trim())
-    ) {
-      setPresetReapplyNeeded(false);
-    }
+    updatePresetReapplyStateForObjective(value, selectedObjectiveAttachmentFiles);
   }
 
   function addDependency(workflowId: string) {
@@ -3000,6 +3064,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   function updateStepAttachments(localId: string, files: File[]) {
+    setSteps((current) =>
+      current.map((step) => {
+        if (
+          step.localId !== localId ||
+          !step.templateStepId ||
+          step.id !== step.templateStepId ||
+          isTemplateBoundStepForAttachments(step, files)
+        ) {
+          return step;
+        }
+        return { ...step, id: "" };
+      }),
+    );
     setSelectedStepAttachmentFiles((current) => {
       const next = { ...current };
       if (files.length > 0) {
@@ -3012,12 +3089,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   function removeObjectiveAttachment(fileToRemove: File) {
-    setSelectedObjectiveAttachmentFiles((current) =>
-      current.filter((file) => file !== fileToRemove),
-    );
-    if (appliedTemplates.length > 0) {
-      setPresetReapplyNeeded(true);
-    }
+    setSelectedObjectiveAttachmentFiles((current) => {
+      const next = current.filter((file) => file !== fileToRemove);
+      updatePresetReapplyStateForObjective(templateFeatureRequest, next);
+      return next;
+    });
   }
 
   function removeStepAttachment(localId: string, fileToRemove: File) {
@@ -3415,6 +3491,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         (current) => current + Math.max(expandedSteps.length, 1),
       );
       setAppliedTemplateFeatureRequest(templateFeatureRequest.trim());
+      setAppliedTemplateObjectiveAttachmentSignature(
+        attachmentSignature(selectedObjectiveAttachmentFiles),
+      );
       setPresetReapplyNeeded(false);
       if (expandedSteps.length > 0) {
         const appliedTemplate = expanded.appliedTemplate || {};
@@ -4039,8 +4118,30 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           if (!sourceStep) {
             return entry.payload;
           }
+          const payloadAttachments = Array.isArray(
+            entry.payload.inputAttachments,
+          )
+            ? (entry.payload.inputAttachments as StepAttachmentRef[])
+            : [];
+          const effectivePayloadAttachments =
+            Array.isArray(entry.payload.inputAttachments) ||
+            !sourceStep.templateStepId ||
+            sourceStep.id !== sourceStep.templateStepId
+              ? payloadAttachments
+              : sourceStep.templateAttachments;
+          const shouldPreserveStepId =
+            !sourceStep.templateStepId ||
+            sourceStep.id !== sourceStep.templateStepId ||
+            (String(entry.payload.instructions || sourceStep.instructions) ===
+              sourceStep.templateInstructions &&
+              isTemplateBoundStepForAttachments(
+                sourceStep,
+                effectivePayloadAttachments,
+              ));
           return {
-            ...(sourceStep.id.trim() ? { id: sourceStep.id.trim() } : {}),
+            ...(shouldPreserveStepId && sourceStep.id.trim()
+              ? { id: sourceStep.id.trim() }
+              : {}),
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
               : {}),
@@ -4866,27 +4967,35 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     Feature Request / Initial Instructions attachments
                     <input
                       type="file"
+                      data-step-field="objective-attachments"
                       accept={attachmentPolicy.allowedContentTypes.join(",")}
                       multiple
                       aria-label="Feature Request / Initial Instructions attachments"
                       onChange={(event) => {
-                        setSelectedObjectiveAttachmentFiles(
-                          Array.from(event.currentTarget.files || []),
+                        const nextFiles = Array.from(
+                          event.currentTarget.files || [],
                         );
-                        if (appliedTemplates.length > 0) {
-                          setPresetReapplyNeeded(true);
-                        }
+                        setSelectedObjectiveAttachmentFiles(nextFiles);
+                        updatePresetReapplyStateForObjective(
+                          templateFeatureRequest,
+                          nextFiles,
+                        );
                       }}
                     />
                   </label>
                   <p className="small">
-                    Objective-scoped images submit as task input attachments.
+                    {`Up to ${attachmentPolicy.maxCount} files across the objective and all steps, ${formatAttachmentBytes(attachmentPolicy.maxBytes)} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`}
                   </p>
                   {selectedObjectiveAttachmentFiles.length > 0 ? (
                     <ul className="list queue-step-attachments-list">
                       {selectedObjectiveAttachmentFiles.map((file) => (
                         <li key={`${file.name}-${file.size}-${file.lastModified}`}>
-                          {`${file.name} (${formatAttachmentBytes(file.size)})`}
+                          <span>
+                            <strong>{file.name}</strong>{" "}
+                            <span className="small">
+                              {`${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`}
+                            </span>
+                          </span>
                           <button
                             type="button"
                             className="secondary"

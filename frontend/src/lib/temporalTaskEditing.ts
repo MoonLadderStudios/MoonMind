@@ -64,6 +64,12 @@ export type TemporalSubmissionDraft = {
     skillRequiredCapabilities: string[];
     templateStepId: string;
     templateInstructions: string;
+    templateAttachments?: Array<{
+      artifactId: string;
+      filename: string;
+      contentType: string;
+      sizeBytes: number;
+    }>;
     storyOutput?: Record<string, unknown>;
   }>;
   appliedTemplates: Array<{
@@ -222,6 +228,57 @@ function stringArrayValue(...values: unknown[]): string[] {
   return [];
 }
 
+function attachmentRefsValue(...values: unknown[]): Array<{
+  artifactId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+}> {
+  for (const value of values) {
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    const normalized = value
+      .map((item) => {
+        const attachment = objectValue(item);
+        const artifactId = stringValue(
+          attachment.artifactId,
+          attachment.artifact_id,
+        );
+        const filename = stringValue(attachment.filename, attachment.name);
+        const contentType = stringValue(
+          attachment.contentType,
+          attachment.content_type,
+        );
+        const rawSize = attachment.sizeBytes ?? attachment.size_bytes;
+        const sizeBytes = Math.max(0, Number(rawSize) || 0);
+        if (!artifactId && !filename) {
+          return null;
+        }
+        return {
+          artifactId,
+          filename,
+          contentType,
+          sizeBytes,
+        };
+      })
+      .filter(
+        (
+          item,
+        ): item is {
+          artifactId: string;
+          filename: string;
+          contentType: string;
+          sizeBytes: number;
+        } => Boolean(item),
+      );
+    if (normalized.length > 0) {
+      return normalized;
+    }
+  }
+  return [];
+}
+
 function firstObjectValue(...values: unknown[]): Record<string, unknown> {
   for (const value of values) {
     const normalized = objectValue(value);
@@ -261,6 +318,13 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id.startsWith('tpl:') ? id : '',
   );
   const storyOutput = firstObjectValue(step.storyOutput, step.story_output);
+  const templateAttachments = attachmentRefsValue(
+    step.templateAttachments,
+    step.template_attachments,
+    step.inputAttachments,
+    step.input_attachments,
+    step.attachments,
+  );
   const result = {
     id,
     title: stringValue(step.title),
@@ -277,6 +341,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
       step.template_instructions,
       templateStepId ? instructions : '',
     ),
+    ...(templateAttachments.length > 0 ? { templateAttachments } : {}),
     ...(Object.keys(storyOutput).length > 0 ? { storyOutput } : {}),
   };
 
@@ -289,6 +354,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.skillRequiredCapabilities.length > 0 ||
     result.templateStepId ||
     result.templateInstructions ||
+    templateAttachments.length > 0 ||
     Object.keys(storyOutput).length > 0;
   return hasContent ? result : null;
 }
