@@ -78,7 +78,7 @@
 - [X] T018 Keep vision diagnostics on the existing `VisionContextArtifactBundle` return contract without adding unnecessary exported types in `moonmind/vision/service.py` for FR-005, FR-007
 - [X] T019 Run focused unit commands, fix failures, and complete story validation for FR-004 through FR-010 in `specs/203-expose-image-diagnostics/quickstart.md`
 
-**Checkpoint**: Prepare-download and image-context diagnostics are covered; upload and validation diagnostics remain in Phase 4 because alignment identified them as missing source-requirement coverage.
+**Checkpoint**: Prepare-download, image-context, upload, and validation diagnostics are covered by focused tests and implementation evidence.
 
 ---
 
@@ -88,14 +88,14 @@
 
 - [X] T020 Run traceability check `rg -n "MM-375|DESIGN-REQ-019" specs/203-expose-image-diagnostics docs/tmp/jira-orchestration-inputs/MM-375-moonspec-orchestration-input.md`
 - [X] T021 Run final unit validation `./tools/test_unit.sh`
-- [ ] T022 Add failing unit tests for attachment upload started/completed diagnostics with target metadata in `tests/unit/api/routers/test_temporal_artifacts.py` covering FR-001, FR-002, SC-001, DESIGN-REQ-019
-- [ ] T023 Add failing unit tests for attachment validation failed diagnostics with target metadata and failure detail in `tests/unit/workflows/tasks/test_task_contract.py` covering FR-003, SC-002, DESIGN-REQ-019
-- [ ] T024 Run `./tools/test_unit.sh tests/unit/api/routers/test_temporal_artifacts.py tests/unit/workflows/tasks/test_task_contract.py` to confirm T022-T023 fail for the expected reason
-- [ ] T025 Implement attachment upload started/completed diagnostic publication in `api_service/api/routers/temporal_artifacts.py` or the existing artifact upload boundary covering FR-001, FR-002, SC-001
-- [ ] T026 Implement attachment validation failed diagnostic evidence at the task attachment contract boundary in `moonmind/workflows/tasks/task_contract.py` covering FR-003, SC-002
-- [ ] T027 Run focused upload diagnostic unit tests and update quickstart evidence in `specs/203-expose-image-diagnostics/quickstart.md`
-- [ ] T028 Run final unit validation `./tools/test_unit.sh`
-- [ ] T029 Run `/moonspec-verify` read-only verification against MM-375 source requirements and implemented evidence
+- [X] T022 Add failing unit tests for attachment upload started/completed diagnostics with target metadata in `tests/unit/api/routers/test_temporal_artifacts.py` covering FR-001, FR-002, SC-001, DESIGN-REQ-019
+- [X] T023 Add failing unit tests for attachment validation failed diagnostics with target metadata and failure detail in `tests/unit/workflows/tasks/test_task_contract.py` covering FR-003, SC-002, DESIGN-REQ-019
+- [X] T024 Run `./tools/test_unit.sh tests/unit/api/routers/test_temporal_artifacts.py tests/unit/workflows/tasks/test_task_contract.py` to confirm T022-T023 fail for the expected reason
+- [X] T025 Implement attachment upload started/completed diagnostic publication in `api_service/api/routers/temporal_artifacts.py` or the existing artifact upload boundary covering FR-001, FR-002, SC-001
+- [X] T026 Implement attachment validation failed diagnostic evidence at the task attachment contract boundary in `moonmind/workflows/tasks/task_contract.py` covering FR-003, SC-002
+- [X] T027 Run focused upload diagnostic unit tests and update quickstart evidence in `specs/203-expose-image-diagnostics/quickstart.md`
+- [X] T028 Run final unit validation `./tools/test_unit.sh`
+- [X] T029 Run `/moonspec-verify` read-only verification against MM-375 source requirements and implemented evidence
 
 ---
 

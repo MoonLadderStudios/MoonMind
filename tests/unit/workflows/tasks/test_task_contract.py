@@ -172,6 +172,77 @@ def test_task_input_attachments_reject_incomplete_or_embedded_data(
         )
 
 
+def test_task_input_attachment_validation_error_carries_objective_diagnostic() -> None:
+    """MM-375: validation failures expose target-aware diagnostic evidence."""
+
+    with pytest.raises(ValidationError) as exc_info:
+        TaskExecutionSpec.model_validate(
+            {
+                "instructions": "Inspect image.",
+                "inputAttachments": [
+                    {
+                        "artifactId": "art-inline",
+                        "filename": "inline.png",
+                        "contentType": "image/png",
+                        "sizeBytes": 10,
+                        "dataUrl": "data:image/png;base64,AAAA",
+                    }
+                ],
+            }
+        )
+
+    error = exc_info.value.errors()[0]["ctx"]["error"]
+    assert error.diagnostic == {
+        "event": "attachment_validation_failed",
+        "status": "failed",
+        "targetKind": "objective",
+        "artifactId": "art-inline",
+        "filename": "inline.png",
+        "contentType": "image/png",
+        "sizeBytes": 10,
+        "error": "inputAttachments entries must not include embedded image data",
+    }
+
+
+def test_task_input_attachment_validation_error_carries_step_diagnostic() -> None:
+    """MM-375: step validation failures identify the affected step target."""
+
+    with pytest.raises(ValidationError) as exc_info:
+        TaskExecutionSpec.model_validate(
+            {
+                "instructions": "Inspect image.",
+                "steps": [
+                    {
+                        "id": "review-step",
+                        "instructions": "Inspect step image.",
+                        "inputAttachments": [
+                            {
+                                "artifactId": "art-step",
+                                "filename": "step.png",
+                                "contentType": "image/png",
+                                "sizeBytes": 10,
+                                "dataUrl": "data:image/png;base64,AAAA",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+    error = exc_info.value.errors()[0]["ctx"]["error"]
+    assert error.diagnostic == {
+        "event": "attachment_validation_failed",
+        "status": "failed",
+        "targetKind": "step",
+        "stepRef": "review-step",
+        "artifactId": "art-step",
+        "filename": "step.png",
+        "contentType": "image/png",
+        "sizeBytes": 10,
+        "error": "inputAttachments entries must not include embedded image data",
+    }
+
+
 def test_task_input_attachments_must_be_lists() -> None:
     """MM-367: canonical attachment fields are arrays."""
 

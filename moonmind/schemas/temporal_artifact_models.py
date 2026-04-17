@@ -30,6 +30,7 @@ class ArtifactRefModel(BaseModel):
     size_bytes: Optional[int] = Field(None, alias="size_bytes")
     content_type: Optional[str] = Field(None, alias="content_type")
     encryption: str = Field(..., alias="encryption")
+    diagnostics: Optional[dict[str, Any]] = None
 
 
 class ArtifactExecutionLinkModel(BaseModel):
@@ -100,6 +101,7 @@ class CreateArtifactResponse(BaseModel):
 
     artifact_ref: ArtifactRefModel
     upload: ArtifactUploadModel
+    diagnostics: Optional[dict[str, Any]] = None
 
 
 class CompleteArtifactPartModel(BaseModel):
