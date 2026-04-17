@@ -28,4 +28,4 @@ Expected:
 ```
 
 Expected:
-- Required unit suite passes before `/speckit.verify`.
+- Required unit suite passes before `/moonspec-verify`.

@@ -13,7 +13,7 @@
 
 - Unit tests: `./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/api/routers/test_executions.py`
 - Integration tests: `./tools/test_unit.sh tests/contract/test_temporal_execution_api.py`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -83,7 +83,7 @@
 
 - [X] T015 Run `./tools/test_unit.sh` for final unit-suite verification
 - [X] T016 Review `docs/Tasks/ImageSystem.md` and generated artifacts to confirm source design coverage remains accurate without rewriting canonical docs (DESIGN-REQ-001-DESIGN-REQ-006, DESIGN-REQ-020)
-- [X] T017 Run `/speckit.verify` to validate the final implementation against the original MM-367 feature request
+- [X] T017 Run `/moonspec-verify` to validate the final implementation against the original MM-367 feature request
 
 ---
 
@@ -120,4 +120,4 @@
 4. Implement typed attachment-ref validation and router forwarding.
 5. Run targeted tests until they pass.
 6. Run full unit verification.
-7. Run `/speckit.verify`.
+7. Run `/moonspec-verify`.
