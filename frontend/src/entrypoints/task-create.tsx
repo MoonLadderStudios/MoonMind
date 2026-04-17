@@ -4932,6 +4932,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       : pageMode.mode === "rerun"
         ? "Rerun Task"
         : "Create";
+  const primaryCtaTooltip =
+    pageMode.mode === "edit"
+      ? "Save changes to this task draft"
+      : pageMode.mode === "rerun"
+        ? "Start a new run from this task draft"
+        : "Create this task";
+  const applyPresetTooltip = presetReapplyNeeded
+    ? "Reapply the selected preset to update preset-derived steps"
+    : "Apply the selected preset to the task draft";
   const modeLoadError =
     pageMode.mode !== "create" && !temporalTaskEditingEnabled
       ? "Temporal task editing is not enabled."
@@ -4985,6 +4994,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 type="button"
                 className="queue-step-icon-button"
                 aria-label="Close Jira browser"
+                title="Close Jira browser"
                 onClick={closeJiraBrowser}
               >
                 <CloseIcon />
@@ -5123,6 +5133,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           : "secondary jira-column-tab"
                       }
                       aria-pressed={column.id === activeJiraColumnId}
+                      title={`Show Jira issues in ${column.name}`}
                       onClick={() => selectJiraColumn(column.id)}
                     >
                       {`${column.name} ${Number(column.count || 0)}`}
@@ -5146,6 +5157,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                             : "jira-issue-button"
                         }
                         disabled={Boolean(pendingJiraImportIssueKey)}
+                        title={`Import Jira issue ${issue.issueKey} into ${jiraTargetText}`}
                         onClick={() => selectJiraIssue(issue.issueKey)}
                       >
                         <strong>{issue.issueKey}</strong>
@@ -5295,7 +5307,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         <button
                           type="button"
                           className="secondary jira-browse-button"
-                          aria-label={`Browse Jira issue for Step ${index + 1} instructions`}
+                          aria-label={`Browse Jira issues for Step ${index + 1} instructions`}
+                          title={`Browse Jira issues for Step ${index + 1} instructions`}
                           onClick={() =>
                             openJiraBrowser({
                               kind: "step",
@@ -5351,7 +5364,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           <button
                             type="button"
                             className="secondary jira-browse-button"
-                            aria-label={`Browse Jira issue for Step ${index + 1} attachments`}
+                            aria-label={`Browse Jira images for Step ${index + 1} attachments`}
+                            title={`Browse Jira images for Step ${index + 1} attachments`}
                             onClick={() =>
                               openJiraBrowser({
                                 kind: "step",
@@ -5388,12 +5402,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                     attachment.artifactId,
                                   )}
                                   download={attachment.filename}
+                                  title={`Download objective attachment ${attachment.filename}`}
                                 >
                                   Download
                                 </a>
                                 <button
                                   type="button"
                                   className="button secondary"
+                                  title={`Remove objective attachment ${attachment.filename}`}
                                   onClick={() =>
                                     removePersistedObjectiveAttachment(
                                       attachment.artifactId,
@@ -5420,12 +5436,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                     attachment.artifactId,
                                   )}
                                   download={attachment.filename}
+                                  title={`Download Step ${index + 1} attachment ${attachment.filename}`}
                                 >
                                   Download
                                 </a>
                                 <button
                                   type="button"
                                   className="button secondary"
+                                  title={`Remove Step ${index + 1} attachment ${attachment.filename}`}
                                   onClick={() =>
                                     removePersistedStepAttachment(
                                       step.localId,
@@ -5478,6 +5496,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                     type="button"
                                     className="secondary"
                                     aria-label={`Retry upload for Step ${index + 1} attachment ${file.name}`}
+                                    title={`Retry upload for Step ${index + 1} attachment ${file.name}`}
                                     onClick={() =>
                                       clearAttachmentTargetError(
                                         attachmentTargetKey(step.localId),
@@ -5491,6 +5510,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                                   type="button"
                                   className="secondary"
                                   aria-label={`Remove Step ${index + 1} attachment ${file.name}`}
+                                  title={`Remove Step ${index + 1} attachment ${file.name}`}
                                   onClick={() =>
                                     removeStepAttachment(step.localId, file)
                                   }
@@ -5598,7 +5618,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </div>
 
             <div className="actions queue-step-add queue-step-actions">
-              <button type="button" data-step-action="add" onClick={addStep}>
+              <button
+                type="button"
+                data-step-action="add"
+                title="Add another task step"
+                onClick={addStep}
+              >
                 Add Step
               </button>
               <button
@@ -5607,6 +5632,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 disabled={isTemporalFormBlocked}
                 aria-disabled={isSubmitting || isTemporalFormBlocked}
                 aria-busy={isSubmitting}
+                title={primaryCtaTooltip}
               >
                 {primaryCta}
               </button>
@@ -5685,7 +5711,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <button
                     type="button"
                     className="secondary jira-browse-button"
-                    aria-label="Browse Jira issue for preset instructions"
+                    aria-label="Browse Jira issues for preset instructions"
+                    title="Browse Jira issues for preset instructions"
                     onClick={() => openJiraBrowser({ kind: "preset" })}
                   >
                     Browse Jira issue
@@ -5732,7 +5759,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     <button
                       type="button"
                       className="secondary jira-browse-button"
-                      aria-label="Browse Jira issue for objective attachments"
+                      aria-label="Browse Jira images for objective attachments"
+                      title="Browse Jira images for objective attachments"
                       onClick={() =>
                         openJiraBrowser({
                           kind: "preset",
@@ -5787,6 +5815,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                               type="button"
                               className="secondary"
                               aria-label={`Retry upload for objective attachment ${file.name}`}
+                              title={`Retry upload for objective attachment ${file.name}`}
                               onClick={() =>
                                 clearAttachmentTargetError(
                                   attachmentTargetKey("objective"),
@@ -5800,6 +5829,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                             type="button"
                             className="secondary"
                             aria-label={`Remove objective attachment ${file.name}`}
+                            title={`Remove objective attachment ${file.name}`}
                             onClick={() => removeObjectiveAttachment(file)}
                           >
                             Remove
@@ -5817,7 +5847,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   type="button"
                   id="queue-template-save-current"
                   className="queue-step-icon-button"
-                  aria-label="Save Current Steps as Preset"
+                  aria-label="Save preset"
                   title="Save the current steps as a reusable preset"
                   onClick={handleSaveCurrentStepsAsPreset}
                 >
@@ -5830,6 +5860,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 onClick={handleApplyPreset}
                 aria-disabled={isApplyingPreset}
                 aria-busy={isApplyingPreset}
+                title={applyPresetTooltip}
               >
                 {presetReapplyNeeded ? "Reapply preset" : "Apply"}
               </button>
@@ -5874,6 +5905,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               <button
                 type="button"
                 id="queue-dependency-add"
+                title="Add the selected prerequisite run"
                 onClick={() => addDependency(selectedDependencyWorkflowId)}
               >
                 Add dependency
@@ -5904,6 +5936,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     <button
                       type="button"
                       className="secondary small"
+                      title={`Remove dependency ${workflowId}`}
                       onClick={() => removeDependency(workflowId)}
                     >
                       Remove

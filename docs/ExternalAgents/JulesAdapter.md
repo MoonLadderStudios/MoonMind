@@ -302,14 +302,9 @@ Those are provider-specific extensions, not replacements for the core lifecycle 
 
 The Jules API only supports `AUTO_CREATE_PR` as an automation mode. There is no true “branch only” mode.
 
-That means when a user requests `publishMode == "branch"`, MoonMind must treat “land changes directly on the target branch” as a MoonMind-owned post-completion outcome rather than a Jules-native publish mode.
+That means when a user requests `publishMode == "branch"`, MoonMind must treat "land changes directly on the authored branch" as a MoonMind-owned post-completion outcome rather than a Jules-native publish mode.
 
-Additionally, `startingBranch` may affect both:
-
-- where Jules starts work
-- the initial PR target
-
-So MoonMind may need to correct the target branch before merge.
+Jules receives a single authored `branch` reference. MoonMind no longer assumes authored inputs provide both a base branch and a target branch. For PR mode, `branch` is the PR base and Jules/provider automation manages work/head branch creation.
 
 ## 8.2 Mechanism
 
@@ -318,13 +313,13 @@ MoonMind handles branch publication with a post-completion flow:
 1. Jules creates a PR using `AUTO_CREATE_PR`
 2. MoonMind waits for terminal completion
 3. MoonMind fetches the Jules result and extracts the PR URL
-4. MoonMind optionally updates the PR base branch if `targetBranch != startingBranch`
+4. MoonMind verifies or corrects the PR base so it targets the authored `branch` when the provider result does not already do so
 5. MoonMind merges the PR through `repo.merge_pr`
 
 This lets MoonMind support:
 
 - `publishMode == "pr"` → leave PR open
-- `publishMode == "branch"` → merge changes into the target branch
+- `publishMode == "branch"` → merge changes into the authored branch
 
 ## 8.3 Workflow flow
 
@@ -333,13 +328,13 @@ When `publishMode == "branch"` and the provider is Jules:
 1. `JulesAgentAdapter.do_start()` sets `automationMode = "AUTO_CREATE_PR"`
 2. `MoonMind.AgentRun` waits for Jules to reach terminal completion
 3. `integration.jules.fetch_result` returns a canonical `AgentRunResult` containing PR metadata
-4. MoonMind optionally updates the PR base branch
+4. MoonMind verifies or corrects the PR base branch against the single authored `branch`
 5. MoonMind calls `repo.merge_pr`
 6. the final MoonMind result reflects whether branch publication actually succeeded
 
 ## 8.4 Truthfulness rule
 
-If `publishMode == "branch"`, MoonMind must not report success unless the changes actually land on the target branch.
+If `publishMode == "branch"`, MoonMind must not report success unless the changes actually land on the authored branch.
 
 That means these failures must prevent a successful branch-publication outcome:
 

@@ -18,36 +18,22 @@ The agent runs in its workspace but no git operations occur after completion. Us
 
 After the agent completes, the infrastructure pushes the current work branch to the remote. The agent is instructed to commit but **not** to push or create a PR — that is handled deterministically by the runtime.
 
-`branch` publish supports both of these operator intents:
+For new authored submissions, `branch` publish uses a single operator-selected `branch` field. That branch is the branch to update and push. MoonMind no longer exposes a separate "clone from X, push to Y" authoring model.
 
-- **Update a new or separate work branch:** set `startingBranch` to the branch to clone from and `targetBranch` to the branch that should receive the agent's commits.
-- **Update an existing branch in place:** set `startingBranch` and `targetBranch` to the same non-hard-protected branch. MoonMind checks out that branch, lets the agent commit on it, and pushes the branch back to `origin`.
-
-Examples:
+Example:
 
 ```json
 {
   "publishMode": "branch",
   "git": {
-    "startingBranch": "main",
-    "targetBranch": "codex/lift-jira-config-tests"
-  }
-}
-```
-
-```json
-{
-  "publishMode": "branch",
-  "git": {
-    "startingBranch": "156-jira-ui-runtime-config",
-    "targetBranch": "156-jira-ui-runtime-config"
+    "branch": "156-jira-ui-runtime-config"
   }
 }
 ```
 
 ### `pr`
 
-Same as `branch`, but after the push completes the workflow creates a pull request via the `repo.create_pr` activity. The PR merges the head branch into the base branch (see [Branch Resolution](#branch-resolution) below).
+For PR publication, the authored `branch` is the selected repository branch and PR base. MoonMind creates or obtains a runtime-generated work branch for the PR head, pushes changes there, and creates a pull request back to the authored base branch.
 
 When merge automation is explicitly enabled for a PR-publishing task, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.Run` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `none`; downstream dependencies on the original task are satisfied only after merge automation succeeds.
 
@@ -55,7 +41,7 @@ When merge automation is explicitly enabled for a PR-publishing task, successful
 
 ### Auto-generated Branches
 
-When `publishMode` is `pr` and no explicit head branch is provided, the runtime planner auto-generates a branch name:
+When `publishMode` is `pr`, the runtime planner auto-generates a work/head branch name:
 
 ```
 {clean-title-prefix}-{uuid8}
@@ -70,50 +56,54 @@ When `publishMode` is `pr` and no explicit head branch is provided, the runtime 
 
 ### Branch Fields
 
-The two primary branch fields used consistently across UI, API, and internal logic:
+New authored submissions use one branch field consistently across UI, API, snapshots, and runtime planning:
 
-| Field            | Role | Description |
-|------------------|------|-------------|
-| `startingBranch` | Base | The branch to clone from. Also used as the PR base (merge destination). |
-| `targetBranch`   | Head | The name for the agent's work branch. Becomes the PR head (source of changes). |
+| Field | Role | Description |
+| --- | --- | --- |
+| `branch` | Authored branch selection | For `publishMode: pr`, the selected repo branch and PR base. For `publishMode: branch`, the branch to update and push. |
 
-For `publishMode: branch`, `targetBranch` may equal `startingBranch` when the desired outcome is to update that existing branch directly. For `publishMode: pr`, `targetBranch` must be distinct from the PR base branch because it is the PR source branch.
+`targetBranch` is not an authored or operator-facing field in new submissions. For PR mode, the head/work branch is runtime-generated or provider-managed and is not part of the create-form contract. `Publish Mode` remains part of the task contract; only its UI placement changed.
 
-Additional fallback field:
+### Legacy Migration
 
-| Field            | Role | Description |
-|------------------|------|-------------|
-| `branch`         | Fallback | General-purpose fallback for either head or base when the specific field is absent. |
+Older snapshots and execution payloads may still contain `startingBranch` and `targetBranch`.
 
-The runtime planner resolves these from multiple sources in priority order:
+Rules:
 
-1. `git` payload (`task.git.startingBranch`, `task.git.targetBranch`)
-2. Task payload (`task.startingBranch`, etc.)
-3. Selected skill inputs
-4. Parameter payload
-5. Input payload
+- New authored submissions must emit `git.branch` only.
+- `startingBranch` may be normalized to the new authored `branch` when reconstructing older submissions.
+- Legacy `targetBranch` may be retained only as historical metadata for audit/debug displays.
+- Legacy `targetBranch` must never drive active new submission logic.
+- Legacy two-branch branch-publish snapshots whose old intent cannot be represented by one authored `branch` must surface a reconstruction warning instead of pretending to round-trip exactly.
 
 ## Branch Resolution
 
-When the workflow creates a PR (`publishMode: pr`), it resolves the **head branch** (where changes live) and the **base branch** (where the PR merges into).
+Runtime planning starts from the authored `branch`.
 
-### Head Branch (PR source)
-
-Resolved via this fallback chain:
-
-1. Agent execution outputs: `outputs.branch` → `outputs.targetBranch`
-2. Workspace spec: `targetBranch` → `branch`
-3. Last plan node inputs: `targetBranch` → `branch`
-
-If no head branch can be resolved, the workflow raises an error.
-
-### Base Branch (PR destination)
+### Authored Branch
 
 Resolved via this fallback chain:
 
-1. `workspaceSpec.startingBranch`
-2. Last plan node inputs: `startingBranch`
-3. Default: `main`
+1. `task.git.branch`
+2. `task.branch`
+3. Selected skill inputs
+4. Parameter payload
+5. Input payload
+6. Repository default branch
+
+For `publishMode: pr`, the authored branch is the PR base branch. The PR head branch is resolved separately from runtime-managed work-branch state, such as workspace metadata, adapter result metadata, or provider PR metadata.
+
+For `publishMode: branch`, the authored branch is the branch the infrastructure updates and pushes.
+
+### Work Branch (PR source)
+
+When the workflow creates a PR, it resolves the work/head branch from runtime-owned sources:
+
+1. Provider or agent execution outputs such as `outputs.branch`
+2. Workspace work-branch metadata
+3. Runtime planner generated branch name
+
+If no PR head branch can be resolved for `publishMode: pr`, the workflow raises an error.
 
 ## Post-Agent Git Push
 
@@ -127,9 +117,9 @@ Before pushing, the runtime resolves the current branch name (`git rev-parse --a
 - `master`
 - `HEAD` / detached or unknown branch state
 
-For `publishMode: pr`, the configured base branch remains protected because the workflow must push a separate head branch and then create a PR back to the base.
+For `publishMode: pr`, the authored base branch remains protected because the workflow pushes a separate runtime-owned head branch and creates a PR back to the base.
 
-For `publishMode: branch`, the configured base branch is publishable when it is also the intended target branch. This is the explicit same-branch update case: `startingBranch == targetBranch`, excluding the hard-protected names above.
+For `publishMode: branch`, the authored `branch` is publishable only when it is not one of the hard-protected names above.
 
 If the branch is protected, the push is skipped with a warning log. This prevents accidental pushes to production branches if the agent switched branches or if branch creation failed.
 

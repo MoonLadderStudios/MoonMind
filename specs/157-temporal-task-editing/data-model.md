@@ -18,9 +18,8 @@ Represents the detail payload used to decide whether an execution can be edited 
 - `model` / `requestedModel` / `resolvedModel`: Model selection state available to prefill later form modes.
 - `effort`: Runtime effort setting when present.
 - `repository`: Repository identifier associated with the task.
-- `startingBranch`: Starting branch or default branch state.
-- `targetBranch`: Target/publish branch state.
-- `publishMode`: Publish behavior selected for the task.
+- `branch`: Single authored branch selection used to prefill the shared form.
+- `publishMode`: Publish behavior selected for the task. This remains task submission data even when the Create page renders it inline with Branch in the Steps card.
 - `targetSkill` / `taskSkills`: Skill selection state.
 - `actions`: State-aware capability set.
 
@@ -30,6 +29,21 @@ Represents the detail payload used to decide whether an execution can be edited 
 - `workflowType` must be `MoonMind.Run` before Edit or Rerun entry points are exposed.
 - `inputParameters` must be an object; missing values are acceptable for Phase 1 visibility but must be treated as incomplete by later draft reconstruction.
 - Artifact references are immutable historical references; edit/rerun submit phases must create new artifact references for changed content.
+- Edit flows must never reintroduce a visible `Target Branch` field.
+- Saving an edited task always emits the new single-branch contract (`branch`) and must not emit a fresh `targetBranch`.
+
+### Legacy Branch Compatibility
+
+Older executions may contain `startingBranch` and `targetBranch`.
+
+| Legacy shape | Edit reconstruction behavior |
+| --- | --- |
+| `startingBranch` only | Normalize to `branch`. |
+| `startingBranch == targetBranch` | Normalize the shared value to `branch`. |
+| PR publish snapshot with differing values | Normalize authored `branch` to old `startingBranch`; preserve old `targetBranch` only as opaque historical metadata for audit/debug. |
+| Branch-publish snapshot with differing values | Mark as non-round-trippable under the new single-branch model and show a warning before allowing save. |
+
+Compatibility normalization is a load-time reconstruction concern only. Edited submissions use `branch` plus `publishMode`; `targetBranch` is never active submission logic.
 
 ## Action Capability Set
 
