@@ -73,6 +73,12 @@ export type TemporalSubmissionDraft = {
     templateStepId: string;
     templateInstructions: string;
     inputAttachments?: TemporalTaskInputAttachmentRef[];
+    templateAttachments?: Array<{
+      artifactId: string;
+      filename: string;
+      contentType: string;
+      sizeBytes: number;
+    }>;
     storyOutput?: Record<string, unknown>;
   }>;
   appliedTemplates: Array<{
@@ -231,6 +237,57 @@ function stringArrayValue(...values: unknown[]): string[] {
   return [];
 }
 
+function attachmentRefsValue(...values: unknown[]): Array<{
+  artifactId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+}> {
+  for (const value of values) {
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    const normalized = value
+      .map((item) => {
+        const attachment = objectValue(item);
+        const artifactId = stringValue(
+          attachment.artifactId,
+          attachment.artifact_id,
+        );
+        const filename = stringValue(attachment.filename, attachment.name);
+        const contentType = stringValue(
+          attachment.contentType,
+          attachment.content_type,
+        );
+        const rawSize = attachment.sizeBytes ?? attachment.size_bytes;
+        const sizeBytes = Math.max(0, Number(rawSize) || 0);
+        if (!artifactId && !filename) {
+          return null;
+        }
+        return {
+          artifactId,
+          filename,
+          contentType,
+          sizeBytes,
+        };
+      })
+      .filter(
+        (
+          item,
+        ): item is {
+          artifactId: string;
+          filename: string;
+          contentType: string;
+          sizeBytes: number;
+        } => Boolean(item),
+      );
+    if (normalized.length > 0) {
+      return normalized;
+    }
+  }
+  return [];
+}
+
 function firstObjectValue(...values: unknown[]): Record<string, unknown> {
   for (const value of values) {
     const normalized = objectValue(value);
@@ -302,7 +359,8 @@ function stepAttachmentBindingKeys(
   step: TemporalSubmissionDraft['steps'][number],
   stepOrdinal: number,
 ): string[] {
-  return (step.inputAttachments || []).flatMap((ref) => {
+  const refs = step.inputAttachments || step.templateAttachments || [];
+  return refs.flatMap((ref) => {
     const keys = [`step:ordinal:${stepOrdinal}:${ref.artifactId}`];
     if (step.id) {
       keys.push(`step:id:${step.id}:${ref.artifactId}`);
@@ -328,6 +386,13 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
   );
   const storyOutput = firstObjectValue(step.storyOutput, step.story_output);
   const inputAttachments = normalizeAttachmentRefs(step.inputAttachments);
+  const templateAttachments = attachmentRefsValue(
+    step.templateAttachments,
+    step.template_attachments,
+    step.inputAttachments,
+    step.input_attachments,
+    step.attachments,
+  );
   const result = {
     id,
     title: stringValue(step.title),
@@ -345,6 +410,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
       templateStepId ? instructions : '',
     ),
     ...(inputAttachments.length > 0 ? { inputAttachments } : {}),
+    ...(templateAttachments.length > 0 ? { templateAttachments } : {}),
     ...(Object.keys(storyOutput).length > 0 ? { storyOutput } : {}),
   };
 
@@ -358,6 +424,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.templateStepId ||
     result.templateInstructions ||
     inputAttachments.length > 0 ||
+    templateAttachments.length > 0 ||
     Object.keys(storyOutput).length > 0;
   return hasContent ? result : null;
 }
@@ -383,10 +450,14 @@ function selectDraftSteps(
   artifactTaskSteps: TemporalSubmissionDraft['steps'],
 ): TemporalSubmissionDraft['steps'] {
   const artifactHasAttachments = artifactTaskSteps.some(
-    (step) => (step.inputAttachments || []).length > 0,
+    (step) =>
+      (step.inputAttachments || []).length > 0 ||
+      (step.templateAttachments || []).length > 0,
   );
   const taskHasAttachments = taskSteps.some(
-    (step) => (step.inputAttachments || []).length > 0,
+    (step) =>
+      (step.inputAttachments || []).length > 0 ||
+      (step.templateAttachments || []).length > 0,
   );
   if (artifactHasAttachments && !taskHasAttachments) {
     return artifactTaskSteps;
