@@ -27,7 +27,7 @@ Expected coverage:
 ## Full Local Verification
 
 ```bash
-SPECIFY_FEATURE=201-edit-rerun-attachment-reconstruction .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
+SPECIFY_FEATURE=202-edit-rerun-attachment-reconstruction .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
 ./tools/test_integration.sh
 ```

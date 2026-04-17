@@ -1,6 +1,6 @@
 # Tasks: Edit and Rerun Attachment Reconstruction
 
-**Input**: Design documents from `/specs/201-edit-rerun-attachment-reconstruction/`  
+**Input**: Design documents from `/specs/202-edit-rerun-attachment-reconstruction/`  
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Unit tests and integration/contract tests are REQUIRED. Existing tests from the attachment-binding implementation are acceptable evidence when they map directly to MM-382 requirements.
@@ -38,9 +38,9 @@
 
 **CRITICAL**: No story validation can be claimed until this phase is complete.
 
-- [X] T005 Create MM-382 spec artifacts under `specs/201-edit-rerun-attachment-reconstruction/` preserving the Jira issue key in `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/edit-rerun-attachment-reconstruction.md`, `quickstart.md`, and `tasks.md`
-- [X] T006 Map each in-scope MM-382 source requirement to functional requirements and test evidence in `specs/201-edit-rerun-attachment-reconstruction/spec.md`
-- [X] T007 Confirm no unresolved story-critical clarification remains in `specs/201-edit-rerun-attachment-reconstruction/spec.md`
+- [X] T005 Create MM-382 spec artifacts under `specs/202-edit-rerun-attachment-reconstruction/` preserving the Jira issue key in `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/edit-rerun-attachment-reconstruction.md`, `quickstart.md`, and `tasks.md`
+- [X] T006 Map each in-scope MM-382 source requirement to functional requirements and test evidence in `specs/202-edit-rerun-attachment-reconstruction/spec.md`
+- [X] T007 Confirm no unresolved story-critical clarification remains in `specs/202-edit-rerun-attachment-reconstruction/spec.md`
 
 **Checkpoint**: Foundation ready - story validation and implementation gap checks can now begin.
 
@@ -88,10 +88,10 @@
 
 **Purpose**: Validate the completed story without adding hidden scope.
 
-- [X] T020 [P] Update `specs/201-edit-rerun-attachment-reconstruction/quickstart.md` if final commands or blockers differ from planned validation
+- [X] T020 [P] Update `specs/202-edit-rerun-attachment-reconstruction/quickstart.md` if final commands or blockers differ from planned validation
 - [X] T021 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit verification
 - [X] T022 Run `./tools/test_integration.sh` when Docker is available, or record the exact Docker socket blocker
-- [X] T023 Run `/moonspec-verify` equivalent read-only verification and record evidence in `specs/201-edit-rerun-attachment-reconstruction/verification.md`
+- [X] T023 Run `/moonspec-verify` equivalent read-only verification and record evidence in `specs/202-edit-rerun-attachment-reconstruction/verification.md`
 
 ---
 

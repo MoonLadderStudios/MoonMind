@@ -1,7 +1,7 @@
 # MoonSpec Verification Report
 
 **Feature**: Edit and Rerun Attachment Reconstruction  
-**Spec**: `specs/201-edit-rerun-attachment-reconstruction/spec.md`  
+**Spec**: `specs/202-edit-rerun-attachment-reconstruction/spec.md`  
 **Original Request Source**: spec.md `Input` and `docs/tmp/jira-orchestration-inputs/MM-382-moonspec-orchestration-input.md`  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH
@@ -15,7 +15,7 @@
 | Focused contract | `pytest tests/contract/test_temporal_execution_api.py -q` | PASS | 8 passed, 1 warning. |
 | Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 3523 Python tests passed, 1 xpassed, 16 subtests passed; 10 UI files passed with 267 UI tests. |
 | Hermetic integration | `./tools/test_integration.sh` | NOT RUN | Blocked by unavailable Docker socket in the managed container: `failed to connect to the docker API at unix:///var/run/docker.sock ... connect: no such file or directory`. |
-| Moon Spec prerequisite helper | `SPECIFY_FEATURE=201-edit-rerun-attachment-reconstruction .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` | PASS | Returned the numbered MM-382 feature directory with `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `tasks.md`. |
+| Moon Spec prerequisite helper | `SPECIFY_FEATURE=202-edit-rerun-attachment-reconstruction .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` | PASS | Returned the numbered MM-382 feature directory with `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `tasks.md`. |
 
 ## Requirement Coverage
 
@@ -66,4 +66,4 @@
 ## Residual Risks
 
 - Docker-backed hermetic integration could not run inside this managed container because `/var/run/docker.sock` is unavailable. Focused contract tests and the full unit suite passed.
-- Moon Spec helpers require `SPECIFY_FEATURE=201-edit-rerun-attachment-reconstruction` when invoked from the managed PR branch `mm-382-8aa2c304`.
+- Moon Spec helpers require `SPECIFY_FEATURE=202-edit-rerun-attachment-reconstruction` when invoked from the managed PR branch `mm-382-8aa2c304`.

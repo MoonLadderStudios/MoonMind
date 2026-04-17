@@ -1,7 +1,7 @@
 # Implementation Plan: Edit and Rerun Attachment Reconstruction
 
-**Feature ID**: `201-edit-rerun-attachment-reconstruction` | **Managed PR Branch**: `mm-382-8aa2c304` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md)  
-**Input**: Single-story feature specification from `specs/201-edit-rerun-attachment-reconstruction/spec.md`
+**Feature ID**: `202-edit-rerun-attachment-reconstruction` | **Managed PR Branch**: `mm-382-8aa2c304` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md)  
+**Input**: Single-story feature specification from `specs/202-edit-rerun-attachment-reconstruction/spec.md`
 
 ## Summary
 
@@ -43,7 +43,7 @@ Implement MM-382 by validating and, where necessary, completing Create page edit
 ### Documentation (this feature)
 
 ```text
-specs/201-edit-rerun-attachment-reconstruction/
+specs/202-edit-rerun-attachment-reconstruction/
 ├── spec.md
 ├── plan.md
 ├── research.md
@@ -77,4 +77,4 @@ docs/tmp/jira-orchestration-inputs/MM-382-moonspec-orchestration-input.md
 
 ## Managed Setup Note
 
-The active managed PR branch is `mm-382-8aa2c304`, while Moon Spec helper scripts expect feature-number branch names in git-derived contexts. This run therefore keeps the Moon Spec feature ID aligned to `201-edit-rerun-attachment-reconstruction` after scanning `specs/` and selecting the next global numeric prefix. In managed branches, run helper scripts with `SPECIFY_FEATURE=201-edit-rerun-attachment-reconstruction` so they resolve the numbered feature directory deterministically.
+The active managed PR branch is `mm-382-8aa2c304`, while Moon Spec helper scripts expect feature-number branch names in git-derived contexts. This run therefore keeps the Moon Spec feature ID aligned to `202-edit-rerun-attachment-reconstruction` after scanning `specs/` and selecting the next global numeric prefix. In managed branches, run helper scripts with `SPECIFY_FEATURE=202-edit-rerun-attachment-reconstruction` so they resolve the numbered feature directory deterministically.
