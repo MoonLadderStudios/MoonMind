@@ -14,7 +14,7 @@
 - Unit tests: `./tools/test_unit.sh tests/unit/workflows/temporal/test_artifact_authorization.py tests/unit/workflows/tasks/test_task_contract.py tests/unit/agents/codex_worker/test_worker.py`
 - UI tests: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx`
 - Integration tests: `pytest tests/integration/vision/test_context_artifacts.py -q`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -88,7 +88,7 @@
 - [X] T014 Run source traceability check: `rg -n "MM-374|DESIGN-REQ-016|DESIGN-REQ-017|DESIGN-REQ-020" specs/203-protect-image-access docs/tmp/jira-orchestration-inputs/MM-374-moonspec-orchestration-input.md` (FR-013, SC-007)
 - [X] T015 Run full unit suite with `./tools/test_unit.sh` or document exact blocker
 - [X] T016 Run hermetic integration suite with `./tools/test_integration.sh` when Docker is available or document exact blocker
-- [X] T017 Run `/speckit.verify` equivalent and record final verification evidence for MM-374
+- [X] T017 Run `/moonspec-verify` equivalent and record final verification evidence for MM-374
 
 ---
 
@@ -108,4 +108,4 @@
 3. Add red tests for the explicit extracted-text instruction boundary.
 4. Harden the worker and vision safety notices.
 5. Run focused validation, then broader validation where feasible.
-6. Run final `/speckit.verify` equivalent against the preserved MM-374 input.
+6. Run final `/moonspec-verify` equivalent against the preserved MM-374 input.
