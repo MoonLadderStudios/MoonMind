@@ -4932,9 +4932,18 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               );
             })}
 
-            <div className="actions queue-step-add">
+            <div className="actions queue-step-add queue-step-actions">
               <button type="button" data-step-action="add" onClick={addStep}>
                 Add Step
+              </button>
+              <button
+                type="submit"
+                className="queue-submit-primary"
+                disabled={isTemporalFormBlocked}
+                aria-disabled={isSubmitting || isTemporalFormBlocked}
+                aria-busy={isSubmitting}
+              >
+                {primaryCta}
               </button>
             </div>
           </div>
@@ -5468,18 +5477,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           data-canonical-create-section="Submit"
           aria-label="Submit"
         >
-        <div className="actions">
-          <button
-            type="submit"
-            className="queue-submit-primary"
-            disabled={isTemporalFormBlocked}
-            aria-disabled={isSubmitting || isTemporalFormBlocked}
-            aria-busy={isSubmitting}
-          >
-            {primaryCta}
-          </button>
-        </div>
-
         <p
           id="queue-submit-message"
           className={
