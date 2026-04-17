@@ -310,6 +310,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Plan work')).toBeTruthy();
       expect(screen.getByText('Apply patch')).toBeTruthy();
       expect(screen.getByText('Verify tests')).toBeTruthy();
+      expect(screen.getByText('Merge Automation Selected:').closest('.card')?.textContent).toContain('No');
       expect(screen.getByText(/^Latest Run:?$/)).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
@@ -1476,6 +1477,7 @@ describe('Task Detail Entrypoint', () => {
       temporalStatus: 'running',
       closeStatus: null,
       summaryArtifactRef: 'art-summary-merge',
+      mergeAutomationSelected: true,
       createdAt: '2026-03-28T00:00:00Z',
       startedAt: '2026-03-28T00:00:01Z',
       updatedAt: '2026-03-28T00:00:02Z',
@@ -1525,6 +1527,7 @@ describe('Task Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Merge Automation')).toBeTruthy();
+      expect(screen.getByText('Merge Automation Selected:').closest('.card')?.textContent).toContain('Yes');
       expect(screen.getByText('blocked')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/354' })).toBeTruthy();
       expect(screen.getByText('abc123')).toBeTruthy();
@@ -1797,6 +1800,110 @@ describe('Task Detail Entrypoint', () => {
         'https://external-storage.com/art-with-url'
       );
     });
+  });
+
+  it('groups task image inputs by persisted target and preserves download when preview fails', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Image input task',
+      summary: 'Review uploaded inputs',
+      status: 'running',
+      state: 'executing',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifacts: [
+              {
+                artifact_id: 'art-objective',
+                content_type: 'image/png',
+                size_bytes: 1234,
+                status: 'complete',
+                download_url: 'https://storage.example/objective.png',
+                metadata: {
+                  source: 'task-dashboard-objective-attachment',
+                  target: 'objective',
+                  filename: 'objective.png',
+                },
+              },
+              {
+                artifact_id: 'art-step',
+                content_type: 'image/webp',
+                size_bytes: 4567,
+                status: 'complete',
+                download_url: 'https://storage.example/step.webp',
+                metadata: {
+                  source: 'task-dashboard-step-attachment',
+                  stepLabel: 'Step 2',
+                  filename: 'step.webp',
+                },
+              },
+              {
+                artifact_id: 'art-step-second',
+                content_type: 'image/jpeg',
+                size_bytes: 7890,
+                status: 'complete',
+                download_url: 'https://storage.example/step-second.jpg',
+                metadata: {
+                  source: 'task-dashboard-step-attachment',
+                  stepLabel: 'Step 2',
+                  filename: 'step-second.jpg',
+                },
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Input Images' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Objective' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Step 2' })).toBeTruthy();
+      expect(screen.getAllByRole('heading', { name: 'Step 2' })).toHaveLength(1);
+      expect(screen.getByText('objective.png')).toBeTruthy();
+      expect(screen.getByText('step.webp')).toBeTruthy();
+      expect(screen.getByText('step-second.jpg')).toBeTruthy();
+    });
+
+    const objectivePreview = screen.getByAltText('Preview of Objective attachment objective.png');
+    expect(objectivePreview.getAttribute('src')).toBe('/api/artifacts/art-objective/download');
+    fireEvent.error(objectivePreview);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Objective: Preview unavailable for objective.png. Attachment metadata remains available.',
+        ),
+      ).toBeTruthy();
+    });
+
+    const imageDownloadLinks = screen
+      .getAllByRole('link', { name: 'Download' })
+      .filter((link) => link.getAttribute('download'));
+    expect(imageDownloadLinks.map((link) => link.getAttribute('href'))).toEqual([
+      '/api/artifacts/art-objective/download',
+      '/api/artifacts/art-step/download',
+      '/api/artifacts/art-step-second/download',
+    ]);
   });
 
   it('renders separate Intervention and Observation sections with intervention audit history', async () => {

@@ -907,6 +907,7 @@ class ExecutionModel(BaseModel):
         description="URL of the pull request associated with this execution.",
     )
     publish_mode: Optional[str] = Field(None, alias="publishMode")
+    merge_automation_selected: bool = Field(False, alias="mergeAutomationSelected")
     resolved_skillset_ref: Optional[str] = Field(None, alias="resolvedSkillsetRef")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")

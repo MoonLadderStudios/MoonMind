@@ -187,6 +187,8 @@ Key diagnostics:
 - Existing Temporal artifact metadata tables and configured artifact store; no new persistent storage (195-enforce-image-artifact-policy)
 - Python 3.12; TypeScript/React for Mission Control Create-page behavior + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal artifact service, React, Vitest, existing task editing helpers (196-preserve-attachment-bindings)
 - Existing Temporal artifact metadata tables and original task input snapshot artifacts; no new persistent storage (196-preserve-attachment-bindings)
+- Python 3.12; TypeScript/React + FastAPI dashboard runtime config helpers, Pydantic settings, `httpx`, React, Vitest, pytest (203-repository-dropdown)
+- No new persistent storage; options are derived from configuration and best-effort GitHub API responses at runtime (203-repository-dropdown)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

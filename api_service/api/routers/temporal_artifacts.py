@@ -42,6 +42,56 @@ from moonmind.workflows.temporal.artifacts import (
 router = APIRouter(tags=["temporal-artifacts"])
 
 
+def _attachment_upload_diagnostic_event(
+    *,
+    event: str,
+    status_value: str,
+    artifact,
+    metadata: object,
+) -> dict[str, object] | None:
+    if not isinstance(metadata, dict):
+        return None
+    target_kind = str(
+        metadata.get("targetKind") or metadata.get("target_kind") or ""
+    ).strip()
+    if target_kind not in {"objective", "step"}:
+        return None
+    payload: dict[str, object] = {
+        "event": event,
+        "status": status_value,
+        "targetKind": target_kind,
+        "artifactId": artifact.artifact_id,
+        "contentType": artifact.content_type,
+        "sizeBytes": artifact.size_bytes,
+    }
+    filename = str(metadata.get("filename") or "").strip()
+    if filename:
+        payload["filename"] = filename
+    if target_kind == "step":
+        step_ref = str(metadata.get("stepRef") or metadata.get("step_ref") or "").strip()
+        if step_ref:
+            payload["stepRef"] = step_ref
+    return payload
+
+
+def _attachment_upload_diagnostics(
+    *,
+    event: str,
+    status_value: str,
+    artifact,
+    metadata: object,
+) -> dict[str, object] | None:
+    diagnostic_event = _attachment_upload_diagnostic_event(
+        event=event,
+        status_value=status_value,
+        artifact=artifact,
+        metadata=metadata,
+    )
+    if diagnostic_event is None:
+        return None
+    return {"events": [diagnostic_event]}
+
+
 def _raise_temporal_artifact_http(error: Exception) -> None:
     if isinstance(error, TemporalArtifactNotFoundError):
         raise HTTPException(
@@ -209,6 +259,12 @@ async def create_artifact(
             "max_size_bytes": upload.max_size_bytes,
             "required_headers": dict(upload.required_headers),
         },
+        diagnostics=_attachment_upload_diagnostics(
+            event="attachment_upload_started",
+            status_value="started",
+            artifact=artifact,
+            metadata=payload.metadata,
+        ),
     )
 
 
@@ -231,7 +287,15 @@ async def upload_artifact_content(
     except Exception as exc:  # pragma: no cover - mapped below
         _raise_temporal_artifact_http(exc)
         raise
-    return ArtifactRefModel(**asdict(build_artifact_ref(artifact)))
+    return ArtifactRefModel(
+        **asdict(build_artifact_ref(artifact)),
+        diagnostics=_attachment_upload_diagnostics(
+            event="attachment_upload_completed",
+            status_value="completed",
+            artifact=artifact,
+            metadata=getattr(artifact, "metadata_json", None),
+        ),
+    )
 
 
 @router.post(

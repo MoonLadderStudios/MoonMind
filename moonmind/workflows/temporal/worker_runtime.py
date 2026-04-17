@@ -40,6 +40,7 @@ from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalIntegrationActivities,
+    TemporalManifestActivities,
     TemporalPlanActivities,
     TemporalProposalActivities,
     TemporalReviewActivities,
@@ -1116,6 +1117,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             plan_activities=TemporalPlanActivities(
                 artifact_service=artifact_service,
                 planner=planner,
+            ),
+            manifest_activities=TemporalManifestActivities(
+                artifact_service=artifact_service,
             ),
             skill_activities=TemporalSkillActivities(
                 dispatcher=dispatcher,

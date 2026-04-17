@@ -50,8 +50,8 @@ Frontend state derived from `OriginalTaskInputSnapshot`.
 Fields:
 
 - `runtime`, `providerProfile`, `model`, `effort`.
-- `repository`, `startingBranch`, `targetBranch`.
-- `publishMode` and publish options supported by the current form.
+- `repository`, `branch`.
+- `publishMode` and publish options supported by the current form. `Publish Mode` remains submission data even when rendered inline with Branch.
 - `taskInstructions` and instruction refs where applicable.
 - `primarySkill`, `primarySkillArgs`, runtime command selection where applicable.
 - `steps` with stable order, IDs, titles, instructions, tool/skill overrides, inputs, attachments, and template binding metadata.
@@ -67,6 +67,20 @@ State transitions:
 - `degraded evidence -> read-only recovery preview`.
 - `read-only recovery preview + operator replacement -> editable draft`.
 - `editable draft submit -> new snapshot artifact + update/rerun payload ref`.
+
+## Legacy Branch Migration
+
+Older snapshots may contain `startingBranch` and `targetBranch`; reconstructed drafts surface only `branch`.
+
+| Legacy snapshot shape | Normalization | Warning requirement |
+| --- | --- | --- |
+| `startingBranch` only | `branch = startingBranch` | No warning. |
+| `startingBranch == targetBranch` | `branch = startingBranch` | No warning. |
+| PR publish with differing `startingBranch` and `targetBranch` | `branch = startingBranch`; old `targetBranch` may be retained as opaque PR-head history. | No warning unless other data is degraded. |
+| Branch publish with differing `startingBranch` and `targetBranch` | Cannot round-trip exactly. Operator must choose the single active `branch`. | Required warning. |
+| `targetBranch` only | Treat as incomplete legacy metadata and require operator branch selection. | Required warning. |
+
+Any retained legacy `targetBranch` is audit/debug context only. It is not executable intent and must not be submitted in edit or rerun payloads.
 
 ## Artifact Linkage
 

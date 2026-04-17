@@ -8,6 +8,7 @@ import logging
 import os
 import posixpath
 import re
+import shlex
 import shutil
 import time
 from datetime import UTC, datetime
@@ -40,6 +41,7 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
 )
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
 
+from .github_auth_broker import GitHubAuthBrokerManager
 from .managed_session_store import ManagedSessionStore
 from .managed_session_supervisor import ManagedSessionSupervisor
 
@@ -176,6 +178,7 @@ class DockerCodexManagedSessionController:
             DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS
         ),
         command_runner: CommandRunner = _default_command_runner,
+        github_auth_brokers: GitHubAuthBrokerManager | Any | None = None,
     ) -> None:
         self._workspace_volume_name = workspace_volume_name
         self._codex_volume_name = codex_volume_name
@@ -191,6 +194,7 @@ class DockerCodexManagedSessionController:
         self._turn_poll_interval_seconds = turn_poll_interval_seconds
         self._turn_poll_timeout_seconds = turn_poll_timeout_seconds
         self._command_runner = command_runner
+        self._github_auth_brokers = github_auth_brokers or GitHubAuthBrokerManager()
 
     @staticmethod
     def _managed_session_user_command_kwargs() -> dict[str, int]:
@@ -280,6 +284,161 @@ class DockerCodexManagedSessionController:
     @staticmethod
     def _volume_mount(volume_name: str, target_path: str) -> str:
         return f"type=volume,src={volume_name},dst={target_path}"
+
+    @staticmethod
+    def _write_executable_script(path: Path, content: str) -> str:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        path.chmod(0o700)
+        return str(path)
+
+    @staticmethod
+    def _render_gh_wrapper_script(*, socket_path: str) -> str:
+        return (
+            "#!/usr/bin/env python3\n"
+            "from moonmind.workflows.temporal.runtime.github_auth_broker "
+            "import run_gh_wrapper\n"
+            "\n"
+            "if __name__ == \"__main__\":\n"
+            f"    raise SystemExit(run_gh_wrapper(socket_path={socket_path!r}))\n"
+        )
+
+    @staticmethod
+    def _render_git_credential_helper_script(*, socket_path: str) -> str:
+        return (
+            "#!/usr/bin/env python3\n"
+            "from moonmind.workflows.temporal.runtime.github_auth_broker "
+            "import run_git_credential_helper\n"
+            "\n"
+            "if __name__ == \"__main__\":\n"
+            f"    raise SystemExit(run_git_credential_helper(socket_path={socket_path!r}))\n"
+        )
+
+    @staticmethod
+    def _format_git_config_value(value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    @classmethod
+    def _persist_brokered_github_config(
+        cls,
+        session_environment: dict[str, str],
+        *,
+        workspace_path: str,
+        support_root: Path,
+        github_socket_path: str,
+    ) -> list[Path]:
+        """Persist broker-backed git/gh config visible inside the session container."""
+
+        bin_dir = support_root / "bin"
+        git_config_path = support_root / "gitconfig"
+        git_helper_path = bin_dir / "git-credential-moonmind"
+        gh_wrapper_path = bin_dir / "gh"
+        touched_paths: list[Path] = [
+            support_root,
+            bin_dir,
+            git_config_path,
+            git_helper_path,
+        ]
+
+        support_root.mkdir(parents=True, exist_ok=True)
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        cls._write_executable_script(
+            git_helper_path,
+            cls._render_git_credential_helper_script(socket_path=github_socket_path),
+        )
+        touched_paths.append(gh_wrapper_path)
+        cls._write_executable_script(
+            gh_wrapper_path,
+            cls._render_gh_wrapper_script(socket_path=github_socket_path),
+        )
+
+        git_config_lines = [
+            "# moonmind-managed-git-config\n",
+        ]
+        existing_global_git_config = str(
+            session_environment.get("GIT_CONFIG_GLOBAL") or ""
+        ).strip()
+        if (
+            existing_global_git_config
+            and Path(existing_global_git_config) != git_config_path
+        ):
+            git_config_lines.extend(
+                [
+                    "[include]\n",
+                    (
+                        "\tpath = "
+                        f"{cls._format_git_config_value(existing_global_git_config)}\n"
+                    ),
+                ]
+            )
+        git_config_lines.extend(
+            [
+                "[safe]\n",
+                f"\tdirectory = {cls._format_git_config_value(str(workspace_path))}\n",
+                "[credential]\n",
+                f"\thelper = !{shlex.quote(str(git_helper_path))}\n",
+            ]
+        )
+        git_config_path.write_text("".join(git_config_lines), encoding="utf-8")
+        git_config_path.chmod(0o600)
+
+        existing_path = str(session_environment.get("PATH") or "").strip()
+        system_paths = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        session_environment["PATH"] = (
+            f"{bin_dir}{os.pathsep}{existing_path}"
+            if existing_path
+            else f"{bin_dir}{os.pathsep}{system_paths}"
+        )
+        session_environment["GIT_CONFIG_GLOBAL"] = str(git_config_path)
+        session_environment.setdefault("GIT_TERMINAL_PROMPT", "0")
+
+        repo_git_config_path = Path(workspace_path) / ".git" / "config"
+        if repo_git_config_path.exists():
+            marker = "# moonmind-credential-helper"
+            existing_config = repo_git_config_path.read_text(encoding="utf-8")
+            if marker not in existing_config:
+                credential_section = (
+                    f"\n{marker}\n"
+                    "[credential]\n"
+                    f"\thelper = !{shlex.quote(str(git_helper_path))}\n"
+                )
+                repo_git_config_path.write_text(
+                    existing_config + credential_section,
+                    encoding="utf-8",
+                )
+                touched_paths.append(repo_git_config_path)
+
+        return touched_paths
+
+    async def _configure_session_github_auth(
+        self,
+        request: LaunchCodexManagedSessionRequest,
+        session_environment: dict[str, str],
+    ) -> None:
+        token = await resolve_github_token_for_launch(
+            request.environment,
+            github_credential=request.github_credential,
+        )
+        token = str(token or "").strip()
+        if not token:
+            return
+
+        support_root = Path(request.session_workspace_path) / ".moonmind"
+        socket_path = str(support_root / "github-auth.sock")
+        await self._github_auth_brokers.start(
+            run_id=request.session_id,
+            token=token,
+            socket_path=socket_path,
+        )
+        touched_paths = self._persist_brokered_github_config(
+            session_environment,
+            workspace_path=request.workspace_path,
+            support_root=support_root,
+            github_socket_path=socket_path,
+        )
+        touched_paths.append(Path(socket_path))
+        self._normalize_container_path_owners(touched_paths)
 
     @staticmethod
     def _record_status_from_handle_status(status: str) -> ManagedSessionRecordStatus:
@@ -1391,6 +1550,13 @@ class DockerCodexManagedSessionController:
             existing_moonmind_url = session_environment.get("MOONMIND_URL")
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
                 session_environment["MOONMIND_URL"] = self._moonmind_url
+        github_broker_started = False
+        try:
+            await self._configure_session_github_auth(request, session_environment)
+            github_broker_started = "GIT_CONFIG_GLOBAL" in session_environment
+        except Exception:
+            await self._github_auth_brokers.stop(request.session_id)
+            raise
         docker_network = self._network_name or _managed_session_docker_network(
             session_environment
         )
@@ -1436,10 +1602,15 @@ class DockerCodexManagedSessionController:
                 "serve",
             ]
         )
-        stdout, _stderr = await self._run(run_command)
-        container_id = stdout.strip()
-        if not container_id:
-            raise RuntimeError("docker run returned a blank container id")
+        try:
+            stdout, _stderr = await self._run(run_command)
+            container_id = stdout.strip()
+            if not container_id:
+                raise RuntimeError("docker run returned a blank container id")
+        except Exception:
+            if github_broker_started:
+                await self._github_auth_brokers.stop(request.session_id)
+            raise
         try:
             await self._wait_ready(container_id=container_id)
             container_request = request.model_copy(
@@ -1457,6 +1628,8 @@ class DockerCodexManagedSessionController:
             )
         except Exception:
             await self._remove_container(container_id, ignore_failure=True)
+            if github_broker_started:
+                await self._github_auth_brokers.stop(request.session_id)
             raise
         handle = CodexManagedSessionHandle.model_validate(payload)
         if self._session_store is not None:
@@ -1719,6 +1892,7 @@ class DockerCodexManagedSessionController:
             if record is not None and record.status == "terminated":
                 self._matches_locator(record, request)
                 await self._remove_container(record.container_id, ignore_failure=True)
+                await self._github_auth_brokers.stop(request.session_id)
                 return CodexManagedSessionHandle(
                     sessionState=record.session_state(),
                     status="terminated",
@@ -1726,6 +1900,7 @@ class DockerCodexManagedSessionController:
                     controlUrl=record.control_url,
                 )
         await self._remove_container(request.container_id, ignore_failure=True)
+        await self._github_auth_brokers.stop(request.session_id)
         handle = CodexManagedSessionHandle(
             sessionState={
                 "sessionId": request.session_id,

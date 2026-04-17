@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import os
+import re
+import time
 from copy import deepcopy
+from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any, Mapping
+from urllib.parse import urlparse
+
+import httpx
 
 from moonmind.config.settings import WorkflowSettings, settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
@@ -22,6 +29,17 @@ _POLL_INTERVALS_MS = {
 }
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex_cli", "gemini_cli", "claude_code", "jules", "universal")
+_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_SSH_GIT_RE = re.compile(
+    r"^(?:ssh://)?git@[A-Za-z0-9.-]+[:/]"
+    r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+)
+_GITHUB_REPOSITORY_DISCOVERY_URL = "https://api.github.com/user/repos"
+_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS = 5.0
+_GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS = 60.0
+_GITHUB_REPOSITORY_OPTIONS_CACHE: dict[
+    str, tuple[float, tuple["RepositoryOption", ...], str | None]
+] = {}
 
 _JIRA_CREATE_PAGE_SOURCES = {
     "connections": "/api/jira/connections/verify",
@@ -56,10 +74,187 @@ def _validate_jira_source_templates(sources: Mapping[str, str]) -> None:
 _validate_jira_source_templates(_JIRA_CREATE_PAGE_SOURCES)
 
 
+@dataclass(frozen=True, slots=True)
+class RepositoryOption:
+    """Browser-safe repository suggestion for the Create page."""
+
+    value: str
+    label: str
+    source: str
+
+    def to_payload(self) -> dict[str, str]:
+        return {
+            "value": self.value,
+            "label": self.label,
+            "source": self.source,
+        }
+
+
 def _build_jira_sources() -> dict[str, str]:
     """Return MoonMind-owned Jira browser endpoint templates."""
 
     return dict(_JIRA_CREATE_PAGE_SOURCES)
+
+
+def _normalize_repository_value(value: object) -> str | None:
+    """Return a browser-safe owner/repo value, or ``None`` when invalid."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if _OWNER_REPO_RE.fullmatch(raw):
+        return raw
+
+    ssh_match = _SSH_GIT_RE.fullmatch(raw)
+    if ssh_match:
+        owner, repo = ssh_match.groups()
+        normalized = f"{owner}/{repo}"
+        return normalized if _OWNER_REPO_RE.fullmatch(normalized) else None
+
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return None
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) != 2:
+        return None
+    owner, repo = parts
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    normalized = f"{owner}/{repo}"
+    return normalized if _OWNER_REPO_RE.fullmatch(normalized) else None
+
+
+def _append_repository_option(
+    options: list[RepositoryOption],
+    seen: set[str],
+    value: object,
+    *,
+    source: str,
+) -> None:
+    normalized = _normalize_repository_value(value)
+    if not normalized:
+        return
+    key = normalized.lower()
+    if key in seen:
+        return
+    seen.add(key)
+    options.append(
+        RepositoryOption(value=normalized, label=normalized, source=source)
+    )
+
+
+def _fetch_github_repository_options(
+    token: str,
+) -> tuple[list[RepositoryOption], str | None]:
+    """Fetch credential-visible GitHub repositories without exposing secrets."""
+
+    if not token:
+        return [], None
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        with httpx.Client(
+            timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
+        ) as client:
+            response = client.get(
+                _GITHUB_REPOSITORY_DISCOVERY_URL,
+                headers=headers,
+                params={
+                    "per_page": 100,
+                    "sort": "updated",
+                    "affiliation": "owner,collaborator,organization_member",
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError):
+        return [], "GitHub repository discovery is unavailable."
+
+    options: list[RepositoryOption] = []
+    seen: set[str] = set()
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, Mapping):
+                _append_repository_option(
+                    options,
+                    seen,
+                    item.get("full_name"),
+                    source="github",
+                )
+    return options, None
+
+
+def _github_repository_options_cache_key(token: str) -> str:
+    return sha256(token.encode("utf-8")).hexdigest()
+
+
+def _get_cached_github_repository_options(
+    token: str,
+) -> tuple[list[RepositoryOption], str | None]:
+    now = time.monotonic()
+    cache_key = _github_repository_options_cache_key(token)
+    cached = _GITHUB_REPOSITORY_OPTIONS_CACHE.get(cache_key)
+    if cached:
+        cached_at, cached_options, cached_error = cached
+        if now - cached_at < _GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS:
+            return list(cached_options), cached_error
+
+    options, error = _fetch_github_repository_options(token)
+    _GITHUB_REPOSITORY_OPTIONS_CACHE[cache_key] = (now, tuple(options), error)
+    return options, error
+
+
+def _is_create_page_path(initial_path: str) -> bool:
+    normalized_path = urlparse(initial_path or "").path.rstrip("/")
+    return normalized_path in {"/tasks/new", "/tasks/create"}
+
+
+def _build_repository_options(
+    *,
+    include_credential_discovery: bool = True,
+) -> dict[str, Any]:
+    """Build Create-page repository suggestions from safe runtime sources."""
+
+    options: list[RepositoryOption] = []
+    seen: set[str] = set()
+    _append_repository_option(
+        options,
+        seen,
+        settings.workflow.github_repository,
+        source="default",
+    )
+
+    configured_repos = str(getattr(settings.github, "github_repos", "") or "")
+    for raw_repo in configured_repos.split(","):
+        _append_repository_option(options, seen, raw_repo, source="configured")
+
+    discovery_error: str | None = None
+    github_enabled = bool(getattr(settings.github, "github_enabled", True))
+    github_token = str(getattr(settings.github, "github_token", "") or "").strip()
+    if include_credential_discovery and github_enabled and github_token:
+        discovered, discovery_error = _get_cached_github_repository_options(
+            github_token
+        )
+        if discovery_error:
+            discovery_error = "GitHub repository discovery is unavailable."
+        for option in discovered:
+            _append_repository_option(
+                options,
+                seen,
+                option.value,
+                source="github",
+            )
+
+    return {
+        "items": [option.to_payload() for option in options],
+        "error": discovery_error,
+    }
 
 
 def _jira_create_page_enabled() -> bool:
@@ -240,6 +435,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     default_publish_mode = (
         str(settings.workflow.default_publish_mode or "").strip().lower() or "pr"
     )
+    repository_options = _build_repository_options(
+        include_credential_discovery=_is_create_page_path(initial_path)
+    )
 
     system_metadata = _build_dashboard_system_metadata()
     jira_runtime_config = _build_jira_runtime_config()
@@ -323,6 +521,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         "system": {
             **system_metadata,
             "defaultRepository": default_repository,
+            "repositoryOptions": repository_options,
             "defaultTaskRuntime": default_task_runtime,
             "defaultTaskModel": default_task_model,
             "defaultTaskEffort": default_task_effort,
@@ -372,5 +571,6 @@ __all__ = [
     "build_live_logs_feature_config",
     "build_runtime_config",
     "normalize_status",
+    "RepositoryOption",
     "status_maps",
 ]

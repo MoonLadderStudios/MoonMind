@@ -573,7 +573,35 @@ CSS cannot truly vary border width around a standard rectangle. Use gradient bor
 }
 ```
 
-### 9.5 Status Chips
+### 9.5 Inline Selector Rows
+
+Use inline selector rows for compact dropdowns inside cards when the controls are tightly coupled and need to scan as one decision group.
+
+Create-page repository controls use this pattern:
+
+- Branch on the left.
+- Publish Mode on the right.
+- Both controls sit in the Steps card with no label above the control.
+- `Publish Mode` is not removed from the task contract; only its visual placement changes.
+
+Treatment:
+
+- Use Codex-like inline dropdown styling: compact height, tight horizontal spacing, subdued border, and readable selected value.
+- Do not copy the exact Codex screenshot iconography.
+- The Branch control should use a branch-like affordance, such as a fork/branch glyph, but the icon must be distinct from the Codex reference.
+- The Publish Mode control may use a compact publish/output affordance or text-only dropdown when the branch icon already anchors the row.
+- Keep accessible names explicit even when visual labels are omitted.
+- On narrow screens, wrap the row so Branch remains first and Publish Mode follows.
+- Preserve stable dimensions so branch loading, empty, error, and stale-selection states do not shift adjacent controls.
+
+Spacing and alignment:
+
+- Row gap: `0.5rem` to `0.75rem`.
+- Branch control should flex wider than Publish Mode.
+- Publish Mode should keep enough width for `branch` and `pr` without truncation.
+- Vertically align icons, selected values, and chevrons on the same centerline.
+
+### 9.6 Status Chips
 
 Map status consistently:
 
@@ -598,7 +626,7 @@ Step-row patterns:
 - keep Logs & Diagnostics blocks visually denser than Summary and Checks blocks
 - preserve table-first comparison on desktop; use stacked step cards only on narrow mobile layouts
 
-### 9.6 Live Output Pane
+### 9.7 Live Output Pane
 
 For `.queue-live-output`:
 

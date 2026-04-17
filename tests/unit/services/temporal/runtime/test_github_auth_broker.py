@@ -75,3 +75,50 @@ def test_run_gh_wrapper_clears_ambient_gh_token(
     assert isinstance(env, dict)
     assert env["GITHUB_TOKEN"] == "broker-issued-token"
     assert "GH_TOKEN" not in env
+
+
+def test_run_gh_wrapper_resolves_real_gh_after_wrapper_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    wrapper_dir = tmp_path / "wrapper-bin"
+    real_dir = tmp_path / "real-bin"
+    wrapper_dir.mkdir()
+    real_dir.mkdir()
+    wrapper_path = wrapper_dir / "gh"
+    real_gh_path = real_dir / "gh"
+    wrapper_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    real_gh_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    wrapper_path.chmod(0o700)
+    real_gh_path.chmod(0o700)
+    monkeypatch.setenv("PATH", f"{wrapper_dir}{os.pathsep}{real_dir}")
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.github_auth_broker.request_github_token",
+        lambda _socket_path: "broker-issued-token",
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.github_auth_broker.sys.argv",
+        [str(wrapper_path), "auth", "status"],
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_execvpe(path: str, args: list[str], env: dict[str, str]) -> None:
+        captured["path"] = path
+        captured["args"] = args
+        captured["env"] = env
+        raise SystemExit(0)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.github_auth_broker.os.execvpe",
+        _fake_execvpe,
+    )
+
+    with pytest.raises(SystemExit):
+        run_gh_wrapper(socket_path="/tmp/github-auth.sock")
+
+    assert captured["path"] == str(real_gh_path)
+    assert captured["args"] == [str(real_gh_path), "auth", "status"]
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["GITHUB_TOKEN"] == "broker-issued-token"

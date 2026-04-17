@@ -3384,6 +3384,11 @@ export interface components {
             prUrl?: string | null;
             /** Publishmode */
             publishMode?: string | null;
+            /**
+             * Mergeautomationselected
+             * @default false
+             */
+            mergeAutomationSelected: boolean;
             /** Resolvedskillsetref */
             resolvedSkillsetRef?: string | null;
             /** Taskskills */
@@ -5369,6 +5374,15 @@ export interface components {
             targetBranch?: string | null;
             /** Instructions */
             instructions?: string | null;
+            /** Presetprovenance */
+            presetProvenance?: string | null;
+            /**
+             * Authoredpresetcount
+             * @default 0
+             */
+            authoredPresetCount: number;
+            /** Stepsourcekinds */
+            stepSourceKinds?: string[];
         };
         /**
          * TaskTemplateAppliedMetadataSchema
