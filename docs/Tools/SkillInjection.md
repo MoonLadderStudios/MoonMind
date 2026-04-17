@@ -1,10 +1,13 @@
 # Skill Injection
 
-Status: Proposed  
+Status: Superseded by `docs/Tools/SkillSystem.md`
 Owners: MoonMind Platform / MoonMind Engineering  
-Related: `docs/Tasks/AgentSkillSystem.md`, `AGENTS.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`
+Related: `docs/Tools/SkillSystem.md`, `AGENTS.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`
 
 ---
+
+> This document is retained for historical context. The canonical runtime-delivery
+> and managed-runtime injection rules now live in `docs/Tools/SkillSystem.md`.
 
 ## 1. Purpose
 

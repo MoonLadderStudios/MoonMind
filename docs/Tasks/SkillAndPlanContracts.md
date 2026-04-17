@@ -6,7 +6,7 @@ MoonMind system design (Temporal-first)
 
 Status: **Implemented** (contracts active, runtime live)
 Last updated: 2026-04-04
-Related: [`docs/Tasks/AgentSkillSystem.md`](AgentSkillSystem.md)
+Related: [`docs/Tools/SkillSystem.md`](../Tools/SkillSystem.md)
 
 ---
 
@@ -40,7 +40,7 @@ It establishes:
 * execution semantics
 * progress contracts
 
-**Use [`docs/Tasks/AgentSkillSystem.md`](AgentSkillSystem.md) for:**
+**Use [`docs/Tools/SkillSystem.md`](../Tools/SkillSystem.md) for:**
 * `AgentSkillDefinition`
 * `SkillSet`
 * `ResolvedSkillSet`
@@ -85,7 +85,7 @@ They are execution-shaping selections for `agent_runtime` steps only.
 > **Important:** Executable tool skills and agent instruction skills are separate systems.
 > The term **"Agent Skill"** (in `.agents/skills/` directories and `SKILL.md` files)
 > refers to reusable instruction bundles that AI agents read for guidance as defined in
-> [`docs/Tasks/AgentSkillSystem.md`](AgentSkillSystem.md).
+> [`docs/Tools/SkillSystem.md`](../Tools/SkillSystem.md).
 > This document only governs the executable **tool** side.
 
 Canonical Python class names:
@@ -242,7 +242,7 @@ security:
 ### 4.3 ToolInvocation schema
 
 A Plan node (step) references an executable Tool with pinned version and inputs.
-Note: Step-level agent skill selectors are defined in `docs/Tasks/AgentSkillSystem.md`. This document only defines the executable tool invocation shape. A plan node may carry both executable tool intent and agent skill selection intent.
+Note: Step-level agent skill selectors are defined in `docs/Tools/SkillSystem.md`. This document only defines the executable tool invocation shape. A plan node may carry both executable tool intent and agent skill selection intent.
 
 ```json
 {

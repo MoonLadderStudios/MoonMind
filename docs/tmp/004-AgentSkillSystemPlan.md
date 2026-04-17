@@ -4,7 +4,7 @@ Status: In progress
 Owners: MoonMind Engineering
 Last Updated: 2026-04-03
 Progress: Phases 1–5 complete. Phases 6–7 not started (Mission Control surfaces; proposals, schedules, reruns, policy hardening).
-Canonical doc: `docs/Tasks/AgentSkillSystem.md`
+Canonical doc: `docs/Tools/SkillSystem.md`
 Related: `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/UI/MissionControlArchitecture.md`, `AGENTS.md`
 
 ---
@@ -13,7 +13,7 @@ Related: `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/TaskArchitecture.md`
 
 This document tracks the phased implementation work required to make the Agent Skill System fully real in MoonMind.
 
-The canonical design is defined in `docs/Tasks/AgentSkillSystem.md`. This plan exists to:
+The canonical design is defined in `docs/Tools/SkillSystem.md`. This plan exists to:
 
 1. break the target-state design into implementation phases
 2. identify the code, API, workflow, and UI work required
@@ -107,7 +107,7 @@ Make the architecture unambiguous before deeper implementation begins.
 
 ### Tasks
 
-- [x] Create `docs/Tasks/AgentSkillSystem.md` as the canonical design doc
+- [x] Create `docs/Tools/SkillSystem.md` as the canonical design doc
 - [x] Update `docs/Tasks/SkillAndPlanContracts.md` to explicitly distinguish `ToolDefinition` from `AgentSkillDefinition`
 - [x] Update `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` to reference resolved skill snapshots and adapter-owned materialization
 - [x] Update `docs/Temporal/TemporalArchitecture.md` to include agent skills as a first-class MoonMind domain concept

@@ -8,7 +8,7 @@ Last updated: 2026-04-04
 
 ## Related docs
 
-- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Tools/SkillSystem.md`
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
 - `docs/Temporal/TemporalArchitecture.md`

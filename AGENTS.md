@@ -8,19 +8,19 @@ Read relevant documents in the following order before implementing tasks:
 2. **Standards:** Code style and guidance in `README.md`
 3. **Spec:** `specs/<feature-id>/spec.md`, then `plan.md`, then `tasks.md`
 4. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs tmp** below).
-   - Start here for Agent Skills: `docs/Tasks/AgentSkillSystem.md`
+   - Start here for Agent Skills: `docs/Tools/SkillSystem.md`
    - For Executable Tools: `docs/Tasks/SkillAndPlanContracts.md`
    - For Runtime boundaries: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 5. **Migration / implementation backlog (when relevant):** `docs/tmp/remaining-work/` and `docs/tmp/PlansOverview.md` for plan-shaped or in-flight work tied to canonical docs.
 
 ## Agent Skill System Terminology
 - Executable `tool.type = "skill"` contracts are **not** the same thing as agent instruction bundles (skill sets) under `.agents/skills`.
-- For agent instruction bundles and snapshot logic, the canonical design is in `docs/Tasks/AgentSkillSystem.md`.
+- For agent instruction bundles and snapshot logic, the canonical design is in `docs/Tools/SkillSystem.md`.
 - For executable tool contracts, the canonical design is in `docs/Tasks/SkillAndPlanContracts.md`.
 
 ## When Modifying the Agent Skill System
 When writing code that interacts with skills:
-- Read `docs/Tasks/AgentSkillSystem.md`.
+- Read `docs/Tools/SkillSystem.md`.
 - Keep `.agents/skills` as the canonical active path.
 - Keep `.agents/skills/local` as a local-only overlay.
 - Do not mutate checked-in skill folders in place.

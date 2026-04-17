@@ -418,7 +418,7 @@ Use the related docs for detailed behavior:
 
 - `docs/UI/CreatePage.md` for page sections, field behavior, Jira targeting, edit/rerun UX, and validation copy
 - `docs/Tasks/ImageSystem.md` for image-input upload, artifact storage, materialization, context generation, and preview/download behavior
-- `docs/Tasks/AgentSkillSystem.md` for skill selection and resolution
+- `docs/Tools/SkillSystem.md` for skill selection and resolution
 - `docs/Temporal/TemporalArchitecture.md` for workflow lifecycle and worker topology
 
 ---

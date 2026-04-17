@@ -7,7 +7,7 @@ Related:
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
-- [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Tools/SkillSystem.md`](../Tools/SkillSystem.md)
 
 ## 1. Purpose
 

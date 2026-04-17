@@ -3,7 +3,7 @@
 Status: Active
 Owners: MoonMind Engineering
 Last Updated: 2026-04-14
-Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Tasks/AgentSkillSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`
+Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Tools/SkillSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`
 Implementation tracking: `docs/tmp/015-TaskProposalSystemPlan.md`
 
 ---
@@ -24,7 +24,7 @@ Each proposal:
 4. Preserves repository-aware deduplication, review priority, notification, and
    origin metadata.
 
-*Note: Canonical agent-skill storage, precedence, and snapshot semantics live in `docs/Tasks/AgentSkillSystem.md`. This document only defines how proposals preserve and promote task-facing skill intent.*
+*Note: Canonical agent-skill storage, precedence, and snapshot semantics live in `docs/Tools/SkillSystem.md`. This document only defines how proposals preserve and promote task-facing skill intent.*
 
 The canonical architecture is Temporal-native:
 
@@ -281,7 +281,7 @@ That means:
 3. `task.tool` and `step.tool`, when present, use the canonical Temporal submit shape
 4. `task.tool.type` must be `skill` when a tool selector is provided (representing an executable tool, not an agent instruction bundle)
 5. proposal payloads do not use `tool.type = "agent_runtime"`
-6. `task.skills` and `step.skills` may be included and must follow the canonical Agent Skill System contract defined in `docs/Tasks/AgentSkillSystem.md`.
+6. `task.skills` and `step.skills` may be included and must follow the canonical Agent Skill System contract defined in `docs/Tools/SkillSystem.md`.
 
 ### 5.2 Candidate example
 

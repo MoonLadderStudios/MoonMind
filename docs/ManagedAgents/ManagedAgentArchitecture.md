@@ -15,7 +15,7 @@
 - [`docs/ManagedAgents/OAuthTerminal.md`](./OAuthTerminal.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/Security/SecretsSystem.md`](../Security/SecretsSystem.md)
-- [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Tools/SkillSystem.md`](../Tools/SkillSystem.md)
 - [`docs/Memory/MemoryArchitecture.md`](../Memory/MemoryArchitecture.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 

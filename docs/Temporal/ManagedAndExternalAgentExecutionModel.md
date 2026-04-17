@@ -5,7 +5,7 @@
 Status: **Implemented** (runtime live; contract hardening in progress)
 Last updated: 2026-04-09
 Related:
-- [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Tools/SkillSystem.md`](../Tools/SkillSystem.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](./ActivityCatalogAndWorkerTopology.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) — canonical design for artifact-first log capture, live observability streaming, and the MoonMind-native log viewer UI
@@ -36,7 +36,7 @@ Use this document for:
 - adapter responsibilities
 - runtime preparation and supervision boundaries
 
-Use [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md) for:
+Use [`docs/Tools/SkillSystem.md`](../Tools/SkillSystem.md) for:
 
 - `AgentSkillDefinition`
 - `SkillSet`

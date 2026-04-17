@@ -79,8 +79,8 @@ bearing tasks, and reruns of reruns.
 
 Constraints:
 - Read .specify/memory/constitution.md, README.md, docs/Tasks/TaskEditingSystem.md, docs/Temporal/
-WorkflowArtifactSystemDesign.md, docs/Temporal/ArtifactPresentationContract.md, docs/Tasks/
-AgentSkillSystem.md, and docs/Tasks/SkillAndPlanContracts.md before proposing changes.
+WorkflowArtifactSystemDesign.md, docs/Temporal/ArtifactPresentationContract.md, docs/Tools/
+SkillSystem.md, and docs/Tasks/SkillAndPlanContracts.md before proposing changes.
 - Preserve the distinction between original operator input and derived planner/runtime data.
 - Do not embed large task content in workflow history; use artifacts/refs.
 - Do not mutate checked-in skill folders or runtime skill snapshots.

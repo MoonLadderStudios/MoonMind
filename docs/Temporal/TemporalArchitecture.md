@@ -30,7 +30,7 @@ This document explains how MoonMind’s Temporal-native architecture incorporate
 - adapters
 - compatibility layers for task-oriented product surfaces
 
-Detailed agent-skill storage, precedence, and workspace path rules live in `docs/Tasks/AgentSkillSystem.md`.
+Detailed agent-skill storage, precedence, and workspace path rules live in `docs/Tools/SkillSystem.md`.
 
 Detailed true-agent execution lifecycle rules live in `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`.
 
@@ -50,7 +50,7 @@ Detailed true-agent execution lifecycle rules live in `docs/Temporal/ManagedAndE
 - `docs/ManagedAgents/LiveLogs.md`
 - `docs/ManagedAgents/DockerOutOfDocker.md`
 - `docs/Tools/JiraIntegration.md`
-- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Tools/SkillSystem.md`
 
 ---
 

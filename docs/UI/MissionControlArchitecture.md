@@ -35,7 +35,7 @@ Detailed backend contracts live in the Temporal docs. This document defines the 
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/ManagedAgents/LiveLogs.md` — canonical design for artifact-first logs, MoonMind-owned observability APIs, SSE live follow, and the non-terminal log viewer UI
-- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Tools/SkillSystem.md`
 - `docs/UI/MissionControlStyleGuide.md`
 - `docs/UI/TypeScriptSystem.md`
 

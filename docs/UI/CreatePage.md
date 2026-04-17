@@ -29,7 +29,7 @@ This document is declarative. It defines the contract the product must satisfy. 
 - `docs/UI/TypeScriptSystem.md`
 - `docs/Tasks/ImageSystem.md`
 - `docs/Tasks/TaskArchitecture.md`
-- `docs/Tasks/AgentSkillSystem.md`
+- `docs/Tools/SkillSystem.md`
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 

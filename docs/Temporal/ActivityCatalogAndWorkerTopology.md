@@ -9,7 +9,7 @@ Scope: Defines MoonMind’s canonical **Activity Types**, **worker fleets**, **T
 ## Related docs
 
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](./ManagedAndExternalAgentExecutionModel.md)
-- [`docs/Tasks/AgentSkillSystem.md`](../Tasks/AgentSkillSystem.md)
+- [`docs/Tools/SkillSystem.md`](../Tools/SkillSystem.md)
 - [`docs/Temporal/WorkflowArtifactSystemDesign.md`](./WorkflowArtifactSystemDesign.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/Temporal/ErrorTaxonomy.md`](./ErrorTaxonomy.md)
