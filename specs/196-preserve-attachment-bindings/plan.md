@@ -53,7 +53,8 @@ specs/196-preserve-attachment-bindings/
 ├── contracts/
 │   └── attachment-binding-reconstruction.md
 ├── tasks.md
-└── verification.md
+└── checklists/
+    └── requirements.md
 ```
 
 ### Source Code (repository root)
