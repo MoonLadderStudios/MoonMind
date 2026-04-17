@@ -21,7 +21,11 @@ from api_service.api.routers.executions import (
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
-from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
+from api_service.db.models import (
+    MoonMindWorkflowState,
+    TemporalArtifactStatus,
+    TemporalWorkflowType,
+)
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import ExecutionDependencySummary
 from moonmind.workflows.temporal import (
@@ -32,6 +36,22 @@ from moonmind.schemas.temporal_models import (
     ExecutionProgressModel,
     StepLedgerSnapshotModel,
 )
+
+
+class _ScalarRows:
+    def __init__(self, rows: list[SimpleNamespace]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[SimpleNamespace]:
+        return self._rows
+
+
+class _ExecuteResult:
+    def __init__(self, rows: list[SimpleNamespace]) -> None:
+        self._rows = rows
+
+    def scalars(self) -> _ScalarRows:
+        return _ScalarRows(self._rows)
 
 
 class _QueryHandle:
@@ -444,6 +464,255 @@ def test_create_task_shaped_execution_rejects_more_than_50_steps(
 
     assert response.status_code == 422
     assert "payload.task.steps can have a maximum of 50 items" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_attachments_when_policy_disabled(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", False)
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Review the uploaded screenshot.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art_01IMAGEINPUT0000000000000",
+                            "filename": "wireframe.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 128,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "attachment policy is disabled" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_unknown_attachment_fields(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Review the uploaded screenshot.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art_01IMAGEINPUT0000000000000",
+                            "filename": "wireframe.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 128,
+                            "caption": "unsupported future field",
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "unsupported fields" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachments(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    execute = AsyncMock(
+        return_value=_ExecuteResult(
+            [
+                SimpleNamespace(
+                    artifact_id="art_01IMAGEINPUT0000000000000",
+                    status=TemporalArtifactStatus.COMPLETE,
+                    content_type="image/png",
+                    size_bytes=128,
+                )
+            ]
+        )
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        execute=execute
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "targetRuntime": "unsupported_runtime",
+                "task": {
+                    "instructions": "Review the uploaded screenshot.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art_01IMAGEINPUT0000000000000",
+                            "filename": "wireframe.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 128,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Unsupported targetRuntime" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    service.create_execution.return_value = _build_execution_record()
+    execute = AsyncMock(
+        return_value=_ExecuteResult(
+            [
+                SimpleNamespace(
+                    artifact_id="art_01IMAGEINPUT0000000000001",
+                    status=TemporalArtifactStatus.COMPLETE,
+                    content_type="image/png",
+                    size_bytes=128,
+                ),
+                SimpleNamespace(
+                    artifact_id="art_01IMAGEINPUT0000000000002",
+                    status=TemporalArtifactStatus.COMPLETE,
+                    content_type="image/webp",
+                    size_bytes=256,
+                ),
+            ]
+        )
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        execute=execute
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Review uploaded screenshots.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art_01IMAGEINPUT0000000000001",
+                            "filename": "one.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 128,
+                        },
+                        {
+                            "artifactId": "art_01IMAGEINPUT0000000000002",
+                            "filename": "two.webp",
+                            "contentType": "image/webp",
+                            "sizeBytes": 256,
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    execute.assert_awaited_once()
+    service.create_execution.assert_awaited_once()
+
+
+def test_create_task_shaped_execution_rejects_svg_attachment_type(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    monkeypatch.setattr(
+        settings.workflow,
+        "agent_job_attachment_allowed_content_types",
+        ("image/png", "image/jpeg", "image/webp", "image/svg+xml"),
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Review the uploaded screenshot.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art_01IMAGEINPUT0000000000000",
+                            "filename": "wireframe.svg",
+                            "contentType": "image/svg+xml",
+                            "sizeBytes": 128,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "image/svg+xml is not supported" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_attachment_policy_limits(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_max_count", 1)
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "instructions": "Review uploaded screenshots.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art_01IMAGEINPUT0000000000001",
+                            "filename": "one.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 128,
+                        },
+                        {
+                            "artifactId": "art_01IMAGEINPUT0000000000002",
+                            "filename": "two.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 128,
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "too many input attachments" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
 

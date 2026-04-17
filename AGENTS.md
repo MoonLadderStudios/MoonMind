@@ -180,6 +180,8 @@ Key diagnostics:
 - No new persistent storage; this story defines compact runtime contracts and deterministic outputs that can later be persisted by the managed-session store or export sinks (191-claude-governance-telemetry)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing OAuth provider registry, existing OAuth session workflow/activity catalog, existing terminal bridge runtime helpers (192-oauth-runner-bootstrap-pty)
 - Existing OAuth session database row and workflow/activity payloads only; no new persistent storage (192-oauth-runner-bootstrap-pty)
+- Python 3.12; TypeScript/React for existing Create-page behavior + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal artifact service, existing React Create page (195-enforce-image-artifact-policy)
+- Existing Temporal artifact metadata tables and configured artifact store; no new persistent storage (195-enforce-image-artifact-policy)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

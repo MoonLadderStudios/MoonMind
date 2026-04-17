@@ -266,6 +266,143 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
             assert [item.artifact_id for item in listed] == [artifact.artifact_id]
 
 
+async def test_write_complete_rejects_invalid_task_image_signature(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task image attachments should be sniffed server-side at completion."""
+
+    monkeypatch.setattr(
+        artifact_module.settings.workflow,
+        "agent_job_attachment_allowed_content_types",
+        ("image/png", "image/jpeg", "image/webp"),
+    )
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="image/png",
+                metadata_json={"source": "task-dashboard-step-attachment"},
+            )
+
+            with pytest.raises(
+                TemporalArtifactValidationError,
+                match="image/png signature",
+            ):
+                await service.write_complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="user-1",
+                    payload=b"not-a-png",
+                    content_type="image/png",
+                )
+
+
+async def test_write_complete_rejects_invalid_image_signature_without_task_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All image uploads should be sniffed, even when metadata is only diagnostic."""
+
+    monkeypatch.setattr(
+        artifact_module.settings.workflow,
+        "agent_job_attachment_allowed_content_types",
+        ("image/png", "image/jpeg", "image/webp"),
+    )
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="image/png",
+            )
+
+            with pytest.raises(
+                TemporalArtifactValidationError,
+                match="image/png signature",
+            ):
+                await service.write_complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="user-1",
+                    payload=b"not-a-png",
+                    content_type="image/png",
+                )
+
+
+async def test_create_rejects_reserved_input_attachment_storage_key(
+    tmp_path: Path,
+) -> None:
+    """Worker artifact uploads must not impersonate input attachment namespaces."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            with pytest.raises(
+                TemporalArtifactValidationError,
+                match="reserved input attachment namespace",
+            ):
+                await service.create(
+                    principal="worker-1",
+                    content_type="text/plain",
+                    metadata_json={
+                        "source": "agent-runtime",
+                        "artifact_path": "inputs/objective/screenshot.png",
+                    },
+                )
+
+
+@pytest.mark.parametrize(
+    "reserved_path",
+    [
+        "./inputs/objective/screenshot.png",
+        "/inputs/objective/screenshot.png",
+        ".moonmind/inputs/objective/screenshot.png",
+        "/.moonmind/inputs/objective/screenshot.png",
+    ],
+)
+async def test_create_rejects_normalized_reserved_input_attachment_storage_keys(
+    tmp_path: Path,
+    reserved_path: str,
+) -> None:
+    """Reserved path checks should normalize candidates and prefixes consistently."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            with pytest.raises(
+                TemporalArtifactValidationError,
+                match="reserved input attachment namespace",
+            ):
+                await service.create(
+                    principal="worker-1",
+                    content_type="text/plain",
+                    metadata_json={
+                        "source": "agent-runtime",
+                        "artifact_path": reserved_path,
+                    },
+                )
+
+
 async def test_create_uses_same_origin_content_endpoint_for_small_s3_uploads(
     tmp_path: Path,
 ) -> None:
