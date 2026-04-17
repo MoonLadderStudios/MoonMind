@@ -5027,7 +5027,7 @@ describe("Task Create Entrypoint", () => {
   it("waits for a fresh Jira issue detail response before appending cached issue text", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     let issueDetailRequests = 0;
-    let resolveFreshIssue: (() => void) | null = null;
+    const freshIssue = { resolve: null as (() => void) | null };
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const path = url.split("?")[0];
@@ -5056,7 +5056,7 @@ describe("Task Create Entrypoint", () => {
           } as Response);
         }
         return new Promise<Response>((resolve) => {
-          resolveFreshIssue = () => {
+          freshIssue.resolve = () => {
             resolve({
               ok: true,
               json: async () => ({
@@ -5111,14 +5111,14 @@ describe("Task Create Entrypoint", () => {
     fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
 
     await waitFor(() => {
-      expect(resolveFreshIssue).not.toBeNull();
+      expect(freshIssue.resolve).not.toBeNull();
     });
     expect(screen.getByRole("dialog", { name: "Browse Jira issue" })).toBeTruthy();
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Reset instructions.",
     );
 
-    resolveFreshIssue?.();
+    freshIssue.resolve?.();
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
     });
