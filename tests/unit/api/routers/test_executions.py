@@ -21,7 +21,11 @@ from api_service.api.routers.executions import (
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
-from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
+from api_service.db.models import (
+    MoonMindWorkflowState,
+    TemporalArtifactStatus,
+    TemporalWorkflowType,
+)
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import ExecutionDependencySummary
 from moonmind.workflows.temporal import (
@@ -509,6 +513,48 @@ def test_create_task_shaped_execution_rejects_unknown_attachment_fields(
 
     assert response.status_code == 422
     assert "unsupported fields" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachments(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        get=AsyncMock(
+            return_value=SimpleNamespace(
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=128,
+            )
+        )
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "targetRuntime": "unsupported_runtime",
+                "task": {
+                    "instructions": "Review the uploaded screenshot.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art_01IMAGEINPUT0000000000000",
+                            "filename": "wireframe.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 128,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Unsupported targetRuntime" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
 

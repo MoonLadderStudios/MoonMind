@@ -43,6 +43,12 @@ The input was classified as a single-story runtime feature request. The Jira bri
 - Final unit suite:
   `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
   Result: Python 3467 passed, 1 xpassed, 101 warnings, 16 subtests passed; frontend Vitest suites 10 passed and 236 tests passed.
+- Alignment regression:
+  `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/api/routers/test_executions.py::test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachments -q`
+  Result: 1 passed.
+- Alignment focused API suite:
+  `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/unit/api/routers/test_executions.py -q`
+  Result: 80 passed, 12 warnings.
 
 ## Residual Risk
 

@@ -31,7 +31,7 @@ This task list covers exactly one independently testable story from MM-368: uplo
 
 - [X] T004 [P] Add failing unit tests for task `inputAttachments` preservation and disabled-policy rejection in `tests/unit/api/routers/test_executions.py`. Covers FR-002, FR-008, SC-001, SC-003.
 - [X] T005 [P] Add failing unit tests for image content type allowlist and `image/svg+xml` rejection in `tests/unit/api/routers/test_executions.py`. Covers FR-003, FR-004, SC-002.
-- [X] T006 [P] Add failing unit tests for max count, per-file size, total size, incomplete artifacts, and unknown future fields in `tests/unit/api/routers/test_executions.py`. Covers FR-005, FR-006, FR-009, SC-002, SC-005.
+- [X] T006 [P] Add failing unit tests for max count, per-file size, total size, incomplete artifacts, unknown future fields, and unsupported target runtime with attachments in `tests/unit/api/routers/test_executions.py`. Covers FR-005, FR-006, FR-009, SC-002, SC-005.
 - [X] T007 [P] Add failing unit tests for artifact completion signature validation and reserved input namespace rejection in `tests/unit/workflows/temporal/test_artifacts.py` or `tests/unit/api/routers/test_temporal_artifacts.py`. Covers FR-004, FR-007, SC-004.
 - [X] T008 [P] Add failing integration/contract coverage for task-shaped execution preserving image attachment refs in `tests/contract/test_temporal_execution_api.py`. Covers DESIGN-REQ-008, SC-001.
 
