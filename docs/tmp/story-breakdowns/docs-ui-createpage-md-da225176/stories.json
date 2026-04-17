@@ -1,0 +1,720 @@
+{
+  "source": {
+    "title": "Create Page",
+    "path": "docs/UI/CreatePage.md",
+    "referencePath": "docs/UI/CreatePage.md",
+    "originalPresetBrief": "breakdown docs/UI/CreatePage.md",
+    "originalDesignText": "# Create Page\n\nStatus: Proposed\nOwners: MoonMind Engineering\nLast updated: 2026-04-16\n\n## 1. Purpose\n\nThis document defines the canonical desired-state contract for the MoonMind Create page.\n\nThe Create page is the single task-authoring surface for:\n\n- composing manual task steps\n- attaching structured input images to the task objective or to individual steps\n- applying reusable task presets\n- importing Jira text and, when allowed, Jira images into declared draft targets\n- selecting run dependencies\n- configuring runtime, repository, publish, and schedule options\n- creating, editing, and rerunning task-shaped Temporal executions\n\nThis document is declarative. It defines the contract the product must satisfy. It is not an implementation changelog or rollout log.\n\n---\n\n## 2. Related docs\n\n- `docs/UI/MissionControlArchitecture.md`\n- `docs/UI/MissionControlStyleGuide.md`\n- `docs/UI/TypeScriptSystem.md`\n- `docs/Tasks/ImageSystem.md`\n- `docs/Tasks/TaskArchitecture.md`\n- `docs/Tasks/AgentSkillSystem.md`\n- `docs/Temporal/TemporalArchitecture.md`\n- `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`\n\n---\n\n## 3. Product stance\n\nThe Create page is a task authoring surface, not a generic workflow builder.\n\nCore posture:\n\n- the task is the primary product object\n- steps are the canonical authored execution units\n- presets are reusable step blueprints and objective helpers, not a separate task type\n- Jira is an external instruction source, not a runtime, not an execution substrate, and not a primary task source\n- input images are structured task inputs, not pasted binary content and not part of the instruction text body\n- browser clients call only MoonMind APIs; they never call Jira, object storage, or model providers directly\n- manual authoring remains first-class even when presets, Jira, or image upload are unavailable\n- edit and rerun must preserve the authored task draft, including attachment targeting, unless the user explicitly changes it\n\nImportant distinctions:\n\n- **objective text** is resolved from existing task-authoring fields; it is still text\n- **objective-scoped images** are structured inputs attached to the task objective target\n- **step-scoped images** are structured inputs attached to a specific step target\n- **applied preset steps** are expanded step blueprints, not live bindings to a preset definition\n- **imported Jira text** is a one-time copy into a text field, not a live sync\n- **imported Jira images** are structured attachment selections, not inline embedded images\n\n---\n\n## 4. Route and hosting model\n\nThe canonical Create page route is:\n\n- `/tasks/new`\n\nRules:\n\n- `/tasks/new` is the canonical route\n- compatibility aliases may exist, but they must redirect to the canonical route and must not define separate product behavior\n- the page is server-hosted by FastAPI and rendered by the Mission Control React/Vite UI\n- runtime configuration is generated server-side and passed through the boot payload\n- all page actions go through MoonMind REST APIs\n- artifact upload, preview, and download all remain behind MoonMind-controlled API surfaces\n\nRepresentative implementation surfaces:\n\n- page entrypoint: `frontend/src/entrypoints/task-create.tsx`\n- runtime config builder: `api_service/api/routers/task_dashboard_view_model.py`\n\n---\n\n## 5. Canonical page model\n\nThe page is a single composition form with these canonical sections, in this order:\n\n| Order | Section | Purpose |\n| --- | --- | --- |\n| 1 | Header | Identify the page as task creation, edit, or rerun |\n| 2 | Steps | Author the execution plan directly, including step-scoped image inputs |\n| 3 | Task Presets | Apply reusable step blueprints and define preset objective text and objective-scoped image inputs |\n| 4 | Dependencies | Block the new run on existing `MoonMind.Run` executions |\n| 5 | Execution context | Runtime, provider, model, effort, repository, branches, publish mode |\n| 6 | Execution controls | Priority, max attempts, propose tasks |\n| 7 | Schedule | Immediate, once, deferred minutes, recurring |\n| 8 | Submit | Create, save changes, or rerun |\n\nRules:\n\n- there is no detached, page-wide “image bucket”\n- every selected attachment belongs to an explicit target\n- the shared secondary surfaces are:\n  - the Jira browser\n  - provider/profile selectors\n  - attachment preview and removal affordances\n- image selection belongs with the field it informs, not with unrelated page controls\n\n---\n\n## 6. Draft model\n\nThe browser draft is step-first and target-aware.\n\nRepresentative browser model:\n\n```ts\ntype AttachmentTarget =\n  | { kind: \"objective\" }\n  | { kind: \"step\"; stepLocalId: string };\n\ninterface DraftAttachment {\n  localId: string;\n  target: AttachmentTarget;\n  source: \"local\" | \"artifact\";\n  status: \"selected\" | \"uploading\" | \"uploaded\" | \"failed\";\n  artifactId?: string;\n  filename: string;\n  contentType: string;\n  sizeBytes: number;\n  previewUrl?: string | null;\n  errorMessage?: string | null;\n}\n\ninterface StepDraft {\n  localId: string;\n  id: string;\n  title: string;\n  instructions: string;\n  skillId: string;\n  skillArgs: string;\n  skillRequiredCapabilities: string;\n  templateStepId: string;\n  templateInstructions: string;\n  attachments: DraftAttachment[];\n  templateAttachments: DraftAttachment[];\n}\n\ninterface TaskDraft {\n  presetObjectiveText: string;\n  presetObjectiveAttachments: DraftAttachment[];\n  steps: StepDraft[];\n  appliedTemplates: AppliedTemplateState[];\n  runtime: string;\n  providerProfile: string;\n  model: string;\n  effort: string;\n  repository: string;\n  startingBranch: string;\n  targetBranch: string;\n  publishMode: \"none\" | \"branch\" | \"pr\";\n  dependencies: string[];\n}\n```\n\nRules:\n\n- attachments are structured inputs, not part of the `Instructions` text value\n- the UI may render image thumbnails directly under an instructions field so the relationship is visually clear\n- the source of truth for attachment targeting is structured state, not text conventions\n- the draft may contain both local-file selections and previously uploaded artifact-backed attachments\n- the draft must distinguish:\n  - an existing persisted attachment\n  - a newly selected local file\n  - an upload failure that has not yet been resolved\n\n---\n\n## 7. Step editor contract\n\n### 7.1 Step list\n\nThe step editor renders a list of step cards.\n\nRules:\n\n- the first card is always **Step 1 (Primary)**\n- users may add, remove, and reorder steps\n- reordering changes authored order only; it does not create dependency edges between steps\n- the page must remain valid with exactly one step card present\n- each step card owns its own instructions and attachment state\n- moving or reordering a step moves its attachments with it\n\n### 7.2 Step fields\n\nEach step card must expose:\n\n- `Instructions`\n- `Images` or `Input Attachments` when attachment policy is enabled\n- `Skill (optional)`\n- `Skill Args (optional JSON object)` when a non-empty explicit skill is selected\n- `Skill Required Capabilities (optional CSV)` in Advanced Settings\n\nRules:\n\n- the primary step must contain instructions or an explicit skill\n- when any additional step is present, the primary step must contain instructions\n- non-primary steps may omit instructions to continue from the task objective\n- non-primary steps may omit skill to inherit primary-step skill defaults\n- step attachments are visible in the same card as the step instructions they inform\n\n### 7.3 Step attachment contract\n\nA step may own zero or more attachments.\n\nRules:\n\n- step attachments are submitted through `task.steps[n].inputAttachments`\n- adding or removing a step attachment is a first-class authored change to that step\n- the UI must show, per attachment:\n  - filename\n  - type\n  - size\n  - thumbnail preview when preview is supported\n  - upload or error state when relevant\n- the UI must allow removing a selected or persisted attachment before submit\n- attachment order may be displayed, but execution semantics do not rely on visual ordering\n- the same image must not become attached to another step implicitly because the user reordered steps, edited text, or applied a preset\n- if the product supports drag-and-drop or paste, those gestures must still land on an explicit target step\n\n### 7.4 Objective-scoped attachment target\n\nThe page also supports an objective-scoped attachment target.\n\nThis target exists for the preset-owned objective field rather than for a specific step.\n\nRules:\n\n- objective-scoped attachments are submitted through `task.inputAttachments`\n- they belong to the preset objective target, not to an anonymous page-wide bucket\n- if presets are disabled, this target may be hidden entirely\n- objective-scoped attachments are part of the task-level objective context\n- they are not copied down into step attachments automatically\n\n### 7.5 Template-bound steps\n\nPreset-expanded steps may carry template step identity.\n\nRules:\n\n- a template-expanded step remains template-bound only while its authored instructions and attachment set still match the template-authored step input contract\n- any manual edit to a template-bound step’s instructions detaches that step from template instruction identity\n- any manual edit to a template-bound step’s attachment set detaches that step from template input identity\n- `templateAttachments` stores the template-authored attachment set used for detachment comparisons\n- importing Jira text or Jira images into a template-bound step counts as a manual edit\n\n---\n\n## 8. Task preset contract\n\n### 8.1 Preset area\n\nThe preset area remains optional.\n\nIt exposes:\n\n- `Preset`\n- `Feature Request / Initial Instructions`\n- objective-scoped image inputs when attachment policy is enabled\n- `Apply`\n- `Save Current Steps as Preset` when preset saving is enabled\n- status text describing preset load and apply outcomes\n\n### 8.2 Preset application\n\nApplying a preset expands blueprint steps into the step list.\n\nRules:\n\n- when the form still contains only the initial empty default step, applying a preset may replace that placeholder step set\n- otherwise, applying a preset appends expanded preset steps to the existing draft\n- selecting a preset alone must not modify the draft\n- objective-scoped attachments are not silently generated by preset application unless the preset system explicitly defines them in a future contract\n- preset application remains an explicit action\n\n### 8.3 Preset objective contract\n\n`Feature Request / Initial Instructions` is the preset-owned objective text source.\n\nRules:\n\n- when non-empty, it is preferred over primary-step instructions for objective text resolution\n- objective-scoped attachments are the matching structured input source for this field\n- changing preset objective text or objective-scoped attachments must not silently rewrite already expanded steps\n\n### 8.4 Reapply behavior\n\nThe page distinguishes between:\n\n- changing preset inputs, and\n- applying or reapplying the preset\n\nRules:\n\n- when preset objective text changes after apply, the page marks the preset state as **needs reapply**\n- when objective-scoped attachments change after apply, the page also marks the preset state as **needs reapply**\n- the page surfaces a clear `Reapply preset` action when the preset is dirty\n- reapply is explicit\n- the page must not automatically overwrite expanded steps because preset inputs changed\n\n---\n\n## 9. Dependency contract\n\nThe dependency area remains a bounded picker for existing `MoonMind.Run` executions.\n\nRules:\n\n- users may add up to 10 direct dependencies\n- duplicate dependencies are rejected client-side\n- dependency fetch failure must not block manual task creation\n- dependency selection is independent from image attachments, Jira, and presets\n\n---\n\n## 10. Execution context contract\n\nThe Create page preserves these execution-context controls:\n\n- `Runtime`\n- `Provider profile` when profiles exist for the selected runtime\n- `Model`\n- `Effort`\n- `GitHub Repo`\n- `Starting Branch (optional)`\n- `Target Branch (optional)`\n- `Publish Mode`\n- `Enable merge automation` when publish mode is `pr` for an ordinary task\n\nRules:\n\n- runtime defaults come from server-provided runtime configuration\n- attachment policy also comes from server-provided runtime configuration\n- provider-profile options are runtime-specific\n- repository validation rules are unaffected by attachments or Jira\n- resolver-style skills may still force publish mode to `none`\n- merge automation is available only for ordinary PR-publishing tasks\n- when merge automation is selected, the submitted task creation payload must\n  preserve `publishMode=pr`, preserve `task.publish.mode=pr`, and include\n  `mergeAutomation.enabled=true`\n- when publish mode is `branch` or `none`, or when the selected task is a direct\n  `pr-resolver` or `batch-pr-resolver` task, merge automation must be hidden or\n  disabled and must not be submitted\n- the merge automation copy must explain that MoonMind waits for the PR\n  readiness gate and then uses `pr-resolver`; it must not imply direct\n  auto-merge or a bypass around resolver behavior\n- Jira Orchestrate preset behavior remains explicit and unchanged by this\n  Create page option; changing Jira Orchestrate to parent-owned PR publishing\n  requires a separate story\n- repository validation rules remain unchanged by Jira integration\n- Jira import must never bypass or weaken repository validation\n- image upload must never bypass or weaken repository validation, publish validation, or runtime gating\n\n---\n\n## 11. Attachment policy and UX contract\n\nAttachment behavior is policy-gated.\n\nRepresentative runtime config shape:\n\n```json\n{\n  \"system\": {\n    \"attachmentPolicy\": {\n      \"enabled\": true,\n      \"maxCount\": 10,\n      \"maxBytes\": 10485760,\n      \"totalBytes\": 26214400,\n      \"allowedContentTypes\": [\n        \"image/png\",\n        \"image/jpeg\",\n        \"image/webp\"\n      ]\n    }\n  }\n}\n```\n\nRules:\n\n- when policy is disabled, all attachment entry points are hidden\n- when policy permits only image MIME types, the UI should use an image-specific label such as `Images`\n- validation must happen both before upload and at submit time\n- the browser must fail fast and visibly when:\n  - count limit is exceeded\n  - single-file size limit is exceeded\n  - total size limit is exceeded\n  - content type is unsupported\n  - upload fails\n- the browser must not silently drop a selected image\n- the user must be able to remove a failed or invalid image without losing unrelated draft state\n- previews are advisory UI affordances; preview failure must not corrupt the draft\n\nDesired-state UX affordances:\n\n- file picker\n- drag-and-drop where supported\n- paste-from-clipboard where supported\n- thumbnail preview for supported images\n- keyboard-accessible remove and retry actions\n- a concise per-target attachment summary\n\n---\n\n## 12. Jira integration contract\n\n### 12.1 Product role\n\nJira exists to source task inputs into the Create page.\n\nIt is not intended to:\n\n- create MoonMind tasks automatically on issue selection\n- replace the step editor\n- replace presets\n- change the task submission API shape into a Jira-native workflow type\n- make the browser talk directly to Jira\n\n### 12.2 Supported targets\n\nThe Jira browser supports these targets:\n\n- preset objective text\n- preset objective attachments\n- any step’s instructions\n- any step’s attachments\n\nRepresentative target model:\n\n```ts\ntype JiraImportTarget =\n  | { kind: \"preset-objective-text\" }\n  | { kind: \"preset-objective-attachments\" }\n  | { kind: \"step-text\"; stepLocalId: string }\n  | { kind: \"step-attachments\"; stepLocalId: string };\n```\n\nRules:\n\n- opening the browser from a field preselects its matching target\n- the browser must display the current target explicitly\n- switching targets inside the browser must not clear the selected issue\n\n### 12.3 Text and image import semantics\n\nRules:\n\n- selecting a Jira issue never mutates the draft automatically\n- text import remains explicit and supports `Replace target text` and `Append to target text`\n- image import remains explicit and supports selecting which supported images to add\n- imported Jira images become structured attachments on the selected target\n- imported Jira images are not injected into instruction text as markdown, HTML, or inline data\n- when importing into a template-bound step, text and attachment imports both count as manual customization\n\n### 12.4 Preset interaction\n\nRules:\n\n- importing Jira text or images into the preset objective target marks an already-applied preset as needing reapply\n- importing into a step target does not mutate preset objective state\n\n---\n\n## 13. Edit and rerun contract\n\nThe Create page also serves as the edit and rerun surface for `MoonMind.Run` executions.\n\nRules:\n\n- edit and rerun reconstruct the draft from the authoritative task input snapshot\n- reconstructed draft state includes:\n  - objective text\n  - objective-scoped attachments\n  - step instructions\n  - step-scoped attachments\n  - runtime and publish settings\n  - applied templates and their dirty state\n  - dependencies that remain part of the editable contract\n- existing persisted attachments must be rendered distinctly from newly selected local files\n- the user must be able to:\n  - keep an existing attachment\n  - remove an existing attachment\n  - add a new attachment\n  - replace one attachment by removing the old and adding the new\n- rerun preserves original attachment refs by default unless the user edits them\n- untouched attachments must survive round-trips through edit and rerun without being silently dropped or duplicated\n\n---\n\n## 14. Submission contract\n\nThe Create page submit flow remains artifact-first.\n\nRules:\n\n- local images upload to the artifact system before create, edit, or rerun is submitted\n- the browser submits structured attachment refs, not raw binary payloads, to the execution create/update API\n- the control plane stores an authoritative task input snapshot that preserves attachment targeting\n- oversized task text continues to use existing artifact fallback behavior for text payloads\n- attachment upload completion is required before the execution becomes eligible to start\n- attachment selection alone does not create a task; submit remains explicit\n\nRepresentative task-shaped payload:\n\n```json\n{\n  \"type\": \"task\",\n  \"payload\": {\n    \"repository\": \"owner/repo\",\n    \"task\": {\n      \"instructions\": \"Resolved task objective text.\",\n      \"inputAttachments\": [\n        {\n          \"artifactId\": \"art_objective_123\",\n          \"filename\": \"overview.png\",\n          \"contentType\": \"image/png\",\n          \"sizeBytes\": 48213\n        }\n      ],\n      \"steps\": [\n        {\n          \"id\": \"step-1\",\n          \"instructions\": \"Inspect the screenshot and identify the bug.\",\n          \"inputAttachments\": [\n            {\n              \"artifactId\": \"art_step1_456\",\n              \"filename\": \"bug.png\",\n              \"contentType\": \"image/png\",\n              \"sizeBytes\": 72109\n            }\n          ]\n        },\n        {\n          \"id\": \"step-2\",\n          \"instructions\": \"Implement the fix and verify the result.\"\n        }\n      ]\n    }\n  }\n}\n```\n\nRules:\n\n- `task.inputAttachments` is the objective-scoped target\n- `task.steps[n].inputAttachments` is the step-scoped target\n- absence of attachments is valid\n- the meaning of an attachment is defined by its target, not by filename conventions\n\n---\n\n## 15. Objective resolution and title derivation\n\nThe page preserves a canonical objective-resolution rule for text.\n\nThe resolved objective text is determined in this order:\n\n1. preset `Feature Request / Initial Instructions`\n2. primary step `Instructions`\n3. the most recent applied preset input that semantically aliases a feature request or request field\n\nRules:\n\n- importing Jira text into the preset objective field overrides primary-step text for objective text resolution\n- importing Jira text into the primary step affects resolved objective text only when preset objective text is empty\n- importing Jira text into a non-primary step does not change resolved objective text\n- explicit task title derivation continues to use the first non-empty line of the resolved objective text\n\nAttachment rules:\n\n- objective-scoped attachments are always part of the task-level objective input context\n- primary-step attachments may also participate in task-level objective input context because the primary step is the default authored task objective\n- non-primary step attachments do not affect task title derivation\n- non-primary step attachments do not become task-level objective inputs unless the planner or runtime explicitly promotes them for a derived purpose\n\n---\n\n## 16. Failure and empty-state rules\n\nRules:\n\n- if attachment policy is disabled, the page hides attachment entry points and remains fully usable\n- if an upload fails, the failure remains local to the affected target and the rest of the draft remains intact\n- if attachment preview fails, metadata remains visible and the user can still remove the attachment\n- if edit or rerun cannot reconstruct attachments, the page must fail explicitly rather than silently dropping them\n- if Jira is unavailable, the user can close the Jira browser and continue manual authoring without losing draft state\n- if the selected Jira issue cannot be fetched, the page must not mutate the draft\n- create, edit, and rerun must never proceed with silently discarded attachments\n\nRepresentative copy:\n\n- `Image upload failed. Remove the image or retry before submitting.`\n- `This runtime does not currently allow image inputs.`\n- `The task draft could not be reconstructed because one or more attachment bindings were missing.`\n- `Failed to load Jira issue. You can continue creating the task manually.`\n\n---\n\n## 17. Accessibility and interaction rules\n\nRules:\n\n- all open, close, target, upload, remove, retry, and import actions must be keyboard accessible\n- image preview controls must expose meaningful labels to assistive technology\n- step cards must clearly identify when attachments are present\n- the Jira browser title must identify the current import target\n- after importing text or images from Jira, focus must return predictably to the updated field or to an explicit success notice\n- validation errors must be associated with the specific target that failed\n\n---\n\n## 18. Testing requirements\n\nThe Create page test suite should cover:\n\n1. attachment entry points are hidden when policy is disabled\n2. image validation enforces count, per-file size, total size, and content type\n3. selecting images does not create hidden draft mutations on other targets\n4. step-scoped images remain attached to the correct step through reorder operations\n5. importing Jira text does not mutate the draft until import is confirmed\n6. importing Jira images creates structured attachments on the selected target\n7. importing into a template-bound step detaches that step when appropriate\n8. changing preset objective text or objective-scoped attachments after apply marks the preset as needing reapply\n9. create submission uploads images before execution create\n10. edit reconstructs persisted attachments correctly\n11. rerun preserves untouched attachments by default\n12. preview failure or upload failure does not corrupt unrelated draft state\n13. submit fails explicitly when attachments are invalid or incomplete\n\n---\n\n## 19. Summary\n\nThe Create page remains a single, task-first composition form.\n\nImages are supported as explicit structured inputs attached either to:\n\n- the preset objective target, or\n- a specific step target\n\nThat is the desired-state contract.\n\nThe page does not become an image editor, a Jira-native surface, or a binary transport layer. It remains MoonMind-native and task-first while allowing users to author text and image inputs together in the same draft.\n"
+  },
+  "extractedAt": "2026-04-17T01:29:57Z",
+  "requestedOutputMode": "jira",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "designSummary": "docs/UI/CreatePage.md defines the desired-state contract for a single MoonMind-native task authoring page. The design keeps the page task-first, step-first, target-aware for structured image inputs, API-boundary safe, and explicit about presets, Jira import, dependencies, execution options, edit/rerun reconstruction, artifact-first submission, failures, accessibility, and test coverage. The breakdown below groups implementation into independently testable vertical stories that preserve manual authoring while adding target-aware attachments, presets, Jira imports, execution controls, and durable edit/rerun behavior.",
+  "coveragePoints": {
+    "DESIGN-REQ-001": {
+      "title": "Task-first Create page purpose",
+      "type": "requirement",
+      "source_section": "1. Purpose; 3. Product stance; 19. Summary",
+      "explanation": "The Create page is the single MoonMind-native task-authoring surface for manual steps, presets, Jira imports, dependencies, execution options, schedules, create, edit, and rerun; it is not a generic workflow builder, image editor, Jira-native surface, or binary transport layer."
+    },
+    "DESIGN-REQ-002": {
+      "title": "Canonical route and hosting boundary",
+      "type": "integration",
+      "source_section": "4. Route and hosting model",
+      "explanation": "The canonical route is /tasks/new, hosted by FastAPI and rendered by the Mission Control React/Vite UI, with runtime config from the server boot payload and all actions through MoonMind APIs."
+    },
+    "DESIGN-REQ-003": {
+      "title": "MoonMind API boundary for browser clients",
+      "type": "security",
+      "source_section": "3. Product stance; 4. Route and hosting model; 12.1 Product role",
+      "explanation": "Browser clients never call Jira, object storage, or model providers directly; artifact upload, preview, download, Jira access, and task submission stay behind MoonMind-controlled APIs."
+    },
+    "DESIGN-REQ-004": {
+      "title": "Canonical single-form section order",
+      "type": "requirement",
+      "source_section": "5. Canonical page model",
+      "explanation": "The page is one composition form ordered as Header, Steps, Task Presets, Dependencies, Execution context, Execution controls, Schedule, and Submit."
+    },
+    "DESIGN-REQ-005": {
+      "title": "Step-first target-aware draft model",
+      "type": "state-model",
+      "source_section": "6. Draft model",
+      "explanation": "The browser draft is step-first and target-aware, with structured DraftAttachment state for objective or step targets, upload state, artifact refs, previews, persisted vs local distinctions, runtime fields, dependencies, and applied templates."
+    },
+    "DESIGN-REQ-006": {
+      "title": "Structured attachment targeting",
+      "type": "requirement",
+      "source_section": "3. Product stance; 5. Canonical page model; 6. Draft model; 14. Submission contract; 19. Summary",
+      "explanation": "Images are structured inputs attached to explicit objective or step targets, never pasted binary content, instruction text, filename conventions, anonymous buckets, or implicit target copies."
+    },
+    "DESIGN-REQ-007": {
+      "title": "Step editor behavior and validation",
+      "type": "requirement",
+      "source_section": "7.1 Step list; 7.2 Step fields",
+      "explanation": "The step editor renders step cards, keeps Step 1 Primary, supports add/remove/reorder, remains valid with one step, moves attachments with reordered steps, and enforces primary/non-primary instruction and skill rules."
+    },
+    "DESIGN-REQ-008": {
+      "title": "Step attachment contract",
+      "type": "requirement",
+      "source_section": "7.3 Step attachment contract",
+      "explanation": "Step attachments submit through task.steps[n].inputAttachments, show metadata and preview/error state, can be removed before submit, and stay bound to the explicit step through reorder, edits, presets, drag-and-drop, or paste."
+    },
+    "DESIGN-REQ-009": {
+      "title": "Objective-scoped attachment contract",
+      "type": "requirement",
+      "source_section": "7.4 Objective-scoped attachment target; 15. Objective resolution and title derivation",
+      "explanation": "Objective-scoped attachments submit through task.inputAttachments, belong to the preset objective target, may be hidden if presets are disabled, participate in task-level objective context, and are not copied into step attachments."
+    },
+    "DESIGN-REQ-010": {
+      "title": "Template-bound step detachment",
+      "type": "state-model",
+      "source_section": "7.5 Template-bound steps",
+      "explanation": "Preset-expanded steps remain template-bound only while authored instructions and attachments match the template input contract; instruction edits, attachment edits, Jira text imports, and Jira image imports detach identity."
+    },
+    "DESIGN-REQ-011": {
+      "title": "Preset area and explicit application",
+      "type": "requirement",
+      "source_section": "8. Task preset contract",
+      "explanation": "The optional preset area exposes preset selection, objective text, objective images, Apply, optional Save Current Steps as Preset, and status; selecting a preset alone does not mutate the draft and application is explicit."
+    },
+    "DESIGN-REQ-012": {
+      "title": "Preset objective and reapply semantics",
+      "type": "state-model",
+      "source_section": "8.3 Preset objective contract; 8.4 Reapply behavior",
+      "explanation": "Preset objective text is preferred for objective resolution, objective attachments match that field, changes do not silently rewrite expanded steps, and changed objective text or attachments mark the applied preset as needing explicit reapply."
+    },
+    "DESIGN-REQ-013": {
+      "title": "Dependency picker contract",
+      "type": "requirement",
+      "source_section": "9. Dependency contract",
+      "explanation": "The dependency area picks up to 10 existing MoonMind.Run executions, rejects duplicates client-side, does not block manual creation on fetch failure, and is independent from attachments, Jira, and presets."
+    },
+    "DESIGN-REQ-014": {
+      "title": "Execution context and merge automation controls",
+      "type": "requirement",
+      "source_section": "10. Execution context contract",
+      "explanation": "The page preserves runtime, provider profile, model, effort, repository, branch, publish mode, and merge automation controls, with server-provided defaults, runtime-specific profiles, resolver skill restrictions, and PR-only merge automation payload preservation."
+    },
+    "DESIGN-REQ-015": {
+      "title": "Repository and runtime validation boundaries",
+      "type": "security",
+      "source_section": "10. Execution context contract",
+      "explanation": "Jira import and image upload must never bypass or weaken repository validation, publish validation, or runtime gating; repository validation remains unchanged by Jira integration."
+    },
+    "DESIGN-REQ-016": {
+      "title": "Policy-gated attachment UX and validation",
+      "type": "requirement",
+      "source_section": "11. Attachment policy and UX contract",
+      "explanation": "Attachment entry points are hidden when disabled, labels follow allowed MIME types, validation runs before upload and at submit, and count, size, content type, upload, invalid, and preview failures are visible and target-local."
+    },
+    "DESIGN-REQ-017": {
+      "title": "Jira import role and supported targets",
+      "type": "integration",
+      "source_section": "12. Jira integration contract",
+      "explanation": "Jira sources task inputs into the Create page through supported targets for preset objective text, preset objective attachments, step instructions, and step attachments; it does not create tasks automatically, replace the editor or presets, change task API shape, or make the browser call Jira."
+    },
+    "DESIGN-REQ-018": {
+      "title": "Explicit Jira text and image import semantics",
+      "type": "requirement",
+      "source_section": "12.2 Supported targets; 12.3 Text and image import semantics; 12.4 Preset interaction",
+      "explanation": "Selecting a Jira issue never mutates the draft automatically; text import supports replace/append, image import supports supported image selection, imported images become structured target attachments, target switching preserves issue selection, and preset imports dirty reapply state appropriately."
+    },
+    "DESIGN-REQ-019": {
+      "title": "Edit and rerun reconstruction",
+      "type": "state-model",
+      "source_section": "13. Edit and rerun contract",
+      "explanation": "Edit and rerun reconstruct from the authoritative task input snapshot, including objective text, objective and step attachments, runtime and publish settings, templates and dirty state, dependencies, and persisted/local attachment distinctions."
+    },
+    "DESIGN-REQ-020": {
+      "title": "Attachment round-trip preservation",
+      "type": "durability",
+      "source_section": "13. Edit and rerun contract; 16. Failure and empty-state rules",
+      "explanation": "Users can keep, remove, add, or replace persisted attachments; rerun preserves untouched refs by default; edit/rerun fails explicitly if attachments cannot be reconstructed; attachments must never be silently dropped or duplicated."
+    },
+    "DESIGN-REQ-021": {
+      "title": "Artifact-first submission contract",
+      "type": "integration",
+      "source_section": "14. Submission contract",
+      "explanation": "Local images upload to the artifact system before create, edit, or rerun submission; the browser submits structured attachment refs, the control plane stores an authoritative task input snapshot, upload completion is required before eligibility, and submit remains explicit."
+    },
+    "DESIGN-REQ-022": {
+      "title": "Objective resolution and title derivation",
+      "type": "state-model",
+      "source_section": "15. Objective resolution and title derivation",
+      "explanation": "Resolved objective text comes from preset objective text, then primary step instructions, then most recent applied preset request input; Jira target choice affects this ordering; title derivation uses the first non-empty line of resolved objective text."
+    },
+    "DESIGN-REQ-023": {
+      "title": "Failure and empty-state behavior",
+      "type": "requirement",
+      "source_section": "16. Failure and empty-state rules",
+      "explanation": "Disabled attachments hide entry points while preserving manual authoring; upload and preview failures are target-local; Jira unavailability and issue fetch failure do not mutate or erase manual draft state; invalid or incomplete attachments block submit explicitly."
+    },
+    "DESIGN-REQ-024": {
+      "title": "Accessibility and interaction contract",
+      "type": "requirement",
+      "source_section": "17. Accessibility and interaction rules",
+      "explanation": "Open, close, target, upload, remove, retry, and import actions are keyboard-accessible; image controls expose labels; step cards indicate attachments; Jira browser title identifies target; focus returns predictably after imports."
+    },
+    "DESIGN-REQ-025": {
+      "title": "Required Create page test coverage",
+      "type": "verification",
+      "source_section": "18. Testing requirements",
+      "explanation": "The test suite must cover policy-disabled attachments, validation limits, target isolation, reorder preservation, explicit Jira imports, template detachment, preset dirty state, artifact-first submission, edit/rerun reconstruction, failure isolation, and invalid/incomplete submit blocking."
+    }
+  },
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Canonical Create Page Shell",
+      "shortName": "create-page-shell",
+      "description": "As a task author, I can open the canonical Create page and use one MoonMind-native task composition form whose route, hosting, section order, and API boundaries are consistent across create, edit, and rerun entry points.",
+      "sourceReference": {
+        "path": "docs/UI/CreatePage.md",
+        "title": "Create Page",
+        "sections": [
+          "1. Purpose",
+          "3. Product stance",
+          "4. Route and hosting model",
+          "5. Canonical page model",
+          "19. Summary"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004"
+        ]
+      },
+      "independentTest": "Render the Create page at /tasks/new with a server boot payload and assert the expected single-form section order, page mode header, MoonMind API usage, and redirect behavior for any compatibility alias.",
+      "acceptanceCriteria": [
+        "Given I navigate to /tasks/new, then the server-hosted Mission Control UI renders the Create page from the server-provided runtime boot payload.",
+        "Given a compatibility route exists, when I visit it, then it redirects to /tasks/new and does not define separate product behavior.",
+        "Given the page renders, then the form sections appear in this order: Header, Steps, Task Presets, Dependencies, Execution context, Execution controls, Schedule, Submit.",
+        "Given any page action occurs, then the browser calls MoonMind REST APIs rather than Jira, object storage, or model providers directly.",
+        "Given optional presets, Jira, or image upload are unavailable, then manual task authoring remains available."
+      ],
+      "requirements": [
+        "Expose /tasks/new as the canonical Create page route.",
+        "Render task creation, edit, and rerun modes through the same task-first composition surface.",
+        "Build runtime configuration server-side and pass it through the boot payload.",
+        "Keep artifact, Jira, provider, and object-storage interactions behind MoonMind API surfaces.",
+        "Preserve the canonical section order and task-first product stance."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the task-first Create page purpose and explicit non-goals for generic workflow, Jira-native, image-editor, and binary-transport behavior.",
+        "DESIGN-REQ-002": "Owns the canonical route, hosting, server config, and compatibility redirect contract.",
+        "DESIGN-REQ-003": "Owns the browser-to-MoonMind API boundary for all page actions.",
+        "DESIGN-REQ-004": "Owns the single-form canonical section order."
+      },
+      "dependencies": [],
+      "outOfScope": [
+        "Implementing attachment upload internals.",
+        "Implementing Jira import semantics.",
+        "Implementing edit/rerun reconstruction internals."
+      ],
+      "assumptions": [
+        "Existing Mission Control routing and FastAPI dashboard view-model surfaces remain the integration points named by the source design."
+      ],
+      "needsClarification": [],
+      "risks": [
+        "Existing aliases may need removal or redirect-only enforcement if they currently carry page behavior."
+      ]
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Step-First Draft and Attachment Targets",
+      "shortName": "step-attachment-targets",
+      "description": "As a task author, I can build a step-first draft where instructions, skills, and image inputs belong to explicit objective or step targets and stay attached to the correct target through normal editing.",
+      "sourceReference": {
+        "path": "docs/UI/CreatePage.md",
+        "title": "Create Page",
+        "sections": [
+          "6. Draft model",
+          "7.1 Step list",
+          "7.2 Step fields",
+          "7.3 Step attachment contract",
+          "7.4 Objective-scoped attachment target"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-024",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "independentTest": "Create a draft with objective and step attachments, add/remove/reorder steps, and assert structured target ownership, validation, keyboard-accessible controls, and payload mapping remain stable.",
+      "acceptanceCriteria": [
+        "Given the draft contains one step, then Step 1 is identified as Primary and the page remains valid when primary instructions or an explicit skill is present.",
+        "Given additional steps exist, then the primary step requires instructions while non-primary steps may omit instructions or inherit the primary skill default.",
+        "Given I add an image to a step, then it appears in that step card and submits through task.steps[n].inputAttachments.",
+        "Given I add an objective-scoped image, then it belongs to the preset objective target and submits through task.inputAttachments.",
+        "Given I reorder steps, then step attachments move with their owning steps and do not attach to another step implicitly.",
+        "Given an attachment control is available, then open, upload, remove, retry, and target actions are keyboard accessible and labeled for assistive technology."
+      ],
+      "requirements": [
+        "Represent attachments as structured DraftAttachment records with objective or step targets.",
+        "Distinguish selected, uploading, uploaded, failed, local-file, and artifact-backed attachment states.",
+        "Keep attachments out of instruction text and detached from filename or ordering conventions.",
+        "Render step attachments in the same card as the step instructions they inform.",
+        "Support add, remove, and reorder for steps without creating dependency edges.",
+        "Allow objective-scoped attachments only as task-level objective inputs, not automatic step copies.",
+        "Cover target isolation and reorder preservation in tests."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Owns the browser draft state model for steps, attachments, runtime fields, dependencies, and applied templates where target-aware data lives.",
+        "DESIGN-REQ-006": "Owns structured explicit objective/step attachment targeting and the ban on anonymous buckets or instruction-text embedding.",
+        "DESIGN-REQ-007": "Owns step list, primary step, add/remove/reorder, and step field validation behavior.",
+        "DESIGN-REQ-008": "Owns step-scoped attachment display, remove behavior, and target preservation through edits and reorders.",
+        "DESIGN-REQ-009": "Owns objective-scoped attachment mapping to task.inputAttachments and no automatic copying into steps.",
+        "DESIGN-REQ-024": "Owns accessibility for step and attachment controls within the draft editor.",
+        "DESIGN-REQ-025": "Owns tests for target isolation, reorder preservation, hidden mutations, and policy-disabled entry points as they affect the step editor."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "outOfScope": [
+        "Preset expansion behavior beyond objective attachment target availability.",
+        "Jira image selection and import.",
+        "Artifact upload implementation."
+      ],
+      "assumptions": [
+        "The UI may render thumbnails below instructions, but target ownership remains structured state."
+      ],
+      "needsClarification": [],
+      "risks": [
+        "Existing step IDs and local IDs must be reconciled carefully so reorder operations do not sever persisted attachments."
+      ]
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Preset Application and Reapply State",
+      "shortName": "preset-reapply-state",
+      "description": "As a task author, I can apply reusable task presets explicitly, edit preset objective inputs, and understand when expanded steps need an explicit reapply without losing my manual step customizations.",
+      "sourceReference": {
+        "path": "docs/UI/CreatePage.md",
+        "title": "Create Page",
+        "sections": [
+          "7.5 Template-bound steps",
+          "8. Task preset contract",
+          "15. Objective resolution and title derivation"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "independentTest": "Apply a preset to an empty draft and a non-empty draft, change objective text and attachments after apply, edit template-bound steps, and assert expanded steps, dirty reapply state, detachment state, and objective resolution are correct.",
+      "acceptanceCriteria": [
+        "Given only the initial empty step exists, when I apply a preset, then the preset may replace the placeholder step set with expanded blueprint steps.",
+        "Given authored steps already exist, when I apply a preset, then expanded preset steps append to the current draft.",
+        "Given I select a preset without pressing Apply, then the draft does not mutate.",
+        "Given preset objective text is non-empty, then it is preferred over primary-step instructions for resolved objective text and title derivation.",
+        "Given I change preset objective text or objective-scoped attachments after applying a preset, then the preset is marked as needing explicit reapply and expanded steps are not overwritten automatically.",
+        "Given I manually edit a template-bound step instruction or attachment set, then that step detaches from template instruction or input identity."
+      ],
+      "requirements": [
+        "Expose optional Preset, Feature Request / Initial Instructions, objective images, Apply, optional save-as-preset, and status controls.",
+        "Treat applied preset steps as expanded blueprints rather than live bindings.",
+        "Track template step identity only while authored instructions and attachments match the template input contract.",
+        "Store templateAttachments for detachment comparisons.",
+        "Mark applied preset state dirty when preset objective text or objective-scoped attachments change.",
+        "Resolve objective text from preset objective, then primary instructions, then the most recent applied preset request alias.",
+        "Cover preset dirty state and template detachment in tests."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-010": "Owns template-bound step identity and detachment when instructions, attachments, Jira text, or Jira images customize a template step.",
+        "DESIGN-REQ-011": "Owns optional preset controls and explicit Apply behavior.",
+        "DESIGN-REQ-012": "Owns preset objective input precedence and explicit reapply dirty state.",
+        "DESIGN-REQ-022": "Owns objective resolution and title derivation for preset and primary-step text inputs.",
+        "DESIGN-REQ-025": "Owns tests for preset dirty state, template detachment, and objective resolution behavior."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "outOfScope": [
+        "Jira browser implementation.",
+        "Saving preset definitions beyond the optional control contract.",
+        "Changing Jira Orchestrate parent-owned PR publishing behavior."
+      ],
+      "assumptions": [
+        "Preset systems do not silently generate objective-scoped attachments unless a separate future contract defines them."
+      ],
+      "needsClarification": [],
+      "risks": [
+        "Preset reapply logic can accidentally overwrite manual edits unless template-bound state and dirty state are tested together."
+      ]
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Dependencies and Execution Options",
+      "shortName": "execution-options",
+      "description": "As a task author, I can select run dependencies and configure runtime, repository, publish, merge automation, priority, attempts, proposals, and schedule options without those controls being weakened by Jira or images.",
+      "sourceReference": {
+        "path": "docs/UI/CreatePage.md",
+        "title": "Create Page",
+        "sections": [
+          "9. Dependency contract",
+          "10. Execution context contract",
+          "5. Canonical page model"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-004"
+        ]
+      },
+      "independentTest": "Configure dependencies and execution context combinations, including resolver skills and merge automation, then assert client validation, rendered controls, and submitted payload fields match the contract.",
+      "acceptanceCriteria": [
+        "Given dependency search fails, then I can continue manual task creation without losing draft state.",
+        "Given I add dependencies, then no more than 10 direct MoonMind.Run dependencies are accepted and duplicates are rejected client-side.",
+        "Given runtime configuration is loaded, then runtime defaults and provider-profile options come from server-provided config and remain runtime-specific.",
+        "Given publish mode is pr for an ordinary task, then merge automation can be selected and submission preserves publishMode=pr, task.publish.mode=pr, and mergeAutomation.enabled=true.",
+        "Given publish mode is branch or none, or the task is a direct pr-resolver or batch-pr-resolver task, then merge automation is hidden or disabled and is not submitted.",
+        "Given Jira import or image upload occurs, then repository validation, publish validation, and runtime gating are unchanged and still enforced."
+      ],
+      "requirements": [
+        "Provide a bounded dependency picker for existing MoonMind.Run executions.",
+        "Preserve runtime, provider profile, model, effort, repo, branch, publish mode, priority, max attempts, propose tasks, schedule, and submit controls.",
+        "Use server-provided runtime defaults and runtime-specific profile options.",
+        "Respect resolver-style skill restrictions that force publish mode to none.",
+        "Gate merge automation to ordinary PR-publishing tasks and copy that explains PR readiness gate plus pr-resolver behavior.",
+        "Reject any Jira or image path that bypasses repository, publish, or runtime validation."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-004": "Owns execution context, execution control, schedule, and submit sections of the canonical section order.",
+        "DESIGN-REQ-013": "Owns dependency picker limits, duplicate rejection, fetch failure tolerance, and independence from attachments, Jira, and presets.",
+        "DESIGN-REQ-014": "Owns execution context controls, runtime defaults, provider profiles, publish modes, and merge automation payload rules.",
+        "DESIGN-REQ-015": "Owns validation boundaries so Jira and image flows cannot weaken repository, publish, or runtime gating."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "outOfScope": [
+        "Implementing pr-resolver itself.",
+        "Changing Jira Orchestrate preset publishing ownership.",
+        "Attachment upload internals."
+      ],
+      "assumptions": [
+        "The existing task-shaped execution API remains the payload target for these controls."
+      ],
+      "needsClarification": [],
+      "risks": [
+        "Merge automation copy and payload fields are easy to drift apart without explicit UI and request-body tests."
+      ]
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Policy-Gated Image Upload and Submit",
+      "shortName": "image-upload-submit",
+      "description": "As a task author, I can add permitted image inputs, see validation and upload failures at the correct target, and submit only after local images become artifact-backed structured attachment refs.",
+      "sourceReference": {
+        "path": "docs/UI/CreatePage.md",
+        "title": "Create Page",
+        "sections": [
+          "11. Attachment policy and UX contract",
+          "14. Submission contract",
+          "16. Failure and empty-state rules",
+          "18. Testing requirements"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-024",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-006"
+        ]
+      },
+      "independentTest": "Exercise attachment policy disabled/enabled states, invalid count/size/type inputs, failed previews, failed uploads, retry/remove actions, and final create submission payloads with artifact-backed refs.",
+      "acceptanceCriteria": [
+        "Given attachment policy is disabled, then all attachment entry points are hidden and the page remains fully usable for manual authoring.",
+        "Given policy allows only image MIME types, then the UI uses an image-specific label such as Images.",
+        "Given count, single-file size, total size, or content type validation fails, then the browser fails fast and visibly at the affected target before upload and again blocks submit if unresolved.",
+        "Given upload fails, then the failure remains local to the affected target and I can remove or retry without losing unrelated draft state.",
+        "Given preview fails, then attachment metadata remains visible, the draft is not corrupted, and removal remains available.",
+        "Given I submit create, edit, or rerun with local images, then images upload to the artifact system first and the execution payload contains structured refs rather than binary content."
+      ],
+      "requirements": [
+        "Read attachmentPolicy from server-provided runtime configuration.",
+        "Validate attachment count, per-file bytes, total bytes, and content type before upload and at submit time.",
+        "Represent upload and preview failure states without silently dropping selected images.",
+        "Provide keyboard-accessible remove and retry actions plus concise per-target summaries.",
+        "Upload local images to the artifact system before create, edit, or rerun submission.",
+        "Submit task.inputAttachments and task.steps[n].inputAttachments as structured artifact refs.",
+        "Block submit while attachments are invalid, failed, incomplete, or still uploading.",
+        "Cover policy, validation, failure isolation, upload-before-create, and invalid/incomplete submit blocking in tests."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-006": "Owns upload and submit enforcement that attachments remain structured refs and never raw instruction text or binary payloads.",
+        "DESIGN-REQ-016": "Owns policy-gated entry points, labels, validation, preview, upload, retry, remove, and per-target summary behavior.",
+        "DESIGN-REQ-021": "Owns artifact-first create/edit/rerun submission and authoritative task input snapshot preservation of attachment targeting.",
+        "DESIGN-REQ-023": "Owns target-local upload/preview failures and explicit submit blocking for invalid or incomplete attachments.",
+        "DESIGN-REQ-024": "Owns accessible image preview, remove, retry, upload, and target controls.",
+        "DESIGN-REQ-025": "Owns required image validation, artifact-first submit, and failure-isolation tests."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "outOfScope": [
+        "Jira image import selection.",
+        "Edit/rerun reconstruction of already persisted attachments beyond preserving target refs in submissions."
+      ],
+      "assumptions": [
+        "The existing artifact API supports upload, preview, and download behind MoonMind-controlled surfaces."
+      ],
+      "needsClarification": [],
+      "risks": [
+        "Submit-time validation must re-check stale browser state so partially uploaded or failed attachments cannot leak into execution creation."
+      ]
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Jira Import Into Declared Targets",
+      "shortName": "jira-import-targets",
+      "description": "As a task author, I can browse Jira as an external instruction source and explicitly import issue text or supported images into a declared Create page target without automatic draft mutation.",
+      "sourceReference": {
+        "path": "docs/UI/CreatePage.md",
+        "title": "Create Page",
+        "sections": [
+          "12. Jira integration contract",
+          "16. Failure and empty-state rules",
+          "17. Accessibility and interaction rules",
+          "18. Testing requirements"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-024",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "independentTest": "Open the Jira browser from each supported target, select an issue, switch targets, import text and images with confirmation, simulate Jira fetch failures, and assert draft mutation, focus return, template detachment, and preset dirty state.",
+      "acceptanceCriteria": [
+        "Given I open Jira from a Create page field, then the browser preselects that matching target and displays the current target explicitly.",
+        "Given I select a Jira issue, then the draft does not mutate until I confirm a text or image import action.",
+        "Given I switch import targets inside the Jira browser, then the selected issue remains selected.",
+        "Given I import text, then I can choose Replace target text or Append to target text for preset objective text or a step instruction target.",
+        "Given I import supported Jira images, then selected images become structured attachments on the selected objective or step attachment target and are not injected as markdown, HTML, or inline data.",
+        "Given Jira is unavailable or the issue fetch fails, then the draft is not mutated and I can continue manual authoring.",
+        "Given import succeeds, then focus returns predictably to the updated field or an explicit success notice."
+      ],
+      "requirements": [
+        "Support Jira import targets for preset objective text, preset objective attachments, step text, and step attachments.",
+        "Require explicit confirmation for all Jira text and image imports.",
+        "Preserve selected issue state while switching targets inside the browser.",
+        "Import Jira images only as structured attachments on the declared target.",
+        "Mark already-applied preset state as needing reapply when importing into preset objective text or attachment targets.",
+        "Detach template-bound steps when Jira text or images import into them.",
+        "Keep Jira access behind MoonMind APIs and separate from task execution substrate behavior.",
+        "Cover explicit import, no-mutation-before-confirm, image target mapping, template detachment, focus return, and failure behavior in tests."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Owns the Jira-specific part of the browser-to-MoonMind API boundary.",
+        "DESIGN-REQ-010": "Owns template detachment when Jira imports customize template-bound steps.",
+        "DESIGN-REQ-012": "Owns preset dirty reapply state when Jira imports alter preset objective inputs.",
+        "DESIGN-REQ-015": "Owns validation boundaries so Jira import cannot weaken repository validation.",
+        "DESIGN-REQ-017": "Owns Jira role, non-goals, and supported import targets.",
+        "DESIGN-REQ-018": "Owns explicit Jira text/image import semantics and target switching behavior.",
+        "DESIGN-REQ-022": "Owns objective-resolution effects of importing Jira text into preset, primary, or non-primary fields.",
+        "DESIGN-REQ-023": "Owns Jira unavailable and issue fetch failure behavior with no draft mutation.",
+        "DESIGN-REQ-024": "Owns Jira browser target title, keyboard-accessible import actions, and predictable focus return.",
+        "DESIGN-REQ-025": "Owns Jira import tests for text, images, template detachment, and no mutation before confirm."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-003",
+        "STORY-005"
+      ],
+      "outOfScope": [
+        "Creating MoonMind tasks automatically on issue selection.",
+        "Replacing presets or the step editor with Jira-native workflow behavior.",
+        "Browser-direct Jira API calls."
+      ],
+      "assumptions": [
+        "Supported Jira images are filtered through the same attachment policy and artifact upload path as local images."
+      ],
+      "needsClarification": [],
+      "risks": [
+        "Jira images and local uploads can diverge unless both paths share target-aware attachment validation and structured ref handling."
+      ]
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Edit and Rerun Attachment Reconstruction",
+      "shortName": "edit-rerun-reconstruction",
+      "description": "As a task author, I can edit or rerun an existing MoonMind.Run and get a reconstructed draft that preserves objective text, attachments, templates, dependencies, runtime options, and untouched attachment refs unless I change them.",
+      "sourceReference": {
+        "path": "docs/UI/CreatePage.md",
+        "title": "Create Page",
+        "sections": [
+          "13. Edit and rerun contract",
+          "14. Submission contract",
+          "16. Failure and empty-state rules",
+          "18. Testing requirements"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "independentTest": "Load an existing task input snapshot into edit and rerun modes, preserve untouched persisted attachments, remove/add/replace attachments, simulate missing attachment bindings, and assert create/update/rerun payloads remain target-aware.",
+      "acceptanceCriteria": [
+        "Given I edit an existing MoonMind.Run, then the draft is reconstructed from the authoritative task input snapshot.",
+        "Given I rerun an existing MoonMind.Run, then objective text, objective attachments, step instructions, step attachments, runtime and publish settings, applied templates and dirty state, and dependencies are reconstructed when they remain editable.",
+        "Given persisted attachments exist, then they render distinctly from newly selected local files.",
+        "Given I do not touch persisted attachments during rerun, then their refs survive the round trip without being dropped or duplicated.",
+        "Given I remove, add, or replace an attachment, then only the authored target changes and unrelated draft state remains intact.",
+        "Given one or more attachment bindings cannot be reconstructed, then edit or rerun fails explicitly rather than silently dropping attachments."
+      ],
+      "requirements": [
+        "Use the authoritative task input snapshot as the source for edit and rerun draft reconstruction.",
+        "Reconstruct objective text, objective-scoped attachments, step instructions, step-scoped attachments, runtime settings, publish settings, templates, dirty state, and dependencies.",
+        "Differentiate existing persisted attachments from new local files in state and UI.",
+        "Support keep, remove, add, and replace flows for persisted attachments.",
+        "Preserve untouched attachment refs by default during rerun.",
+        "Fail explicitly if attachment targeting or bindings cannot be reconstructed.",
+        "Cover edit reconstruction, rerun preservation, and no silent drop/duplicate behavior in tests."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Owns reconstructing the step-first draft model from authoritative snapshots in edit and rerun modes.",
+        "DESIGN-REQ-006": "Owns preserving structured attachment targets through edit and rerun round trips.",
+        "DESIGN-REQ-019": "Owns edit and rerun draft reconstruction from authoritative task input snapshots.",
+        "DESIGN-REQ-020": "Owns persisted attachment keep/remove/add/replace behavior and no silent drop or duplicate guarantees.",
+        "DESIGN-REQ-021": "Owns storing and resubmitting authoritative structured attachment refs during edit and rerun.",
+        "DESIGN-REQ-023": "Owns explicit reconstruction failure behavior when attachment bindings are missing.",
+        "DESIGN-REQ-025": "Owns edit and rerun attachment reconstruction and preservation tests."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-003",
+        "STORY-004",
+        "STORY-005"
+      ],
+      "outOfScope": [
+        "Initial create page route setup.",
+        "Jira browser implementation.",
+        "Changing the execution API into a non-task workflow type."
+      ],
+      "assumptions": [
+        "Authoritative task input snapshots already exist or are introduced through the artifact-first submit story."
+      ],
+      "needsClarification": [],
+      "risks": [
+        "Historical snapshots with incomplete attachment target data must fail clearly or be handled by a documented cutover rather than silently reconstructed."
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002",
+      "STORY-005",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-004",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-005",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-003",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-005",
+      "STORY-006",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-002",
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-025": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007"
+    ]
+  }
+}
