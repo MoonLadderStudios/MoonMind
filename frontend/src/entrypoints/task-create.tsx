@@ -242,8 +242,8 @@ interface JiraIssueAttachment {
 }
 
 type JiraImportTarget =
-  | { kind: "preset" }
-  | { kind: "step"; localId: string };
+  | { kind: "preset"; attachmentsOnly?: boolean }
+  | { kind: "step"; localId: string; attachmentsOnly?: boolean };
 
 type JiraImportMode =
   | "preset-brief"
@@ -630,14 +630,51 @@ function jiraTargetLabel(
     return "No target selected";
   }
   if (target.kind === "preset") {
-    return "Feature Request / Initial Instructions";
+    return target.attachmentsOnly
+      ? "Feature Request / Initial Instructions attachments"
+      : "Feature Request / Initial Instructions";
   }
   const index = steps.findIndex((step) => step.localId === target.localId);
+  if (target.attachmentsOnly) {
+    return index >= 0 ? `Step ${index + 1} attachments` : "Step attachments";
+  }
   return index >= 0 ? `Step ${index + 1} Instructions` : "Step Instructions";
 }
 
 function defaultJiraImportMode(target: JiraImportTarget): JiraImportMode {
   return target.kind === "preset" ? "preset-brief" : "execution-brief";
+}
+
+function jiraTargetValue(target: JiraImportTarget | null): string {
+  if (!target) {
+    return "";
+  }
+  if (target.kind === "preset") {
+    return target.attachmentsOnly ? "preset-attachments" : "preset-text";
+  }
+  return target.attachmentsOnly
+    ? `step-attachments:${target.localId}`
+    : `step-text:${target.localId}`;
+}
+
+function jiraTargetFromValue(value: string): JiraImportTarget | null {
+  if (value === "preset-text") {
+    return { kind: "preset" };
+  }
+  if (value === "preset-attachments") {
+    return { kind: "preset", attachmentsOnly: true };
+  }
+  if (value.startsWith("step-text:")) {
+    return { kind: "step", localId: value.slice("step-text:".length) };
+  }
+  if (value.startsWith("step-attachments:")) {
+    return {
+      kind: "step",
+      localId: value.slice("step-attachments:".length),
+      attachmentsOnly: true,
+    };
+  }
+  return null;
 }
 
 function joinJiraText(parts: Array<string | null | undefined>): string {
@@ -2046,6 +2083,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     useState("");
   const [jiraImportMode, setJiraImportMode] =
     useState<JiraImportMode>("preset-brief");
+  const [jiraWriteMode, setJiraWriteMode] =
+    useState<"append" | "replace">("append");
   const [presetJiraProvenance, setPresetJiraProvenance] =
     useState<JiraImportProvenance | null>(null);
   const [stepJiraProvenance, setStepJiraProvenance] = useState<
@@ -2857,7 +2896,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       ? steps.find((step) => step.localId === jiraImportTarget.localId) || null
       : null;
   const jiraImportWillCustomizeTemplateStep =
-    isTemplateBoundStepForInstructions(jiraTargetStep);
+    jiraImportTarget?.attachmentsOnly
+      ? isTemplateBoundStepForAttachments(
+          jiraTargetStep,
+          jiraTargetStep
+            ? selectedStepAttachmentFiles[jiraTargetStep.localId] || []
+            : [],
+        )
+      : isTemplateBoundStepForInstructions(jiraTargetStep);
 
   useEffect(() => {
     if (
@@ -2936,9 +2982,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
     setJiraImportTarget(target);
     setJiraImportMode(defaultJiraImportMode(target));
+    setJiraWriteMode("append");
     setJiraBrowserOpen(true);
     setSelectedJiraIssueKey(provenance?.issueKey || "");
     setPendingJiraImportIssueKey("");
+  }
+
+  function selectJiraImportTarget(value: string) {
+    const target = jiraTargetFromValue(value);
+    if (!target) {
+      return;
+    }
+    setJiraImportTarget(target);
+    setJiraImportMode(defaultJiraImportMode(target));
   }
 
   function closeJiraBrowser() {
@@ -3118,6 +3174,31 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (!issue || !importTarget) {
       return;
     }
+    if (importTarget.attachmentsOnly) {
+      const provenance = createJiraProvenance(
+        issue,
+        selectedJiraBoardId,
+        jiraImportMode,
+        importTarget,
+      );
+      if (importTarget.kind === "preset") {
+        setPresetJiraProvenance(provenance);
+      } else {
+        setStepJiraProvenance((current) => {
+          if (provenance) {
+            return { ...current, [importTarget.localId]: provenance };
+          }
+          if (!current[importTarget.localId]) {
+            return current;
+          }
+          const { [importTarget.localId]: _removed, ...rest } = current;
+          return rest;
+        });
+        updateStep(importTarget.localId, { id: "" });
+      }
+      await importSelectedJiraImages(issue, importTarget);
+      return;
+    }
     if (!selectedJiraImportText.trim()) {
       return;
     }
@@ -3125,7 +3206,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const nextText = writeJiraImportedText(
         templateFeatureRequest,
         selectedJiraImportText,
-        "append",
+        jiraWriteMode,
       );
       if (nextText.trim() === templateFeatureRequest.trim()) {
         return;
@@ -3143,7 +3224,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         nextText,
         selectedObjectiveAttachmentFiles,
       );
-      await importSelectedJiraImages(issue, importTarget, nextText);
       return;
     }
 
@@ -3155,7 +3235,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       instructions: writeJiraImportedText(
         targetStep.instructions,
         selectedJiraImportText,
-        "append",
+        jiraWriteMode,
       ),
     });
     const provenance = createJiraProvenance(
@@ -3177,7 +3257,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const { [importTarget.localId]: _removed, ...rest } = current;
       return rest;
     });
-    await importSelectedJiraImages(issue, importTarget);
   }
 
   function updatePresetReapplyStateForObjective(
@@ -4915,6 +4994,60 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </label>
             </div>
 
+            <div className="grid-2">
+              <label>
+                Import target
+                <select
+                  value={jiraTargetValue(jiraImportTarget)}
+                  onChange={(event) => selectJiraImportTarget(event.target.value)}
+                >
+                  <option value="preset-text">
+                    Feature Request / Initial Instructions
+                  </option>
+                  {attachmentPolicy.enabled ? (
+                    <option value="preset-attachments">
+                      Feature Request / Initial Instructions attachments
+                    </option>
+                  ) : null}
+                  {steps.map((step, index) => (
+                    <option
+                      key={`jira-target-step-text-${step.localId}`}
+                      value={`step-text:${step.localId}`}
+                    >
+                      {`Step ${index + 1} Instructions`}
+                    </option>
+                  ))}
+                  {attachmentPolicy.enabled
+                    ? steps.map((step, index) => (
+                        <option
+                          key={`jira-target-step-attachments-${step.localId}`}
+                          value={`step-attachments:${step.localId}`}
+                        >
+                          {`Step ${index + 1} attachments`}
+                        </option>
+                      ))
+                    : null}
+                </select>
+              </label>
+
+              {!jiraImportTarget?.attachmentsOnly ? (
+                <label>
+                  Text import
+                  <select
+                    value={jiraWriteMode}
+                    onChange={(event) =>
+                      setJiraWriteMode(
+                        event.target.value === "replace" ? "replace" : "append",
+                      )
+                    }
+                  >
+                    <option value="append">Append to target text</option>
+                    <option value="replace">Replace target text</option>
+                  </select>
+                </label>
+              ) : null}
+            </div>
+
             {jiraProjectsError ? (
               <p className="notice small">{jiraProjectsError}</p>
             ) : null}
@@ -5167,6 +5300,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                         <p className="small">
                           {`Up to ${attachmentPolicy.maxCount} files across all steps, ${formatAttachmentBytes(attachmentPolicy.maxBytes)} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`}
                         </p>
+                        {jiraIntegration?.enabled ? (
+                          <button
+                            type="button"
+                            className="secondary jira-browse-button"
+                            aria-label={`Browse Jira issue for Step ${index + 1} attachments`}
+                            onClick={() =>
+                              openJiraBrowser({
+                                kind: "step",
+                                localId: step.localId,
+                                attachmentsOnly: true,
+                              })
+                            }
+                          >
+                            Browse Jira images
+                          </button>
+                        ) : null}
                         {attachmentTargetErrors[
                           attachmentTargetKey(step.localId)
                         ] ? (
@@ -5491,6 +5640,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <p className="small">
                     {`Up to ${attachmentPolicy.maxCount} files across the objective and all steps, ${formatAttachmentBytes(attachmentPolicy.maxBytes)} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`}
                   </p>
+                  {jiraIntegration?.enabled ? (
+                    <button
+                      type="button"
+                      className="secondary jira-browse-button"
+                      aria-label="Browse Jira issue for objective attachments"
+                      onClick={() =>
+                        openJiraBrowser({
+                          kind: "preset",
+                          attachmentsOnly: true,
+                        })
+                      }
+                    >
+                      Browse Jira images
+                    </button>
+                  ) : null}
                   {attachmentTargetErrors[attachmentTargetKey("objective")] ? (
                     <p className="notice error">
                       {attachmentTargetErrors[attachmentTargetKey("objective")]}
