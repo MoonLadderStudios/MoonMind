@@ -179,18 +179,16 @@ components:
           type:
             - string
             - "null"
-        startingBranch:
+        branch:
           type:
             - string
             - "null"
-        targetBranch:
-          type:
-            - string
-            - "null"
+          description: "Single authored branch selection. Edit and rerun UIs must not reintroduce a visible Target Branch field."
         publishMode:
           type:
             - string
             - "null"
+          description: "Task publish mode retained for submission semantics; visual placement may be inline with Branch in the Steps card."
         targetSkill:
           type:
             - string

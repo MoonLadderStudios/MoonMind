@@ -191,8 +191,11 @@ Runtime config may still expose sources such as:
 - `manifests`
 - `schedules`
 - `temporal`
+- `githubBranches` or equivalent MoonMind-owned repository branch lookup endpoint
 
 That does not mean the user-facing task UI should give all of those equal primary visibility.
+
+The Create page branch selector is a data dependency on MoonMind-owned GitHub branch lookup. The browser must call the configured MoonMind API source, not GitHub directly. Runtime config supplies the endpoint template or source key used to fetch branches for the selected repository.
 
 ## 8.2 Task surface posture
 
@@ -759,9 +762,12 @@ Rollout order:
 * do not expose raw source-precedence logic directly to ordinary users
 * keep submit flows organized around task-shaped product language
 * let the backend decide the workflow type and execution routing
+* browser clients call MoonMind APIs only; Jira, GitHub, object storage, Temporal Server, and model providers remain behind MoonMind-controlled API surfaces
 * `/tasks/new` may preview composed presets and show preset grouping before submission
 * unresolved preset includes must be rejected before runtime submission; they must not be sent as task work for a worker or adapter to resolve later
 * submit previews may explain preset provenance, but the submitted execution payload remains flat resolved steps plus durable task snapshot metadata
+* repository, branch, and publish controls live together in the Steps card: choose repo, fetch branch options through the MoonMind branch source, populate the Branch dropdown, then render Publish Mode alongside it
+* `Publish Mode` remains part of task submission semantics; this is a visual placement change, not removal from the contract
 
 ## 15.3 Backend mapping for submit
 
@@ -769,7 +775,7 @@ The dashboard submits task-shaped requests plus task-level intent such as:
 
 * instructions
 * runtime choice
-* repository/workspace context
+* repository/workspace context, including the single authored branch selection
 * artifacts
 * optional scheduling intent
 * skill-selection intent

@@ -364,6 +364,8 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.workflow, "github_repository", "Octo/Repo")
+    monkeypatch.setattr(settings.github, "github_repos", None)
+    monkeypatch.setattr(settings.github, "github_token", None)
     monkeypatch.setattr(settings.workflow, "codex_model", "gpt-test-codex")
     monkeypatch.setattr(settings.workflow, "codex_effort", "medium")
     monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex_cli")
@@ -373,6 +375,10 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     config = dashboard_view_model.build_runtime_config("/tasks")
 
     assert config["system"]["defaultRepository"] == "Octo/Repo"
+    assert config["system"]["repositoryOptions"] == {
+        "items": [{"value": "Octo/Repo", "label": "Octo/Repo", "source": "default"}],
+        "error": None,
+    }
     assert config["system"]["defaultTaskModel"] == "gpt-test-codex"
     assert config["system"]["defaultTaskEffort"] == "medium"
     assert config["system"]["defaultTaskModelByRuntime"]["codex_cli"] == "gpt-test-codex"
@@ -380,6 +386,97 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultTaskEffortByRuntime"]["codex_cli"] == "medium"
     assert config["system"]["defaultPublishMode"] == "branch"
     assert config["system"]["defaultProposeTasks"] is False
+
+
+def test_build_runtime_config_includes_configured_repository_options(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "github_repository", "Octo/Repo")
+    monkeypatch.setattr(
+        settings.github,
+        "github_repos",
+        "Octo/Repo, MoonLadderStudios/MoonMind, https://github.com/Example/App.git, bad-value",
+    )
+    monkeypatch.setattr(settings.github, "github_token", None)
+
+    config = dashboard_view_model.build_runtime_config("/tasks/new")
+
+    assert config["system"]["repositoryOptions"]["items"] == [
+        {"value": "Octo/Repo", "label": "Octo/Repo", "source": "default"},
+        {
+            "value": "MoonLadderStudios/MoonMind",
+            "label": "MoonLadderStudios/MoonMind",
+            "source": "configured",
+        },
+        {"value": "Example/App", "label": "Example/App", "source": "configured"},
+    ]
+
+
+def test_build_runtime_config_includes_credential_visible_github_repositories(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "github_repository", "Octo/Repo")
+    monkeypatch.setattr(settings.github, "github_repos", None)
+    monkeypatch.setattr(settings.github, "github_token", "ghp_test_token")
+    monkeypatch.setattr(settings.github, "github_enabled", True)
+    monkeypatch.setattr(
+        dashboard_view_model,
+        "_fetch_github_repository_options",
+        lambda token: (
+            [
+                dashboard_view_model.RepositoryOption(
+                    value="MoonLadderStudios/MoonMind",
+                    label="MoonLadderStudios/MoonMind",
+                    source="github",
+                )
+            ],
+            None,
+        ),
+    )
+
+    config = dashboard_view_model.build_runtime_config("/tasks/new")
+
+    assert config["system"]["repositoryOptions"]["items"] == [
+        {"value": "Octo/Repo", "label": "Octo/Repo", "source": "default"},
+        {
+            "value": "MoonLadderStudios/MoonMind",
+            "label": "MoonLadderStudios/MoonMind",
+            "source": "github",
+        },
+    ]
+
+
+def test_build_runtime_config_sanitizes_repository_options_and_errors(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        settings.workflow,
+        "github_repository",
+        "https://token@example.com/Secret/Repo.git",
+    )
+    monkeypatch.setattr(
+        settings.github,
+        "github_repos",
+        "Octo/Repo, octo/repo, https://github.com/Valid/Repo.git?token=secret, git@github.com:Another/Repo.git",
+    )
+    monkeypatch.setattr(settings.github, "github_token", "ghp_secret_token")
+    monkeypatch.setattr(settings.github, "github_enabled", True)
+    monkeypatch.setattr(
+        dashboard_view_model,
+        "_fetch_github_repository_options",
+        lambda token: (
+            [],
+            "GitHub repository discovery failed; ghp_secret_token was not exposed.",
+        ),
+    )
+
+    config = dashboard_view_model.build_runtime_config("/tasks/new")
+
+    assert config["system"]["repositoryOptions"]["items"] == [
+        {"value": "Octo/Repo", "label": "Octo/Repo", "source": "configured"},
+        {"value": "Another/Repo", "label": "Another/Repo", "source": "configured"},
+    ]
+    assert "ghp_secret_token" not in config["system"]["repositoryOptions"]["error"]
 
 
 def test_build_runtime_config_uses_repo_runtime_model_defaults(monkeypatch) -> None:

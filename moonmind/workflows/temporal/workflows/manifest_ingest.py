@@ -5,16 +5,13 @@ from typing import Any, Optional, TypedDict
 from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy
 
-DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
-    initial_interval=timedelta(seconds=5),
-    backoff_coefficient=2.0,
-    maximum_interval=timedelta(minutes=1),
-    maximum_attempts=5,
+from moonmind.workflows.temporal.activity_catalog import (
+    TemporalActivityRoute,
+    build_default_activity_catalog,
 )
 
-WORKFLOW_TASK_QUEUE = "mm.workflow"
-
 WORKFLOW_NAME = "MoonMind.ManifestIngest"
+DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
 
 class ManifestIngestWorkflowInput(TypedDict, total=False):
@@ -33,6 +30,27 @@ class ManifestIngestWorkflowOutput(TypedDict):
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindManifestIngestWorkflow:
+    def _retry_policy_for_route(self, route: TemporalActivityRoute) -> RetryPolicy:
+        return RetryPolicy(
+            initial_interval=timedelta(seconds=5),
+            backoff_coefficient=2.0,
+            maximum_interval=timedelta(seconds=route.retries.max_interval_seconds),
+            maximum_attempts=route.retries.max_attempts,
+            non_retryable_error_types=list(route.retries.non_retryable_error_codes),
+        )
+
+    def _execute_kwargs_for_route(self, route: TemporalActivityRoute) -> dict[str, Any]:
+        return {
+            "task_queue": route.task_queue,
+            "start_to_close_timeout": timedelta(
+                seconds=route.timeouts.start_to_close_seconds
+            ),
+            "schedule_to_close_timeout": timedelta(
+                seconds=route.timeouts.schedule_to_close_seconds
+            ),
+            "retry_policy": self._retry_policy_for_route(route),
+        }
+
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
         try:
             info = workflow.info()
@@ -73,6 +91,7 @@ class MoonMindManifestIngestWorkflow:
             )
 
         # 1. Compile Manifest
+        compile_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("manifest.compile")
         compile_result = await workflow.execute_activity(
             "manifest.compile",
             {
@@ -83,9 +102,7 @@ class MoonMindManifestIngestWorkflow:
                 "requested_by": {"type": "system", "id": "temporal"},
                 "execution_policy": {},
             },
-            start_to_close_timeout=timedelta(minutes=5),
-            task_queue=WORKFLOW_TASK_QUEUE,
-            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            **self._execute_kwargs_for_route(compile_route),
         )
 
         plan_ref = (
@@ -102,6 +119,9 @@ class MoonMindManifestIngestWorkflow:
             self._plan_ref = plan_ref
 
         # 2. Write Summary
+        summary_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "manifest.write_summary"
+        )
         summary_result = await workflow.execute_activity(
             "manifest.write_summary",
             {
@@ -112,9 +132,7 @@ class MoonMindManifestIngestWorkflow:
                 "manifest_ref": self._manifest_ref,
                 "plan_ref": self._plan_ref,
             },
-            start_to_close_timeout=timedelta(minutes=5),
-            task_queue=WORKFLOW_TASK_QUEUE,
-            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            **self._execute_kwargs_for_route(summary_route),
         )
 
         # summary_result is a tuple of (summary_ref, run_index_ref)

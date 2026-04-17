@@ -2364,6 +2364,10 @@ export interface components {
             content_type?: string | null;
             /** Encryption */
             encryption: string;
+            /** Diagnostics */
+            diagnostics?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * ArtifactSessionControlRequest
@@ -2964,6 +2968,10 @@ export interface components {
         CreateArtifactResponse: {
             artifact_ref: components["schemas"]["ArtifactRefModel"];
             upload: components["schemas"]["ArtifactUploadModel"];
+            /** Diagnostics */
+            diagnostics?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** CreateOAuthSessionRequest */
         CreateOAuthSessionRequest: {
@@ -3384,6 +3392,11 @@ export interface components {
             prUrl?: string | null;
             /** Publishmode */
             publishMode?: string | null;
+            /**
+             * Mergeautomationselected
+             * @default false
+             */
+            mergeAutomationSelected: boolean;
             /** Resolvedskillsetref */
             resolvedSkillsetRef?: string | null;
             /** Taskskills */
@@ -5369,6 +5382,15 @@ export interface components {
             targetBranch?: string | null;
             /** Instructions */
             instructions?: string | null;
+            /** Presetprovenance */
+            presetProvenance?: string | null;
+            /**
+             * Authoredpresetcount
+             * @default 0
+             */
+            authoredPresetCount: number;
+            /** Stepsourcekinds */
+            stepSourceKinds?: string[];
         };
         /**
          * TaskTemplateAppliedMetadataSchema

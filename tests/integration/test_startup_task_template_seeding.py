@@ -110,10 +110,18 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             for step in jira_orchestrate_template.latest_version.steps
         ]
         assert jira_orchestrate_steps[0] == "jira-issue-updater"
+        assert jira_orchestrate_steps[1] == "auto"
         assert "moonspec-implement" in jira_orchestrate_steps
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
-        assert len(jira_orchestrate_steps) == 12
+        assert len(jira_orchestrate_steps) == 13
+        blocker_step = jira_orchestrate_template.latest_version.steps[1]
+        assert blocker_step["title"] == "Check Jira blockers before implementation"
+        assert "trusted Jira tool surface" in blocker_step["instructions"]
+        assert "Done" in blocker_step["instructions"]
+        assert "non-blocker" in blocker_step["instructions"]
+        assert "status cannot be determined" in blocker_step["instructions"]
+        assert "stop the orchestration immediately" in blocker_step["instructions"]
         pr_step = next(
             step
             for step in jira_orchestrate_template.latest_version.steps

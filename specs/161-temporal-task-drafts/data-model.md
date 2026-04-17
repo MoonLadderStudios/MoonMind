@@ -28,7 +28,7 @@ Existing Temporal execution used to reconstruct the form draft.
 - `actions`: capability set from backend
 - `inputParameters`: structured task input state
 - `inputArtifactRef`: optional immutable artifact reference for historical input state
-- Runtime and task fields: runtime, provider profile, model, effort, repository, branches, publish mode, skill, and template state where available
+- Runtime and task fields: runtime, provider profile, model, effort, repository, branch, publish mode, skill, and template state where available
 
 **Validation Rules**
 
@@ -64,8 +64,7 @@ The shared form state reconstructed from a Temporal source execution and optiona
 - `model`
 - `effort`
 - `repository`
-- `startingBranch`
-- `targetBranch`
+- `branch`
 - `publishMode`
 - `taskInstructions`
 - `primarySkill`
@@ -74,8 +73,25 @@ The shared form state reconstructed from a Temporal source execution and optiona
 **Validation Rules**
 
 - `taskInstructions` are required for a trustworthy reconstructed draft.
+- `branch` is the only active branch field in new draft writes.
+- Draft write paths must not require or emit both `startingBranch` and `targetBranch`.
+- `publishMode` remains part of the task submission contract, even though the Create page renders it inline with Branch in the Steps card instead of as a separate Execution context card control.
 - Other first-slice fields should be filled when available and left as normal form defaults only when that matches existing create-form behavior.
 - Draft construction must not mutate source execution data or historical artifacts.
+
+## Legacy Branch Normalization
+
+Older Temporal execution payloads and snapshots may still contain two branch fields. Reconstruction normalizes them into the single authored `branch` field before the form becomes editable.
+
+| Legacy shape | New draft result |
+| --- | --- |
+| `startingBranch` only | Normalize `startingBranch` to `branch`. |
+| `startingBranch == targetBranch` | Normalize the shared value to `branch`. |
+| PR publish snapshot with differing `startingBranch` and `targetBranch` | Normalize authored `branch` to old `startingBranch`, because it represented the PR base. Preserve old `targetBranch` only as opaque legacy metadata for audit/debug. |
+| Branch publish snapshot with differing `startingBranch` and `targetBranch` | Mark the draft as non-round-trippable under the new model and require a reconstruction warning. Preserve old `targetBranch` only as opaque historical metadata; do not use it for active submission logic. |
+| `targetBranch` only | Treat as incomplete legacy metadata and require a reconstruction warning before submit. |
+
+New authored submissions must not reintroduce `targetBranch`; edited or rerun drafts always submit the single `branch` contract.
 
 ## Input Artifact Reference
 

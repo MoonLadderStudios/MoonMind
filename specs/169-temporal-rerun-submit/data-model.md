@@ -32,9 +32,8 @@ Represents the operator-reviewable shared form state reconstructed from executio
 | `model` | string or null | No | Model value prefilled when reconstructable. |
 | `effort` | string or null | No | Effort value prefilled when reconstructable. |
 | `repository` | string or null | No | Repository prefilled from execution or artifact input. |
-| `startingBranch` | string or null | No | Starting branch prefilled when available. |
-| `targetBranch` | string or null | No | Target branch prefilled when available. |
-| `publishMode` | string or null | No | Publish mode prefilled when available. |
+| `branch` | string or null | No | Single authored branch selection prefilled when reconstructable. |
+| `publishMode` | string or null | No | Publish mode prefilled when available. It remains part of rerun submission semantics even when rendered inline with Branch. |
 | `taskInstructions` | string | Yes | Operator-visible task instructions reconstructed from inline inputs or artifact content. |
 | `primarySkill` | string or null | No | Primary skill/template selection when reconstructable. |
 | `appliedTemplates` | array | No | Template state preserved for review when present. |
@@ -44,6 +43,21 @@ Represents the operator-reviewable shared form state reconstructed from executio
 - `taskInstructions` is required; rerun submission must be blocked when instructions cannot be reconstructed.
 - Artifact-backed inputs must be loaded before building a submittable draft when inline instructions are absent.
 - Incomplete or malformed artifact content must not produce a misleading partial rerun form.
+- Rerun drafts surface only `branch`, never `targetBranch`.
+- Rerun submission emits the new single-branch contract and must not depend on legacy `targetBranch`.
+
+### Legacy Branch Rerun Behavior
+
+Older executions may contain `startingBranch` and `targetBranch`.
+
+| Legacy shape | Rerun behavior |
+| --- | --- |
+| `startingBranch` only | Normalize to `branch`. |
+| `startingBranch == targetBranch` | Normalize the shared value to `branch`. |
+| PR publish snapshot with differing values | Normalize `branch` to old `startingBranch`, because it represented the PR base. Old `targetBranch` is retained only as historical metadata. |
+| Branch-publish snapshot with differing values | Show a user-facing warning that the previous two-branch intent cannot be preserved exactly. Rerun uses the normalized single `branch` only after operator review. |
+
+Rerun must not use `targetBranch` as executable intent under the new model.
 
 ## Rerun Request
 

@@ -14,6 +14,7 @@ It maps how the control plane translates user intent from Mission Control — in
 - step-authored instructions
 - objective-scoped and step-scoped input attachments
 - runtime and publish choices
+- repository and single authored branch selection
 - agent skill selection intent
 - presets, Jira imports, and dependency declarations
 
@@ -142,6 +143,7 @@ The control plane is responsible for all of the following.
 - render the Create page
 - validate repository, runtime, publish mode, dependencies, and attachment policy
 - collect text fields, preset state, Jira imports, and input attachments into a coherent draft
+- render repository, Branch, and Publish Mode together in the Steps card. `Publish Mode` remains submission data; only its visual placement changes.
 
 ### 5.2 Artifact upload orchestration
 
@@ -249,8 +251,7 @@ interface TaskPayload {
     mode?: "none" | "branch" | "pr";
   };
   git?: {
-    startingBranch?: string;
-    targetBranch?: string;
+    branch?: string;
   };
   appliedStepTemplates?: unknown[];
   dependsOn?: string[];
@@ -266,6 +267,10 @@ Rules:
 - these fields are part of the task contract, not incidental UI metadata
 - the absence of attachments is valid
 - the presence of attachments must be preserved across create, detail, edit, and rerun
+- `task.git.branch` is the single authored branch field; new create, edit, and rerun payloads do not include `targetBranch`
+- for `publish.mode === "pr"`, `task.git.branch` is the selected repository branch / PR base and the PR head branch is runtime-generated or provider-managed
+- for `publish.mode === "branch"`, `task.git.branch` is the branch to update/push
+- `Publish Mode` remains part of task submission semantics; only its Create page placement changes
 - the execution-facing payload is resolved before workers consume it; `authoredPresets` and `source` metadata are for reconstruction, audit, diagnostics, and safe rerun semantics
 
 ---
@@ -283,6 +288,7 @@ Rules:
   - step-scoped attachment refs
   - step order and identity
   - runtime and publish selections
+  - repository and single authored branch selection
   - preset application metadata
   - pinned preset bindings
   - include-tree summary

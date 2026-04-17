@@ -59,9 +59,11 @@ When `publishMode == "branch"`:
 
 - MoonMind must request Jules PR automation at start.
 - MoonMind must extract the resulting PR URL after provider completion.
-- If `targetBranch` differs from `startingBranch`, MoonMind must update the PR base before merge.
+- Jules receives a single authored `branch` reference. MoonMind must treat that branch as the intended branch-publication destination.
 - MoonMind must merge the PR successfully before reporting branch publication success.
 - If any of these steps fail, MoonMind must surface a non-success outcome.
+
+For `publishMode == "pr"`, the authored `branch` is the PR base. Jules/provider automation manages the work/head branch; MoonMind must not require authored inputs to provide both base and target branches.
 
 ## 6. Truthful Bundle Result Semantics
 
@@ -71,4 +73,4 @@ MoonMind must treat a bundled run as incomplete or failed when:
 
 - required checklist outcomes were not actually completed,
 - required verification fails,
-- requested branch publication does not land on the intended target branch.
+- requested branch publication does not land on the intended authored branch.

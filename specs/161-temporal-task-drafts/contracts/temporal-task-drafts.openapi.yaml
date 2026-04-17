@@ -149,18 +149,16 @@ components:
           type:
             - string
             - "null"
-        startingBranch:
+        branch:
           type:
             - string
             - "null"
-        targetBranch:
-          type:
-            - string
-            - "null"
+          description: "Single authored branch selection. Legacy startingBranch values normalize here; legacy targetBranch is historical metadata only."
         publishMode:
           type:
             - string
             - "null"
+          description: "Task publish mode. This remains submission semantics even when rendered inline with Branch in the Steps card."
         targetSkill:
           type:
             - string
@@ -188,10 +186,9 @@ components:
           type: string
         repository:
           type: string
-        startingBranch:
+        branch:
           type: string
-        targetBranch:
-          type: string
+          description: "Single authored branch selection for create/edit/rerun forms. New draft writes must not include targetBranch."
         publishMode:
           type: string
         taskInstructions:
