@@ -37,6 +37,15 @@ _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
 _SINGLE_PUT_READ_RETRY_DELAYS_SECONDS = (0.1, 0.2, 0.4, 0.8, 1.6)
 _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES = {"404", "NoSuchKey", "NotFound"}
+_TASK_INPUT_ATTACHMENT_SOURCES = frozenset(
+    {"task-dashboard-step-attachment", "task-create"}
+)
+_RESERVED_INPUT_ATTACHMENT_PREFIXES = (
+    "inputs/",
+    "/inputs/",
+    ".moonmind/inputs/",
+    "/.moonmind/inputs/",
+)
 
 
 class TemporalArtifactError(Exception):
@@ -189,6 +198,80 @@ def _derive_retention(
     if link in {"output.primary", "output.patch", "output.summary"}:
         return db_models.TemporalArtifactRetentionClass.STANDARD
     return db_models.TemporalArtifactRetentionClass.STANDARD
+
+
+def _normalized_content_type(value: object | None) -> str:
+    return str(value or "").split(";", 1)[0].strip().lower()
+
+
+def _allowed_input_attachment_content_types() -> set[str]:
+    configured = {
+        _normalized_content_type(item)
+        for item in settings.workflow.agent_job_attachment_allowed_content_types
+    }
+    configured.discard("")
+    configured.discard("image/svg+xml")
+    return configured or {"image/png", "image/jpeg", "image/webp"}
+
+
+def _is_task_input_attachment_metadata(metadata: Mapping[str, Any]) -> bool:
+    source = str(metadata.get("source") or "").strip().lower()
+    attachment_kind = str(metadata.get("attachmentKind") or "").strip().lower()
+    return source in _TASK_INPUT_ATTACHMENT_SOURCES or attachment_kind == "input"
+
+
+def _assert_not_reserved_input_attachment_metadata(
+    metadata: Mapping[str, Any] | None,
+) -> None:
+    source = dict(metadata or {})
+    for key in (
+        "artifact_path",
+        "artifactPath",
+        "path",
+        "relative_path",
+        "relativePath",
+        "workspacePath",
+        "workspace_path",
+        "name",
+    ):
+        raw_value = source.get(key)
+        if not isinstance(raw_value, str):
+            continue
+        candidate = raw_value.strip().replace("\\", "/").lower().lstrip("./")
+        if not candidate:
+            continue
+        if any(
+            candidate.startswith(prefix.lstrip("/").lstrip("./"))
+            for prefix in _RESERVED_INPUT_ATTACHMENT_PREFIXES
+        ):
+            raise TemporalArtifactValidationError(
+                "worker artifact uploads may not target the reserved input attachment namespace"
+            )
+
+
+def _validate_image_attachment_payload(
+    *,
+    content_type: str | None,
+    payload: bytes,
+) -> None:
+    normalized = _normalized_content_type(content_type)
+    if normalized == "image/svg+xml":
+        raise TemporalArtifactValidationError("image/svg+xml is not supported")
+    allowed = _allowed_input_attachment_content_types()
+    if normalized not in allowed:
+        supported = ", ".join(sorted(allowed))
+        raise TemporalArtifactValidationError(
+            f"unsupported image attachment content type {normalized or '<missing>'}; "
+            f"supported types: {supported}"
+        )
+    if normalized == "image/png" and not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise TemporalArtifactValidationError("image/png signature validation failed")
+    if normalized == "image/jpeg" and not payload.startswith(b"\xff\xd8\xff"):
+        raise TemporalArtifactValidationError("image/jpeg signature validation failed")
+    if normalized == "image/webp" and (
+        len(payload) < 12 or not payload.startswith(b"RIFF") or payload[8:12] != b"WEBP"
+    ):
+        raise TemporalArtifactValidationError("image/webp signature validation failed")
 
 
 def _expires_at_for_retention(
@@ -1119,6 +1202,7 @@ class TemporalArtifactService:
         redaction_level: db_models.TemporalArtifactRedactionLevel = db_models.TemporalArtifactRedactionLevel.NONE,
     ) -> tuple[db_models.TemporalArtifact, ArtifactUploadDescriptor]:
         now = datetime.now(UTC)
+        _assert_not_reserved_input_attachment_metadata(metadata_json)
         declared_size: int | None = None
         if size_bytes is not None:
             declared_size = int(size_bytes)
@@ -1250,6 +1334,16 @@ class TemporalArtifactService:
             artifact.status = db_models.TemporalArtifactStatus.FAILED
             await self._repository.commit()
             raise
+        if _is_task_input_attachment_metadata(artifact.metadata_json or {}):
+            try:
+                _validate_image_attachment_payload(
+                    content_type=content_type or artifact.content_type,
+                    payload=payload,
+                )
+            except TemporalArtifactValidationError:
+                artifact.status = db_models.TemporalArtifactStatus.FAILED
+                await self._repository.commit()
+                raise
 
         await asyncio.get_running_loop().run_in_executor(
             None,
@@ -1383,6 +1477,16 @@ class TemporalArtifactService:
             artifact.status = db_models.TemporalArtifactStatus.FAILED
             await self._repository.commit()
             raise
+        if _is_task_input_attachment_metadata(artifact.metadata_json or {}):
+            try:
+                _validate_image_attachment_payload(
+                    content_type=artifact.content_type,
+                    payload=payload,
+                )
+            except TemporalArtifactValidationError:
+                artifact.status = db_models.TemporalArtifactStatus.FAILED
+                await self._repository.commit()
+                raise
 
         artifact.sha256 = digest
         artifact.size_bytes = actual_size
