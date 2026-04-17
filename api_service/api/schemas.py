@@ -374,9 +374,14 @@ class TaskTemplateStepBlueprintSchema(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    kind: Optional[Literal["step", "include"]] = None
     slug: Optional[str] = None
     title: Optional[str] = None
-    instructions: str
+    instructions: Optional[str] = None
+    version: Optional[str] = None
+    alias: Optional[str] = None
+    scope: Optional[Literal["global", "personal"]] = None
+    input_mapping: dict[str, Any] = Field(default_factory=dict, alias="inputMapping")
     skill: Optional[TaskTemplateStepSkillSchema] = None
     annotations: dict[str, Any] = Field(default_factory=dict)
 
@@ -478,6 +483,7 @@ class TaskTemplateExpandResponseSchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     steps: list[dict[str, Any]] = Field(default_factory=list)
+    composition: dict[str, Any] = Field(default_factory=dict)
     applied_template: TaskTemplateAppliedMetadataSchema = Field(
         ..., alias="appliedTemplate"
     )

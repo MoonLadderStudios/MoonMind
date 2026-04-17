@@ -99,6 +99,13 @@ def test_expand_template_success() -> None:
     client, catalog, _ = _build_app()
     catalog.expand_template.return_value = {
         "steps": [{"id": "tpl:demo:1.0.0:01:abcd1234", "instructions": "do work"}],
+        "composition": {
+            "slug": "demo",
+            "version": "1.0.0",
+            "scope": "global",
+            "stepIds": ["tpl:demo:1.0.0:01:abcd1234"],
+            "includes": [],
+        },
         "appliedTemplate": {
             "slug": "demo",
             "version": "1.0.0",
@@ -119,6 +126,7 @@ def test_expand_template_success() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["appliedTemplate"]["slug"] == "demo"
+    assert payload["composition"]["slug"] == "demo"
     assert payload["capabilities"] == ["codex", "git"]
 
 
