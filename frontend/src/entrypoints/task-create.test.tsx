@@ -3548,6 +3548,63 @@ describe("Task Create Entrypoint", () => {
     ]);
   });
 
+  it("does not submit hidden advanced step capabilities after toggling advanced mode off", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        "Step 1 Skill Args (optional JSON object)",
+      ),
+      {
+        target: { value: '{"hidden":true}' },
+      },
+    );
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "docker, qdrant" },
+      },
+    );
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Run without hidden advanced routing." },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as {
+      task: { tool: Record<string, unknown> };
+      requiredCapabilities: string[];
+    };
+    expect(payload.task.tool).toEqual({
+      type: "skill",
+      name: "auto",
+      version: "1.0",
+    });
+    expect(payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
+    ]);
+  });
+
   it("uploads a step attachment as a structured step input without rewriting instructions", async () => {
     renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
 
@@ -5808,6 +5865,83 @@ describe("Task Create Entrypoint", () => {
         ([url]) => String(url) === "/api/task-step-templates/save-from-task",
       ),
     ).toBe(false);
+
+    promptSpy.mockRestore();
+  });
+
+  it("persists advanced-mode skill args for auto steps when saving presets", async () => {
+    const promptSpy = vi
+      .spyOn(window, "prompt")
+      .mockImplementationOnce(() => "Saved preset title")
+      .mockImplementationOnce(() => "Saved preset description");
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText("Instructions"),
+      {
+        target: { value: "Capture auto skill args in a preset." },
+      },
+    );
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        "Step 1 Skill Args (optional JSON object)",
+      ),
+      {
+        target: { value: '{"mode":"advanced"}' },
+      },
+    );
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "docker" },
+      },
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Save Current Steps as Preset/ }),
+    );
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/task-step-templates/save-from-task",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const saveCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/task-step-templates/save-from-task")
+      .at(-1);
+    const request = JSON.parse(String(saveCall?.[1]?.body)) as {
+      steps: Array<{
+        tool?: Record<string, unknown>;
+        skill?: Record<string, unknown>;
+      }>;
+    };
+    const savedStep = request.steps[0];
+    expect(savedStep).toBeDefined();
+    expect(savedStep?.tool).toEqual({
+      type: "skill",
+      name: "auto",
+      version: "1.0",
+      inputs: { mode: "advanced" },
+      requiredCapabilities: ["docker"],
+    });
+    expect(savedStep?.skill).toEqual({
+      id: "auto",
+      args: { mode: "advanced" },
+      requiredCapabilities: ["docker"],
+    });
 
     promptSpy.mockRestore();
   });

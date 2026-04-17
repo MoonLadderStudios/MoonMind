@@ -860,6 +860,14 @@ function createStepStateEntriesFromTemporalDraft(
   });
 }
 
+function hasAdvancedStepOptionValues(steps: StepState[]): boolean {
+  return steps.some(
+    (step) =>
+      Boolean(step.skillRequiredCapabilities.trim()) ||
+      (Boolean(step.skillArgs.trim()) && !shouldShowSkillArgs(step)),
+  );
+}
+
 function stepAttachmentRefFromTemporal(
   attachment: TemporalTaskInputAttachmentRef,
 ): StepAttachmentRef {
@@ -2399,6 +2407,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
     setSteps(reconstructedSteps);
+    setShowAdvancedStepOptions(hasAdvancedStepOptionValues(reconstructedSteps));
     setNextStepNumber(reconstructedSteps.length + 1);
     setPersistedObjectiveAttachments(
       draft.inputAttachments.map(stepAttachmentRefFromTemporal),
@@ -3926,8 +3935,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       const blueprint: Record<string, unknown> = { instructions };
       const skillId = step.skillId.trim();
-      const caps = parseCapabilitiesCsv(step.skillRequiredCapabilities);
-      const skillArgsRaw = shouldShowSkillArgs(step)
+      const caps = showAdvancedStepOptions
+        ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
+        : [];
+      const skillArgsRaw = showAdvancedStepOptions || shouldShowSkillArgs(step)
         ? step.skillArgs.trim()
         : "";
       if (skillId || skillArgsRaw || caps.length > 0) {
@@ -4182,9 +4193,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       showAdvancedStepOptions || shouldShowSkillArgs(primaryStep)
       ? String(primaryStep?.skillArgs || "").trim()
       : "";
-    const taskSkillRequiredCapabilities = parseCapabilitiesCsv(
-      String(primaryStep?.skillRequiredCapabilities || ""),
-    );
+    const taskSkillRequiredCapabilities = showAdvancedStepOptions
+      ? parseCapabilitiesCsv(String(primaryStep?.skillRequiredCapabilities || ""))
+      : [];
 
     let primarySkillArgs: Record<string, unknown> = {};
     if (primarySkillArgsRaw) {
@@ -4244,9 +4255,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         showAdvancedStepOptions || shouldShowSkillArgs(step)
         ? step.skillArgs.trim()
         : "";
-      const stepSkillCaps = parseCapabilitiesCsv(
-        step.skillRequiredCapabilities,
-      );
+      const stepSkillCaps = showAdvancedStepOptions
+        ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
+        : [];
       const stepAttachmentFiles = selectedStepAttachmentFiles[step.localId] || [];
       const hasStepContent =
         Boolean(step.instructions) ||
@@ -5532,10 +5543,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                           })
                         }
                       />
-                      <span className="small">
-                        Optional worker routing overrides. Runtime, publish mode,
-                        skills, and presets already add the common capabilities.
-                      </span>
                     </label>
                   ) : null}
                 </section>
@@ -6147,7 +6154,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           />
           Advanced mode
           <span className="small">
-            Adds skill args and required capabilities to each step.
+            Adds skill args and required capabilities to each step. Optional
+            worker routing overrides; runtime, publish mode, skills, and
+            presets already add the common capabilities automatically.
           </span>
         </label>
         <p
