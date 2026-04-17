@@ -54,8 +54,24 @@ _JIRA_BREAKDOWN_PROJECT_INPUT = "jira_project_key"
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
 _STEP_RESERVED_KEYS = frozenset(
-    {"id", "title", "slug", "instructions", "skill", "skills", "annotations"}
+    {
+        "id",
+        "kind",
+        "title",
+        "slug",
+        "version",
+        "alias",
+        "scope",
+        "inputMapping",
+        "input_mapping",
+        "instructions",
+        "skill",
+        "skills",
+        "annotations",
+    }
 )
+_STEP_KIND = "step"
+_INCLUDE_KIND = "include"
 logger = logging.getLogger(__name__)
 
 
@@ -231,6 +247,27 @@ def _build_step_id(
     *, slug: str, version: str, index: int, inputs: dict[str, Any]
 ) -> str:
     return f"tpl:{slug}:{version}:{index:02d}:{_hash_from_inputs(inputs)}"
+
+
+def _template_path_label(
+    *, slug: str, version: str, alias: str | None = None
+) -> str:
+    label = f"{slug}@{version}"
+    if alias:
+        return f"{alias}:{label}"
+    return label
+
+
+def _format_include_path(path: list[str]) -> str:
+    return " -> ".join(path)
+
+
+def _composition_capabilities(node: dict[str, Any]) -> list[str]:
+    capabilities = list(node.get("requiredCapabilities") or [])
+    for child in node.get("includes") or []:
+        if isinstance(child, dict):
+            capabilities.extend(_composition_capabilities(child))
+    return _normalize_capabilities(capabilities)
 
 
 def _render_value(
@@ -619,7 +656,7 @@ class TaskTemplateCatalogService:
             steps=validated_steps,
             annotations=dict(annotations or {}),
             required_capabilities=derived_capabilities,
-            max_step_count=max(1, len(validated_steps)),
+            max_step_count=max(25, len(validated_steps)),
             release_status=release_status,
             seed_source=seed_source,
         )
@@ -710,6 +747,7 @@ class TaskTemplateCatalogService:
         if not steps:
             raise TaskTemplateValidationError("Template steps must not be empty.")
         validated: list[dict[str, Any]] = []
+        include_aliases: set[str] = set()
         for index, raw_step in enumerate(steps, start=1):
             if not isinstance(raw_step, dict):
                 raise TaskTemplateValidationError(
@@ -722,6 +760,49 @@ class TaskTemplateCatalogService:
                 raise TaskTemplateValidationError(
                     f"Step {index} uses forbidden keys: {', '.join(blocked)}."
                 )
+            kind = str(raw_step.get("kind") or _STEP_KIND).strip().lower()
+            if kind not in {_STEP_KIND, _INCLUDE_KIND}:
+                raise TaskTemplateValidationError(
+                    f"Step {index} kind must be one of: {_STEP_KIND}, {_INCLUDE_KIND}."
+                )
+            if kind == _INCLUDE_KIND:
+                include_slug = _normalize_slug(str(raw_step.get("slug") or ""))
+                include_version = str(raw_step.get("version") or "").strip()
+                include_alias = _normalize_slug(str(raw_step.get("alias") or ""))
+                if not include_version:
+                    raise TaskTemplateValidationError(
+                        f"Step {index} include requires a pinned version."
+                    )
+                if include_alias in include_aliases:
+                    raise TaskTemplateValidationError(
+                        f"Step {index} include alias '{include_alias}' is duplicated."
+                    )
+                include_aliases.add(include_alias)
+                include_scope = raw_step.get("scope")
+                include_payload: dict[str, Any] = {
+                    "kind": _INCLUDE_KIND,
+                    "slug": include_slug,
+                    "version": include_version,
+                    "alias": include_alias,
+                }
+                if include_scope is not None:
+                    include_payload["scope"] = _normalize_scope(str(include_scope)).value
+                input_mapping = raw_step.get("inputMapping", raw_step.get("input_mapping"))
+                if input_mapping is not None:
+                    if not isinstance(input_mapping, dict):
+                        raise TaskTemplateValidationError(
+                            f"Step {index} include inputMapping must be an object."
+                        )
+                    include_payload["inputMapping"] = dict(input_mapping)
+                annotations = raw_step.get("annotations")
+                if annotations is not None:
+                    if not isinstance(annotations, dict):
+                        raise TaskTemplateValidationError(
+                            f"Step {index} annotations must be an object when provided."
+                        )
+                    include_payload["annotations"] = dict(annotations)
+                validated.append(include_payload)
+                continue
             instructions = str(raw_step.get("instructions") or "").strip()
             if not instructions:
                 raise TaskTemplateValidationError(
@@ -776,6 +857,214 @@ class TaskTemplateCatalogService:
             validated.append(step_payload)
         return validated
 
+    def _select_template_version(
+        self, template: TaskStepTemplate, version: str
+    ) -> TaskStepTemplateVersion:
+        for candidate in template.versions:
+            if candidate.version == version:
+                return candidate
+        raise TaskTemplateNotFoundError("Template version not found.")
+
+    async def _expand_version_steps(
+        self,
+        *,
+        template: TaskStepTemplate,
+        version_model: TaskStepTemplateVersion,
+        scope: TaskTemplateScopeType,
+        scope_ref: str | None,
+        variables: dict[str, Any],
+        root_slug: str,
+        root_version: str,
+        root_inputs: dict[str, Any],
+        root_max_step_count: int,
+        enforce_limit: bool,
+        path: list[str],
+        visited: set[tuple[str, str, str]],
+        resolved_steps: list[dict[str, Any]],
+        alias: str | None = None,
+    ) -> dict[str, Any]:
+        node: dict[str, Any] = {
+            "slug": template.slug,
+            "version": version_model.version,
+            "scope": scope.value,
+            "path": list(path),
+            "stepIds": [],
+            "includes": [],
+            "requiredCapabilities": _normalize_capabilities(
+                list(template.required_capabilities or [])
+                + list(version_model.required_capabilities or [])
+            ),
+        }
+        if alias:
+            node["alias"] = alias
+
+        for source_index, source_step in enumerate(version_model.steps or [], start=1):
+            rendered = _render_value(
+                self._template_env, source_step, variables=variables
+            )
+            if not isinstance(rendered, dict):
+                raise TaskTemplateValidationError(
+                    f"Expanded step at {_format_include_path(path)} must be an object."
+                )
+            kind = str(rendered.get("kind") or _STEP_KIND).strip().lower()
+            if kind == _INCLUDE_KIND:
+                include_slug = _normalize_slug(str(rendered.get("slug") or ""))
+                include_version = str(rendered.get("version") or "").strip()
+                include_alias = _normalize_slug(str(rendered.get("alias") or ""))
+                include_scope = _normalize_scope(str(rendered.get("scope") or scope.value))
+                include_scope_ref = (
+                    None
+                    if include_scope is TaskTemplateScopeType.GLOBAL
+                    else scope_ref
+                )
+                include_path = [
+                    *path,
+                    _template_path_label(
+                        slug=include_slug,
+                        version=include_version,
+                        alias=include_alias,
+                    ),
+                ]
+                if scope is TaskTemplateScopeType.GLOBAL and include_scope is TaskTemplateScopeType.PERSONAL:
+                    raise TaskTemplateValidationError(
+                        "Global presets cannot include personal presets at "
+                        f"{_format_include_path(include_path)}."
+                    )
+                target_key = (include_scope.value, include_slug, include_version)
+                if target_key in visited:
+                    raise TaskTemplateValidationError(
+                        "Preset include cycle detected at "
+                        f"{_format_include_path(include_path)}."
+                    )
+                try:
+                    child_template = await self._get_template_for_scope(
+                        slug=include_slug,
+                        scope=include_scope,
+                        scope_ref=include_scope_ref,
+                    )
+                    child_version = self._select_template_version(
+                        child_template, include_version
+                    )
+                except TaskTemplateError as exc:
+                    raise TaskTemplateValidationError(
+                        f"Preset include target unavailable at "
+                        f"{_format_include_path(include_path)}: {exc}"
+                    ) from exc
+                if child_version.release_status is TaskTemplateReleaseStatus.INACTIVE:
+                    raise TaskTemplateValidationError(
+                        f"Preset include target is inactive at "
+                        f"{_format_include_path(include_path)}."
+                    )
+                input_mapping = rendered.get("inputMapping") or {}
+                if not isinstance(input_mapping, dict):
+                    raise TaskTemplateValidationError(
+                        f"Preset include inputMapping must be an object at "
+                        f"{_format_include_path(include_path)}."
+                    )
+                try:
+                    child_inputs = self._resolve_inputs(
+                        schema=_effective_inputs_schema(
+                            slug=child_template.slug,
+                            inputs_schema=child_version.inputs_schema or [],
+                        ),
+                        submitted=dict(input_mapping),
+                    )
+                except TaskTemplateValidationError as exc:
+                    raise TaskTemplateValidationError(
+                        f"Preset include input mapping is incompatible at "
+                        f"{_format_include_path(include_path)}: {exc}"
+                    ) from exc
+                child_variables = {
+                    **variables,
+                    "inputs": child_inputs,
+                }
+                child_node = await self._expand_version_steps(
+                    template=child_template,
+                    version_model=child_version,
+                    scope=include_scope,
+                    scope_ref=include_scope_ref,
+                    variables=child_variables,
+                    root_slug=root_slug,
+                    root_version=root_version,
+                    root_inputs=root_inputs,
+                    root_max_step_count=root_max_step_count,
+                    enforce_limit=enforce_limit,
+                    path=include_path,
+                    visited={*visited, target_key},
+                    resolved_steps=resolved_steps,
+                    alias=include_alias,
+                )
+                node["includes"].append(child_node)
+                node["stepIds"].extend(child_node["stepIds"])
+                continue
+
+            if kind != _STEP_KIND:
+                raise TaskTemplateValidationError(
+                    f"Expanded step kind must be one of: {_STEP_KIND}, {_INCLUDE_KIND}."
+                )
+            blocked = sorted(
+                key for key in rendered if str(key).strip() in _FORBIDDEN_STEP_KEYS
+            )
+            if blocked:
+                raise TaskTemplateValidationError(
+                    f"Expanded step uses forbidden keys at {_format_include_path(path)}: "
+                    f"{', '.join(blocked)}."
+                )
+            instructions = str(rendered.get("instructions") or "").strip()
+            if not instructions:
+                raise TaskTemplateValidationError(
+                    f"Expanded step instructions may not be empty at "
+                    f"{_format_include_path(path)}."
+                )
+            if _UNRESOLVED_PLACEHOLDER_PATTERN.search(instructions):
+                raise TaskTemplateValidationError(
+                    f"Expanded instructions still contain unresolved template "
+                    f"placeholders at {_format_include_path(path)}."
+                )
+            next_index = len(resolved_steps) + 1
+            if enforce_limit and next_index > root_max_step_count:
+                raise TaskTemplateValidationError(
+                    f"Template expansion exceeded max_step_count={root_max_step_count} "
+                    f"at {_format_include_path(path)}."
+                )
+            step_payload: dict[str, Any] = {
+                "id": _build_step_id(
+                    slug=root_slug,
+                    version=root_version,
+                    index=next_index,
+                    inputs=root_inputs,
+                ),
+                "instructions": instructions,
+                "presetProvenance": {
+                    "root": {"slug": root_slug, "version": root_version},
+                    "source": {
+                        "slug": template.slug,
+                        "version": version_model.version,
+                        "scope": scope.value,
+                        "stepIndex": source_index,
+                    },
+                    "path": list(path),
+                },
+            }
+            if alias:
+                step_payload["presetProvenance"]["alias"] = alias
+            title = str(rendered.get("title") or "").strip()
+            if title:
+                step_payload["title"] = title
+            if isinstance(rendered.get("skill"), dict):
+                step_payload["skill"] = rendered["skill"]
+            step_payload.update(
+                {
+                    str(key).strip(): value
+                    for key, value in rendered.items()
+                    if str(key).strip()
+                    and str(key).strip() not in _STEP_RESERVED_KEYS
+                }
+            )
+            resolved_steps.append(step_payload)
+            node["stepIds"].append(step_payload["id"])
+        return node
+
     async def expand_template(
         self,
         *,
@@ -795,13 +1084,7 @@ class TaskTemplateCatalogService:
             scope=normalized_scope,
             scope_ref=normalized_scope_ref,
         )
-        selected_version = None
-        for candidate in template.versions:
-            if candidate.version == version:
-                selected_version = candidate
-                break
-        if selected_version is None:
-            raise TaskTemplateNotFoundError("Template version not found.")
+        selected_version = self._select_template_version(template, version)
 
         validated_inputs = self._resolve_inputs(
             schema=_effective_inputs_schema(
@@ -821,62 +1104,29 @@ class TaskTemplateCatalogService:
         warnings: list[str] = []
         enforce_limit = options.should_enforce_step_limit if options else True
         max_step_count = max(int(selected_version.max_step_count or 25), 1)
-        if enforce_limit and len(selected_version.steps or []) > max_step_count:
-            raise TaskTemplateValidationError(
-                f"Template expansion exceeded max_step_count={max_step_count}."
-            )
-
-        for index, source_step in enumerate(selected_version.steps or [], start=1):
-            rendered = _render_value(
-                self._template_env, source_step, variables=variables
-            )
-            if not isinstance(rendered, dict):
-                raise TaskTemplateValidationError(
-                    "Expanded step payload must be an object."
-                )
-            blocked = sorted(
-                key for key in rendered if str(key).strip() in _FORBIDDEN_STEP_KEYS
-            )
-            if blocked:
-                raise TaskTemplateValidationError(
-                    f"Expanded step uses forbidden keys: {', '.join(blocked)}."
-                )
-            instructions = str(rendered.get("instructions") or "").strip()
-            if not instructions:
-                raise TaskTemplateValidationError(
-                    "Expanded step instructions may not be empty."
-                )
-            if _UNRESOLVED_PLACEHOLDER_PATTERN.search(instructions):
-                raise TaskTemplateValidationError(
-                    "Expanded instructions still contain unresolved template placeholders."
-                )
-            step_payload: dict[str, Any] = {
-                "id": _build_step_id(
-                    slug=template.slug,
-                    version=selected_version.version,
-                    index=index,
-                    inputs=validated_inputs,
-                ),
-                "instructions": instructions,
-            }
-            title = str(rendered.get("title") or "").strip()
-            if title:
-                step_payload["title"] = title
-            if isinstance(rendered.get("skill"), dict):
-                step_payload["skill"] = rendered["skill"]
-            step_payload.update(
-                {
-                    str(key).strip(): value
-                    for key, value in rendered.items()
-                    if str(key).strip()
-                    and str(key).strip() not in _STEP_RESERVED_KEYS
-                }
-            )
-            resolved_steps.append(step_payload)
+        root_path = [
+            _template_path_label(slug=template.slug, version=selected_version.version)
+        ]
+        composition = await self._expand_version_steps(
+            template=template,
+            version_model=selected_version,
+            scope=normalized_scope,
+            scope_ref=normalized_scope_ref,
+            variables=variables,
+            root_slug=template.slug,
+            root_version=selected_version.version,
+            root_inputs=validated_inputs,
+            root_max_step_count=max_step_count,
+            enforce_limit=enforce_limit,
+            path=root_path,
+            visited={(normalized_scope.value, template.slug, selected_version.version)},
+            resolved_steps=resolved_steps,
+        )
 
         template_caps = _normalize_capabilities(
             list(template.required_capabilities or [])
             + list(selected_version.required_capabilities or [])
+            + _composition_capabilities(composition)
             + [
                 cap
                 for step in resolved_steps
@@ -905,6 +1155,7 @@ class TaskTemplateCatalogService:
         _METRICS.increment("expand")
         return {
             "steps": resolved_steps,
+            "composition": composition,
             "appliedTemplate": {
                 "slug": template.slug,
                 "version": selected_version.version,
