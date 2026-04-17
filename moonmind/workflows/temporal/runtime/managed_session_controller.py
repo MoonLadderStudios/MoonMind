@@ -293,16 +293,14 @@ class DockerCodexManagedSessionController:
         return str(path)
 
     @staticmethod
-    def _render_gh_wrapper_script(*, socket_path: str, real_gh_path: str) -> str:
+    def _render_gh_wrapper_script(*, socket_path: str) -> str:
         return (
             "#!/usr/bin/env python3\n"
             "from moonmind.workflows.temporal.runtime.github_auth_broker "
             "import run_gh_wrapper\n"
             "\n"
             "if __name__ == \"__main__\":\n"
-            "    raise SystemExit(run_gh_wrapper("
-            f"socket_path={socket_path!r}, real_gh_path={real_gh_path!r}"
-            "))\n"
+            f"    raise SystemExit(run_gh_wrapper(socket_path={socket_path!r}))\n"
         )
 
     @staticmethod
@@ -321,19 +319,6 @@ class DockerCodexManagedSessionController:
         escaped = value.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
 
-    @staticmethod
-    def _best_effort_chown_managed_session_paths(paths: Sequence[Path]) -> None:
-        geteuid = getattr(os, "geteuid", None)
-        if os.name != "posix" or not callable(geteuid) or geteuid() != 0:
-            return
-        for path in paths:
-            try:
-                os.chown(path, _MANAGED_SESSION_CONTAINER_UID, _MANAGED_SESSION_CONTAINER_GID)
-            except FileNotFoundError:
-                continue
-            except OSError:
-                logger.debug("Failed to chown managed session support path %s", path, exc_info=True)
-
     @classmethod
     def _persist_brokered_github_config(
         cls,
@@ -342,14 +327,19 @@ class DockerCodexManagedSessionController:
         workspace_path: str,
         support_root: Path,
         github_socket_path: str,
-        real_gh_path: str | None,
     ) -> list[Path]:
         """Persist broker-backed git/gh config visible inside the session container."""
 
         bin_dir = support_root / "bin"
         git_config_path = support_root / "gitconfig"
         git_helper_path = bin_dir / "git-credential-moonmind"
-        touched_paths: list[Path] = [support_root, bin_dir, git_config_path, git_helper_path]
+        gh_wrapper_path = bin_dir / "gh"
+        touched_paths: list[Path] = [
+            support_root,
+            bin_dir,
+            git_config_path,
+            git_helper_path,
+        ]
 
         support_root.mkdir(parents=True, exist_ok=True)
         bin_dir.mkdir(parents=True, exist_ok=True)
@@ -357,31 +347,48 @@ class DockerCodexManagedSessionController:
             git_helper_path,
             cls._render_git_credential_helper_script(socket_path=github_socket_path),
         )
-
-        if real_gh_path:
-            gh_wrapper_path = bin_dir / "gh"
-            touched_paths.append(gh_wrapper_path)
-            cls._write_executable_script(
-                gh_wrapper_path,
-                cls._render_gh_wrapper_script(
-                    socket_path=github_socket_path,
-                    real_gh_path=real_gh_path,
-                ),
-            )
+        touched_paths.append(gh_wrapper_path)
+        cls._write_executable_script(
+            gh_wrapper_path,
+            cls._render_gh_wrapper_script(socket_path=github_socket_path),
+        )
 
         git_config_lines = [
             "# moonmind-managed-git-config\n",
-            "[safe]\n",
-            f"\tdirectory = {cls._format_git_config_value(str(Path(workspace_path).resolve()))}\n",
-            "[credential]\n",
-            f"\thelper = !{shlex.quote(str(git_helper_path))}\n",
         ]
+        existing_global_git_config = str(
+            session_environment.get("GIT_CONFIG_GLOBAL") or ""
+        ).strip()
+        if (
+            existing_global_git_config
+            and Path(existing_global_git_config) != git_config_path
+        ):
+            git_config_lines.extend(
+                [
+                    "[include]\n",
+                    (
+                        "\tpath = "
+                        f"{cls._format_git_config_value(existing_global_git_config)}\n"
+                    ),
+                ]
+            )
+        git_config_lines.extend(
+            [
+                "[safe]\n",
+                f"\tdirectory = {cls._format_git_config_value(str(workspace_path))}\n",
+                "[credential]\n",
+                f"\thelper = !{shlex.quote(str(git_helper_path))}\n",
+            ]
+        )
         git_config_path.write_text("".join(git_config_lines), encoding="utf-8")
         git_config_path.chmod(0o600)
 
         existing_path = str(session_environment.get("PATH") or "").strip()
+        system_paths = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         session_environment["PATH"] = (
-            f"{bin_dir}{os.pathsep}{existing_path}" if existing_path else str(bin_dir)
+            f"{bin_dir}{os.pathsep}{existing_path}"
+            if existing_path
+            else f"{bin_dir}{os.pathsep}{system_paths}"
         )
         session_environment["GIT_CONFIG_GLOBAL"] = str(git_config_path)
         session_environment.setdefault("GIT_TERMINAL_PROMPT", "0")
@@ -400,6 +407,7 @@ class DockerCodexManagedSessionController:
                     existing_config + credential_section,
                     encoding="utf-8",
                 )
+                touched_paths.append(repo_git_config_path)
 
         return touched_paths
 
@@ -423,16 +431,14 @@ class DockerCodexManagedSessionController:
             token=token,
             socket_path=socket_path,
         )
-        real_gh_path = shutil.which("gh")
         touched_paths = self._persist_brokered_github_config(
             session_environment,
             workspace_path=request.workspace_path,
             support_root=support_root,
             github_socket_path=socket_path,
-            real_gh_path=real_gh_path,
         )
         touched_paths.append(Path(socket_path))
-        self._best_effort_chown_managed_session_paths(touched_paths)
+        self._normalize_container_path_owners(touched_paths)
 
     @staticmethod
     def _record_status_from_handle_status(status: str) -> ManagedSessionRecordStatus:

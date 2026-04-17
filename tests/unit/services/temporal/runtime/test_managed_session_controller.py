@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
@@ -763,11 +764,6 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
         "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
         lambda *_args, **_kwargs: None,
     )
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_session_controller.shutil.which",
-        lambda command: "/usr/bin/gh" if command == "gh" else None,
-    )
-
     async def _fake_runner(
         command: tuple[str, ...],
         *,
@@ -861,6 +857,53 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
         )
     )
     assert github_auth_brokers.stops == [request.session_id]
+
+
+def test_persist_brokered_github_config_preserves_container_visible_paths(
+    tmp_path: Path,
+) -> None:
+    workspace_target = tmp_path / "workspace-target"
+    workspace_target.mkdir()
+    workspace_path = tmp_path / "workspace-link"
+    workspace_path.symlink_to(workspace_target, target_is_directory=True)
+    repo_git_config_path = workspace_path / ".git" / "config"
+    repo_git_config_path.parent.mkdir()
+    repo_git_config_path.write_text(
+        "[core]\n\trepositoryformatversion = 0\n",
+        encoding="utf-8",
+    )
+    existing_global_config = tmp_path / "existing.gitconfig"
+    existing_global_config.write_text(
+        "[user]\n\tname = Existing User\n",
+        encoding="utf-8",
+    )
+    support_root = tmp_path / "session" / ".moonmind"
+    session_environment = {
+        "GIT_CONFIG_GLOBAL": str(existing_global_config),
+    }
+
+    touched_paths = DockerCodexManagedSessionController._persist_brokered_github_config(
+        session_environment,
+        workspace_path=str(workspace_path),
+        support_root=support_root,
+        github_socket_path="/tmp/github-auth.sock",
+    )
+
+    git_config_text = (support_root / "gitconfig").read_text(encoding="utf-8")
+    assert f"\tpath = \"{existing_global_config}\"" in git_config_text
+    assert f"\tdirectory = \"{workspace_path}\"" in git_config_text
+    assert f"\tdirectory = \"{workspace_target}\"" not in git_config_text
+    assert session_environment["GIT_CONFIG_GLOBAL"] == str(support_root / "gitconfig")
+    assert session_environment["PATH"] == (
+        f"{support_root / 'bin'}{os.pathsep}"
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    )
+    assert repo_git_config_path in touched_paths
+    assert "# moonmind-credential-helper" in repo_git_config_path.read_text(
+        encoding="utf-8"
+    )
+    gh_wrapper_text = (support_root / "bin" / "gh").read_text(encoding="utf-8")
+    assert "real_gh_path" not in gh_wrapper_text
 
 
 @pytest.mark.asyncio
