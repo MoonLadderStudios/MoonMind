@@ -3384,6 +3384,11 @@ export interface components {
             prUrl?: string | null;
             /** Publishmode */
             publishMode?: string | null;
+            /**
+             * Mergeautomationselected
+             * @default false
+             */
+            mergeAutomationSelected: boolean;
             /** Resolvedskillsetref */
             resolvedSkillsetRef?: string | null;
             /** Taskskills */
