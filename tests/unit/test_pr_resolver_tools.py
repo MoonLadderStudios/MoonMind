@@ -1242,3 +1242,27 @@ def test_review_comment_with_thread_resolved_via_enrichment(
     assert summary["actionableCommentCount"] == 1
     assert summary["actionableCommentIds"] == [2]
     assert summary["nonActionableReasonCounts"].get("thread_resolved") == 1
+
+
+def test_pr_resolver_skill_requires_orchestrated_merge_completion() -> None:
+    skill_text = (
+        REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Primary Command (mandatory first action)" in skill_text
+    assert "Terminal Success Contract" in skill_text
+    assert "Main Loop" in skill_text
+    assert "A local fix, local commit" in skill_text
+    assert "status=merged" in skill_text
+    assert "merge_outcome=merged" in skill_text
+    assert "reason `publish_unavailable`" in skill_text
+    assert "branch is ahead of origin" in skill_text
+
+    repeated_blocker_step = (
+        "If the same blocker repeats after its specialized skill ran and no remote "
+        "PR branch change is visible"
+    )
+    skill_execution_step = "Execute the matching specialized skill exactly once"
+    assert skill_text.index(repeated_blocker_step) < skill_text.index(
+        skill_execution_step
+    )
