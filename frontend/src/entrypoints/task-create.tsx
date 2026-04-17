@@ -366,6 +366,8 @@ interface ExpandedStepPayload {
   instructions?: string;
   skill?: TaskTemplateStepSkill;
   tool?: TaskTemplateStepSkill;
+  inputAttachments?: StepAttachmentRef[];
+  attachments?: StepAttachmentRef[];
   storyOutput?: Record<string, unknown>;
   story_output?: Record<string, unknown>;
 }
@@ -416,6 +418,7 @@ interface StepState {
   skillRequiredCapabilities: string;
   templateStepId: string;
   templateInstructions: string;
+  templateAttachments: StepAttachmentRef[];
   storyOutput?: Record<string, unknown>;
 }
 
@@ -771,6 +774,7 @@ function createStepStateEntry(
     skillRequiredCapabilities: "",
     templateStepId: "",
     templateInstructions: "",
+    templateAttachments: [],
     ...overrides,
   };
 }
@@ -803,6 +807,11 @@ function createStepStateEntriesFromTemporalDraft(
       skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
+      templateAttachments: Array.isArray(
+        (step as { templateAttachments?: StepAttachmentRef[] }).templateAttachments,
+      )
+        ? (step as { templateAttachments?: StepAttachmentRef[] }).templateAttachments || []
+        : [],
       ...(step.storyOutput && Object.keys(step.storyOutput).length > 0
         ? { storyOutput: step.storyOutput }
         : {}),
@@ -891,8 +900,30 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
     !step.skillArgs.trim() &&
     !step.skillRequiredCapabilities.trim() &&
     !step.templateStepId.trim() &&
-    !step.templateInstructions.trim()
+    !step.templateInstructions.trim() &&
+    step.templateAttachments.length === 0
   );
+}
+
+function attachmentIdentity(item: StepAttachmentRef | File): string {
+  if ("artifactId" in item && item.artifactId) {
+    return `artifact:${item.artifactId}`;
+  }
+  if (item instanceof File) {
+    return ["file", item.name, item.type || "", String(item.size || 0)].join(
+      ":",
+    );
+  }
+  return [
+    "file",
+    item.filename,
+    item.contentType || "",
+    String(item.sizeBytes || 0),
+  ].join(":");
+}
+
+function attachmentSignature(items: Array<StepAttachmentRef | File>): string {
+  return items.map(attachmentIdentity).sort().join("|");
 }
 
 function isTemplateBoundStepForInstructions(
@@ -902,6 +933,18 @@ function isTemplateBoundStepForInstructions(
     step?.templateStepId &&
       step.id === step.templateStepId &&
       step.instructions === step.templateInstructions,
+  );
+}
+
+function isTemplateBoundStepForAttachments(
+  step: StepState | null | undefined,
+  attachments: Array<StepAttachmentRef | File>,
+): boolean {
+  return Boolean(
+    step?.templateStepId &&
+      step.id === step.templateStepId &&
+      attachmentSignature(attachments) ===
+        attachmentSignature(step.templateAttachments),
   );
 }
 
@@ -1109,6 +1152,11 @@ function mapExpandedStepToState(
       : step.story_output && typeof step.story_output === "object"
         ? step.story_output
         : undefined;
+  const templateAttachments = Array.isArray(step.inputAttachments)
+    ? step.inputAttachments
+    : Array.isArray(step.attachments)
+      ? step.attachments
+      : [];
   return createStepStateEntry(index, {
     id: stepId,
     title: String(step.title || "").trim(),
@@ -1118,6 +1166,7 @@ function mapExpandedStepToState(
     skillRequiredCapabilities: extractCapabilityCsv(tool.requiredCapabilities),
     templateStepId: stepId,
     templateInstructions: instructions,
+    templateAttachments,
     ...(storyOutput ? { storyOutput } : {}),
   });
 }
@@ -1434,9 +1483,14 @@ async function createStepAttachmentArtifact(
   file: File,
   repository: string,
   stepLabel: string,
+  options: {
+    source?: string;
+    target?: string;
+  } = {},
 ): Promise<StepAttachmentRef> {
   const filename = file.name || "attachment";
   const contentType = String(file.type || "application/octet-stream").trim();
+  const source = options.source || "task-dashboard-step-attachment";
   let createResponse: Response;
   try {
     createResponse = await fetch(createEndpoint, {
@@ -1452,8 +1506,8 @@ async function createStepAttachmentArtifact(
           label: `${stepLabel} Attachment`,
           filename,
           repository: repository || null,
-          source: "task-dashboard-step-attachment",
-          stepLabel,
+          source,
+          ...(options.target ? { target: options.target } : { stepLabel }),
         },
       }),
     });
@@ -1842,6 +1896,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [presetReapplyNeeded, setPresetReapplyNeeded] = useState(false);
   const [appliedTemplateFeatureRequest, setAppliedTemplateFeatureRequest] =
     useState("");
+  const [
+    appliedTemplateObjectiveAttachmentSignature,
+    setAppliedTemplateObjectiveAttachmentSignature,
+  ] = useState("");
   const [appliedTemplates, setAppliedTemplates] = useState<
     AppliedTemplateState[]
   >([]);
@@ -1864,6 +1922,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [selectedStepAttachmentFiles, setSelectedStepAttachmentFiles] = useState<
     Record<string, File[]>
   >({});
+  const [objectiveAttachmentFiles, setObjectiveAttachmentFiles] = useState<
+    File[]
+  >([]);
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2801,7 +2862,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const room = Math.max(
       0,
       attachmentPolicy.maxCount -
-        Object.values(selectedStepAttachmentFiles).flat().length,
+        selectedAttachmentFiles.length,
     );
     const toDownload = eligible.slice(0, room);
     if (toDownload.length === 0) {
@@ -2857,7 +2918,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           setSubmitMessage(validation.errors.join(" "));
           return;
         }
-        setSelectedStepAttachmentFiles(nextFilesByStep);
+        updateStepAttachments(targetLocalId, [...existingFiles, ...files]);
       }
       const messages: string[] = [];
       if (eligible.length > toDownload.length) {
@@ -2877,6 +2938,83 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       if (messages.length > 0) {
         setSubmitMessage(messages.join(" "));
+      }
+    } catch (error) {
+      const failure =
+        error instanceof Error
+          ? error
+          : new Error("Failed to download Jira images.");
+      setSubmitMessage(failure.message);
+    }
+  }
+
+  async function importSelectedJiraObjectiveImages(
+    issue: JiraIssueDetail,
+  ): Promise<void> {
+    const attachments = Array.isArray(issue.attachments) ? issue.attachments : [];
+    if (!attachmentPolicy.enabled || attachments.length === 0) {
+      return;
+    }
+    const eligible = attachments.filter(
+      (attachment) => !validateJiraImageAttachment(attachment, attachmentPolicy),
+    );
+    if (eligible.length === 0) {
+      setSubmitMessage(
+        "Jira images are not supported by the current attachment policy.",
+      );
+      return;
+    }
+    const existingKeys = new Set(
+      objectiveAttachmentFiles.map(
+        (file) => `${file.name}:${file.size}:${file.type}`,
+      ),
+    );
+    const room = Math.max(0, attachmentPolicy.maxCount - selectedAttachmentFiles.length);
+    const toDownload = eligible.slice(0, room);
+    if (toDownload.length === 0) {
+      setSubmitMessage("Attachment limit reached before Jira images could be added.");
+      return;
+    }
+    try {
+      const downloaded = await Promise.allSettled(
+        toDownload.map(async (attachment) => {
+          const response = await fetch(attachment.downloadUrl);
+          if (!response.ok) {
+            throw new Error(
+              await responseErrorMessage(response, "Failed to download Jira image."),
+            );
+          }
+          const blob = await response.blob();
+          const type = String(
+            blob.type || attachment.contentType || "",
+          ).toLowerCase();
+          const file = new File([blob], attachment.filename, { type });
+          return existingKeys.has(`${file.name}:${file.size}:${file.type}`)
+            ? null
+            : file;
+        }),
+      );
+      const files = downloaded
+        .filter(
+          (result): result is PromiseFulfilledResult<File | null> =>
+            result.status === "fulfilled",
+        )
+        .map((result) => result.value)
+        .filter((file): file is File => file !== null);
+      if (files.length > 0) {
+        const nextFiles = [...objectiveAttachmentFiles, ...files];
+        const validation = validateAttachmentFiles(
+          [
+            ...nextFiles,
+            ...Object.values(selectedStepAttachmentFiles).flat(),
+          ],
+          attachmentPolicy,
+        );
+        if (!validation.ok) {
+          setSubmitMessage(validation.errors.join(" "));
+          return;
+        }
+        updateObjectiveAttachments(nextFiles);
       }
     } catch (error) {
       const failure =
@@ -2915,10 +3053,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           importTarget,
         ),
       );
-      if (appliedTemplates.length > 0) {
-        setPresetReapplyNeeded(true);
-      }
-      await importSelectedJiraImages(issue, steps[0]?.localId);
+      updatePresetReapplyStateForObjective(nextText, objectiveAttachmentFiles);
+      await importSelectedJiraObjectiveImages(issue);
       return;
     }
 
@@ -2955,16 +3091,25 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     await importSelectedJiraImages(issue, importTarget.localId);
   }
 
+  function updatePresetReapplyStateForObjective(
+    nextText: string,
+    nextFiles: File[],
+  ) {
+    if (appliedTemplates.length === 0) {
+      setPresetReapplyNeeded(false);
+      return;
+    }
+    setPresetReapplyNeeded(
+      nextText.trim() !== appliedTemplateFeatureRequest.trim() ||
+        attachmentSignature(nextFiles) !==
+          appliedTemplateObjectiveAttachmentSignature,
+    );
+  }
+
   function handleTemplateFeatureRequestChange(value: string) {
     setTemplateFeatureRequest(value);
     setPresetJiraProvenance(null);
-    if (
-      presetReapplyNeeded &&
-      (!value.trim() ||
-        value.trim() === appliedTemplateFeatureRequest.trim())
-    ) {
-      setPresetReapplyNeeded(false);
-    }
+    updatePresetReapplyStateForObjective(value, objectiveAttachmentFiles);
   }
 
   function addDependency(workflowId: string) {
@@ -2996,6 +3141,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   function updateStepAttachments(localId: string, files: File[]) {
+    setSteps((current) =>
+      current.map((step) => {
+        if (
+          step.localId !== localId ||
+          !step.templateStepId ||
+          step.id !== step.templateStepId ||
+          isTemplateBoundStepForAttachments(step, files)
+        ) {
+          return step;
+        }
+        return { ...step, id: "" };
+      }),
+    );
     setSelectedStepAttachmentFiles((current) => {
       const next = { ...current };
       if (files.length > 0) {
@@ -3007,9 +3165,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     });
   }
 
+  function updateObjectiveAttachments(files: File[]) {
+    setObjectiveAttachmentFiles(files);
+    updatePresetReapplyStateForObjective(templateFeatureRequest, files);
+  }
+
   const selectedAttachmentFiles = useMemo(
-    () => Object.values(selectedStepAttachmentFiles).flat(),
-    [selectedStepAttachmentFiles],
+    () => [
+      ...objectiveAttachmentFiles,
+      ...Object.values(selectedStepAttachmentFiles).flat(),
+    ],
+    [objectiveAttachmentFiles, selectedStepAttachmentFiles],
   );
 
   const providerOptions = [...(providerProfilesQuery.data || [])]
@@ -3385,6 +3551,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         (current) => current + Math.max(expandedSteps.length, 1),
       );
       setAppliedTemplateFeatureRequest(templateFeatureRequest.trim());
+      setAppliedTemplateObjectiveAttachmentSignature(
+        attachmentSignature(objectiveAttachmentFiles),
+      );
       setPresetReapplyNeeded(false);
       if (expandedSteps.length > 0) {
         const appliedTemplate = expanded.appliedTemplate || {};
@@ -3872,9 +4041,26 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
 
     setIsSubmitting(true);
+    let uploadedObjectiveAttachments: StepAttachmentRef[] = [];
     let uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
     try {
       if (selectedAttachmentFiles.length > 0) {
+        if (objectiveAttachmentFiles.length > 0) {
+          uploadedObjectiveAttachments = await Promise.all(
+            objectiveAttachmentFiles.map((file) =>
+              createStepAttachmentArtifact(
+                artifactCreateEndpoint,
+                file,
+                normalizedRepository,
+                "Feature Request / Initial Instructions",
+                {
+                  source: "task-dashboard-objective-attachment",
+                  target: "Feature Request / Initial Instructions",
+                },
+              ),
+            ),
+          );
+        }
         const uploadEntries = await Promise.all(
           steps.map(async (step, index) => {
             const files = selectedStepAttachmentFiles[step.localId] || [];
@@ -3911,6 +4097,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     const primaryAttachmentRefs = primaryStep
       ? uploadedStepAttachments[primaryStep.localId] || []
       : [];
+    const taskLevelAttachmentRefs = [
+      ...uploadedObjectiveAttachments,
+      ...primaryAttachmentRefs,
+    ];
     const objectiveInstructionsWithAttachments = appendStepAttachmentInstructions(
       objectiveInstructions,
       primaryAttachmentRefs,
@@ -4007,8 +4197,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           if (!sourceStep) {
             return entry.payload;
           }
+          const payloadAttachments = Array.isArray(
+            entry.payload.inputAttachments,
+          )
+            ? (entry.payload.inputAttachments as StepAttachmentRef[])
+            : [];
+          const shouldPreserveStepId =
+            !sourceStep.templateStepId ||
+            sourceStep.id !== sourceStep.templateStepId ||
+            (String(entry.payload.instructions || sourceStep.instructions) ===
+              sourceStep.templateInstructions &&
+              isTemplateBoundStepForAttachments(sourceStep, payloadAttachments));
           return {
-            ...(sourceStep.id.trim() ? { id: sourceStep.id.trim() } : {}),
+            ...(shouldPreserveStepId && sourceStep.id.trim()
+              ? { id: sourceStep.id.trim() }
+              : {}),
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
               : {}),
@@ -4092,8 +4295,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       instructions: objectiveInstructionsWithAttachments,
       tool: resolvedTool,
       skill: resolvedSkill,
-      ...(primaryAttachmentRefs.length > 0
-        ? { inputAttachments: primaryAttachmentRefs }
+      ...(taskLevelAttachmentRefs.length > 0
+        ? { inputAttachments: taskLevelAttachmentRefs }
         : {}),
       ...(taskSkillSelectors ? { skills: taskSkillSelectors } : {}),
       ...(Object.keys(primarySkillArgs).length > 0 ? { inputs: primarySkillArgs } : {}),
@@ -4237,7 +4440,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       if (inputArtifactRef) {
         await linkInputArtifact(inputArtifactRef, created);
       }
-      for (const attachment of Object.values(uploadedStepAttachments).flat()) {
+      for (const attachment of [
+        ...uploadedObjectiveAttachments,
+        ...Object.values(uploadedStepAttachments).flat(),
+      ]) {
         await linkInputArtifact(attachment.artifactId, created, {
           linkType: "input.attachment",
           label: attachment.filename,
@@ -4815,6 +5021,42 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   handleTemplateFeatureRequestChange(event.target.value)
                 }
               />
+              {attachmentPolicy.enabled ? (
+                <div className="queue-step-attachments">
+                  <label>
+                    Objective images
+                    <input
+                      type="file"
+                      data-step-field="objective-attachments"
+                      multiple
+                      accept={attachmentPolicy.allowedContentTypes.join(",")}
+                      aria-label="Feature Request / Initial Instructions attachments"
+                      onChange={(event) =>
+                        updateObjectiveAttachments(
+                          Array.from(event.target.files || []),
+                        )
+                      }
+                    />
+                  </label>
+                  <p className="small">
+                    {`Up to ${attachmentPolicy.maxCount} files across the objective and all steps, ${formatAttachmentBytes(attachmentPolicy.maxBytes)} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`}
+                  </p>
+                  {objectiveAttachmentFiles.length > 0 ? (
+                    <ul className="list queue-step-attachments-list">
+                      {objectiveAttachmentFiles.map((file) => (
+                        <li key={`${file.name}:${file.size}:${file.type}`}>
+                          <span>
+                            <strong>{file.name}</strong>{" "}
+                            <span className="small">
+                              {`${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`}
+                            </span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
             <div className="actions">
               <button

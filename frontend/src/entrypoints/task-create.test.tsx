@@ -4309,6 +4309,225 @@ describe("Task Create Entrypoint", () => {
     ]);
   });
 
+  it("does not mutate the draft when selecting a preset before apply", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Keep this authored step." },
+    });
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+
+    expect(screen.getByDisplayValue("Keep this authored step.")).toBeTruthy();
+    expect(
+      screen.queryByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeTruthy();
+  });
+
+  it("marks an applied preset dirty when preset objective text changes manually", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create with revised objective" },
+      },
+    );
+
+    expect(
+      screen.getByText(
+        "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reapply preset" })).toBeTruthy();
+    expect(
+      screen.getByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
+    ).toBeTruthy();
+  });
+
+  it("marks an applied preset dirty when objective attachments change and submits them as task attachments", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    const objectiveFile = new File(["objective image"], "objective.png", {
+      type: "image/png",
+    });
+    fireEvent.change(
+      await screen.findByLabelText(
+        "Feature Request / Initial Instructions attachments",
+      ),
+      {
+        target: { files: [objectiveFile] },
+      },
+    );
+
+    expect(screen.getByRole("button", { name: "Reapply preset" })).toBeTruthy();
+    expect(
+      screen.getByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const artifactCreateCall = fetchSpy.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "/api/artifacts" &&
+        String(init?.body || "").includes(
+          "task-dashboard-objective-attachment",
+        ),
+    );
+    expect(JSON.parse(String(artifactCreateCall?.[1]?.body))).toMatchObject({
+      content_type: "image/png",
+      size_bytes: objectiveFile.size,
+      metadata: {
+        filename: "objective.png",
+        source: "task-dashboard-objective-attachment",
+        target: "Feature Request / Initial Instructions",
+      },
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.inputAttachments).toEqual([
+      {
+        artifactId: "art-001",
+        filename: "objective.png",
+        contentType: "image/png",
+        sizeBytes: objectiveFile.size,
+      },
+    ]);
+    expect(request.payload.task.steps[0].inputAttachments).toBeUndefined();
+  });
+
+  it("detaches template step identity when a template-bound step attachment changes", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Spec Kit Demo (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Task Create" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByDisplayValue(
+      "Clarify the {{ inputs.feature_name }} scope.",
+    );
+
+    const file = new File(["step image"], "step.png", { type: "image/png" });
+    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+      target: { files: [file] },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+    expect(request.payload.task.steps[0]).toEqual(
+      expect.objectContaining({
+        instructions: expect.stringContaining(
+          "Clarify the {{ inputs.feature_name }} scope.",
+        ),
+        inputAttachments: [
+          {
+            artifactId: "art-001",
+            filename: "step.png",
+            contentType: "image/png",
+            sizeBytes: file.size,
+          },
+        ],
+      }),
+    );
+    expect([undefined, null, ""]).toContain(
+      request.payload.task.steps[0]?.id,
+    );
+  });
+
   it("derives the task objective from feature-request template input aliases", () => {
     expect(
       resolveObjectiveInstructions("", "", [
@@ -5879,7 +6098,7 @@ describe("Task Create Entrypoint", () => {
       throw new Error("Expected Jira image download to be pending.");
     }
     imageDownload.resolve();
-    expect(await screen.findByText("wireframe.png (10 B)")).toBeTruthy();
+    expect(await screen.findByText("wireframe.png")).toBeTruthy();
     expect(
       screen.getByRole("dialog", { name: "Browse Jira issue" }),
     ).toBeTruthy();
