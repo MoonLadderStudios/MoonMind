@@ -25,6 +25,7 @@ NON_RETRYABLE_REASONS = {
     "comment_policy_not_enforced",
     "merge_not_ready",
     "pr_not_found",
+    "publish_unavailable",
     "already_merged",
 }
 
@@ -97,4 +98,6 @@ def remediation_next_step(reason: str) -> str:
         return "inspect_comment_policy"
     if normalized == "merge_not_ready":
         return "inspect_mergeability_state"
+    if normalized == "publish_unavailable":
+        return "manual_review"
     return "manual_review"
