@@ -1,9 +1,11 @@
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from moonmind.vision.service import (
     AttachmentContextInput,
+    VisionContextTargetInput,
     VisionContextStatus,
     VisionService,
 )
@@ -238,3 +240,155 @@ def test_vision_service_default_config():
         service = VisionService()
         assert service._config.provider == "test"
         mock_get_config.assert_called_once()
+
+
+@patch("moonmind.vision.service.settings")
+def test_render_target_contexts_preserves_objective_and_step_targets(
+    mock_settings, base_config
+):
+    mock_settings.google.google_api_key = "fake_key"
+    objective_attachment = AttachmentContextInput(
+        id="artifact-objective",
+        filename="shared.png",
+        content_type="image/png",
+        size_bytes=100,
+        digest="sha256:objective",
+        local_path=".moonmind/inputs/objective/artifact-objective-shared.png",
+    )
+    step_attachment = AttachmentContextInput(
+        id="artifact-step",
+        filename="shared.png",
+        content_type="image/png",
+        size_bytes=200,
+        digest="sha256:step",
+        local_path=".moonmind/inputs/steps/review/artifact-step-shared.png",
+    )
+    service = VisionService(config=base_config)
+
+    bundle = service.render_target_contexts(
+        [
+            VisionContextTargetInput.objective([objective_attachment]),
+            VisionContextTargetInput.step("review", [step_attachment]),
+        ]
+    )
+
+    assert bundle.index["generated"] is True
+    assert [entry["contextPath"] for entry in bundle.index["targets"]] == [
+        ".moonmind/vision/task/image_context.md",
+        ".moonmind/vision/steps/review/image_context.md",
+    ]
+    assert bundle.index["targets"][0]["targetKind"] == "objective"
+    assert bundle.index["targets"][0]["attachmentRefs"] == ["artifact-objective"]
+    assert bundle.index["targets"][1]["targetKind"] == "step"
+    assert bundle.index["targets"][1]["stepRef"] == "review"
+    assert bundle.index["targets"][1]["attachmentRefs"] == ["artifact-step"]
+    assert "artifact-objective" in bundle.artifacts[0].context.markdown
+    assert "artifact-step" in bundle.artifacts[1].context.markdown
+
+
+def test_render_target_contexts_disabled_records_status_and_traceability(
+    base_config,
+):
+    disabled_config = VisionConfig(
+        enabled=False,
+        provider="gemini_cli",
+        model="gemini-1.5-flash",
+        max_tokens=4000,
+        ocr_enabled=True,
+    )
+    attachment = AttachmentContextInput(
+        id="artifact-disabled",
+        filename="disabled.png",
+        content_type="image/png",
+        size_bytes=300,
+        digest=None,
+        local_path=".moonmind/inputs/objective/artifact-disabled-disabled.png",
+    )
+    service = VisionService(config=disabled_config)
+
+    bundle = service.render_target_contexts(
+        [VisionContextTargetInput.objective([attachment])]
+    )
+
+    assert bundle.index["generated"] is False
+    target = bundle.index["targets"][0]
+    assert target["status"] == VisionContextStatus.DISABLED.value
+    assert target["attachmentRefs"] == ["artifact-disabled"]
+    assert target["sourcePaths"] == [
+        ".moonmind/inputs/objective/artifact-disabled-disabled.png"
+    ]
+    assert "Vision context generation disabled" in bundle.artifacts[0].context.markdown
+
+
+def test_render_target_contexts_sanitizes_step_ref_for_context_path(base_config):
+    service = VisionService(config=base_config)
+    bundle = service.render_target_contexts(
+        [
+            VisionContextTargetInput.step(
+                "../Review Step!",
+                [
+                    AttachmentContextInput(
+                        id="artifact-safe",
+                        filename="safe.png",
+                        content_type="image/png",
+                        size_bytes=300,
+                        digest=None,
+                        local_path=".moonmind/inputs/steps/review/artifact-safe-safe.png",
+                    )
+                ],
+            )
+        ]
+    )
+
+    assert bundle.artifacts[0].context_path == Path(
+        ".moonmind/vision/steps/review-step/image_context.md"
+    )
+    assert bundle.index["targets"][0]["stepRef"] == "../Review Step!"
+    assert bundle.index["targets"][0]["contextPath"] == (
+        ".moonmind/vision/steps/review-step/image_context.md"
+    )
+
+
+def test_render_target_contexts_rejects_colliding_sanitized_step_refs(base_config):
+    service = VisionService(config=base_config)
+    attachment_a = AttachmentContextInput(
+        id="artifact-a",
+        filename="shared.png",
+        content_type="image/png",
+        size_bytes=300,
+        digest=None,
+        local_path=".moonmind/inputs/steps/a-b/artifact-a-shared.png",
+    )
+    attachment_b = AttachmentContextInput(
+        id="artifact-b",
+        filename="shared.png",
+        content_type="image/png",
+        size_bytes=300,
+        digest=None,
+        local_path=".moonmind/inputs/steps/a-b/artifact-b-shared.png",
+    )
+
+    with pytest.raises(ValueError, match="target path collision"):
+        service.render_target_contexts(
+            [
+                VisionContextTargetInput.step("A B", [attachment_a]),
+                VisionContextTargetInput.step("A-B", [attachment_b]),
+            ]
+        )
+
+
+def test_render_target_contexts_rejects_unusable_step_ref_with_value(base_config):
+    service = VisionService(config=base_config)
+    attachment = AttachmentContextInput(
+        id="artifact-unsafe",
+        filename="unsafe.png",
+        content_type="image/png",
+        size_bytes=300,
+        digest=None,
+        local_path=".moonmind/inputs/steps/unsafe/artifact-unsafe-unsafe.png",
+    )
+
+    with pytest.raises(ValueError, match="got unusable value: '!!!'"):
+        service.render_target_contexts(
+            [VisionContextTargetInput.step("!!!", [attachment])]
+        )
