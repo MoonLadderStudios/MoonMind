@@ -71,8 +71,8 @@
 
 ## Verification Notes
 
-- Focused service/API command: `pytest tests/unit/api/test_task_step_templates_service.py tests/unit/api/routers/test_task_step_templates.py -q` passed with 27 tests.
-- Full unit command: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` passed with 3466 Python tests, 16 subtests, and 236 frontend tests.
+- Focused service/API command: `pytest tests/unit/api/test_task_step_templates_service.py tests/unit/api/routers/test_task_step_templates.py -q` passed with 29 tests, including seed-sync include limit coverage.
+- Full unit command: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` passed with 3468 Python tests, 16 subtests, and 236 frontend tests.
 - Hermetic integration command was not run because Docker is unavailable in this managed workspace: `dial unix /var/run/docker.sock: connect: no such file or directory`.
 - Final `/moonspec-verify` verdict: `FULLY_IMPLEMENTED` with integration-suite execution blocked only by the workspace Docker socket, while service/API boundary tests cover the MM-383 composition contract.
 

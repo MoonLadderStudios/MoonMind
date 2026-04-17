@@ -1555,7 +1555,7 @@ class TaskTemplateCatalogService:
                     steps=validated_steps,
                     annotations=annotations,
                     required_capabilities=derived_capabilities,
-                    max_step_count=max(1, len(validated_steps)),
+                    max_step_count=max(25, len(validated_steps)),
                     release_status=TaskTemplateReleaseStatus.ACTIVE,
                     seed_source=item.get("seedSource"),
                 )
@@ -1576,7 +1576,7 @@ class TaskTemplateCatalogService:
                 ):
                     version_model.required_capabilities = list(derived_capabilities)
                     updated = True
-                max_step_count = max(1, len(validated_steps))
+                max_step_count = max(25, len(validated_steps))
                 if int(version_model.max_step_count or 0) != max_step_count:
                     version_model.max_step_count = max_step_count
                     updated = True

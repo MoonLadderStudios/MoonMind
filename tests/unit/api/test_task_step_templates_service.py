@@ -1102,6 +1102,105 @@ async def test_sync_seed_templates_creates_missing_seed(tmp_path):
             assert template.latest_version.steps[0]["skill"]["id"] == "moonspec-specify"
 
 
+async def test_sync_seed_templates_preserves_default_expansion_limit_for_includes(
+    tmp_path,
+):
+    seed_dir = tmp_path / "seeds"
+    seed_data = {
+        "slug": "composed-seed",
+        "title": "Composed Seed",
+        "description": "Seeded preset with child include",
+        "scope": "global",
+        "version": "1.0.0",
+        "steps": [
+            {
+                "kind": "include",
+                "slug": "shared-child",
+                "version": "1.0.0",
+                "alias": "shared",
+                "scope": "global",
+            }
+        ],
+        "inputs": [],
+        "annotations": {"sourceSkill": "composed-seed"},
+    }
+    _write_seed_template(seed_dir, seed_data)
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="composed-seed",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+
+    assert template.latest_version is not None
+    assert template.latest_version.max_step_count == 25
+
+
+async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_path):
+    seed_dir = tmp_path / "seeds"
+    seed_data = {
+        "slug": "composed-seed",
+        "title": "Composed Seed",
+        "description": "Seeded preset with child include",
+        "scope": "global",
+        "version": "1.0.0",
+        "steps": [
+            {
+                "kind": "include",
+                "slug": "shared-child",
+                "version": "1.0.0",
+                "alias": "shared",
+                "scope": "global",
+            }
+        ],
+        "inputs": [],
+        "annotations": {"sourceSkill": "composed-seed"},
+    }
+    _write_seed_template(seed_dir, seed_data)
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="composed-seed",
+                title="Composed Seed",
+                description="Seeded preset with child include",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=seed_data["steps"],
+                annotations={"sourceSkill": "composed-seed"},
+                required_capabilities=[],
+                created_by=None,
+            )
+            template = await service._get_template_for_scope(
+                slug="composed-seed",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.latest_version is not None
+            template.latest_version.max_step_count = 1
+            await session.commit()
+
+            result = await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="composed-seed",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+
+    assert result.updated == 1
+    assert template.latest_version is not None
+    assert template.latest_version.max_step_count == 25
+
+
 async def test_sync_seed_templates_updates_existing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"
     seed_data = {
