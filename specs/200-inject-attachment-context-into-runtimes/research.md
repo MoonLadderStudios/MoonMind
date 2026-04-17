@@ -42,8 +42,8 @@ Alternatives considered: Using the step prompt renderer for planning was rejecte
 
 ## Test Strategy
 
-Decision: Use focused pytest coverage in `tests/unit/agents/codex_worker/test_worker.py` for instruction ordering, step filtering, compact inventory, absent manifest behavior, and byte/data URL guardrails.
+Decision: Use focused pytest coverage in `tests/unit/agents/codex_worker/test_worker.py` for instruction ordering, step filtering, compact inventory, absent manifest behavior, byte/data URL guardrails, and integration-style worker boundary coverage over prepared manifest plus vision index artifacts.
 
-Rationale: The behavior is pure worker instruction composition over prepared workspace files and does not require Docker or external credentials.
+Rationale: The behavior is pure worker instruction composition over prepared workspace files and does not require Docker or external credentials. The required integration-style boundary is the worker prepare/instruction seam, so it belongs in the required unit suite rather than the Docker-backed hermetic integration suite.
 
 Alternatives considered: Full Temporal integration was rejected for this story because no workflow/activity signature or persisted payload shape changes are introduced.

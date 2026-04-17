@@ -7,7 +7,7 @@
 
 ## Summary
 
-MM-372 requires text-first runtime instructions to receive target-scoped attachment context before `WORKSPACE`, while planning receives only compact later-step inventory and multimodal paths preserve existing refs/contracts. The implementation will extend the Codex worker instruction composition helpers to read prepared `.moonmind/attachments_manifest.json` and optional `.moonmind/vision/image_context_index.json`, select objective plus current-step entries, render a safety-marked `INPUT ATTACHMENTS` block, and keep non-current step entries out of active step instructions. Validation will use focused worker unit coverage for prompt ordering, target filtering, planning inventory, guardrails, and absent-manifest behavior.
+MM-372 requires text-first runtime instructions to receive target-scoped attachment context before `WORKSPACE`, while planning receives only compact later-step inventory and multimodal paths preserve existing refs/contracts. The implementation will extend the Codex worker instruction composition helpers to read prepared `.moonmind/attachments_manifest.json` and optional `.moonmind/vision/image_context_index.json`, select objective plus current-step entries, render a safety-marked `INPUT ATTACHMENTS` block, and keep non-current step entries out of active step instructions. Validation will use focused worker unit coverage for prompt ordering, target filtering, planning inventory, guardrails, and absent-manifest behavior plus integration-style worker boundary coverage proving prepared manifest and vision index artifacts flow into runtime instruction composition.
 
 ## Technical Context
 
