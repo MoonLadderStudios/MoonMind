@@ -22,7 +22,7 @@ Read relevant documents in the following order before implementing tasks:
 When writing code that interacts with skills:
 - Read `docs/Tools/SkillSystem.md`.
 - Keep `.agents/skills` as the canonical active path.
-- Keep `.agents/skills/local` as a local-only overlay.
+- Keep `.agents/skills/local` as a workspace-local overlay.
 - Do not mutate checked-in skill folders in place.
 - Keep large skill content out of workflow history (use refs).
 - Add workflow/activity or adapter-boundary tests.
@@ -150,7 +150,7 @@ Key diagnostics:
 - Never paste full `docker compose` output, `.env` files, or environment/config dumps into PR comments. Summarize and redact.
 - Before posting any PR/issue/review comment, scan the outgoing text for secret-like patterns (`ghp_`, `github_pat_`, `AIza`, `ATATT`, `AKIA`, private key blocks, `token=`/`password=` assignments) and block posting on any match.
 - If secrets are observed in comments, logs, or commits: stop, redact/delete the exposed content when possible, and rotate affected credentials immediately.
-- Repo and local skill sources are potentially *untrusted input*. Implementations must respect deployment policy on whether those sources are allowed and must not silently assume repo/local skills are always enabled.
+- Repo checked-in and workspace-local overlay skill sources are potentially *untrusted input*. Implementations must respect deployment policy on whether those sources are allowed and must not silently assume repo checked-in or workspace-local overlay skills are always enabled.
 
 ## Compatibility Policy
 - MoonMind is a **pre-release project** (see Constitution Principle XIII). Do NOT introduce compatibility aliases, translation layers, or backward-compat wrappers for internal contracts. When a pattern is superseded, **remove the old version entirely** in the same change.
@@ -164,8 +164,8 @@ Key diagnostics:
 - **Target-State Model**: MoonMind resolves and materializes one per-run active skill set, exposing it to agents through adapter boundaries.
 - **Canonical Active Path**: `.agents/skills` is the canonical runtime-visible path. It contains the **resolved active snapshot** for the run, not a mutable source-of-truth folder.
 - **Immutable Source Protection**: Do not rewrite checked-in skill folders in place as part of runtime setup. Generate or project the active skill set separately, then expose it through the canonical active path.
-- **Local Overlay Source**: `.agents/skills/local` is a valid *local-only input/overlay path*. It is **not** the authoritative durable storage model for MoonMind-managed skills and should not be treated as the canonical source of truth.
-- **Adapter Mappings**: `skills_active` (or its equivalent run-scoped active directory) contains the **resolved immutable active skill set for the run**. Adapters traditionally map `.agents/skills -> ../skills_active` or `.gemini/skills -> ../skills_active` to link workflows to the snapshot. Checked-in repo skills and local-only skills are merely *inputs* to this resolution.
+- **Workspace-Local Overlay Source**: `.agents/skills/local` is a valid *workspace-local input/overlay path*. It is **not** the authoritative durable storage model for MoonMind-managed skills and should not be treated as the canonical source of truth.
+- **Adapter Mappings**: `skills_active` (or its equivalent run-scoped active directory) contains the **resolved immutable active skill set for the run**. Adapters traditionally map `.agents/skills -> ../skills_active` or `.gemini/skills -> ../skills_active` to link workflows to the snapshot. Checked-in repo skills and workspace-local overlay skills are merely *inputs* to this resolution.
 - **Environment Targeting**: Prefer configuring `WORKFLOW_SKILLS_WORKSPACE_ROOT` and `WORKFLOW_SKILLS_CACHE_ROOT` to point to writable paths intended specifically for storing resolved active skill snapshots and related runtime materialization artifacts (these mounts are not arbitrary mutable replacements for the canonical design).
 
 ## Active Technologies

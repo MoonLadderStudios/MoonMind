@@ -51,7 +51,7 @@ The canonical model is:
 2. `docs/Tasks/SkillAndPlanContracts.md` remains canonical for executable tool contracts.
 3. This document is canonical for the overall Skill System boundary and for the full lifecycle of agent instruction-bundle skills.
 4. Agent instruction-bundle skills are deployment-scoped data, not incidental markdown files.
-5. MoonMind supports **built-in**, **deployment-stored**, **repo-checked-in**, and **local-only** agent skills, plus explicit task or step overrides.
+5. MoonMind supports **built-in**, **deployment-stored**, **repo-checked-in**, and **workspace-local overlay** agent skills, plus explicit task or step overrides.
 6. At run start, MoonMind resolves all applicable sources into an immutable **ResolvedSkillSet** snapshot.
 7. Workflows and activities carry refs to that snapshot, not large inline skill bodies.
 8. Runtime adapters materialize that snapshot for the target runtime.
@@ -61,7 +61,7 @@ The canonical model is:
    2. compact activation summary included inline in runtime instructions
    3. active bundle projected to the runtime at `.agents/skills`
 10. `.agents/skills` is the canonical runtime-visible path for the active resolved skill set.
-11. `.agents/skills/local` is the canonical local-only overlay and input path.
+11. `.agents/skills/local` is the canonical workspace-local overlay and input path.
 12. Runtimes must not re-resolve or rediscover skills during execution.
 
 This gives MoonMind:
@@ -71,7 +71,7 @@ This gives MoonMind:
 * reproducible executions
 * better auditability
 * lower workflow-history pressure
-* support for deployment-managed skills and repo-local inputs without making repo folders the primary source of truth
+* support for deployment-managed skills, repo-checked-in inputs, and workspace-local overlays without making repo folders the primary source of truth
 
 ---
 
@@ -195,7 +195,7 @@ The Skill System must:
 1. define one canonical terminology boundary for all MoonMind “skill” concepts
 2. support deployment-scoped skill storage as MoonMind data
 3. support built-in base skills shipped with MoonMind
-4. support repo-checked-in and local-only repo skills as optional inputs
+4. support repo-checked-in skills and workspace-local overlay skills as optional inputs
 5. allow tasks and steps to select skill sets in a runtime-independent way
 6. resolve all selected agent skills into an immutable snapshot before runtime launch
 7. keep large skill bodies out of workflow history
@@ -231,7 +231,7 @@ The following rules are fixed.
 1. Agent skills are **data**, not executable tool contracts.
 2. The deployment-backed skill catalog is the authoritative source of truth for managed skill storage.
 3. `.agents/skills` is the canonical workspace-facing path for the runtime-visible active skill set.
-4. `.agents/skills/local` is the canonical local-only overlay path for non-version-controlled skills and mirrors.
+4. `.agents/skills/local` is the canonical workspace-local overlay path for non-version-controlled skills and mirrors.
 5. Repo directories may contribute skills, but they do not replace the deployment-backed skill system.
 6. Every run or step uses an immutable `ResolvedSkillSet`.
 7. Workflows carry refs to skill snapshots, not large inline skill content.
@@ -293,18 +293,20 @@ These skills are useful for:
 
 Repo checked-in skills are valid resolution inputs, but they are not the only source of truth.
 
-## 6.4 Repo local-only skills
+## 6.4 Workspace-local overlay skills
 
-A target repository may define local-only agent skills under `.agents/skills/local`.
+Workspace-local overlay skills are non-version-controlled skill inputs available in the current workspace or runtime environment.
+
+They are not checked into the target repository and are not part of the authoritative deployment-backed skill catalog.
 
 These are useful for:
 
-* non-version-controlled local instructions
-* developer-specific overlays
 * local experimentation
-* migration from older local-only skill flows
+* operator-specific overlays
+* migration from older workspace-local flows
+* environment-scoped additions where policy allows them
 
-These skills are intentionally excluded from version control by default.
+These skills are intentionally excluded from version control by default. In managed-session environments, they are owned by the deployment, worker environment, or ephemeral workspace around the repo rather than by the target repo itself.
 
 ## 6.5 Explicit task or step overrides
 
@@ -323,7 +325,7 @@ When multiple sources provide candidate skills, MoonMind resolves them in this o
 1. built-in base skills
 2. deployment-stored skills
 3. repo checked-in skills
-4. repo local-only skills
+4. workspace-local overlay skills
 5. explicit task or step overrides
 
 Later layers may override earlier ones according to the collision rules below.
@@ -343,10 +345,10 @@ When more than one source provides a skill with the same canonical name:
 Deployments may define policy that restricts:
 
 1. whether repo skills are allowed
-2. whether local-only skills are allowed
+2. whether workspace-local overlay skills are allowed
 3. which built-in or deployment skills are eligible
 4. whether step-level overrides are permitted
-5. whether local-only skills may shadow deployment-managed skills
+5. whether workspace-local overlay skills may shadow deployment-managed skills
 6. whether deployment-managed skills are mandatory for certain runs
 7. whether specific skills or skill sets are permitted for certain runtimes
 
@@ -362,15 +364,15 @@ Policy is enforced during resolution, not after runtime launch.
 
 This path is the stable interface MoonMind should present to managed runtimes and to workspace-aware tooling.
 
-## 8.2 Local-only overlay path
+## 8.2 Workspace-local overlay path
 
-`.agents/skills/local` is the canonical local-only overlay path.
+`.agents/skills/local` is the canonical workspace-local overlay path.
 
 This path is intended for:
 
-* local-only developer skills
+* non-version-controlled workspace-local overlay skills
 * non-version-controlled mirrors
-* opt-in repo-local overlay behavior
+* opt-in environment-scoped overlay behavior
 
 It is not the authoritative durable source of truth for MoonMind-managed skill storage.
 
@@ -629,7 +631,7 @@ The canonical resolution flow is:
 
 1. collect selectors from the task and current step
 2. identify the allowed source kinds under current policy
-3. load candidate skills from built-in, deployment, repo checked-in, and local-only sources
+3. load candidate skills from built-in, deployment, repo checked-in, and workspace-local overlay sources
 4. apply precedence and collision rules
 5. pin exact skill versions
 6. write a resolved manifest artifact
@@ -749,7 +751,7 @@ These are the possible sources used during resolution, such as:
 * deployment-managed skills
 * built-in skills
 * repo-checked-in skills
-* repo local-only skills
+* workspace-local overlay skills
 
 ### 14.2.2 Active backing store
 
@@ -1002,7 +1004,7 @@ This keeps skill resolution centralized while allowing runtime-specific delivery
 
 ## 17.1 Untrusted content rule
 
-Repo-provided and local-only skill content must be treated as potentially untrusted input.
+Repo-provided and workspace-local overlay skill content must be treated as potentially untrusted input.
 
 MoonMind must not assume that repo skill content is safe simply because it lives in the workspace.
 
@@ -1021,7 +1023,7 @@ MoonMind must not:
 Deployments may restrict:
 
 1. whether repo checked-in skills are allowed
-2. whether local-only skills are allowed
+2. whether workspace-local overlay skills are allowed
 3. whether deployment-managed skills are mandatory
 4. whether task or step overrides are allowed
 5. whether specific skills or skill sets are permitted for certain runtimes
@@ -1056,7 +1058,7 @@ Where applicable, operators should be able to see or select:
 1. named skill sets
 2. explicit includes and excludes
 3. the intended materialization mode
-4. whether repo and local overlays are enabled for the run
+4. whether repo checked-in skills and workspace-local overlays are enabled for the run
 
 ## 18.2 Detail-page visibility
 
@@ -1136,7 +1138,7 @@ This document describes the canonical target-state design. The current implement
 ## 20.2 Partially aligned
 
 1. shared skill materialization behavior exists in some runtime guidance and workspace conventions
-2. local-only mirrors and adapter-visible compatibility paths already exist in some form
+2. workspace-local mirrors and adapter-visible compatibility paths already exist in some form
 3. managed-runtime projection behavior exists, but some manifest naming and adapter details are still transitional
 4. the runtime side of skill exposure is more advanced than the fully modeled control-plane data model
 
@@ -1147,7 +1149,7 @@ This document describes the canonical target-state design. The current implement
 3. canonical task and step selectors for agent skills in all relevant APIs
 4. full Mission Control support for selection and visibility
 5. end-to-end audit and provenance surfaces
-6. explicit policy enforcement across built-in, deployment, repo, and local sources
+6. explicit policy enforcement across built-in, deployment, repo checked-in, and workspace-local overlay sources
 7. full standardization of the runtime-visible active manifest and adapter metadata surfaces
 
 ---
@@ -1206,7 +1208,7 @@ This document locks the following design decisions.
 3. Runtime-native commands are distinct from both.
 4. The authoritative managed storage model for agent skills is deployment-backed.
 5. `.agents/skills` is the canonical runtime-visible path for the active skill set.
-6. `.agents/skills/local` is the local-only overlay path.
+6. `.agents/skills/local` is the workspace-local overlay path.
 7. Repo skill folders are valid inputs, not the only source of truth.
 8. Each run or step uses an immutable `ResolvedSkillSet`.
 9. Managed runtimes use one standard injection shape: full active bundle in a run-scoped backing store, projected at `.agents/skills`, with a compact activation summary inline.
@@ -1228,11 +1230,11 @@ The canonical model is:
 
 1. distinguish executable tool contracts from agent instruction bundles
 2. store agent skills as versioned data
-3. allow repo and local overlays as inputs
+3. allow repo-checked-in and workspace-local overlays as inputs
 4. resolve all applicable sources into an immutable active snapshot
 5. materialize that snapshot for the target runtime
 6. expose the active result through `.agents/skills`
-7. keep `.agents/skills/local` as the local-only overlay path
+7. keep `.agents/skills/local` as the workspace-local overlay path
 8. use one standard managed-runtime injection shape
 9. preserve provenance, auditability, and replay safety
 

@@ -126,7 +126,7 @@ These are the possible sources used during resolution, such as:
 - deployment-managed skills
 - built-in skills
 - repo-checked-in skills
-- repo local-only skills
+- workspace-local overlay skills
 
 ### 6.2 Active backing store
 
@@ -414,7 +414,7 @@ Adapters must not:
 ## 17. Security and trust model
 
 1. Repo-provided skills remain potentially untrusted input.
-2. Deployment policy decides whether repo and local-only skills are allowed.
+2. Deployment policy decides whether repo checked-in and workspace-local overlay skills are allowed.
 3. The active projection should be read-only to the runtime where possible.
 4. Skill content must not be treated as a secret store.
 5. The runtime should not be allowed to mutate the resolved active bundle as a way of changing policy.

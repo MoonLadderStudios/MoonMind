@@ -30,7 +30,7 @@ MoonMind has implemented the core control-plane and runtime path through Phases 
 
 - Canonical docs and terminology split (tools vs agent instruction bundles); stable `.agents/skills` / `.agents/skills/local` policy documented
 - Deployment-backed storage and models for definitions, versions, skill sets, provenance, and artifact-stored bodies
-- Resolution engine across built-in, deployment, repo, and local sources; `ResolvedSkillSet` artifacts; policy, precedence, and selector behavior per design
+- Resolution engine across built-in, deployment, repo checked-in, and workspace-local overlay sources; `ResolvedSkillSet` artifacts; policy, precedence, and selector behavior per design
 - Runtime materialization into a run-scoped active view; adapters consume resolved snapshot refs; non-mutation of checked-in skill trees enforced at the materialization boundary
 - Canonical `task.skills` / `step.skills` in execution contracts; `agent_skill.*` activities; workflow propagation of compact refs through `MoonMind.AgentRun` (workflow payloads carry refs/metadata, not large bodies)
 
@@ -50,7 +50,7 @@ _Nothing in flight for Phase 5._
 MoonMind should support the following target-state behavior:
 
 1. agent skills are stored as versioned deployment data
-2. built-in, deployment, repo, and local sources participate in skill resolution
+2. built-in, deployment, repo checked-in, and workspace-local overlay sources participate in skill resolution
 3. tasks and steps can select skills and skill sets explicitly
 4. MoonMind resolves all applicable skills into an immutable `ResolvedSkillSet`
 5. workflows pass only refs to the resolved snapshot
@@ -153,7 +153,7 @@ Introduce a real managed skill catalog owned by MoonMind.
 - [x] Add checksums or content digests for immutable version verification
 - [x] Add migrations for the new storage tables and indices
 - [x] Add service-layer validation for skill-name uniqueness and version immutability
-- [x] Add policy fields or associated settings needed to gate repo and local skill sources
+- [x] Add policy fields or associated settings needed to gate repo checked-in and workspace-local overlay skill sources
 - [x] Add basic CRUD or internal service methods for deployment-stored skills
 - [x] Add tests for immutable version creation, source-kind handling, and validation failures
 
@@ -375,12 +375,12 @@ Each semantic behavior below must have a failing test before implementation. The
   - [ ] Regression test: skill-selector payloads traverse skill version changes without breaking execution
   - [ ] Implementation: compatibility model updates reflecting how skill-selector payloads traverse versions
 
-- [ ] **Policy hardening for repo and local sources**
+- [ ] **Policy hardening for repo checked-in and workspace-local overlay sources**
   - [ ] Unit test: policy enforcement blocks repo skills when `agent_skill_repo_sources_enabled = false`
-  - [ ] Unit test: policy enforcement blocks local skills when `agent_skill_local_sources_enabled = false`
-  - [ ] Unit test: local-only skills cannot bypass deployment policy silently
-  - [ ] Implementation: harden policy enforcement around repo and local source usage
-  - [ ] Implementation: admin/operator controls for enabling or disabling repo/local skill sources
+  - [ ] Unit test: policy enforcement blocks workspace-local overlay skills when `agent_skill_local_sources_enabled = false`
+  - [ ] Unit test: workspace-local overlay skills cannot bypass deployment policy silently
+  - [ ] Implementation: harden policy enforcement around repo checked-in and workspace-local overlay source usage
+  - [ ] Implementation: admin/operator controls for enabling or disabling repo checked-in and workspace-local overlay skill sources
 
 - [ ] **Terminology cleanup**
   - [ ] Audit: identify all remaining ambiguous "skill" terminology across older system interfaces, proposal schemas, and related legacy queues
@@ -498,7 +498,7 @@ The main risks are:
 1. continuing to overload “skill” semantically in code or docs
 2. letting runtime-side conventions outrun the control-plane model again
 3. accidentally storing large skill bodies in workflow history
-4. allowing local-only skills to bypass policy invisibly
+4. allowing workspace-local overlay skills to bypass policy invisibly
 5. mutating checked-in repo skill files during materialization
 6. introducing workflow-payload changes that break in-flight runs
 7. making reruns silently drift by re-resolving latest skills unintentionally
@@ -513,7 +513,7 @@ This plan is complete when all of the following are true:
 
 1. the canonical docs are aligned
 2. deployment-backed agent skill storage exists
-3. built-in, deployment, repo, and local sources resolve through one engine
+3. built-in, deployment, repo checked-in, and workspace-local overlay sources resolve through one engine
 4. tasks and steps can select skills explicitly
 5. each run uses an immutable `ResolvedSkillSet`
 6. managed runtimes consume the active set through `.agents/skills`

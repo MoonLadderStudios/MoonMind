@@ -48,7 +48,7 @@ Use [`docs/Tools/SkillSystem.md`](../Tools/SkillSystem.md) for:
 This document does **not** define:
 
 - the storage model for agent skills
-- source precedence rules across built-in, deployment, repo, and local skills
+- source precedence rules across built-in, deployment, repo checked-in, and workspace-local overlay skills
 - ordinary one-shot LLM activity behavior (`mm.activity.llm`)
 - generic executable tool contracts outside true agent runtime execution
 

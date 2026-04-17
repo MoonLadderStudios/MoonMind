@@ -778,13 +778,13 @@ class WorkflowSettings(BaseSettings):
     skills_local_mirror_root: str = Field(
         ".agents/skills/local",
         validation_alias=AliasChoices("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT"),
-        description="Default local-only skill mirror directory used for source resolution.",
+        description="Default workspace-local overlay skill mirror directory used for source resolution.",
     )
     skills_legacy_mirror_root: str = Field(
         ".agents/skills",
         validation_alias=AliasChoices("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT"),
         description=(
-            "Secondary shared mirror root checked after local-only skills; "
+            "Secondary shared mirror root checked after workspace-local overlay skills; "
             "nested '<root>/skills' is auto-detected for compatibility."
         ),
     )
@@ -796,7 +796,7 @@ class WorkflowSettings(BaseSettings):
     skills_validate_local_mirror: bool = Field(
         False,
         validation_alias=AliasChoices("WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR"),
-        description="Enable startup validation of the configured local skill mirror root.",
+        description="Enable startup validation of the configured workspace-local overlay skill mirror root.",
     )
     live_session_enabled_default: bool = Field(
         True,

@@ -187,13 +187,13 @@ def _resolve_mirror_root(raw_root: str | Path) -> Path:
 
 
 def resolve_skills_local_mirror_root() -> Path:
-    """Resolve the configured local skills mirror root to an absolute path."""
+    """Resolve the configured workspace-local overlay skills mirror root."""
 
     return _resolve_mirror_root(settings.workflow.skills_local_mirror_root)
 
 
 def resolve_skill_markdown_path(skill_name: str) -> Path | None:
-    """Resolve a skill's markdown file across configured local and legacy roots."""
+    """Resolve a skill's markdown file across configured workspace-local and legacy roots."""
 
     normalized = validate_skill_name(skill_name)
     source_uri = _resolve_local_source(normalized)
