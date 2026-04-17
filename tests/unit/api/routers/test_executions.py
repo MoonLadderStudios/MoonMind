@@ -1036,6 +1036,73 @@ def test_create_task_shaped_execution_forwards_input_attachments(
     ]
 
 
+def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """MM-367: router normalization accepts Pydantic field-name aliases."""
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "Moon/Mind",
+                "targetRuntime": "codex",
+                "task": {
+                    "instructions": "Inspect submitted screenshots.",
+                    "input_attachments": [
+                        {
+                            "artifactId": "art-objective",
+                            "filename": "objective.png",
+                            "contentType": "image/png",
+                            "sizeBytes": 10,
+                        }
+                    ],
+                    "steps": [
+                        {
+                            "instructions": "Inspect the step screenshot.",
+                            "input_attachments": [
+                                {
+                                    "artifactId": "art-step",
+                                    "filename": "step.png",
+                                    "contentType": "image/png",
+                                    "sizeBytes": 20,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["task"]["inputAttachments"] == [
+        {
+            "artifactId": "art-objective",
+            "filename": "objective.png",
+            "contentType": "image/png",
+            "sizeBytes": 10,
+        }
+    ]
+    step_payload = initial_parameters["task"]["steps"][0]
+    assert step_payload["inputAttachments"] == [
+        {
+            "artifactId": "art-step",
+            "filename": "step.png",
+            "contentType": "image/png",
+            "sizeBytes": 20,
+        }
+    ]
+    assert "input_attachments" not in step_payload
+
+
 def test_create_task_shaped_execution_rejects_embedded_attachment_data(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

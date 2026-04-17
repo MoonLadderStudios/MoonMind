@@ -1354,7 +1354,8 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
             normalized_step["skills"] = normalized_skills
 
         normalized_input_attachments = _normalize_task_input_attachments(
-            step_payload.get("inputAttachments"),
+            step_payload.get("inputAttachments")
+            or step_payload.get("input_attachments"),
             field_name=f"payload.task.steps[{index}].inputAttachments",
         )
         if normalized_input_attachments:
@@ -1396,6 +1397,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "title",
                 "instructions",
                 "inputAttachments",
+                "input_attachments",
                 "skill",
                 "skills",
                 "tool",
@@ -1951,7 +1953,8 @@ async def _create_execution_from_task_request(
     if normalized_proposal_policy is not None:
         normalized_task_for_planner["proposalPolicy"] = normalized_proposal_policy
     normalized_input_attachments = _normalize_task_input_attachments(
-        task_payload.get("inputAttachments"),
+        task_payload.get("inputAttachments")
+        or task_payload.get("input_attachments"),
         field_name="payload.task.inputAttachments",
     )
     if normalized_input_attachments:
