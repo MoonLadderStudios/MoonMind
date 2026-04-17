@@ -20,8 +20,8 @@
 
 | Requirement | Evidence | Status | Notes |
 |-------------|----------|--------|-------|
-| FR-001 | `api_service/data/task_step_templates/jira-orchestrate.yaml:49`, `tests/unit/api/test_task_step_templates_service.py:1052`, `tests/integration/test_startup_task_template_seeding.py:119` | VERIFIED | Preset adds the blocker preflight before MoonSpec work. |
-| FR-002 | `api_service/data/task_step_templates/jira-orchestrate.yaml:59`, `tests/unit/api/test_task_step_templates_service.py:1063`, `tests/integration/test_startup_task_template_seeding.py:124` | VERIFIED | Non-Done blockers stop before MoonSpec, PR creation, and Code Review. |
+| FR-001 | `api_service/data/task_step_templates/jira-orchestrate.yaml:49`, `tests/unit/api/test_task_step_templates_service.py:1052`, `tests/integration/test_startup_task_template_seeding.py:119` | VERIFIED | Preset adds the blocker preflight before brief loading, classification, or MoonSpec work. |
+| FR-002 | `api_service/data/task_step_templates/jira-orchestrate.yaml:59`, `tests/unit/api/test_task_step_templates_service.py:1063`, `tests/integration/test_startup_task_template_seeding.py:124` | VERIFIED | Non-Done blockers stop before brief loading, classification, MoonSpec work, PR creation, and Code Review. |
 | FR-003 | `api_service/data/task_step_templates/jira-orchestrate.yaml:57`, `tests/unit/api/test_task_step_templates_service.py:1064`, `tests/integration/test_startup_task_template_seeding.py:125` | VERIFIED | No blocker links continue to the existing lifecycle. |
 | FR-004 | `api_service/data/task_step_templates/jira-orchestrate.yaml:57`, `tests/unit/api/test_task_step_templates_service.py:1056`, `tests/integration/test_startup_task_template_seeding.py:121` | VERIFIED | Done-only blockers continue. |
 | FR-005 | `api_service/data/task_step_templates/jira-orchestrate.yaml:59`, `tests/unit/api/test_task_step_templates_service.py:1058`, `tests/integration/test_startup_task_template_seeding.py:123` | VERIFIED | Missing blocker status fails closed. |
@@ -53,8 +53,8 @@
 ## Original Request Alignment
 
 - Jira issue `MM-398` remains preserved in the MoonSpec artifacts and verification report.
-- Jira Orchestrate now checks blockers after In Progress and before any MoonSpec implementation work.
-- Blocked runs stop before MoonSpec, PR creation, and Code Review; unblocked runs preserve the existing lifecycle.
+- Jira Orchestrate now checks blockers after In Progress and before brief loading, classification, or any MoonSpec implementation work.
+- Blocked runs stop before brief loading, classification, MoonSpec work, PR creation, and Code Review; unblocked runs preserve the existing lifecycle.
 
 ## Gaps
 

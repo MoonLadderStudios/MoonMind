@@ -121,7 +121,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "Done" in blocker_step["instructions"]
         assert "non-blocker" in blocker_step["instructions"]
         assert "status cannot be determined" in blocker_step["instructions"]
-        assert "stop before MoonSpec" in blocker_step["instructions"]
+        assert "stop the orchestration immediately" in blocker_step["instructions"]
         pr_step = next(
             step
             for step in jira_orchestrate_template.latest_version.steps

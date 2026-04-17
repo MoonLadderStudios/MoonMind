@@ -55,4 +55,4 @@ start
   -> blocked when unresolved blocker exists or blocker status is unavailable
 ```
 
-Blocked outcomes stop before MoonSpec implementation, pull request creation, and Code Review transition.
+Blocked outcomes stop before brief loading, classification, MoonSpec implementation, pull request creation, and Code Review transition.

@@ -83,10 +83,10 @@ Dependencies
 
 **Acceptance Scenarios**:
 
-1. **Given** a target Jira issue has a blocker relationship to another issue whose status is not Done, **When** Jira Orchestrate evaluates the issue before implementation work, **Then** orchestration stops with a blocked outcome before MoonSpec implementation, pull request creation, and Code Review transition.
+1. **Given** a target Jira issue has a blocker relationship to another issue whose status is not Done, **When** Jira Orchestrate evaluates the issue before implementation work, **Then** orchestration stops immediately with a blocked outcome, before brief loading, classification, or MoonSpec implementation.
 2. **Given** a target Jira issue has blocker relationships only to issues whose statuses are Done, **When** Jira Orchestrate evaluates the issue before implementation work, **Then** orchestration proceeds through the existing MoonSpec lifecycle.
 3. **Given** a target Jira issue has no blocker relationships, **When** Jira Orchestrate evaluates the issue before implementation work, **Then** orchestration proceeds as it did before this feature.
-4. **Given** a blocker relationship is present but the blocking issue status cannot be determined from trusted Jira data, **When** Jira Orchestrate evaluates the issue, **Then** orchestration stops with an operator-readable blocked outcome rather than guessing.
+4. **Given** a blocker relationship is present but the blocking issue status cannot be determined from trusted Jira data, **When** Jira Orchestrate evaluates the issue, **Then** orchestration stops immediately with a blocked outcome in the required JSON format rather than guessing.
 5. **Given** orchestration stops because of an unresolved blocker, **When** the operator reviews the result, **Then** the result identifies the target issue key, the available blocking issue key, and the available blocking issue status.
 
 ### Edge Cases
@@ -120,7 +120,7 @@ Dependencies
 ### Functional Requirements
 
 - **FR-001**: System MUST evaluate blocker relationships for a Jira Orchestrate target issue before MoonSpec implementation work starts.
-- **FR-002**: System MUST stop before MoonSpec specify, planning, task generation, implementation, pull request creation, and Code Review transition when the target issue is blocked by at least one issue that is not Done.
+- **FR-002**: System MUST stop before brief loading, classification, MoonSpec specify, planning, task generation, implementation, pull request creation, and Code Review transition when the target issue is blocked by at least one issue that is not Done.
 - **FR-003**: System MUST continue the existing Jira Orchestrate lifecycle when the target issue has no blocker relationships.
 - **FR-004**: System MUST continue the existing Jira Orchestrate lifecycle when every detected blocking issue is Done.
 - **FR-005**: System MUST stop with a blocked outcome when a blocker relationship exists but the blocking issue status cannot be determined from trusted Jira data.
@@ -140,7 +140,7 @@ Dependencies
 
 ### Measurable Outcomes
 
-- **SC-001**: 100% of Jira Orchestrate runs with at least one detected non-Done blocking issue stop before MoonSpec implementation work begins.
+- **SC-001**: 100% of Jira Orchestrate runs with at least one detected non-Done blocking issue stop before brief loading, classification, or MoonSpec implementation work begins.
 - **SC-002**: 100% of blocked outcomes include the target issue key and every available blocker issue key from trusted Jira data.
 - **SC-003**: 100% of Jira Orchestrate runs with only Done blockers or no blocker relationships proceed through the same lifecycle stages as before this feature.
 - **SC-004**: 0 blocked outcomes caused by this feature create a pull request or transition the target issue to Code Review.

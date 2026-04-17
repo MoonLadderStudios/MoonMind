@@ -2,7 +2,7 @@
 
 ## Preset Step Contract
 
-Jira Orchestrate must include a pre-implementation blocker step after the target issue is moved to In Progress and before MoonSpec specification, planning, task generation, implementation, pull request creation, or Code Review transition.
+Jira Orchestrate must include a pre-implementation blocker step after the target issue is moved to In Progress and before brief loading, classification, MoonSpec specification, planning, task generation, implementation, pull request creation, or Code Review transition.
 
 Required input:
 
