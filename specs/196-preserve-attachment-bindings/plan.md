@@ -3,7 +3,7 @@
 **Branch**: `196-preserve-attachment-bindings` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md)
 **Input**: Single-story feature specification from `/specs/196-preserve-attachment-bindings/spec.md`
 
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/plan-template.md` for the execution workflow.
+**Note**: This template is filled in by the `/moonspec-plan` command. See `.specify/templates/plan-template.md` for the execution workflow.
 
 ## Summary
 
@@ -14,7 +14,7 @@ MM-369 requires task edit and rerun flows to reconstruct attachment bindings fro
 **Language/Version**: Python 3.12; TypeScript/React for Mission Control Create-page behavior  
 **Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal artifact service, React, Vitest, existing task editing helpers  
 **Storage**: Existing Temporal artifact metadata tables and original task input snapshot artifacts; no new persistent storage  
-**Unit Testing**: pytest via `./tools/test_unit.sh`; Vitest via `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` for focused frontend iteration  
+**Unit Testing**: pytest via `./tools/test_unit.sh`; Vitest via `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx` for focused frontend iteration
 **Integration Testing**: pytest contract coverage against FastAPI app + sqlite-backed metadata, plus `./tools/test_integration.sh` for hermetic integration when Docker is available  
 **Target Platform**: MoonMind API service and Mission Control Create/task detail surfaces  
 **Project Type**: Web service with React frontend and Temporal workflow orchestration backend  

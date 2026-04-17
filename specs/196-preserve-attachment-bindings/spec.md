@@ -104,7 +104,7 @@ Non-Goals
 Needs Clarification
 - None
 
-<!-- Moon Spec specs contain exactly one independently testable user story. Use /speckit.breakdown for technical designs that contain multiple stories. -->
+<!-- Moon Spec specs contain exactly one independently testable user story. Use /moonspec-breakdown for technical designs that contain multiple stories. -->
 
 ## User Story - Preserve Attachment Bindings in Snapshots and Reruns
 
