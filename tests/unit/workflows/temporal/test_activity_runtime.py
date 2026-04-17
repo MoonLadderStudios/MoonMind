@@ -33,6 +33,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
     TemporalIntegrationActivities,
+    TemporalManifestActivities,
     TemporalPlanActivities,
     TemporalProposalActivities,
     TemporalSandboxActivities,
@@ -237,9 +238,12 @@ async def test_artifact_create_binding_accepts_legacy_name_payload(
                 for binding in build_activity_bindings(
                     catalog,
                     artifact_activities=activities,
+                    manifest_activities=TemporalManifestActivities(
+                        artifact_service=service,
+                    ),
                     proposal_activities=TemporalProposalActivities(artifact_service=service),
                     agent_skills_activities=AgentSkillsActivities(),
-                fleets=(ARTIFACTS_FLEET,),
+                    fleets=(ARTIFACTS_FLEET,),
                 )
             }
 
@@ -915,6 +919,9 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
             bindings = build_activity_bindings(
                 catalog,
                 artifact_activities=TemporalArtifactActivities(service),
+                manifest_activities=TemporalManifestActivities(
+                    artifact_service=service,
+                ),
                 plan_activities=TemporalPlanActivities(artifact_service=service),
                 skill_activities=TemporalSkillActivities(
                     dispatcher=SkillActivityDispatcher()
@@ -965,6 +972,9 @@ async def test_build_activity_bindings_artifact_read_accepts_request_mapping(
             bindings = build_activity_bindings(
                 catalog,
                 artifact_activities=TemporalArtifactActivities(service),
+                manifest_activities=TemporalManifestActivities(
+                    artifact_service=service,
+                ),
                 proposal_activities=TemporalProposalActivities(artifact_service=service),
                 agent_skills_activities=AgentSkillsActivities(),
                 fleets=(ARTIFACTS_FLEET,),
@@ -1000,6 +1010,9 @@ async def test_build_activity_bindings_artifact_handlers_preserve_typed_request_
                 for binding in build_activity_bindings(
                     catalog,
                     artifact_activities=TemporalArtifactActivities(service),
+                    manifest_activities=TemporalManifestActivities(
+                        artifact_service=service,
+                    ),
                     proposal_activities=TemporalProposalActivities(artifact_service=service),
                     agent_skills_activities=AgentSkillsActivities(),
                     fleets=(ARTIFACTS_FLEET,),
@@ -1060,6 +1073,9 @@ async def test_build_activity_bindings_artifact_read_accepts_serialized_ref_mapp
             bindings = build_activity_bindings(
                 catalog,
                 artifact_activities=TemporalArtifactActivities(service),
+                manifest_activities=TemporalManifestActivities(
+                    artifact_service=service,
+                ),
                 proposal_activities=TemporalProposalActivities(artifact_service=service),
                 agent_skills_activities=AgentSkillsActivities(),
                 fleets=(ARTIFACTS_FLEET,),
@@ -1105,6 +1121,9 @@ async def test_build_activity_bindings_artifact_write_complete_accepts_legacy_pa
             bindings = build_activity_bindings(
                 catalog,
                 artifact_activities=TemporalArtifactActivities(service),
+                manifest_activities=TemporalManifestActivities(
+                    artifact_service=service,
+                ),
                 proposal_activities=TemporalProposalActivities(artifact_service=service),
                 agent_skills_activities=AgentSkillsActivities(),
                 fleets=(ARTIFACTS_FLEET,),
@@ -1157,6 +1176,9 @@ async def test_build_activity_bindings_injected_skill_handler_uses_request_mappi
             bindings = build_activity_bindings(
                 catalog,
                 artifact_activities=TemporalArtifactActivities(service),
+                manifest_activities=TemporalManifestActivities(
+                    artifact_service=service,
+                ),
                 skill_activities=_KeywordOnlySkillActivities(),
                 proposal_activities=TemporalProposalActivities(artifact_service=service),
                 agent_skills_activities=AgentSkillsActivities(),
