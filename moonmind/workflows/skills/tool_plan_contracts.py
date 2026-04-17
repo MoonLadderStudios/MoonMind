@@ -324,6 +324,54 @@ class StepSkillSelectors:
 
 
 @dataclass(frozen=True, slots=True)
+class StepSourceProvenance:
+    """Optional traceability metadata for a flattened executable plan node."""
+
+    binding_id: str | None = None
+    include_path: tuple[str, ...] = ()
+    blueprint_step_slug: str | None = None
+    detached: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.binding_id is not None:
+            _ensure_non_empty(
+                self.binding_id, field_name="node.source.binding_id"
+            )
+        for entry in self.include_path:
+            _ensure_non_empty(str(entry), field_name="node.source.include_path[]")
+        if self.blueprint_step_slug is not None:
+            _ensure_non_empty(
+                self.blueprint_step_slug,
+                field_name="node.source.blueprint_step_slug",
+            )
+        if self.detached is not None and not isinstance(self.detached, bool):
+            raise ContractValidationError(
+                "invalid_plan", "node.source.detached must be a boolean"
+            )
+        if (
+            self.binding_id is None
+            and not self.include_path
+            and self.blueprint_step_slug is None
+            and self.detached is None
+        ):
+            raise ContractValidationError(
+                "invalid_plan", "node.source must include at least one provenance field"
+            )
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if self.binding_id is not None:
+            payload["binding_id"] = self.binding_id
+        if self.include_path:
+            payload["include_path"] = list(self.include_path)
+        if self.blueprint_step_slug is not None:
+            payload["blueprint_step_slug"] = self.blueprint_step_slug
+        if self.detached is not None:
+            payload["detached"] = self.detached
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class Step:
     """Plan node invocation of a tool contract (skill or agent_runtime)."""
 
@@ -334,6 +382,7 @@ class Step:
     options: Mapping[str, Any] = field(default_factory=dict)
     tool_type: str = "skill"
     skills: StepSkillSelectors | None = None
+    source: StepSourceProvenance | None = None
 
     def __post_init__(self) -> None:
         _ensure_non_empty(self.id, field_name="node.id")
@@ -382,6 +431,8 @@ class Step:
             payload["options"] = dict(self.options)
         if self.skills is not None:
             payload["skills"] = self.skills.to_payload()
+        if self.source is not None:
+            payload["source"] = self.source.to_payload()
         return payload
 
 
@@ -757,8 +808,75 @@ class PlanDefinition:
         }
 
 
+def _parse_step_source(payload: Mapping[str, Any]) -> StepSourceProvenance | None:
+    source_raw = payload.get("source")
+    if source_raw is None:
+        return None
+    if not isinstance(source_raw, Mapping):
+        raise ContractValidationError("invalid_plan", "node.source must be an object")
+
+    allowed = {"binding_id", "include_path", "blueprint_step_slug", "detached"}
+    unexpected = sorted(set(source_raw.keys()) - allowed)
+    if unexpected:
+        raise ContractValidationError(
+            "invalid_plan",
+            f"node.source contains unsupported field(s): {', '.join(unexpected)}",
+        )
+
+    include_path_raw = source_raw.get("include_path")
+    if include_path_raw is None:
+        include_path: tuple[str, ...] = ()
+    elif isinstance(include_path_raw, list):
+        include_path = tuple(
+            _ensure_non_empty(str(item), field_name="node.source.include_path[]")
+            for item in include_path_raw
+        )
+    else:
+        raise ContractValidationError(
+            "invalid_plan", "node.source.include_path must be a list"
+        )
+
+    detached_raw = source_raw.get("detached")
+    if detached_raw is not None and not isinstance(detached_raw, bool):
+        raise ContractValidationError(
+            "invalid_plan", "node.source.detached must be a boolean"
+        )
+
+    binding_raw = source_raw.get("binding_id")
+    slug_raw = source_raw.get("blueprint_step_slug")
+    return StepSourceProvenance(
+        binding_id=(
+            _ensure_non_empty(str(binding_raw), field_name="node.source.binding_id")
+            if binding_raw is not None
+            else None
+        ),
+        include_path=include_path,
+        blueprint_step_slug=(
+            _ensure_non_empty(
+                str(slug_raw), field_name="node.source.blueprint_step_slug"
+            )
+            if slug_raw is not None
+            else None
+        ),
+        detached=detached_raw if detached_raw is not None else None,
+    )
+
+
+def _looks_like_unresolved_preset_include(payload: Mapping[str, Any]) -> bool:
+    marker = str(payload.get("kind") or payload.get("type") or "").strip().lower()
+    if marker in {"include", "preset_include", "preset-include"}:
+        return True
+    return "include" in payload and not any(key in payload for key in ("tool", "skill"))
+
+
 def parse_step(payload: Mapping[str, Any]) -> Step:
     """Parse one plan node payload into ``Step``."""
+
+    if _looks_like_unresolved_preset_include(payload):
+        raise ContractValidationError(
+            "invalid_plan",
+            "stored plan nodes must be executable; unresolved preset include entries are invalid",
+        )
 
     tool_payload = payload.get("tool")
     skill_payload = payload.get("skill")
@@ -845,6 +963,7 @@ def parse_step(payload: Mapping[str, Any]) -> Step:
         ),
         tool_type=tool_type,
         skills=parsed_skills,
+        source=_parse_step_source(payload),
     )
 
 
@@ -1088,6 +1207,7 @@ __all__ = [
     "ToolExecutorBinding",
     "ToolFailure",
     "Step",
+    "StepSourceProvenance",
     "ToolPolicies",
     "ToolPolicyRetries",
     "ToolPolicyTimeouts",
