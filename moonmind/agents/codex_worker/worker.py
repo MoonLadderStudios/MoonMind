@@ -10177,7 +10177,12 @@ class CodexWorker:
 
     @staticmethod
     def _safe_attachment_prompt_value(value: object) -> str | None:
-        text = str(value or "").strip()
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        text = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()
         if not text:
             return None
         lowered = text.lower()
@@ -10197,6 +10202,8 @@ class CodexWorker:
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            return manifest_path, []
+        if not isinstance(payload, dict):
             return manifest_path, []
         raw_entries = payload.get("attachments")
         if not isinstance(raw_entries, list):
@@ -10218,6 +10225,8 @@ class CodexWorker:
         try:
             payload = json.loads(index_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
             return {}
         raw_targets = payload.get("targets")
         if not isinstance(raw_targets, list):
@@ -10295,13 +10304,16 @@ class CodexWorker:
     ) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
         objective_entries: list[Mapping[str, Any]] = []
         current_step_entries: list[Mapping[str, Any]] = []
+        expected_step_ref = cls._sanitize_attachment_workspace_segment(
+            step.step_id, fallback=f"step-{step.step_index + 1}"
+        )
         for entry in entries:
             target_kind = cls._safe_attachment_prompt_value(entry.get("targetKind"))
             if target_kind == "objective":
                 objective_entries.append(entry)
             elif target_kind == "step":
                 step_ref = cls._safe_attachment_prompt_value(entry.get("stepRef"))
-                if step_ref == step.step_id:
+                if step_ref == expected_step_ref:
                     current_step_entries.append(entry)
         return objective_entries, current_step_entries
 
