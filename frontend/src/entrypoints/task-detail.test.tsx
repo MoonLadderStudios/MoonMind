@@ -1270,6 +1270,8 @@ describe('Task Detail Entrypoint', () => {
       workflowType: 'MoonMind.Run',
       entry: 'run',
       targetRuntime: 'gemini_cli',
+      targetSkill: 'jira-pr-verify',
+      taskSkills: ['jira-pr-verify', 'fix-comments'],
       profileId: 'profile:gemini-default',
       providerId: 'google',
       providerLabel: 'Google',
@@ -1308,6 +1310,9 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Example task')).toBeTruthy();
       expect(screen.getByText('Did work')).toBeTruthy();
       expect(screen.getByText('Gemini CLI')).toBeTruthy();
+      expect(screen.getByText('Skill:').closest('.card')?.textContent).toContain(
+        'jira-pr-verify, fix-comments',
+      );
       expect(screen.getByText('Google')).toBeTruthy();
       expect(screen.getByText('profile:gemini-default')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();

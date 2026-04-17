@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
-import { formatRuntimeLabel } from '../utils/formatters';
+import { formatRuntimeLabel, formatTaskSkills } from '../utils/formatters';
 import {
   recordTemporalTaskEditingClientEvent,
   taskEditHref,
@@ -3132,6 +3132,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             {execution.targetRuntime ? (
               <Card label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Card>
             ) : null}
+            <Card label="Skill">{formatTaskSkills(execution.taskSkills, execution.targetSkill)}</Card>
             {execution.model ? (
               <Card label="Model">
                 <code className="text-xs">{execution.model}</code>
