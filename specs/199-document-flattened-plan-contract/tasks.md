@@ -29,13 +29,13 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm active MM-386 feature directory and source input in `.specify/feature.json`, `docs/tmp/jira-orchestration-inputs/MM-386-moonspec-orchestration-input.md`, and `specs/199-document-flattened-plan-contract/spec.md` (FR-012, SC-007).
-- [ ] T002 Confirm `docs/Tasks/SkillAndPlanContracts.md` is the canonical documentation target and `docs/Tasks/PresetComposability.md` is absent in the current checkout in `specs/199-document-flattened-plan-contract/research.md` (FR-011).
-- [ ] T003 Confirm the managed branch limitation for `.specify/scripts/bash/check-prerequisites.sh --json` is recorded in `specs/199-document-flattened-plan-contract/plan.md` (FR-011).
+- [X] T001 Confirm active MM-386 feature directory and source input in `.specify/feature.json`, `docs/tmp/jira-orchestration-inputs/MM-386-moonspec-orchestration-input.md`, and `specs/199-document-flattened-plan-contract/spec.md` (FR-012, SC-007).
+- [X] T002 Confirm `docs/Tasks/SkillAndPlanContracts.md` is the canonical documentation target and `docs/Tasks/PresetComposability.md` is absent in the current checkout in `specs/199-document-flattened-plan-contract/research.md` (FR-011).
+- [X] T003 Confirm the managed branch limitation for `.specify/scripts/bash/check-prerequisites.sh --json` is recorded in `specs/199-document-flattened-plan-contract/plan.md` (FR-011).
 
 ## Phase 2: Foundational
 
-- [ ] T004 Inspect existing plan schema, dependency semantics, validation rules, and execution semantics in `docs/Tasks/SkillAndPlanContracts.md` before test authoring (FR-001 through FR-010).
+- [X] T004 Inspect existing plan schema, dependency semantics, validation rules, and execution semantics in `docs/Tasks/SkillAndPlanContracts.md` before test authoring (FR-001 through FR-010).
 
 ## Phase 3: Story - Flattened Plan Execution Contract
 
@@ -47,36 +47,36 @@
 
 ### Unit Tests
 
-- [ ] T005 Add or confirm the focused documentation contract check command in `specs/199-document-flattened-plan-contract/quickstart.md` (FR-001 through FR-004, FR-008 through FR-010, SC-001 through SC-006, DESIGN-REQ-001, DESIGN-REQ-019, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-026).
-- [ ] T006 Add or confirm the validation rule check command in `specs/199-document-flattened-plan-contract/quickstart.md` (FR-005 through FR-007, FR-009, SC-002, SC-004, SC-006, DESIGN-REQ-021, DESIGN-REQ-025, DESIGN-REQ-026).
-- [ ] T007 Add or confirm the source traceability check command in `specs/199-document-flattened-plan-contract/quickstart.md` (FR-012, SC-007).
+- [X] T005 Add or confirm the focused documentation contract check command in `specs/199-document-flattened-plan-contract/quickstart.md` (FR-001 through FR-004, FR-008 through FR-010, SC-001 through SC-006, DESIGN-REQ-001, DESIGN-REQ-019, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-026).
+- [X] T006 Add or confirm the validation rule check command in `specs/199-document-flattened-plan-contract/quickstart.md` (FR-005 through FR-007, FR-009, SC-002, SC-004, SC-006, DESIGN-REQ-021, DESIGN-REQ-025, DESIGN-REQ-026).
+- [X] T007 Add or confirm the source traceability check command in `specs/199-document-flattened-plan-contract/quickstart.md` (FR-012, SC-007).
 
 ### Integration Tests
 
-- [ ] T008 Add or confirm end-to-end contract review criteria in `specs/199-document-flattened-plan-contract/contracts/flattened-plan-execution-contract.md` covering preset expansion boundary, stored plan artifact shape, provenance metadata, validation behavior, DAG semantics, and executor behavior (FR-001 through FR-010, SC-001 through SC-006, DESIGN-REQ-001, DESIGN-REQ-019, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-025, DESIGN-REQ-026).
-- [ ] T009 Add or confirm final story validation commands in `specs/199-document-flattened-plan-contract/quickstart.md` for full unit tests, hermetic integration tests, and `/moonspec-verify` (FR-011, FR-012, SC-007).
+- [X] T008 Add or confirm end-to-end contract review criteria in `specs/199-document-flattened-plan-contract/contracts/flattened-plan-execution-contract.md` covering preset expansion boundary, stored plan artifact shape, provenance metadata, validation behavior, DAG semantics, and executor behavior (FR-001 through FR-010, SC-001 through SC-006, DESIGN-REQ-001, DESIGN-REQ-019, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-025, DESIGN-REQ-026).
+- [X] T009 Add or confirm final story validation commands in `specs/199-document-flattened-plan-contract/quickstart.md` for full unit tests, hermetic integration tests, and `/moonspec-verify` (FR-011, FR-012, SC-007).
 
 ### Red-First Confirmation
 
-- [ ] T010 Run `rg -n "authoring concern|flattened execution contract|unresolved preset include|binding_id|include_path|blueprint_step_slug|detached|provenance" docs/Tasks/SkillAndPlanContracts.md` and confirm it fails or is incomplete before documentation edits (FR-001 through FR-004, FR-008 through FR-010, SC-001 through SC-006).
-- [ ] T011 Run `rg -n "absent provenance|invalid claimed preset provenance|unresolved preset include|nested preset semantics|never executable logic" docs/Tasks/SkillAndPlanContracts.md` and confirm it fails or is incomplete before documentation edits (FR-005 through FR-007, FR-009, SC-002, SC-004, SC-006).
+- [X] T010 Run `rg -n "authoring concern|flattened execution contract|unresolved preset include|binding_id|include_path|blueprint_step_slug|detached|provenance" docs/Tasks/SkillAndPlanContracts.md` and confirm it fails or is incomplete before documentation edits (FR-001 through FR-004, FR-008 through FR-010, SC-001 through SC-006).
+- [X] T011 Run `rg -n "absent provenance|invalid claimed preset provenance|unresolved preset include|nested preset semantics|never executable logic" docs/Tasks/SkillAndPlanContracts.md` and confirm it fails or is incomplete before documentation edits (FR-005 through FR-007, FR-009, SC-002, SC-004, SC-006).
 
 ### Implementation
 
-- [ ] T012 Update the plan definition and plan schema narrative in `docs/Tasks/SkillAndPlanContracts.md` to state preset composition is an authoring concern and stored plans are flattened execution contracts after expansion (FR-001, FR-002, SC-001, DESIGN-REQ-020).
-- [ ] T013 Update PlanDefinition production rules in `docs/Tasks/SkillAndPlanContracts.md` so executable plan nodes are the only valid stored plan nodes and unresolved include objects are invalid stored plan artifact content (FR-003, FR-006, SC-002, DESIGN-REQ-021).
-- [ ] T014 Update plan node examples in `docs/Tasks/SkillAndPlanContracts.md` with optional source provenance metadata containing `binding_id`, `include_path`, `blueprint_step_slug`, and `detached` (FR-004, FR-005, SC-003, DESIGN-REQ-001).
-- [ ] T015 Update validation rules in `docs/Tasks/SkillAndPlanContracts.md` to allow absent provenance and reject structurally invalid claimed preset provenance (FR-005, FR-007, SC-004, DESIGN-REQ-025).
-- [ ] T016 Update DAG semantics and execution invariants in `docs/Tasks/SkillAndPlanContracts.md` to state all plan producers create the same flattened graph, nested preset semantics do not exist at runtime, and provenance is never executable logic (FR-008 through FR-010, SC-005, SC-006, DESIGN-REQ-019, DESIGN-REQ-026).
+- [X] T012 Update the plan definition and plan schema narrative in `docs/Tasks/SkillAndPlanContracts.md` to state preset composition is an authoring concern and stored plans are flattened execution contracts after expansion (FR-001, FR-002, SC-001, DESIGN-REQ-020).
+- [X] T013 Update PlanDefinition production rules in `docs/Tasks/SkillAndPlanContracts.md` so executable plan nodes are the only valid stored plan nodes and unresolved include objects are invalid stored plan artifact content (FR-003, FR-006, SC-002, DESIGN-REQ-021).
+- [X] T014 Update plan node examples in `docs/Tasks/SkillAndPlanContracts.md` with optional source provenance metadata containing `binding_id`, `include_path`, `blueprint_step_slug`, and `detached` (FR-004, FR-005, SC-003, DESIGN-REQ-001).
+- [X] T015 Update validation rules in `docs/Tasks/SkillAndPlanContracts.md` to allow absent provenance and reject structurally invalid claimed preset provenance (FR-005, FR-007, SC-004, DESIGN-REQ-025).
+- [X] T016 Update DAG semantics and execution invariants in `docs/Tasks/SkillAndPlanContracts.md` to state all plan producers create the same flattened graph, nested preset semantics do not exist at runtime, and provenance is never executable logic (FR-008 through FR-010, SC-005, SC-006, DESIGN-REQ-019, DESIGN-REQ-026).
 
 ### Story Validation
 
-- [ ] T017 Run focused documentation contract, validation rule, and source traceability checks from `specs/199-document-flattened-plan-contract/quickstart.md`, then fix `docs/Tasks/SkillAndPlanContracts.md` or MoonSpec artifacts as needed (FR-001 through FR-012, SC-001 through SC-007).
+- [X] T017 Run focused documentation contract, validation rule, and source traceability checks from `specs/199-document-flattened-plan-contract/quickstart.md`, then fix `docs/Tasks/SkillAndPlanContracts.md` or MoonSpec artifacts as needed (FR-001 through FR-012, SC-001 through SC-007).
 
 ## Phase 4: Polish And Verification
 
-- [ ] T018 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` or record the exact environment blocker in `specs/199-document-flattened-plan-contract/verification.md` (FR-011).
-- [ ] T019 Run `./tools/test_integration.sh` when Docker is available or record the exact environment blocker in `specs/199-document-flattened-plan-contract/verification.md` (FR-011).
+- [X] T018 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` or record the exact environment blocker in `specs/199-document-flattened-plan-contract/verification.md` (FR-011).
+- [X] T019 Run `./tools/test_integration.sh` when Docker is available or record the exact environment blocker in `specs/199-document-flattened-plan-contract/verification.md` (FR-011).
 - [ ] T020 Run `/moonspec-verify` and record the result in `specs/199-document-flattened-plan-contract/verification.md` (FR-012, SC-007).
 
 ## Dependencies & Execution Order
