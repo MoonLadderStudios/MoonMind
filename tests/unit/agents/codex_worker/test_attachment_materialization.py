@@ -12,7 +12,6 @@ from moonmind.agents.codex_worker.handlers import WorkerExecutionResult
 from moonmind.agents.codex_worker.worker import (
     CodexWorker,
     CodexWorkerConfig,
-    QueueSystemStatus,
 )
 
 
