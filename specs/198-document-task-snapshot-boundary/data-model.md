@@ -27,12 +27,11 @@ Fields:
 - `version`: Pinned source version when applicable.
 - `includePath`: Ordered preset include path when the step came from a composition tree.
 - `originalStepId`: Source template step identity when applicable.
-- `detached`: Whether authored changes broke template identity.
 
 Validation rules:
 - Manual steps do not require preset identifiers.
 - Preset-derived steps must preserve enough source metadata to audit the flattened order.
-- Detached steps preserve historical provenance while making clear that live template identity no longer applies.
+- Detached steps use `kind: detached` to preserve historical provenance while making clear that live template identity no longer applies.
 
 ## Authoritative Task Input Snapshot
 

@@ -200,13 +200,12 @@ interface TaskInputAttachmentRef {
 }
 
 interface TaskStepSource {
-  kind?: "manual" | "preset" | "preset_include" | "detached";
+  kind?: "manual" | "preset-derived" | "preset-include" | "detached";
   presetId?: string;
   presetSlug?: string;
   version?: string;
   includePath?: string[];
   originalStepId?: string;
-  detached?: boolean;
 }
 
 interface AuthoredPresetBinding {
