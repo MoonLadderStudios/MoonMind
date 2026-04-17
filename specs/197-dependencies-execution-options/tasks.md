@@ -5,7 +5,7 @@
 
 **Tests**: Unit tests and integration-style Create page tests are REQUIRED. Write tests first, confirm they fail for the intended reason when implementation is absent, then implement production code until they pass.
 
-**Source Traceability**: MM-379, FR-001 through FR-010, acceptance scenarios 1-6, SC-001 through SC-007, DESIGN-REQ-004, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015.
+**Source Traceability**: MM-379, the Original Jira Preset Brief preserved in `spec.md`, FR-001 through FR-010, acceptance scenarios 1-6, SC-001 through SC-007, DESIGN-REQ-004, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015.
 
 **Test Commands**:
 
@@ -15,7 +15,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-379 orchestration input exists in `docs/tmp/jira-orchestration-inputs/MM-379-moonspec-orchestration-input.md` and is preserved in `specs/197-dependencies-execution-options/spec.md` (FR-010)
+- [X] T001 Confirm MM-379 orchestration input exists in `docs/tmp/jira-orchestration-inputs/MM-379-moonspec-orchestration-input.md` and the original Jira preset brief is preserved in `specs/197-dependencies-execution-options/spec.md` (FR-010, SC-007)
 - [X] T002 Create Moon Spec artifact directory `specs/197-dependencies-execution-options/` with spec, plan, research, data model, contract, quickstart, and tasks
 
 ## Phase 2: Foundational
@@ -28,7 +28,7 @@
 
 **Independent Test**: Submit Create page drafts across dependency, runtime, publish, resolver, Jira import, and image upload flows and inspect validation messages plus create payloads.
 
-**Traceability**: FR-001 through FR-010; scenarios 1-6; SC-001 through SC-007; DESIGN-REQ-004, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015.
+**Traceability**: Original Jira Preset Brief, FR-001 through FR-010; scenarios 1-6; SC-001 through SC-007; DESIGN-REQ-004, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015.
 
 ### Unit Tests
 
@@ -62,7 +62,7 @@
 
 ## Phase 4: Polish
 
-- [X] T019 Run `/moonspec-verify` equivalent and record verification in `specs/197-dependencies-execution-options/verification.md`
+- [X] T019 Run final `/moonspec-verify` work and record verification in `specs/197-dependencies-execution-options/verification.md`
 
 ## Dependencies & Execution Order
 
@@ -79,4 +79,4 @@
 ## Notes
 
 - This task list covers one story only.
-- MM-379 is preserved as the canonical Jira source key.
+- MM-379 and the original Jira preset brief are preserved as the canonical Jira source.
