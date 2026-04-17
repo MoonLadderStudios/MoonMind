@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import tempfile
 from contextlib import contextmanager
+from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator
@@ -25,19 +25,35 @@ from api_service.api.routers.task_dashboard import (
 )
 
 
-_BOOT_PAYLOAD_SCRIPT_RE = re.compile(
-    r"<script\b"
-    r"(?=[^>]*\bid=[\"']moonmind-ui-boot[\"'])"
-    r"(?=[^>]*\btype=[\"']application/json[\"'])"
-    r"[^>]*>(?P<payload>.*?)</script>",
-    re.DOTALL,
-)
+class _BootPayloadParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._capturing = False
+        self.payload_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "script":
+            return
+        attr_map = dict(attrs)
+        self._capturing = (
+            attr_map.get("id") == "moonmind-ui-boot"
+            and attr_map.get("type") == "application/json"
+        )
+
+    def handle_data(self, data: str) -> None:
+        if self._capturing:
+            self.payload_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script":
+            self._capturing = False
 
 
 def _extract_boot_payload(response_text: str) -> dict[str, object]:
-    match = _BOOT_PAYLOAD_SCRIPT_RE.search(response_text)
-    assert match is not None
-    return json.loads(match.group("payload"))
+    parser = _BootPayloadParser()
+    parser.feed(response_text)
+    assert parser.payload_parts
+    return json.loads("".join(parser.payload_parts))
 
 
 def _write_dashboard_test_manifest(root: Path) -> Path:
