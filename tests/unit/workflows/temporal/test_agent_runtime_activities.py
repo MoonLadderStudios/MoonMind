@@ -438,7 +438,7 @@ async def test_launch_session_delegates_to_remote_session_controller() -> None:
     controller.launch_session.assert_awaited_once()
 
 
-async def test_launch_session_injects_github_token_from_activity_environment(
+async def test_launch_session_uses_github_descriptor_from_activity_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-ambient-token")
@@ -468,13 +468,57 @@ async def test_launch_session_injects_github_token_from_activity_environment(
             "codexHomePath": "/work/task/codex-home",
             "imageRef": "moonmind:latest",
             "environment": {"PATH": "/usr/bin"},
+            "workspaceSpec": {"repository": "MoonLadderStudios/private-repo"},
         }
     )
 
     launched_request = controller.launch_session.await_args.args[0]
     assert launched_request.environment["PATH"] == "/usr/bin"
-    assert launched_request.environment["GITHUB_TOKEN"] == "ghp-ambient-token"
-    assert launched_request.environment["GIT_TERMINAL_PROMPT"] == "0"
+    assert "GITHUB_TOKEN" not in launched_request.environment
+    assert "GIT_TERMINAL_PROMPT" not in launched_request.environment
+    assert launched_request.github_credential is not None
+    assert launched_request.github_credential.source == "environment"
+    assert launched_request.github_credential.env_var == "GITHUB_TOKEN"
+
+
+async def test_launch_session_preserves_request_scoped_github_token_for_controller() -> None:
+    token = "ghp_request_scoped_token_12345678901234567890"
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    await activities.agent_runtime_launch_session(
+        {
+            "taskRunId": "task-1",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+            "workspacePath": "/work/task/repo",
+            "sessionWorkspacePath": "/work/task/session",
+            "artifactSpoolPath": "/work/task/artifacts",
+            "codexHomePath": "/work/task/codex-home",
+            "imageRef": "moonmind:latest",
+            "environment": {"GITHUB_TOKEN": token},
+            "workspaceSpec": {"repository": "MoonLadderStudios/private-repo"},
+        }
+    )
+
+    launched_request = controller.launch_session.await_args.args[0]
+    assert launched_request.environment["GITHUB_TOKEN"] == token
+    assert "GIT_TERMINAL_PROMPT" not in launched_request.environment
+    assert launched_request.github_credential is not None
+    assert launched_request.github_credential.source == "environment"
+    assert launched_request.github_credential.env_var == "GITHUB_TOKEN"
 
 
 async def test_launch_session_injects_moonmind_url_from_activity_environment(
@@ -515,19 +559,60 @@ async def test_launch_session_injects_moonmind_url_from_activity_environment(
     assert launched_request.environment["MOONMIND_URL"] == "http://api:5000"
 
 
-async def test_launch_session_injects_github_token_from_managed_secret_store(
+async def test_launch_session_uses_github_descriptor_for_managed_secret_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    from moonmind.config.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    await activities.agent_runtime_launch_session(
+        {
+            "taskRunId": "task-1",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+            "workspacePath": "/work/task/repo",
+            "sessionWorkspacePath": "/work/task/session",
+            "artifactSpoolPath": "/work/task/artifacts",
+            "codexHomePath": "/work/task/codex-home",
+            "imageRef": "moonmind:latest",
+            "workspaceSpec": {"repository": "MoonLadderStudios/private-repo"},
+        }
+    )
+
+    launched_request = controller.launch_session.await_args.args[0]
+    assert "GITHUB_TOKEN" not in launched_request.environment
+    assert "GIT_TERMINAL_PROMPT" not in launched_request.environment
+    assert launched_request.github_credential is not None
+    assert launched_request.github_credential.source == "managed_secret"
+    assert launched_request.github_credential.required is False
+
+
+async def test_launch_session_preserves_explicit_github_secret_ref_descriptor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.config.settings import settings as app_settings
 
-    async def _fake_store_token() -> str:
-        return "ghp-managed-secret"
-
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", None)
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_github_token_from_store",
-        _fake_store_token,
+        app_settings.github,
+        "github_token_secret_ref",
+        "env://MM320_GITHUB_PAT",
     )
     controller = AsyncMock()
     controller.launch_session = AsyncMock(
@@ -554,12 +639,18 @@ async def test_launch_session_injects_github_token_from_managed_secret_store(
             "artifactSpoolPath": "/work/task/artifacts",
             "codexHomePath": "/work/task/codex-home",
             "imageRef": "moonmind:latest",
+            "workspaceSpec": {"repository": "MoonLadderStudios/private-repo"},
         }
     )
 
     launched_request = controller.launch_session.await_args.args[0]
-    assert launched_request.environment["GITHUB_TOKEN"] == "ghp-managed-secret"
-    assert launched_request.environment["GIT_TERMINAL_PROMPT"] == "0"
+    assert launched_request.github_credential is not None
+    assert launched_request.github_credential.source == "secret_ref"
+    assert (
+        launched_request.github_credential.secret_ref
+        == "env://MM320_GITHUB_PAT"
+    )
+    assert "GITHUB_TOKEN" not in launched_request.environment
 
 
 async def test_launch_session_redacts_github_token_in_failure_details() -> None:
@@ -1786,6 +1877,7 @@ async def test_agent_runtime_launch_session_temporal_boundary(
                     "artifactSpoolPath": "/work/task/artifacts",
                     "codexHomePath": "/work/task/codex-home",
                     "imageRef": "moonmind:latest",
+                    "workspaceSpec": {"repository": "MoonLadderStudios/private-repo"},
                 },
                 id="boundary-test-launch-session",
                 task_queue="boundary-test-queue-launch-session",
@@ -1794,8 +1886,11 @@ async def test_agent_runtime_launch_session_temporal_boundary(
             assert isinstance(result, CodexManagedSessionHandle)
             assert result.session_state.container_id == "ctr-boundary"
             launch_request = captured_request["request"]
-            assert launch_request.environment["GITHUB_TOKEN"] == "ghs-boundary-token"
-            assert launch_request.environment["GIT_TERMINAL_PROMPT"] == "0"
+            assert "GITHUB_TOKEN" not in launch_request.environment
+            assert "GIT_TERMINAL_PROMPT" not in launch_request.environment
+            assert launch_request.github_credential is not None
+            assert launch_request.github_credential.source == "environment"
+            assert launch_request.github_credential.env_var == "GITHUB_TOKEN"
 
 
 @pytest.mark.asyncio

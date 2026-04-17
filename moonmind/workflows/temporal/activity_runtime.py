@@ -112,8 +112,8 @@ from moonmind.workflows.temporal.manifest_ingest import (
     plan_nodes_to_runtime_nodes,
 )
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    build_github_credential_descriptor_for_launch,
     resolve_managed_api_key_reference,
-    shape_launch_github_auth_environment,
 )
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
@@ -3119,11 +3119,28 @@ class TemporalAgentRuntimeActivities:
             value = os.environ.get(key)
             if value is not None and value.strip() and key not in environment:
                 environment[key] = value
-        environment = await shape_launch_github_auth_environment(
-            environment,
-            ambient_github_token=os.environ.get("GITHUB_TOKEN"),
+        github_credential = request.github_credential
+        if github_credential is None:
+            repository = str(
+                request.workspace_spec.get("repository")
+                or request.workspace_spec.get("repo")
+                or ""
+            ).strip()
+            github_credential = build_github_credential_descriptor_for_launch(
+                environment,
+                ambient_github_token=os.environ.get("GITHUB_TOKEN"),
+                enable_managed_secret_fallback=bool(repository),
+            )
+
+        if not str(environment.get("GITHUB_TOKEN", "")).strip():
+            environment.pop("GITHUB_TOKEN", None)
+        environment.pop("GIT_TERMINAL_PROMPT", None)
+        return request.model_copy(
+            update={
+                "environment": environment,
+                "github_credential": github_credential,
+            }
         )
-        return request.model_copy(update={"environment": environment})
 
     @staticmethod
     def _managed_session_auth_diagnostics(
@@ -3157,6 +3174,9 @@ class TemporalAgentRuntimeActivities:
             auth_mount_target = str(profile.volume_mount_path).strip()
         if auth_mount_target:
             diagnostics["authMountTarget"] = auth_mount_target
+        if request.github_credential is not None:
+            diagnostics["githubCredentialSource"] = request.github_credential.source
+            diagnostics["githubCredentialMaterialization"] = "required"
         if validation_failure_reason:
             diagnostics["validationFailureReason"] = validation_failure_reason
         return diagnostics

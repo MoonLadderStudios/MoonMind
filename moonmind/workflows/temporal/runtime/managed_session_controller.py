@@ -35,6 +35,9 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
+from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    resolve_github_token_for_launch,
+)
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
 
 from .managed_session_store import ManagedSessionStore
@@ -554,12 +557,25 @@ class DockerCodexManagedSessionController:
         return stdout, stderr
 
     @staticmethod
-    def _git_host_environment(
+    async def _git_host_environment(
         request: LaunchCodexManagedSessionRequest | None = None,
     ) -> dict[str, str]:
         env = dict(_GIT_COMMAND_LOCALE)
         request_env = request.environment if request is not None else {}
-        token = str(request_env.get("GITHUB_TOKEN") or "").strip()
+        try:
+            token = (
+                await resolve_github_token_for_launch(
+                    request_env,
+                    github_credential=(
+                        request.github_credential if request is not None else None
+                    ),
+                )
+                if request is not None
+                else None
+            )
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+        token = str(token or "").strip()
         if token:
             env["GITHUB_TOKEN"] = token
             env["GIT_TERMINAL_PROMPT"] = str(
@@ -584,10 +600,13 @@ class DockerCodexManagedSessionController:
         command: Sequence[str],
         *,
         request: LaunchCodexManagedSessionRequest | None = None,
+        git_env: Mapping[str, str] | None = None,
     ) -> tuple[str, str]:
+        if git_env is None:
+            git_env = await self._git_host_environment(request)
         return await self._run_host_command(
             command,
-            extra_env=self._git_host_environment(request),
+            extra_env=git_env,
             run_as_managed_session_user=True,
         )
 
@@ -611,11 +630,14 @@ class DockerCodexManagedSessionController:
         command: Sequence[str],
         *,
         request: LaunchCodexManagedSessionRequest | None = None,
+        git_env: Mapping[str, str] | None = None,
     ) -> tuple[int, str, str]:
         command_kwargs = self._managed_session_user_command_kwargs()
+        if git_env is None:
+            git_env = await self._git_host_environment(request)
         return await self._command_runner(
             tuple(command),
-            env=self._git_host_environment(request),
+            env=git_env,
             **command_kwargs,
         )
 
@@ -643,6 +665,7 @@ class DockerCodexManagedSessionController:
         workspace_path: Path,
         request: LaunchCodexManagedSessionRequest,
         repository: str,
+        git_env: Mapping[str, str],
     ) -> None:
         workspace_path.parent.mkdir(parents=True, exist_ok=True)
         await self._remove_workspace_path(workspace_path=workspace_path)
@@ -661,7 +684,11 @@ class DockerCodexManagedSessionController:
         if branch:
             clone_command.extend(["--branch", branch, "--single-branch"])
         clone_command.extend([source, str(workspace_path)])
-        await self._run_git_host_command(clone_command, request=request)
+        await self._run_git_host_command(
+            clone_command,
+            request=request,
+            git_env=git_env,
+        )
         self._normalize_container_path_ownership((workspace_path,))
 
     @staticmethod
@@ -708,6 +735,11 @@ class DockerCodexManagedSessionController:
             or request.workspace_spec.get("repo")
             or ""
         ).strip()
+        git_env = (
+            await self._git_host_environment(request)
+            if repository
+            else None
+        )
         if workspace_path.exists():
             self._normalize_container_path_ownership([workspace_path])
             if repository:
@@ -716,10 +748,12 @@ class DockerCodexManagedSessionController:
                         workspace_path=workspace_path,
                         request=request,
                         repository=repository,
+                        git_env=git_env,
                     )
                 await self._ensure_target_branch(
                     workspace_path=workspace_path,
                     request=request,
+                    git_env=git_env,
                 )
             return
 
@@ -733,10 +767,12 @@ class DockerCodexManagedSessionController:
             workspace_path=workspace_path,
             request=request,
             repository=repository,
+            git_env=git_env,
         )
         await self._ensure_target_branch(
             workspace_path=workspace_path,
             request=request,
+            git_env=git_env,
         )
 
     def _collect_managed_support_paths(
@@ -764,6 +800,7 @@ class DockerCodexManagedSessionController:
         *,
         workspace_path: Path,
         request: LaunchCodexManagedSessionRequest,
+        git_env: Mapping[str, str],
     ) -> None:
         target_branch = str(request.workspace_spec.get("targetBranch") or "").strip()
         if not target_branch:
@@ -779,6 +816,7 @@ class DockerCodexManagedSessionController:
         returncode, stdout, stderr = await self._git_command_result(
             checkout_command,
             request=request,
+            git_env=git_env,
         )
         if returncode == 0:
             return
@@ -788,7 +826,7 @@ class DockerCodexManagedSessionController:
             rendered_command, rendered_detail = self._scrub_command_failure(
                 checkout_command,
                 stderr.strip() or stdout.strip(),
-                extra_env=self._git_host_environment(request),
+                extra_env=git_env,
             )
             raise RuntimeError(
                 f"{rendered_command} failed with exit code {returncode}: "
@@ -804,6 +842,7 @@ class DockerCodexManagedSessionController:
         fetch_returncode, fetch_stdout, fetch_stderr = await self._git_command_result(
             fetch_command,
             request=request,
+            git_env=git_env,
         )
         if fetch_returncode == 0:
             await self._run_git_host_command(
@@ -815,6 +854,7 @@ class DockerCodexManagedSessionController:
                     f"origin/{target_branch}",
                 ),
                 request=request,
+                git_env=git_env,
             )
             return
 
@@ -823,7 +863,7 @@ class DockerCodexManagedSessionController:
             rendered_command, rendered_detail = self._scrub_command_failure(
                 fetch_command,
                 fetch_stderr.strip() or fetch_stdout.strip(),
-                extra_env=self._git_host_environment(request),
+                extra_env=git_env,
             )
             raise RuntimeError(
                 f"{rendered_command} failed with exit code {fetch_returncode}: "
@@ -838,6 +878,7 @@ class DockerCodexManagedSessionController:
                 target_branch,
             ),
             request=request,
+            git_env=git_env,
         )
 
     @staticmethod
@@ -1345,6 +1386,7 @@ class DockerCodexManagedSessionController:
             self._volume_mount(self._workspace_volume_name, self._workspace_root),
         ]
         session_environment = dict(request.environment)
+        session_environment.pop("GITHUB_TOKEN", None)
         if self._moonmind_url:
             existing_moonmind_url = session_environment.get("MOONMIND_URL")
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
@@ -1400,7 +1442,10 @@ class DockerCodexManagedSessionController:
             raise RuntimeError("docker run returned a blank container id")
         try:
             await self._wait_ready(container_id=container_id)
-            container_payload = request.model_dump(
+            container_request = request.model_copy(
+                update={"environment": session_environment}
+            )
+            container_payload = container_request.model_dump(
                 by_alias=True,
                 exclude={"workspace_spec"},
             )

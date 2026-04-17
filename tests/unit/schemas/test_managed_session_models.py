@@ -20,6 +20,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionTerminateUpdateRequest,
     CodexManagedSessionTurnResponse,
     LaunchCodexManagedSessionRequest,
+    ManagedGitHubCredentialDescriptor,
     SendCodexManagedSessionTurnRequest,
 )
 
@@ -251,6 +252,46 @@ def test_launch_codex_managed_session_request_rejects_reserved_session_environme
             imageRef="moonmind:latest",
             environment={"MOONMIND_SESSION_WORKSPACE_PATH": "/tmp/override"},
         )
+
+
+def test_managed_github_credential_descriptor_serializes_without_secret_value() -> None:
+    descriptor = ManagedGitHubCredentialDescriptor(
+        source="secret_ref",
+        secretRef="db://managed-secrets/GITHUB_TOKEN",
+        required=True,
+    )
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="task-123",
+        sessionId="sess-123",
+        threadId="thread-1",
+        workspacePath="/work/task/repo",
+        sessionWorkspacePath="/work/task/session",
+        artifactSpoolPath="/work/task/artifacts",
+        codexHomePath="/work/task/codex-home",
+        imageRef="moonmind:latest",
+        githubCredential=descriptor,
+    )
+
+    payload = request.model_dump(mode="json", by_alias=True)
+
+    assert payload["githubCredential"] == {
+        "envVar": None,
+        "source": "secret_ref",
+        "secretRef": "db://managed-secrets/GITHUB_TOKEN",
+        "required": True,
+    }
+    assert "ghp_secret_token_value" not in str(payload)
+    assert "GITHUB_TOKEN" not in payload["environment"]
+
+
+def test_managed_github_credential_descriptor_requires_secret_ref() -> None:
+    with pytest.raises(ValidationError, match="secretRef is required"):
+        ManagedGitHubCredentialDescriptor(source="secret_ref")
+
+
+def test_managed_github_credential_descriptor_rejects_unknown_source() -> None:
+    with pytest.raises(ValidationError):
+        ManagedGitHubCredentialDescriptor(source="plain_text", required=True)
 
 
 def test_codex_managed_session_clear_request_requires_new_thread() -> None:

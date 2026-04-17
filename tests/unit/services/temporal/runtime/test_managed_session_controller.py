@@ -14,6 +14,7 @@ from moonmind.schemas.managed_session_models import (
     FetchCodexManagedSessionSummaryRequest,
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
+    ManagedGitHubCredentialDescriptor,
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
     SteerCodexManagedSessionTurnRequest,
@@ -710,6 +711,236 @@ async def test_controller_clone_uses_launch_scoped_github_token_for_git_auth(
     message = str(exc_info.value)
     assert token not in message
     assert "[REDACTED]" in message
+
+
+@pytest.mark.asyncio
+async def test_controller_clone_resolves_descriptor_for_git_without_container_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    token = "launch-secret-token-12345678901234567890"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "mm:task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        githubCredential=ManagedGitHubCredentialDescriptor(
+            source="environment",
+            envVar="MM320_GITHUB_TOKEN",
+            required=True,
+        ),
+        workspaceSpec={"repository": "MoonLadderStudios/private-repo"},
+    )
+    git_envs: list[dict[str, str] | None] = []
+    docker_commands: list[tuple[str, ...]] = []
+    container_payloads: list[str | None] = []
+
+    monkeypatch.setenv("MM320_GITHUB_TOKEN", token)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 0,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
+        lambda *_args, **_kwargs: None,
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
+    ) -> tuple[int, str, str]:
+        if command[0] == "git":
+            git_envs.append(env)
+            return 0, "", ""
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            docker_commands.append(command)
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            container_payloads.append(input_text)
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    assert git_envs
+    assert git_envs[0] is not None
+    assert git_envs[0]["GITHUB_TOKEN"] == token
+    assert git_envs[0]["GIT_TERMINAL_PROMPT"] == "0"
+    assert 'password="$GITHUB_TOKEN"' in git_envs[0]["GIT_CONFIG_VALUE_1"]
+    docker_run_text = " ".join(docker_commands[0])
+    assert token not in docker_run_text
+    assert "GITHUB_TOKEN=" not in docker_run_text
+    assert container_payloads
+    assert token not in str(container_payloads[0])
+    assert "githubCredential" in str(container_payloads[0])
+
+
+@pytest.mark.asyncio
+async def test_controller_reuses_resolved_git_environment_for_target_branch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    workspace_path = workspace_root / "mm:task-1" / "repo"
+    workspace_path.mkdir(parents=True)
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_path),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        githubCredential=ManagedGitHubCredentialDescriptor(
+            source="environment",
+            envVar="MM320_GITHUB_TOKEN",
+            required=True,
+        ),
+        workspaceSpec={
+            "repository": "MoonLadderStudios/private-repo",
+            "targetBranch": "feature/mm-320",
+        },
+    )
+    token = "launch-secret-token-12345678901234567890"
+    resolve_calls: list[ManagedGitHubCredentialDescriptor | None] = []
+    git_envs: list[dict[str, str] | None] = []
+
+    async def _fake_resolve(
+        _environment: dict[str, str],
+        *,
+        github_credential: ManagedGitHubCredentialDescriptor | None = None,
+    ) -> str:
+        resolve_calls.append(github_credential)
+        return token
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
+    ) -> tuple[int, str, str]:
+        if command[0] != "git":
+            raise AssertionError(f"unexpected command: {command}")
+        git_envs.append(env)
+        if command[-1] == "--is-inside-work-tree":
+            return 0, "true\n", ""
+        if command[-2:] == ("checkout", "feature/mm-320"):
+            return 1, "", "pathspec 'feature/mm-320' did not match"
+        if command[-3:] == ("fetch", "origin", "feature/mm-320"):
+            return 0, "", ""
+        if command[-4:] == (
+            "checkout",
+            "-B",
+            "feature/mm-320",
+            "origin/feature/mm-320",
+        ):
+            return 0, "", ""
+        raise AssertionError(f"unexpected git command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller._ensure_workspace_paths(request)
+
+    assert len(resolve_calls) == 1
+    assert git_envs[0] == {"LC_ALL": "C", "LANG": "C"}
+    assert len(git_envs) == 4
+    for env in git_envs[1:]:
+        assert env is not None
+        assert env["GITHUB_TOKEN"] == token
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_controller_required_github_descriptor_fails_before_clone(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        taskRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "mm:task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        githubCredential=ManagedGitHubCredentialDescriptor(
+            source="environment",
+            envVar="MM320_MISSING_GITHUB_TOKEN",
+            required=True,
+        ),
+        workspaceSpec={"repository": "MoonLadderStudios/private-repo"},
+    )
+
+    monkeypatch.delenv("MM320_MISSING_GITHUB_TOKEN", raising=False)
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
+    ) -> tuple[int, str, str]:
+        raise AssertionError(f"unexpected command after missing credential: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(RuntimeError, match="GitHub credential"):
+        await controller.launch_session(request)
 
 
 @pytest.mark.asyncio
