@@ -20,6 +20,7 @@ Expected coverage:
 - Target switching inside the browser preserves the selected issue.
 - Jira text imports can append to or replace the declared text target.
 - Jira images become structured attachments on the declared attachment target.
+- Successful imports return focus or visible success context to the updated result.
 - Jira failures remain local and manual task authoring remains available.
 
 ## Final Repository Validation

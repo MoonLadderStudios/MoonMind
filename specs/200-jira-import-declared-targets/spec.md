@@ -96,6 +96,7 @@ Requirements:
 5. **Given** Jira is unavailable or issue detail cannot be fetched, **When** the task author closes or leaves the Jira browser, **Then** the draft is not mutated and manual authoring remains available.
 6. **Given** a template-bound step receives Jira text or images, **When** the import succeeds, **Then** the step is treated as manually customized and no other preset-derived steps are silently rewritten.
 7. **Given** an already-applied preset receives Jira text or objective-scoped images, **When** the import changes the preset objective target, **Then** the preset is marked as needing explicit reapply and already-expanded steps remain unchanged.
+8. **Given** a Jira import succeeds, **When** the draft target is updated, **Then** focus returns predictably to the updated field or visible success context identifies the updated result.
 
 ### Edge Cases
 
@@ -155,7 +156,7 @@ Requirements:
 - **FR-023**: Jira browser open, close, target selection, issue selection, and import controls MUST be keyboard accessible.
 - **FR-024**: The Jira browser MUST identify the current import target while it is open.
 - **FR-025**: After a successful Jira import, focus or success context MUST return predictably to the updated field or visible result.
-- **FR-026**: Automated coverage MUST prove target preselection, target switching with selected issue preservation, append/replace text import, structured image target mapping, template detachment, Jira failure isolation, and manual authoring continuity.
+- **FR-026**: Automated coverage MUST prove target preselection, target switching with selected issue preservation, append/replace text import, structured image target mapping, template detachment, post-import focus or visible success context, Jira failure isolation, and manual authoring continuity.
 - **FR-027**: System MUST preserve Jira issue key MM-381 in MoonSpec artifacts and verification evidence for traceability.
 
 ### Key Entities

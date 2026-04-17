@@ -5,7 +5,7 @@
 
 **Tests**: Unit tests and integration-style Create page tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement production code until they pass.
 
-**Source Traceability**: MM-381, FR-001 through FR-027, acceptance scenarios 1-7, SC-001 through SC-007, DESIGN-REQ-017, DESIGN-REQ-018, DESIGN-REQ-003, DESIGN-REQ-010, DESIGN-REQ-012, DESIGN-REQ-015, DESIGN-REQ-022, DESIGN-REQ-023, DESIGN-REQ-024, DESIGN-REQ-025.
+**Source Traceability**: MM-381, FR-001 through FR-027, acceptance scenarios 1-8, SC-001 through SC-007, DESIGN-REQ-017, DESIGN-REQ-018, DESIGN-REQ-003, DESIGN-REQ-010, DESIGN-REQ-012, DESIGN-REQ-015, DESIGN-REQ-022, DESIGN-REQ-023, DESIGN-REQ-024, DESIGN-REQ-025.
 
 **Test Commands**:
 
@@ -29,7 +29,7 @@
 
 **Independent Test**: Open the Create page with Jira enabled, browse from each text and attachment target, switch targets inside the browser, import Jira text and images, and inspect draft state plus the submitted payload.
 
-**Traceability**: FR-001 through FR-027; scenarios 1-7; SC-001 through SC-007; DESIGN-REQ-017, DESIGN-REQ-018, DESIGN-REQ-003, DESIGN-REQ-010, DESIGN-REQ-012, DESIGN-REQ-015, DESIGN-REQ-022, DESIGN-REQ-023, DESIGN-REQ-024, DESIGN-REQ-025.
+**Traceability**: FR-001 through FR-027; scenarios 1-8; SC-001 through SC-007; DESIGN-REQ-017, DESIGN-REQ-018, DESIGN-REQ-003, DESIGN-REQ-010, DESIGN-REQ-012, DESIGN-REQ-015, DESIGN-REQ-022, DESIGN-REQ-023, DESIGN-REQ-024, DESIGN-REQ-025.
 
 ### Unit Tests
 
@@ -42,41 +42,42 @@
 
 - [X] T008 Add or confirm integration-style Create page coverage for Jira failures staying local and manual task submission payload shape remaining unchanged in `frontend/src/entrypoints/task-create.test.tsx` (FR-013, FR-014, FR-021, FR-022, FR-026, SC-006, scenario 5, DESIGN-REQ-003, DESIGN-REQ-022, DESIGN-REQ-025)
 - [X] T009 Add or confirm integration-style Create page coverage for preset reapply and template-bound step text detachment after Jira import in `frontend/src/entrypoints/task-create.test.tsx` (FR-010, FR-015, FR-017, FR-026, SC-005, scenario 7, DESIGN-REQ-010, DESIGN-REQ-018)
-- [X] T010 Confirm MM-381 traceability appears in feature artifacts and verification inputs in `specs/200-jira-import-declared-targets/spec.md`, `specs/200-jira-import-declared-targets/tasks.md`, and `docs/tmp/jira-orchestration-inputs/MM-381-moonspec-orchestration-input.md` (FR-027)
+- [X] T010 Add or confirm integration-style Create page coverage for post-import focus or visible success context in `frontend/src/entrypoints/task-create.test.tsx` (FR-025, FR-026, scenario 8, DESIGN-REQ-023, DESIGN-REQ-024)
+- [X] T011 Confirm MM-381 traceability appears in feature artifacts and verification inputs in `specs/200-jira-import-declared-targets/spec.md`, `specs/200-jira-import-declared-targets/tasks.md`, and `docs/tmp/jira-orchestration-inputs/MM-381-moonspec-orchestration-input.md` (FR-027)
 
 ### Red-First Confirmation
 
-- [X] T011 Run focused UI tests with `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and confirm T004-T007 fail before implementation
+- [X] T012 Run focused UI tests with `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and confirm T004-T007 fail before implementation
 
 ### Implementation
 
-- [X] T012 Update Jira target modeling and browser controls in `frontend/src/entrypoints/task-create.tsx` to support preset text, objective attachments, step text, step attachments, and target switching without clearing the selected issue (FR-001, FR-002, FR-003, FR-004, FR-005, FR-023, FR-024)
-- [X] T013 Update Jira text import controls in `frontend/src/entrypoints/task-create.tsx` so text targets can append to or replace the declared target (FR-006, FR-020)
-- [X] T014 Update Jira attachment entry points and attachment-only import handling in `frontend/src/entrypoints/task-create.tsx` so Jira images are imported only as structured attachments on the selected target (FR-007, FR-008, FR-009, FR-018, FR-019)
-- [X] T015 Update template-bound step and preset reapply handling in `frontend/src/entrypoints/task-create.tsx` for Jira text and attachment imports (FR-010, FR-011, FR-012, FR-015, FR-016, FR-017)
+- [X] T013 Update Jira target modeling and browser controls in `frontend/src/entrypoints/task-create.tsx` to support preset text, objective attachments, step text, step attachments, and target switching without clearing the selected issue (FR-001, FR-002, FR-003, FR-004, FR-005, FR-023, FR-024, FR-025)
+- [X] T014 Update Jira text import controls in `frontend/src/entrypoints/task-create.tsx` so text targets can append to or replace the declared target (FR-006, FR-020)
+- [X] T015 Update Jira attachment entry points and attachment-only import handling in `frontend/src/entrypoints/task-create.tsx` so Jira images are imported only as structured attachments on the selected target (FR-007, FR-008, FR-009, FR-018, FR-019)
+- [X] T016 Update template-bound step and preset reapply handling in `frontend/src/entrypoints/task-create.tsx` for Jira text and attachment imports (FR-010, FR-011, FR-012, FR-015, FR-016, FR-017)
 
 ### Story Validation
 
-- [X] T016 Run focused UI validation `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
-- [X] T017 Run final repository unit validation `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`
+- [X] T017 Run focused UI validation `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`
+- [X] T018 Run final repository unit validation `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`
 
 ## Phase 4: Polish And Verification
 
-- [X] T018 Run `/moonspec-verify` equivalent and record verification in `specs/200-jira-import-declared-targets/verification.md`
+- [X] T019 Run `/moonspec-verify` equivalent and record verification in `specs/200-jira-import-declared-targets/verification.md`
 
 ## Dependencies & Execution Order
 
 - T001-T003 establish inputs and implementation surfaces.
-- T004-T010 must be written or confirmed before implementation tasks.
-- T011 must confirm the new focused tests fail for the intended reasons before T012-T015 are considered complete.
-- T012-T015 implement the story.
-- T016 and T017 validate implementation before T018 verification.
+- T004-T011 must be written or confirmed before implementation tasks.
+- T012 must confirm the new focused tests fail for the intended reasons before T013-T016 are considered complete.
+- T013-T016 implement the story.
+- T017 and T018 validate implementation before T019 verification.
 
 ## Parallel Example
 
 ```text
 T004 and T005 can be drafted in parallel with T006 and T007 only if the edits are kept to separate test blocks and then reconciled sequentially.
-T008, T009, and T010 are confirmation tasks and can run independently after the focused test file has been inspected.
+T008, T009, T010, and T011 are confirmation tasks and can run independently after the focused test file has been inspected.
 ```
 
 ## Notes

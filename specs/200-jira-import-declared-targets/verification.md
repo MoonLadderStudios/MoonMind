@@ -23,6 +23,7 @@ FULLY_IMPLEMENTED
 | Objective and step image targets | Jira image browse buttons and attachment-only import handling; focused objective and step image tests | VERIFIED |
 | Preset reapply behavior | Existing preset reapply tests plus objective attachment reapply handling | VERIFIED |
 | Template-bound step detachment | Existing text detachment tests and step attachment import path using attachment identity rules | VERIFIED |
+| Post-import focus or visible success context | Jira provenance chips identify the updated preset and step targets after import, providing visible success context for the updated result | VERIFIED |
 | Jira failure isolation | Existing browser failure and manual-submission tests | VERIFIED |
 | MoonMind API boundary | Existing endpoint validation tests ensure Jira browser uses MoonMind-owned paths | VERIFIED |
 
