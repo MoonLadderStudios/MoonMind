@@ -35,38 +35,39 @@
 - [X] T004 Add failing test for step attachment refs staying structured and out of instruction text in `frontend/src/entrypoints/task-create.test.tsx` (FR-003, FR-005, SC-002)
 - [X] T005 Add failing test for objective-scoped attachment submission through `task.inputAttachments` in `frontend/src/entrypoints/task-create.test.tsx` (FR-004, FR-005, SC-001)
 - [X] T006 Add failing test for step reorder preserving attachment ownership in `frontend/src/entrypoints/task-create.test.tsx` (FR-006, SC-003)
+- [X] T007 Confirm primary-step validation, Step 1 labeling, and non-primary instruction/skill inheritance coverage in `frontend/src/entrypoints/task-create.test.tsx` (FR-002, SC-004, DESIGN-REQ-006, DESIGN-REQ-007)
 
 ### Integration Tests
 
-- [X] T007 Add failing integration-style Create page payload test for objective attachment upload, artifact metadata, and `/api/executions` task payload in `frontend/src/entrypoints/task-create.test.tsx` (FR-004, FR-005, SC-001)
-- [X] T008 Add failing integration-style Create page payload test for step reorder preserving owning `task.steps[n].inputAttachments` in `frontend/src/entrypoints/task-create.test.tsx` (FR-006, DESIGN-REQ-008, SC-003)
+- [X] T008 Add failing integration-style Create page payload test for objective attachment upload, artifact metadata, and `/api/executions` task payload in `frontend/src/entrypoints/task-create.test.tsx` (FR-004, FR-005, SC-001)
+- [X] T009 Add failing integration-style Create page payload test for step reorder preserving owning `task.steps[n].inputAttachments` in `frontend/src/entrypoints/task-create.test.tsx` (FR-006, DESIGN-REQ-008, SC-003)
 
 ### Red-First Confirmation
 
-- [X] T009 Run focused UI tests and confirm T004-T008 fail before implementation
+- [X] T010 Run focused UI tests and confirm T004-T009 fail before implementation
 
 ### Implementation
 
-- [X] T010 Add objective attachment draft state and target-aware selected-file helpers in `frontend/src/entrypoints/task-create.tsx` (FR-001, FR-004, FR-007)
-- [X] T011 Submit objective and step attachments through structured target refs only in `frontend/src/entrypoints/task-create.tsx` (FR-003, FR-004, FR-005)
-- [X] T012 Render objective-scoped attachment controls and selected attachment removal actions in `frontend/src/entrypoints/task-create.tsx` (FR-004, FR-008)
-- [X] T013 Preserve step attachment ownership across add/remove/reorder operations in `frontend/src/entrypoints/task-create.tsx` (FR-006)
-- [X] T014 Route Jira image imports to the selected objective or step target in `frontend/src/entrypoints/task-create.tsx` (FR-004, FR-006)
+- [X] T011 Add objective attachment draft state and target-aware selected-file helpers in `frontend/src/entrypoints/task-create.tsx` (FR-001, FR-004, FR-007)
+- [X] T012 Submit objective and step attachments through structured target refs only in `frontend/src/entrypoints/task-create.tsx` (FR-003, FR-004, FR-005)
+- [X] T013 Render objective-scoped attachment controls and selected attachment removal actions in `frontend/src/entrypoints/task-create.tsx` (FR-004, FR-008)
+- [X] T014 Preserve step attachment ownership across add/remove/reorder operations in `frontend/src/entrypoints/task-create.tsx` (FR-006)
+- [X] T015 Route Jira image imports to the selected objective or step target in `frontend/src/entrypoints/task-create.tsx` (FR-004, FR-006)
 
 ### Story Validation
 
-- [X] T015 Run focused UI validation `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
-- [X] T016 Run final repository unit validation `./tools/test_unit.sh`
+- [X] T016 Run focused UI validation `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx`
+- [X] T017 Run final repository unit validation `./tools/test_unit.sh`
 
 ## Phase 4: Polish
 
-- [X] T017 Run `/moonspec-verify` equivalent and record verification in `specs/196-step-first-draft-attachment-targets/verification.md`
+- [X] T018 Run `/moonspec-verify` equivalent and record verification in `specs/196-step-first-draft-attachment-targets/verification.md`
 
 ## Dependencies & Execution Order
 
 - Setup and foundational review precede story implementation.
-- T004-T008 must fail before T010-T014 are considered complete.
-- T015 and T016 validate implementation before T017 verification.
+- T004-T009 must fail before T011-T015 are considered complete.
+- T016 and T017 validate implementation before T018 verification.
 
 ## Notes
 
