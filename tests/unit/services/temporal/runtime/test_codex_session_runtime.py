@@ -2203,6 +2203,9 @@ def test_runtime_launch_session_seeds_auth_directories_and_excludes_sessions(
     sessions_dir = auth_volume_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "rollout.jsonl").write_text("secret transcript", encoding="utf-8")
+    tmp_dir = auth_volume_path / ".tmp" / "plugins" / ".git" / "objects" / "pack"
+    tmp_dir.mkdir(parents=True)
+    (tmp_dir / "pack-readonly.pack").write_text("plugin cache", encoding="utf-8")
     symlink_path = auth_volume_path / "linked-auth.json"
     symlink_path.symlink_to(auth_volume_path / "auth.json")
 
@@ -2223,7 +2226,47 @@ def test_runtime_launch_session_seeds_auth_directories_and_excludes_sessions(
     assert Path(request.codex_home_path, "auth.json").is_file()
     assert Path(request.codex_home_path, "accounts", "default.json").is_file()
     assert not Path(request.codex_home_path, "sessions").exists()
+    assert not Path(request.codex_home_path, ".tmp").exists()
     assert not Path(request.codex_home_path, "linked-auth.json").exists()
+
+
+def test_runtime_launch_session_auth_seed_overwrites_read_only_files_on_retry(
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    source_auth = auth_volume_path / "auth.json"
+    source_auth.write_text('{"token":"oauth"}', encoding="utf-8")
+    source_auth.chmod(0o444)
+
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    runtime.launch_session(request)
+    destination_auth = Path(request.codex_home_path, "auth.json")
+    assert destination_auth.stat().st_mode & 0o777 == 0o444
+
+    source_auth.chmod(0o644)
+    source_auth.write_text('{"token":"oauth-refresh"}', encoding="utf-8")
+    source_auth.chmod(0o444)
+
+    runtime.launch_session(request)
+
+    assert destination_auth.read_text(encoding="utf-8") == (
+        '{"token":"oauth-refresh"}'
+    )
+    assert destination_auth.stat().st_mode & 0o777 == 0o444
 
 
 def test_runtime_launch_session_rejects_missing_auth_volume_path(
