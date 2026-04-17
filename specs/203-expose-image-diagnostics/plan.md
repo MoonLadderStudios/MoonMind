@@ -14,7 +14,7 @@ MM-375 requires runtime diagnostics for image-input upload, validation, prepare 
 **Language/Version**: Python 3.12  
 **Primary Dependencies**: Existing Codex worker prepare stage, existing `moonmind.vision` service, Pydantic v2 models where already present, standard-library `json` and `pathlib`  
 **Storage**: Existing per-job workspace artifacts under `.moonmind/`; task context diagnostics under job artifacts; no new persistent database storage  
-**Unit Testing**: pytest via `./tools/test_unit.sh tests/unit/agents/codex_worker/test_attachment_materialization.py tests/unit/moonmind/vision/test_service.py` for focused iteration and `./tools/test_unit.sh` for final unit verification  
+**Unit Testing**: pytest via `./tools/test_unit.sh tests/unit/agents/codex_worker/test_attachment_materialization.py tests/unit/moonmind/vision/test_service.py tests/unit/api/routers/test_temporal_artifacts.py tests/unit/workflows/tasks/test_task_contract.py` for focused iteration and `./tools/test_unit.sh` for final unit verification  
 **Integration Testing**: Existing filesystem-bound vision artifact tests in `tests/integration/vision/test_context_artifacts.py`; full hermetic runner is `./tools/test_integration.sh` when Docker is available  
 **Target Platform**: MoonMind managed runtime worker containers and per-job workspaces  
 **Project Type**: Python worker/runtime orchestration service within the MoonMind control plane  
@@ -63,19 +63,28 @@ specs/203-expose-image-diagnostics/
 moonmind/
 ├── agents/codex_worker/
 │   └── worker.py
+├── workflows/tasks/
+│   └── task_contract.py
 └── vision/
-    ├── __init__.py
     └── service.py
+
+api_service/
+└── api/routers/
+    └── temporal_artifacts.py
 
 tests/
 └── unit/
     ├── agents/codex_worker/
     │   └── test_attachment_materialization.py
-    └── moonmind/vision/
-        └── test_service.py
+    ├── api/routers/
+    │   └── test_temporal_artifacts.py
+    ├── moonmind/vision/
+    │   └── test_service.py
+    └── workflows/tasks/
+        └── test_task_contract.py
 ```
 
-**Structure Decision**: Add compact diagnostic event helpers to the existing prepare materialization and vision context services because those boundaries already own target-aware attachment metadata, evidence paths, and failure handling.
+**Structure Decision**: Add compact diagnostic event helpers to existing upload, task-contract validation, prepare materialization, and vision context service boundaries because those boundaries already own target-aware attachment metadata, evidence paths, and failure handling.
 
 ## Complexity Tracking
 

@@ -11,7 +11,7 @@
 
 **Test Commands**:
 
-- Unit tests: `./tools/test_unit.sh tests/unit/agents/codex_worker/test_attachment_materialization.py tests/unit/moonmind/vision/test_service.py`
+- Unit tests: `./tools/test_unit.sh tests/unit/agents/codex_worker/test_attachment_materialization.py tests/unit/moonmind/vision/test_service.py tests/unit/api/routers/test_temporal_artifacts.py tests/unit/workflows/tasks/test_task_contract.py`
 - Integration tests: `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/integration/vision/test_context_artifacts.py -q`
 - Final verification: `/moonspec-verify`
 
@@ -75,10 +75,10 @@
 - [X] T015 Emit prepare download started/completed/failed diagnostics from `_materialize_input_attachments` in `moonmind/agents/codex_worker/worker.py` for FR-004, SC-003, SC-006
 - [X] T016 Add prepared task diagnostics summary with manifest path, attachment count, attachment target metadata, and image diagnostic events in `moonmind/agents/codex_worker/worker.py` for FR-006, FR-008, SC-005
 - [X] T017 Add image context diagnostic event data to `moonmind/vision/service.py` for started/completed/failed/disabled statuses, target identity, source refs, and context paths covering FR-005, FR-007, SC-004
-- [X] T018 Export any new vision diagnostic types from `moonmind/vision/__init__.py` for runtime callers covering FR-005, FR-007
+- [X] T018 Keep vision diagnostics on the existing `VisionContextArtifactBundle` return contract without adding unnecessary exported types in `moonmind/vision/service.py` for FR-005, FR-007
 - [X] T019 Run focused unit commands, fix failures, and complete story validation for FR-004 through FR-010 in `specs/203-expose-image-diagnostics/quickstart.md`
 
-**Checkpoint**: The story is fully functional, covered by unit tests and integration evidence, and testable independently.
+**Checkpoint**: Prepare-download and image-context diagnostics are covered; upload and validation diagnostics remain in Phase 4 because alignment identified them as missing source-requirement coverage.
 
 ---
 
@@ -88,7 +88,14 @@
 
 - [X] T020 Run traceability check `rg -n "MM-375|DESIGN-REQ-019" specs/203-expose-image-diagnostics docs/tmp/jira-orchestration-inputs/MM-375-moonspec-orchestration-input.md`
 - [X] T021 Run final unit validation `./tools/test_unit.sh`
-- [X] T022 Run `/moonspec-verify` read-only verification against MM-375 source requirements and implemented evidence
+- [ ] T022 Add failing unit tests for attachment upload started/completed diagnostics with target metadata in `tests/unit/api/routers/test_temporal_artifacts.py` covering FR-001, FR-002, SC-001, DESIGN-REQ-019
+- [ ] T023 Add failing unit tests for attachment validation failed diagnostics with target metadata and failure detail in `tests/unit/workflows/tasks/test_task_contract.py` covering FR-003, SC-002, DESIGN-REQ-019
+- [ ] T024 Run `./tools/test_unit.sh tests/unit/api/routers/test_temporal_artifacts.py tests/unit/workflows/tasks/test_task_contract.py` to confirm T022-T023 fail for the expected reason
+- [ ] T025 Implement attachment upload started/completed diagnostic publication in `api_service/api/routers/temporal_artifacts.py` or the existing artifact upload boundary covering FR-001, FR-002, SC-001
+- [ ] T026 Implement attachment validation failed diagnostic evidence at the task attachment contract boundary in `moonmind/workflows/tasks/task_contract.py` covering FR-003, SC-002
+- [ ] T027 Run focused upload diagnostic unit tests and update quickstart evidence in `specs/203-expose-image-diagnostics/quickstart.md`
+- [ ] T028 Run final unit validation `./tools/test_unit.sh`
+- [ ] T029 Run `/moonspec-verify` read-only verification against MM-375 source requirements and implemented evidence
 
 ---
 
@@ -107,7 +114,7 @@
 - Integration evidence is confirmed before implementation completion.
 - Worker diagnostic helpers precede prepare-stage event emission and task context summary.
 - Vision diagnostic events precede exports.
-- Quickstart and verification follow passing focused tests.
+- Quickstart and verification follow passing focused tests, including the upload and validation diagnostic tasks added during alignment.
 
 ### Parallel Opportunities
 
@@ -124,4 +131,5 @@
 4. Implement compact diagnostic events at worker and vision service boundaries.
 5. Run focused tests until passing.
 6. Run traceability and final unit verification.
-7. Run `/moonspec-verify` coverage check against MM-375 and DESIGN-REQ-019.
+7. Complete the upload and validation diagnostic gap tasks identified by alignment.
+8. Run `/moonspec-verify` coverage check against MM-375 and DESIGN-REQ-019.
