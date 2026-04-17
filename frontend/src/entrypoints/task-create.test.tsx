@@ -143,6 +143,36 @@ function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
   };
 }
 
+function withoutOptionalAuthoringIntegrations(
+  payload: BootPayload = mockPayload,
+): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      sources?: Record<string, unknown>;
+      system?: Record<string, unknown>;
+    };
+  };
+  const { jira: _jiraSources, ...sources } =
+    initialData.dashboardConfig.sources || {};
+  const {
+    jiraIntegration: _jiraIntegration,
+    attachmentPolicy: _attachmentPolicy,
+    taskTemplateCatalog: _taskTemplateCatalog,
+    ...system
+  } = initialData.dashboardConfig.system || {};
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        sources,
+        system,
+      },
+    },
+  };
+}
+
 function withJiraSessionMemory(
   rememberLastBoardInSession: boolean,
   payload: BootPayload = mockPayload,
@@ -211,6 +241,12 @@ describe("Task Create Entrypoint", () => {
       string,
       unknown
     >;
+  }
+
+  function canonicalCreateSections(): string[] {
+    return Array.from(
+      document.querySelectorAll<HTMLElement>("[data-canonical-create-section]"),
+    ).map((element) => element.dataset.canonicalCreateSection || "");
   }
 
   beforeEach(() => {
@@ -3608,6 +3644,106 @@ describe("Task Create Entrypoint", () => {
     expect(await screen.findByDisplayValue("3")).not.toBeNull();
     expect(screen.getByText("Task Presets (optional)")).not.toBeNull();
     expect(screen.getByText("Schedule (optional)")).not.toBeNull();
+  });
+
+  it("exposes the canonical Create page section order in create mode", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    await screen.findByText("Step 1 (Primary)");
+
+    expect(canonicalCreateSections()).toEqual([
+      "Header",
+      "Steps",
+      "Task Presets",
+      "Dependencies",
+      "Execution context",
+      "Execution controls",
+      "Schedule",
+      "Submit",
+    ]);
+  });
+
+  it("uses the same Create page composition surface for edit and rerun modes", async () => {
+    const { unmount } = renderForEdit("mm:artifact-edit");
+
+    await screen.findByRole("heading", { name: "Edit Task" });
+    expect(canonicalCreateSections()).toEqual([
+      "Header",
+      "Steps",
+      "Task Presets",
+      "Dependencies",
+      "Execution context",
+      "Execution controls",
+      "Submit",
+    ]);
+    unmount();
+
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/tasks/new?rerunExecutionId=mm%3Arerun-123",
+    );
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    await screen.findByRole("heading", { name: "Rerun Task" });
+    expect(canonicalCreateSections()).toEqual([
+      "Header",
+      "Steps",
+      "Task Presets",
+      "Dependencies",
+      "Execution context",
+      "Execution controls",
+      "Submit",
+    ]);
+  });
+
+  it("keeps manual authoring available without optional presets Jira or image upload", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withoutOptionalAuthoringIntegrations()} />,
+    );
+
+    expect(await screen.findByText("Step 1 (Primary)")).not.toBeNull();
+    expect(await screen.findByLabelText("Instructions")).not.toBeNull();
+    expect(screen.queryByLabelText("Preset")).toBeNull();
+    expect(screen.queryByText("Browse Jira issue")).toBeNull();
+    expect(screen.queryByLabelText(/attachments/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Create" })).not.toBeNull();
+  });
+
+  it("uses only MoonMind REST endpoints while submitting a manually authored task", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withoutOptionalAuthoringIntegrations()} />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Submit through MoonMind REST only." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const urls = fetchSpy.mock.calls.map(([url]) => String(url));
+    expect(urls).toContain("/api/executions");
+    expect(
+      urls.every(
+        (url) =>
+          url.startsWith("/api/") ||
+          url.startsWith("/api?") ||
+          url === "/api",
+      ),
+    ).toBe(true);
+    expect(
+      urls.some((url) =>
+        /atlassian|jira\.|amazonaws|storage\.googleapis|openai|anthropic|googleapis/i.test(
+          url,
+        ),
+      ),
+    ).toBe(false);
   });
 
   it("updates provider-profile options when the selected runtime changes", async () => {

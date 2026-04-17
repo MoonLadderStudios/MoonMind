@@ -180,6 +180,27 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert "__moonmind_customElementsDefineGuard" not in response.text
 
 
+def test_task_create_route_uses_canonical_boot_payload(client: TestClient) -> None:
+    """GET /tasks/new renders the task-create shell with server runtime config."""
+    response = client.get("/tasks/new")
+
+    assert response.status_code == 200
+    assert "moonmind-ui-boot" in response.text
+    boot_json = response.text.split(
+        '<script id="moonmind-ui-boot" type="application/json">',
+        maxsplit=1,
+    )[1].split("</script>", maxsplit=1)[0]
+    boot_payload = json.loads(boot_json)
+
+    assert boot_payload["page"] == "task-create"
+    dashboard_config = boot_payload["initialData"]["dashboardConfig"]
+    assert dashboard_config["initialPath"] == "/tasks/new"
+    assert dashboard_config["sources"]["temporal"]["create"].startswith("/api/")
+    assert dashboard_config["sources"]["temporal"]["artifactCreate"].startswith(
+        "/api/"
+    )
+
+
 def test_alias_routes_redirect_to_canonical_paths(client: TestClient) -> None:
     """GET /tasks/create and /tasks/tasks-list must return 307 redirects to canonical routes."""
     create_resp = client.get("/tasks/create", follow_redirects=False)
