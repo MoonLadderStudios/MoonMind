@@ -3438,7 +3438,7 @@ describe("Task Create Entrypoint", () => {
     ]);
   });
 
-  it("uploads a step attachment and includes it with the step instructions", async () => {
+  it("uploads a step attachment as a structured step input without rewriting instructions", async () => {
     renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -3490,16 +3490,20 @@ describe("Task Create Entrypoint", () => {
       .filter(([url]) => String(url) === "/api/executions")
       .at(-1);
     const request = JSON.parse(String(executionCall?.[1]?.body));
-    expect(request.payload.task.instructions).toContain(
+    expect(request.payload.task.instructions).toBe(
       "Review the provided screenshot.",
     );
-    expect(request.payload.task.instructions).toContain(
+    expect(request.payload.task.instructions).not.toContain(
       "Step input attachments:",
     );
-    expect(request.payload.task.instructions).toContain(
-      "wireframe.png (image/png",
+    expect(request.payload.task.inputAttachments).toBeUndefined();
+    expect(request.payload.task.steps[0].instructions).toBe(
+      "Review the provided screenshot.",
     );
-    expect(request.payload.task.inputAttachments).toEqual([
+    expect(request.payload.task.steps[0].instructions).not.toContain(
+      "Step input attachments:",
+    );
+    expect(request.payload.task.steps[0].inputAttachments).toEqual([
       {
         artifactId: "art-001",
         filename: "wireframe.png",
@@ -3507,9 +3511,6 @@ describe("Task Create Entrypoint", () => {
         sizeBytes: file.size,
       },
     ]);
-    expect(request.payload.task.steps[0].inputAttachments).toEqual(
-      request.payload.task.inputAttachments,
-    );
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/artifacts/art-001/links",
       expect.objectContaining({
@@ -3517,6 +3518,153 @@ describe("Task Create Entrypoint", () => {
         body: expect.stringContaining("input.attachment"),
       }),
     );
+  });
+
+  it("uploads an objective-scoped attachment only as a task input attachment", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Review objective context." },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Feature Request / Initial Instructions"),
+      {
+        target: { value: "Use the product sketch as objective context." },
+      },
+    );
+    const objectiveInput = await screen.findByLabelText(
+      "Feature Request / Initial Instructions attachments",
+    );
+    const file = new File(["fake image"], "objective.png", {
+      type: "image/png",
+    });
+    fireEvent.change(objectiveInput, {
+      target: { files: [file] },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const artifactCreateCall = fetchSpy.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "/api/artifacts" &&
+        String(init?.body || "").includes("task-dashboard-objective-attachment"),
+    );
+    expect(JSON.parse(String(artifactCreateCall?.[1]?.body))).toMatchObject({
+      content_type: "image/png",
+      size_bytes: file.size,
+      metadata: {
+        filename: "objective.png",
+        source: "task-dashboard-objective-attachment",
+        target: "objective",
+      },
+    });
+
+    const payload = latestCreateRequest().payload as {
+      task: {
+        instructions: string;
+        inputAttachments?: unknown;
+        steps?: Array<Record<string, unknown>>;
+      };
+    };
+    expect(payload.task.instructions).toBe(
+      "Use the product sketch as objective context.",
+    );
+    expect(payload.task.instructions).not.toContain(
+      "Step input attachments:",
+    );
+    expect(payload.task.inputAttachments).toEqual([
+      {
+        artifactId: "art-001",
+        filename: "objective.png",
+        contentType: "image/png",
+        sizeBytes: file.size,
+      },
+    ]);
+    expect(payload.task.steps?.[0]?.inputAttachments).toBeUndefined();
+  });
+
+  it("keeps step attachments with their owning steps after reorder", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Primary screenshot instructions." },
+    });
+    const firstFile = new File(["first image"], "primary.png", {
+      type: "image/png",
+    });
+    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+      target: { files: [firstFile] },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const stepTwo = (await screen.findByText("Step 2")).closest("section");
+    expect(stepTwo).not.toBeNull();
+    fireEvent.change(
+      within(stepTwo as HTMLElement).getByLabelText("Instructions"),
+      {
+        target: { value: "Second screenshot instructions." },
+      },
+    );
+    const secondFile = new File(["second image"], "second.png", {
+      type: "image/png",
+    });
+    fireEvent.change(await screen.findByLabelText("Step 2 attachments"), {
+      target: { files: [secondFile] },
+    });
+
+    const stepOne = screen.getByText("Step 1 (Primary)").closest("section");
+    expect(stepOne).not.toBeNull();
+    fireEvent.click(
+      within(stepOne as HTMLElement).getByRole("button", {
+        name: "Move step down",
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as {
+      task: {
+        steps: Array<Record<string, unknown>>;
+      };
+    };
+    expect(payload.task.steps[0]).toMatchObject({
+      instructions: "Second screenshot instructions.",
+      inputAttachments: [
+        {
+          filename: "second.png",
+          contentType: "image/png",
+          sizeBytes: secondFile.size,
+        },
+      ],
+    });
+    expect(payload.task.steps[1]).toMatchObject({
+      instructions: "Primary screenshot instructions.",
+      inputAttachments: [
+        {
+          filename: "primary.png",
+          contentType: "image/png",
+          sizeBytes: firstFile.size,
+        },
+      ],
+    });
   });
 
   it("does not upload step attachments when later client validation fails", async () => {
@@ -4936,7 +5084,7 @@ describe("Task Create Entrypoint", () => {
       metadata: {
         filename: "objective.png",
         source: "task-dashboard-objective-attachment",
-        target: "Feature Request / Initial Instructions",
+        target: "objective",
       },
     });
 
