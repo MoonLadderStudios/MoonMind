@@ -143,6 +143,41 @@ function withAttachmentPolicy(payload: BootPayload = mockPayload): BootPayload {
   };
 }
 
+function withRepositoryOptions(payload: BootPayload = mockPayload): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      system?: Record<string, unknown>;
+    };
+  };
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...initialData.dashboardConfig.system,
+          repositoryOptions: {
+            items: [
+              {
+                value: "MoonLadderStudios/MoonMind",
+                label: "MoonLadderStudios/MoonMind",
+                source: "default",
+              },
+              {
+                value: "Octo/Repo",
+                label: "Octo/Repo",
+                source: "github",
+              },
+            ],
+            error: null,
+          },
+        },
+      },
+    },
+  };
+}
+
 function withImageOnlyAttachmentPolicy(
   payload: BootPayload = mockPayload,
 ): BootPayload {
@@ -3476,6 +3511,73 @@ describe("Task Create Entrypoint", () => {
       expect(navigateTo).toHaveBeenCalledWith(
         "/tasks/mm:workflow-123?source=temporal",
       );
+    });
+  });
+
+  it("offers repository options while preserving editable repository entry", async () => {
+    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+
+    const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
+    expect(repositoryInput.getAttribute("list")).toBe("queue-repository-options");
+
+    const datalist = document.querySelector<HTMLDataListElement>(
+      "#queue-repository-options",
+    );
+    expect(datalist).not.toBeNull();
+    expect(
+      Array.from(datalist?.querySelectorAll("option") || []).map(
+        (option) => option.value,
+      ),
+    ).toEqual(["MoonLadderStudios/MoonMind", "Octo/Repo"]);
+
+    fireEvent.change(repositoryInput, {
+      target: { value: "Custom/Repo" },
+    });
+    expect((repositoryInput as HTMLInputElement).value).toBe("Custom/Repo");
+  });
+
+  it("submits a selected repository option without changing unrelated draft fields", async () => {
+    renderWithClient(<TaskCreatePage payload={withRepositoryOptions()} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run repository dropdown regression." },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "Octo/Repo" },
+    });
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "moonspec-orchestrate" },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const request = latestCreateRequest();
+    expect(request).toMatchObject({
+      payload: {
+        repository: "Octo/Repo",
+        task: {
+          instructions: "Run repository dropdown regression.",
+          runtime: {
+            mode: "codex_cli",
+          },
+        },
+      },
     });
   });
 
