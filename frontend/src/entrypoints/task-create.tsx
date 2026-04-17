@@ -2658,14 +2658,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (
       !jiraBrowserOpen ||
       !pendingJiraImportIssueKey ||
-      !selectedJiraIssue ||
       selectedJiraIssueKey !== pendingJiraImportIssueKey
     ) {
+      return;
+    }
+    if (jiraIssueDetailQuery.isError) {
+      setPendingJiraImportIssueKey("");
+      return;
+    }
+    if (jiraIssueDetailQuery.isFetching || !selectedJiraIssue) {
       return;
     }
     setPendingJiraImportIssueKey("");
     void importSelectedJiraIssue();
   }, [
+    jiraIssueDetailQuery.isError,
+    jiraIssueDetailQuery.isFetching,
     jiraBrowserOpen,
     pendingJiraImportIssueKey,
     selectedJiraIssue,

@@ -5010,6 +5010,10 @@ describe("Task Create Entrypoint", () => {
         "Failed to load Jira issue. You can continue creating the task manually. Jira issue detail failed.",
       ),
     ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: /ENG-202/ }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
     expect(screen.queryByRole("button", { name: "Replace target text" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Append to target text" })).toBeNull();
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
@@ -5017,6 +5021,109 @@ describe("Task Create Entrypoint", () => {
     );
     expect((presetInstructions as HTMLTextAreaElement).value).toBe(
       "Keep existing preset instructions.",
+    );
+  });
+
+  it("waits for a fresh Jira issue detail response before appending cached issue text", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    let issueDetailRequests = 0;
+    let resolveFreshIssue: (() => void) | null = null;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/jira/issues/ENG-202") {
+        issueDetailRequests += 1;
+        if (issueDetailRequests === 1) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              issueKey: "ENG-202",
+              url: "https://jira.example.test/browse/ENG-202",
+              summary: "Build browser shell",
+              issueType: "Story",
+              column: { id: "doing", name: "Doing" },
+              status: { id: "3", name: "In Progress" },
+              descriptionText: "Let operators browse Jira stories.",
+              acceptanceCriteriaText:
+                "Given a board, users can select a story preview.",
+              recommendedImports: {
+                presetInstructions:
+                  "ENG-202: Build browser shell\n\nLet operators browse Jira stories.",
+                stepInstructions:
+                  "Complete Jira issue ENG-202: Build browser shell",
+              },
+            }),
+          } as Response);
+        }
+        return new Promise<Response>((resolve) => {
+          resolveFreshIssue = () => {
+            resolve({
+              ok: true,
+              json: async () => ({
+                issueKey: "ENG-202",
+                url: "https://jira.example.test/browse/ENG-202",
+                summary: "Build browser shell",
+                issueType: "Story",
+                column: { id: "doing", name: "Doing" },
+                status: { id: "3", name: "In Progress" },
+                descriptionText: "Fresh Jira issue details.",
+                acceptanceCriteriaText:
+                  "Given a board, users can select a story preview.",
+                recommendedImports: {
+                  presetInstructions:
+                    "ENG-202: Build browser shell\n\nFresh Jira issue details.",
+                  stepInstructions:
+                    "Complete Jira issue ENG-202: Build browser shell",
+                },
+              }),
+            } as Response);
+          };
+        });
+      }
+      return defaultFetch?.(input, init) ?? Promise.reject(new Error("fetch missing"));
+    });
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const presetInstructions = await screen.findByLabelText(
+      "Feature Request / Initial Instructions",
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+    fireEvent.change(presetInstructions, {
+      target: { value: "Reset instructions." },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Browse Jira issue for preset instructions",
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "To Do 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Doing 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ENG-202/ }));
+
+    await waitFor(() => {
+      expect(resolveFreshIssue).not.toBeNull();
+    });
+    expect(screen.getByRole("dialog", { name: "Browse Jira issue" })).toBeTruthy();
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Reset instructions.",
+    );
+
+    resolveFreshIssue?.();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Browse Jira issue" })).toBeNull();
+    });
+    expect((presetInstructions as HTMLTextAreaElement).value).toBe(
+      "Reset instructions.\n\n---\n\nENG-202: Build browser shell\n\nFresh Jira issue details.",
     );
   });
 
