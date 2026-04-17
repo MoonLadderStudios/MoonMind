@@ -368,6 +368,8 @@ interface ExpandedStepPayload {
   instructions?: string;
   skill?: TaskTemplateStepSkill;
   tool?: TaskTemplateStepSkill;
+  storyOutput?: Record<string, unknown>;
+  story_output?: Record<string, unknown>;
 }
 
 interface TaskTemplateExpandResponse {
@@ -416,6 +418,7 @@ interface StepState {
   skillRequiredCapabilities: string;
   templateStepId: string;
   templateInstructions: string;
+  storyOutput?: Record<string, unknown>;
 }
 
 interface AppliedTemplateState {
@@ -802,6 +805,9 @@ function createStepStateEntriesFromTemporalDraft(
       skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
       templateStepId: step.templateStepId,
       templateInstructions: step.templateInstructions,
+      ...(step.storyOutput && Object.keys(step.storyOutput).length > 0
+        ? { storyOutput: step.storyOutput }
+        : {}),
     });
   });
 }
@@ -1099,6 +1105,12 @@ function mapExpandedStepToState(
         : {};
   const stepId = String(step.id || "").trim();
   const instructions = String(step.instructions || "").trim();
+  const storyOutput =
+    step.storyOutput && typeof step.storyOutput === "object"
+      ? step.storyOutput
+      : step.story_output && typeof step.story_output === "object"
+        ? step.story_output
+        : undefined;
   return createStepStateEntry(index, {
     id: stepId,
     title: String(step.title || "").trim(),
@@ -1108,6 +1120,7 @@ function mapExpandedStepToState(
     skillRequiredCapabilities: extractCapabilityCsv(tool.requiredCapabilities),
     templateStepId: stepId,
     templateInstructions: instructions,
+    ...(storyOutput ? { storyOutput } : {}),
   });
 }
 
@@ -3969,6 +3982,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             ...(sourceStep.id.trim() ? { id: sourceStep.id.trim() } : {}),
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
+              : {}),
+            ...(sourceStep.storyOutput
+              ? { storyOutput: sourceStep.storyOutput }
               : {}),
             ...entry.payload,
           };

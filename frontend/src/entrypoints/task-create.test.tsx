@@ -1798,6 +1798,14 @@ describe("Task Create Entrypoint", () => {
               id: "step-second",
               title: "Second",
               instructions: "Second step instructions.",
+              storyOutput: {
+                mode: "jira",
+                jira: {
+                  projectKey: "MM",
+                  issueTypeName: "Story",
+                  dependencyMode: "linear_blocker_chain",
+                },
+              },
               tool: {
                 name: "pr-resolver",
                 inputs: { merge: false },
@@ -1828,6 +1836,14 @@ describe("Task Create Entrypoint", () => {
         skillRequiredCapabilities: [],
         templateStepId: "",
         templateInstructions: "",
+        storyOutput: {
+          mode: "jira",
+          jira: {
+            projectKey: "MM",
+            issueTypeName: "Story",
+            dependencyMode: "linear_blocker_chain",
+          },
+        },
       },
     ]);
   });
@@ -4017,6 +4033,52 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("applies a preset into task steps and submits them", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/task-step-templates/speckit-demo:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:speckit-demo:1.2.3:01",
+                title: "Clarify spec",
+                instructions: "Clarify the {{ inputs.feature_name }} scope.",
+                skill: {
+                  id: "speckit-clarify",
+                  args: { feature: "Task Create" },
+                },
+              },
+              {
+                id: "tpl:speckit-demo:1.2.3:02",
+                title: "Plan implementation",
+                instructions: "Write a plan for the task builder recovery.",
+                storyOutput: {
+                  mode: "jira",
+                  jira: {
+                    projectKey: "MM",
+                    issueTypeName: "Story",
+                    dependencyMode: "linear_blocker_chain",
+                  },
+                },
+              },
+            ],
+            appliedTemplate: {
+              slug: "speckit-demo",
+              version: "1.2.3",
+            },
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const presetSelect = await screen.findByLabelText("Preset");
@@ -4093,6 +4155,14 @@ describe("Task Create Entrypoint", () => {
         id: "tpl:speckit-demo:1.2.3:02",
         title: "Plan implementation",
         instructions: "Write a plan for the task builder recovery.",
+        storyOutput: {
+          mode: "jira",
+          jira: {
+            projectKey: "MM",
+            issueTypeName: "Story",
+            dependencyMode: "linear_blocker_chain",
+          },
+        },
       },
     ]);
     expect(request.payload.task.appliedStepTemplates).toEqual([

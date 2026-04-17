@@ -256,6 +256,48 @@ async def test_create_jira_issues_falls_back_to_docs_tmp_when_jira_target_missin
 
 
 @pytest.mark.asyncio
+async def test_create_jira_issues_fails_when_jira_mode_has_no_story_payload():
+    with pytest.raises(ValueError, match="No stories were available"):
+        await create_jira_issues_from_stories(
+            {
+                "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+                "storyOutput": {
+                    "mode": "jira",
+                    "jira": {
+                        "projectKey": "MM",
+                        "issueTypeId": "10001",
+                        "dependencyMode": "linear_blocker_chain",
+                    },
+                },
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_allows_explicit_fallback_when_jira_mode_has_no_story_payload():
+    result = await create_jira_issues_from_stories(
+        {
+            "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json",
+            "storyOutput": {
+                "mode": "jira",
+                "fallback": "docs_tmp",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "linear_blocker_chain",
+                },
+            },
+        }
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "fallback"
+    assert (
+        result.outputs["storyOutput"]["reason"]
+        == "No stories were available for Jira issue creation."
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_jira_issues_truncates_description_and_creates_subtasks():
     service = _FakeJiraService()
     long_description = "x" * 40000

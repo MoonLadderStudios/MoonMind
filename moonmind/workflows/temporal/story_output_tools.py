@@ -518,6 +518,9 @@ async def create_jira_issues_from_stories(
     """Create one Jira issue per story, or report docs/tmp fallback metadata."""
 
     story_output = _mapping(inputs.get("storyOutput") or inputs.get("story_output"))
+    story_output_mode = str(
+        story_output.get("mode") or story_output.get("target") or ""
+    ).strip().lower()
     jira_payload = _mapping(story_output.get("jira") or inputs.get("jira"))
     project_key = _string(
         jira_payload.get("projectKey")
@@ -541,12 +544,21 @@ async def create_jira_issues_from_stories(
         or inputs.get("issueType")
         or inputs.get("issue_type")
     )
+    fallback_keys = ("fallback", "onFailure", "on_failure")
+    fallback_configured = any(key in story_output for key in fallback_keys)
     fallback_on_failure = str(
-        story_output.get("fallback")
-        or story_output.get("onFailure")
-        or story_output.get("on_failure")
-        or "docs_tmp"
+        next(
+            (
+                story_output.get(key)
+                for key in fallback_keys
+                if key in story_output
+            ),
+            "docs_tmp",
+        )
     ).strip().lower() not in {"fail", "none", "false"}
+    fallback_for_missing_stories = fallback_on_failure and (
+        story_output_mode != "jira" or fallback_configured
+    )
     dependency_mode, dependency_mode_error = _dependency_mode(
         inputs=inputs,
         story_output=story_output,
@@ -594,7 +606,7 @@ async def create_jira_issues_from_stories(
                 breakdown_source_path = _breakdown_source_path(fetched_payload)
                 stories = _coerce_story_payload(fetched)
             except Exception as exc:
-                if fallback_on_failure:
+                if fallback_for_missing_stories:
                     return _fallback_result(
                         reason=f"Unable to read story breakdown for Jira output: {exc}",
                         inputs=inputs,
@@ -603,7 +615,7 @@ async def create_jira_issues_from_stories(
                 raise
 
     if not stories:
-        if fallback_on_failure:
+        if fallback_for_missing_stories:
             return _fallback_result(
                 reason="No stories were available for Jira issue creation.",
                 inputs=inputs,
