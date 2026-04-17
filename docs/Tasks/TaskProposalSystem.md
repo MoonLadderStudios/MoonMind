@@ -56,6 +56,8 @@ These rules are fixed:
    proposal.
 9. When a proposal depends on agent skill context, that context must be preserved explicitly in the stored `taskCreateRequest` or preserved through documented inheritance semantics.
 10. Proposal promotion must not silently drift to unrelated skill defaults when the original proposal logic depended on explicit skill selection.
+11. Preset-derived metadata in proposals is advisory UX and reconstruction metadata, not a runtime dependency.
+12. Proposal promotion validates and submits the reviewed flat task payload; it does not depend on live preset catalog lookup or live preset re-expansion for correctness.
 
 ---
 
@@ -162,6 +164,7 @@ Generators analyze:
 3. normalized `AgentRunResult` data from managed and external agents
 4. finish-summary signals and execution diagnostics
 5. resolved skill snapshot metadata and skill-related execution context, specifically observing if a specific skill set or context contributed to the detected follow-up work (using artifact-backed skill metadata where needed rather than treating the runtime workspace as the sole source of truth)
+6. authored preset metadata and per-step source provenance when the parent run exposes reliable preset provenance
 
 Generators must:
 
@@ -170,6 +173,7 @@ Generators must:
 3. avoid side effects such as commits, pushes, or task creation
 4. redact or exclude secrets and unsafe command output
 5. **Preserve Skill Selectors:** Only emit explicit skill selectors when they materially affect the correctness or expected behavior of the follow-up work. Generic project follow-up proposals do not need to redundantly stamp all inherited defaults if doing so adds noise without preserving important intent. When the originating task explicitly selected non-default skill sets, proposals should preserve that intent unless documented otherwise.
+6. **Preserve Reliable Preset Provenance:** Proposal generators may carry forward parent-run preset provenance when the candidate work is genuinely derived from authored preset metadata or reliable step source metadata. Generators must not fabricate `task.authoredPresets`, binding IDs, include paths, or preset-derived labels for work that was manually authored, inferred from logs only, or otherwise lacks reliable binding evidence.
 
 ### 3.5 Proposal submission
 
@@ -314,12 +318,34 @@ That means:
               { "name": "moonmind-doc-writer", "version": "2.3.0" }
             ]
           },
+          "authoredPresets": [
+            {
+              "bindingId": "preset-binding-123",
+              "presetId": "runtime-quality-followup",
+              "version": "2026-04-17",
+              "includePath": ["root", "regression-coverage"],
+              "detached": false
+            }
+          ],
           "runtime": {
             "mode": "codex"
           },
           "publish": {
             "mode": "pr"
-          }
+          },
+          "steps": [
+            {
+              "title": "Add regression coverage",
+              "instructions": "Add a regression test covering retry loop detection in the Temporal runtime.",
+              "source": {
+                "kind": "preset",
+                "bindingId": "preset-binding-123",
+                "includePath": ["root", "regression-coverage"],
+                "blueprintStepSlug": "add-regression-test",
+                "detached": false
+              }
+            }
+          ]
         }
       }
     }
@@ -341,6 +367,8 @@ That means:
 6. If `task.skills` or `step.skills` are present, they must validate against the canonical agent-skill contract. Proposals must not embed full agent skill bodies inline when refs or selectors are the correct contract.
 7. Proposals should preserve execution intent, not raw runtime materialization state. Proposal payloads must **not** store mutable `.agents/skills` directory state, runtime-local materialization outputs, or ephemeral prompt bundles produced only for one adapter session.
 8. Proposal-capable work originating from a Codex managed session must already carry `task.proposeTasks` and any `task.proposalPolicy` in the canonical task payload. Proposal generation must not reconstruct this intent from session-local metadata.
+9. Proposal payloads may include optional `task.authoredPresets` and `steps[].source` provenance when the metadata is reliable. These fields are reconstruction and review metadata only; they do not change the executable meaning of the flat task payload.
+10. Proposal payloads must not contain unresolved preset include objects as runtime work. Preset-derived proposals must be execution-ready flat payloads before storage and promotion.
 
 ---
 
@@ -393,11 +421,12 @@ Promotion must follow this algorithm:
 4. apply shortcut `runtimeMode` only by constructing that override
 5. validate the merged payload against the canonical task contract, including verification of any agent-skill selectors
 6. preserve explicit skill-selection intent from the stored proposal unless the operator intentionally overrides it, ensuring promotion-time overrides do not silently drop or corrupt skill fields
-7. submit the merged task through the same Temporal-backed create path used by
+7. preserve `task.authoredPresets` and per-step `source` provenance from the stored proposal unless the operator intentionally overrides those fields through the merged payload
+8. submit the merged task through the same Temporal-backed create path used by
    `/api/executions`
-8. create a new `MoonMind.Run` through `TemporalExecutionService.create_execution()`
-9. store the promoted workflow or execution identifier on the proposal record
-10. return both the updated proposal and the new execution metadata
+9. create a new `MoonMind.Run` through `TemporalExecutionService.create_execution()`
+10. store the promoted workflow or execution identifier on the proposal record
+11. return both the updated proposal and the new execution metadata
 
 Promotion is therefore a control-plane-to-Temporal bridge, not a proposal-local
 mutation only.
@@ -410,7 +439,30 @@ Proposal promotion preserves agent skill intent from the original execution.
 * **Promotion Overrides:** Operators may override runtime at promotion time. Agent skill selectors are preserved by default. Changing the runtime does not automatically erase or rewrite agent skill intent.
 * **Incompatibilities:** If a selected skill set is incompatible with the chosen runtime, promotion must fail validation or require an explicit override path. Proposal promotion does not re-resolve skill-source precedence as an undocumented side effect.
 
-### 7.3 Runtime selection
+### 7.3 Preset provenance preservation
+
+Proposal promotion preserves reliable preset provenance from the stored proposal
+as review and reconstruction metadata.
+
+Rules:
+
+1. Default promotion uses the reviewed flat `taskCreateRequest` payload and does
+   not perform live preset catalog lookup for correctness.
+2. Default promotion does not re-expand live presets. Catalog changes after the
+   proposal was created must not silently change the promoted execution.
+3. `task.authoredPresets` and `steps[].source` are preserved by default when
+   present and valid in the stored proposal payload.
+4. If an operator intentionally edits or removes provenance through a validated
+   promotion override, the merged payload is the source of truth.
+5. A future refresh-latest workflow may exist, but it must be explicit
+   operator-selected behavior that re-resolves presets before submission and
+   presents the refreshed flat payload for validation. It is not the default
+   promotion path.
+6. Flattened-only proposals remain valid. When reliable authored preset binding
+   metadata is absent, promotion must not invent bindings or infer executable
+   preset semantics from descriptive text.
+
+### 7.4 Runtime selection
 
 Proposal promotion supports operator runtime selection.
 
@@ -423,7 +475,7 @@ Rules:
    proposal payload
 4. disabled runtimes must fail validation before a workflow is created
 
-### 7.4 Response contract
+### 7.5 Response contract
 
 The promote API response must include:
 
@@ -456,6 +508,7 @@ The system must surface:
 3. links from execution detail to proposals filtered by
    `originSource=workflow` and `originId=<workflow_id>`
 4. **Proposal-Review Visibility:** Proposal detail or promotion UI may need to present a compact summary of execution context showing whether the proposal carries explicit skill selectors or inherits deployment defaults, alongside runtime, repository, and publish settings.
+5. **Preset-Provenance Visibility:** Proposal detail or promotion UI may distinguish manual work, preset-derived work with preserved binding metadata, and preset-derived flattened-only work. These labels are explanatory review metadata and must not imply nested runtime work, live preset expansion, subtasks, sub-plans, or separate workflow runs.
 
 ### 8.3 Failure handling
 
