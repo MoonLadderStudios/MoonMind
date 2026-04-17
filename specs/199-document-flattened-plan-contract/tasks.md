@@ -77,7 +77,7 @@
 
 - [X] T018 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` or record the exact environment blocker in `specs/199-document-flattened-plan-contract/verification.md` (FR-011).
 - [X] T019 Run `./tools/test_integration.sh` when Docker is available or record the exact environment blocker in `specs/199-document-flattened-plan-contract/verification.md` (FR-011).
-- [ ] T020 Run `/moonspec-verify` and record the result in `specs/199-document-flattened-plan-contract/verification.md` (FR-012, SC-007).
+- [X] T020 Run `/moonspec-verify` and record the result in `specs/199-document-flattened-plan-contract/verification.md` (FR-012, SC-007).
 
 ## Dependencies & Execution Order
 

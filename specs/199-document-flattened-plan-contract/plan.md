@@ -9,15 +9,15 @@ Implement MM-386 by updating the canonical execution tool and plan contract so s
 
 ## Technical Context
 
-**Language/Version**: Markdown documentation for MoonMind runtime plan contracts  
-**Primary Dependencies**: Existing `docs/Tasks/SkillAndPlanContracts.md`, preserved MM-386 Jira preset brief, existing MoonSpec artifacts  
-**Storage**: No new persistent storage; documents describe stored plan artifact and provenance semantics  
-**Unit Testing**: Documentation contract checks with `rg` against `docs/Tasks/SkillAndPlanContracts.md` and generated MoonSpec artifacts  
-**Integration Testing**: End-to-end documentation validation by reviewing the canonical plan contract against MM-386 acceptance scenarios and running final `/moonspec-verify`  
-**Target Platform**: MoonMind control plane, plan producers, and runtime plan executor contract  
-**Project Type**: Runtime architecture contract documentation  
-**Performance Goals**: No runtime performance impact; documentation must preserve a flat executor model without adding runtime preset expansion work  
-**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `docs/tmp/` and `specs/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-386 in artifacts  
+**Language/Version**: Markdown documentation for MoonMind runtime plan contracts
+**Primary Dependencies**: Existing `docs/Tasks/SkillAndPlanContracts.md`, preserved MM-386 Jira preset brief, existing MoonSpec artifacts
+**Storage**: No new persistent storage; documents describe stored plan artifact and provenance semantics
+**Unit Testing**: Documentation contract checks with `rg` against `docs/Tasks/SkillAndPlanContracts.md` and generated MoonSpec artifacts
+**Integration Testing**: End-to-end documentation validation by reviewing the canonical plan contract against MM-386 acceptance scenarios and running final `/moonspec-verify`
+**Target Platform**: MoonMind control plane, plan producers, and runtime plan executor contract
+**Project Type**: Runtime architecture contract documentation
+**Performance Goals**: No runtime performance impact; documentation must preserve a flat executor model without adding runtime preset expansion work
+**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `docs/tmp/` and `specs/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-386 in artifacts
 **Scale/Scope**: One canonical documentation file plus MoonSpec artifacts for one independently testable story
 
 ## Constitution Check

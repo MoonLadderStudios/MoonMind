@@ -1,7 +1,8 @@
 # Verification: Document Flattened Plan Execution Contract
 
 **Original Request Source**: `spec.md` Input, MM-386 Jira preset brief
-**Status**: Implementation evidence recorded; final MoonSpec verification pending.
+**Status**: Final MoonSpec verification completed.
+**Verification Verdict**: FULLY_IMPLEMENTED.
 
 ## Implementation Evidence
 
@@ -40,4 +41,4 @@
 
 ## Remaining Work
 
-- Run `/moonspec-verify` as the final read-only MoonSpec gate.
+- Hermetic integration tests remain blocked in this managed container because the Docker socket is unavailable. Run `./tools/test_integration.sh` in a Docker-capable environment if branch policy requires local integration evidence before merge.
