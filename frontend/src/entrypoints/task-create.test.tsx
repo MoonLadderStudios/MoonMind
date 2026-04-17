@@ -363,6 +363,19 @@ describe("Task Create Entrypoint", () => {
     ).map((element) => element.dataset.canonicalCreateSection || "");
   }
 
+  function expectAllButtonsHaveTitles(container: ParentNode = document): void {
+    const missingTitles = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .filter((button) => !button.getAttribute("title")?.trim())
+      .map(
+        (button) =>
+          button.getAttribute("aria-label") || button.textContent?.trim() || "",
+      );
+
+    expect(missingTitles).toEqual([]);
+  }
+
   beforeEach(() => {
     window.history.pushState({}, "Task Create", "/tasks/new");
     window.sessionStorage.clear();
@@ -4650,7 +4663,7 @@ describe("Task Create Entrypoint", () => {
 
     const presetsSection = await screen.findByLabelText("Task Presets");
     const saveButton = within(presetsSection).getByRole("button", {
-      name: "Save Current Steps as Preset",
+      name: "Save preset",
     });
     const applyButton = within(presetsSection).getByRole("button", {
       name: "Apply",
@@ -4667,6 +4680,53 @@ describe("Task Create Entrypoint", () => {
     );
     expect(saveButton.querySelector("svg")).not.toBeNull();
     expect(saveButton.textContent).toBe("");
+  });
+
+  it("adds hover tooltips to Create page buttons", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    await screen.findByText("Step 1 (Primary)");
+
+    expectAllButtonsHaveTitles();
+    expect(
+      screen.getByRole("button", { name: "Add Step" }).getAttribute("title"),
+    ).toBe("Add another task step");
+    expect(
+      screen.getByRole("button", { name: "Create" }).getAttribute("title"),
+    ).toBe("Create this task");
+  });
+
+  it("adds hover tooltips to Jira browser buttons", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Browse Jira issue for preset instructions",
+      }),
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Browse Jira issue",
+    });
+    await waitFor(() => {
+      expect(within(dialog).getByRole("button", { name: "To Do 1" }))
+        .toBeTruthy();
+    });
+
+    expectAllButtonsHaveTitles(dialog);
+    expect(
+      within(dialog)
+        .getByRole("button", { name: "Close Jira browser" })
+        .getAttribute("title"),
+    ).toBe("Close Jira browser");
+    expect(
+      within(dialog).getByRole("button", { name: "To Do 1" }).getAttribute("title"),
+    ).toBe("Show Jira issues in To Do");
+    expect(
+      within(dialog).getByRole("button", { name: /ENG-101/ }).getAttribute("title"),
+    ).toBe(
+      "Import Jira issue ENG-101 into Feature Request / Initial Instructions",
+    );
   });
 
   it("exposes the canonical Create page section order in create mode", async () => {
@@ -5886,7 +5946,7 @@ describe("Task Create Entrypoint", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: /Save Current Steps as Preset/ }),
+      screen.getByRole("button", { name: "Save preset" }),
     );
 
     await waitFor(() => {
