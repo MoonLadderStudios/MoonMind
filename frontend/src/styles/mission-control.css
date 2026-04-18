@@ -104,7 +104,7 @@ samp {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1rem 1rem 0.95rem;
+  padding: 0.65rem 1rem 0.62rem;
 }
 
 .masthead::before {
@@ -146,10 +146,31 @@ samp {
 
 .masthead-title-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
+}
+
+.masthead-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.masthead-logo {
+  display: block;
+  flex: 0 0 auto;
+  width: auto;
+  height: 2.45rem;
+  max-width: 3.2rem;
+  object-fit: contain;
+}
+
+.masthead-brand h1 {
+  margin: 0;
+  font-size: clamp(1.48rem, 2.42vw, 2.08rem);
 }
 
 .masthead-title-meta {
