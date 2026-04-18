@@ -181,6 +181,30 @@ function withRepositoryOptions(payload: BootPayload = mockPayload): BootPayload 
   };
 }
 
+function withDefaultRepository(
+  defaultRepository: string,
+  payload: BootPayload = mockPayload,
+): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      system?: Record<string, unknown>;
+    };
+  };
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...initialData.dashboardConfig.system,
+          defaultRepository,
+        },
+      },
+    },
+  };
+}
+
 function withImageOnlyAttachmentPolicy(
   payload: BootPayload = mockPayload,
 ): BootPayload {
@@ -1937,7 +1961,6 @@ describe("Task Create Entrypoint", () => {
       effort: "high",
       repository: "MoonLadderStudios/MoonMind",
       branch: "main",
-      legacyBranchWarning: null,
       publishMode: "branch",
       targetSkill: "speckit-implement",
       inputParameters: {
@@ -5134,20 +5157,9 @@ describe("Task Create Entrypoint", () => {
   it("loads branches for URL repository values accepted by submission", async () => {
     renderWithClient(
       <TaskCreatePage
-        payload={{
-          ...mockPayload,
-          initialData: {
-            ...mockPayload.initialData,
-            dashboardConfig: {
-              ...mockPayload.initialData.dashboardConfig,
-              system: {
-                ...mockPayload.initialData.dashboardConfig.system,
-                defaultRepository:
-                  "https://github.com/MoonLadderStudios/MoonMind.git",
-              },
-            },
-          },
-        }}
+        payload={withDefaultRepository(
+          "https://github.com/MoonLadderStudios/MoonMind.git",
+        )}
       />,
     );
 
