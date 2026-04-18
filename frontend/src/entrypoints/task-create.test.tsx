@@ -5195,6 +5195,49 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
+  it("shows branch loading text below the dropdown when a selected branch is hidden during reload", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/github/branches?repository=MoonLadderStudios%2FOtherRepo",
+        )
+      ) {
+        return new Promise<Response>(() => {});
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const branchSelect = (await screen.findByLabelText(
+      "Branch",
+    )) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(branchSelect.options).some(
+          (option) => option.value === "feature/create-page",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(branchSelect, {
+      target: { value: "feature/create-page" },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "MoonLadderStudios/OtherRepo" },
+    });
+
+    await waitFor(() => {
+      expect(
+        Array.from(document.querySelectorAll("p")).some(
+          (element) => element.textContent?.trim() === "Loading branches...",
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("loads branches for URL repository values accepted by submission", async () => {
     renderWithClient(
       <TaskCreatePage
