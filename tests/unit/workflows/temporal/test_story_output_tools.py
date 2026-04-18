@@ -675,6 +675,50 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
 
 
 @pytest.mark.asyncio
+async def test_create_jira_orchestrate_tasks_uses_previous_step_mappings_and_owner_context():
+    creator = _FakeExecutionCreator()
+
+    result = await create_jira_orchestrate_tasks_from_issue_mappings(
+        {
+            "jiraOrchestration": {
+                "task": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "runtime": {"mode": "codex_cli"},
+                    "publish": {"mode": "none"},
+                    "orchestrationMode": "runtime",
+                },
+                "traceability": {"sourceIssueKey": "MM-404"},
+            }
+        },
+        {
+            "ownerId": "user-123",
+            "ownerType": "user",
+            "previousOutputs": {
+                "jira": {
+                    "issueMappings": [
+                        {
+                            "storyId": "STORY-001",
+                            "storyIndex": 1,
+                            "summary": "First",
+                            "issueKey": "MM-501",
+                        }
+                    ]
+                }
+            },
+        },
+        execution_creator=creator,
+    )
+
+    assert result.outputs["jiraOrchestration"]["status"] == "completed"
+    assert result.outputs["jiraOrchestration"]["createdTaskCount"] == 1
+    assert creator.requests[0]["owner_id"] == "user-123"
+    assert creator.requests[0]["owner_type"] == "user"
+    task = creator.requests[0]["initial_parameters"]["task"]
+    assert task["inputs"]["constraints"] == "Preserve source issue MM-404 traceability."
+    assert "Source Jira issue: MM-404." in task["instructions"]
+
+
+@pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_handles_one_and_zero_story_results():
     one_creator = _FakeExecutionCreator()
 

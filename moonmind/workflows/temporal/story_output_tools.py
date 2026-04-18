@@ -267,8 +267,17 @@ def _story_id(story: Mapping[str, Any], *, index: int) -> str:
     return f"STORY-{index:03d}"
 
 
-def _issue_mappings_from_inputs(inputs: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _issue_mappings_from_inputs(
+    inputs: Mapping[str, Any],
+    *,
+    context: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     jira_payload = _mapping(inputs.get("jira"))
+    previous_outputs = _mapping(
+        (context or {}).get("previousOutputs")
+        or (context or {}).get("previous_outputs")
+    )
+    previous_jira_payload = _mapping(previous_outputs.get("jira"))
     candidates = (
         jira_payload.get("issueMappings")
         or jira_payload.get("issue_mappings")
@@ -276,6 +285,12 @@ def _issue_mappings_from_inputs(inputs: Mapping[str, Any]) -> list[dict[str, Any
         or inputs.get("issue_mappings")
         or jira_payload.get("createdIssues")
         or inputs.get("createdIssues")
+        or previous_jira_payload.get("issueMappings")
+        or previous_jira_payload.get("issue_mappings")
+        or previous_jira_payload.get("createdIssues")
+        or previous_outputs.get("issueMappings")
+        or previous_outputs.get("issue_mappings")
+        or previous_outputs.get("createdIssues")
         or []
     )
     mappings = [dict(item) for item in _list(candidates) if isinstance(item, Mapping)]
@@ -322,11 +337,11 @@ def _downstream_task_payload(
     task_payload: Mapping[str, Any],
     traceability: Mapping[str, Any],
     depends_on: list[str],
+    source_issue_key: str,
 ) -> tuple[str, dict[str, Any]]:
     issue_key = _string(mapping.get("issueKey") or mapping.get("issue_key"))
     story_id = _string(mapping.get("storyId") or mapping.get("story_id"))
     summary = _string(mapping.get("summary")) or issue_key
-    source_issue_key = _source_issue_key(inputs={}, traceability=traceability)
     source_brief_ref = _string(
         traceability.get("sourceBriefRef") or traceability.get("source_brief_ref")
     )
@@ -387,7 +402,8 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
     if execution_creator is None:
         raise ValueError("execution_creator is required for Jira Orchestrate task creation.")
 
-    issue_mappings = _issue_mappings_from_inputs(inputs)
+    context = _context or {}
+    issue_mappings = _issue_mappings_from_inputs(inputs, context=context)
     orchestration_payload = _mapping(
         inputs.get("jiraOrchestration") or inputs.get("jira_orchestration")
     )
@@ -407,13 +423,13 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
     owner_id = (
         _string(task_payload.get("ownerId") or task_payload.get("owner_id"))
         or _string(inputs.get("ownerId") or inputs.get("owner_id"))
-        or _string((_context or {}).get("ownerId") or (_context or {}).get("owner_id"))
+        or _string(context.get("ownerId") or context.get("owner_id"))
         or None
     )
     owner_type = (
         _string(task_payload.get("ownerType") or task_payload.get("owner_type"))
         or _string(inputs.get("ownerType") or inputs.get("owner_type"))
-        or _string((_context or {}).get("ownerType") or (_context or {}).get("owner_type"))
+        or _string(context.get("ownerType") or context.get("owner_type"))
         or None
     )
 
@@ -450,6 +466,7 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
             task_payload=task_payload,
             traceability=traceability,
             depends_on=depends_on,
+            source_issue_key=source_issue_key,
         )
         idempotency_key = _stable_idempotency_key(
             source_issue_key=source_issue_key,
