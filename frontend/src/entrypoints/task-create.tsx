@@ -5671,7 +5671,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </div>
             </div>
 
-            <div className="actions queue-step-add queue-step-actions">
+            <div className="actions queue-step-add queue-step-actions queue-step-submit-actions">
               <button
                 type="submit"
                 className={

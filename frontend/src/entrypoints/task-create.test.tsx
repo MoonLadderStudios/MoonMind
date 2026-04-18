@@ -5041,6 +5041,9 @@ describe("Task Create Entrypoint", () => {
       true,
     );
     expect(createButton.closest(".queue-step-actions")).toBe(stepActionRow);
+    expect(stepActionRow?.classList.contains("queue-step-submit-actions")).toBe(
+      true,
+    );
     expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBe(
       stepsSection,
     );
