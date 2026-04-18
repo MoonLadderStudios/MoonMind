@@ -1913,6 +1913,14 @@ function ArrowDownIcon() {
   );
 }
 
+function ArrowRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 12h14m0 0-5-5m5 5-5 5" />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -4947,6 +4955,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       : pageMode.mode === "rerun"
         ? "Rerun Task"
         : "Create";
+  const showPrimaryCtaArrow = pageMode.mode === "create";
   const primaryCtaTooltip =
     pageMode.mode === "edit"
       ? "Save changes to this task draft"
@@ -5658,13 +5667,26 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </button>
               <button
                 type="submit"
-                className="queue-submit-primary"
+                className={
+                  showPrimaryCtaArrow
+                    ? "queue-submit-primary queue-submit-primary--with-arrow"
+                    : "queue-submit-primary"
+                }
                 disabled={isTemporalFormBlocked}
                 aria-disabled={isSubmitting || isTemporalFormBlocked}
                 aria-busy={isSubmitting}
                 title={primaryCtaTooltip}
               >
-                {primaryCta}
+                <span>{primaryCta}</span>
+                {showPrimaryCtaArrow ? (
+                  <span
+                    aria-hidden="true"
+                    className="queue-submit-primary-arrow"
+                    data-submit-arrow="right"
+                  >
+                    <ArrowRightIcon />
+                  </span>
+                ) : null}
               </button>
             </div>
           </div>
