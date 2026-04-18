@@ -58,7 +58,10 @@ def test_candidate_keys_prefers_explicit_post_merge_issue_key() -> None:
 
 @pytest.mark.asyncio
 async def test_resolve_issue_key_deduplicates_and_detects_ambiguity() -> None:
+    calls: list[str] = []
+
     async def get_issue(issue_key: str) -> dict[str, object]:
+        calls.append(issue_key)
         return _issue(issue_key)
 
     resolved = await resolve_issue_key(
@@ -75,6 +78,7 @@ async def test_resolve_issue_key_deduplicates_and_detects_ambiguity() -> None:
         "merge_automation",
         "task_origin",
     ]
+    assert calls == ["MM-403"]
 
     ambiguous = await resolve_issue_key(
         [
@@ -85,6 +89,7 @@ async def test_resolve_issue_key_deduplicates_and_detects_ambiguity() -> None:
     )
     assert ambiguous["status"] == "ambiguous"
     assert ambiguous["issueKey"] is None
+    assert calls == ["MM-403", "MM-403", "MM-404"]
 
 
 def test_select_done_transition_requires_exactly_one_safe_done_transition() -> None:
@@ -186,3 +191,42 @@ async def test_complete_post_merge_jira_transitions_one_valid_issue() -> None:
     assert decision.status == "succeeded"
     assert decision.transitioned is True
     assert calls[-1] == ("transition_issue", ("MM-403", "41", {}))
+
+
+@pytest.mark.asyncio
+async def test_complete_post_merge_jira_returns_failed_decision_for_read_failures() -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def get_issue(issue_key: str) -> dict[str, object]:
+        calls.append(("get_issue", issue_key))
+        if len([call for call in calls if call[0] == "get_issue"]) > 1:
+            raise RuntimeError("temporary Jira read failure token=secret")
+        return _issue(issue_key)
+
+    async def get_transitions(issue_key: str) -> list[dict[str, object]]:
+        calls.append(("get_transitions", issue_key))
+        return [_transition("41", "Done")]
+
+    async def transition_issue(
+        issue_key: str,
+        transition_id: str,
+        fields: dict[str, object],
+    ) -> dict[str, object]:
+        calls.append(("transition_issue", (issue_key, transition_id, fields)))
+        return {"transitioned": True}
+
+    decision = await complete_post_merge_jira(
+        {
+            "jiraIssueKey": "MM-403",
+            "postMergeJira": {"enabled": True, "required": False},
+        },
+        get_issue=get_issue,
+        get_transitions=get_transitions,
+        transition_issue=transition_issue,
+    )
+
+    assert decision.status == "failed"
+    assert decision.required is False
+    assert decision.issueResolution["issueKey"] == "MM-403"
+    assert "secret" not in str(decision.to_summary())
+    assert ("transition_issue", ("MM-403", "41", {})) not in calls

@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping
 
-from moonmind.utils.logging import SecretRedactor
+from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 
 _JIRA_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b", re.IGNORECASE)
 _CREDENTIAL_KEYS = {
@@ -176,7 +176,8 @@ async def resolve_issue_key(
         }
 
     evidence: list[dict[str, Any]] = []
-    by_key: dict[str, dict[str, Any]] = {}
+    candidates_by_key: dict[str, list[JiraIssueCandidate]] = {}
+    ordered_keys: list[str] = []
     for candidate in candidates:
         issue_key = _normalize_issue_key(candidate.issue_key)
         if not issue_key:
@@ -189,12 +190,21 @@ async def resolve_issue_key(
                 }
             )
             continue
+        if issue_key not in candidates_by_key:
+            candidates_by_key[issue_key] = []
+            ordered_keys.append(issue_key)
+        candidates_by_key[issue_key].append(candidate)
+
+    by_key: dict[str, dict[str, Any]] = {}
+    for issue_key in ordered_keys:
+        grouped_candidates = candidates_by_key[issue_key]
+        first_candidate = grouped_candidates[0]
         try:
             issue = await get_issue(issue_key)
             status = _issue_status(issue)
             item = {
                 "issueKey": issue_key,
-                "source": candidate.source,
+                "source": first_candidate.source,
                 "validated": True,
                 "statusName": status.get("name"),
                 "statusCategory": status.get("category"),
@@ -202,11 +212,14 @@ async def resolve_issue_key(
         except Exception as exc:
             item = {
                 "issueKey": issue_key,
-                "source": candidate.source,
+                "source": first_candidate.source,
                 "validated": False,
-                "reason": SecretRedactor().scrub(str(exc))[:300],
+                "reason": _scrub_exception(exc)[:300],
             }
-        evidence.append(item)
+        for candidate in grouped_candidates:
+            candidate_item = dict(item)
+            candidate_item["source"] = candidate.source
+            evidence.append(candidate_item)
         if item.get("validated") and issue_key not in by_key:
             by_key[issue_key] = item
 
@@ -234,6 +247,35 @@ async def resolve_issue_key(
         "candidates": evidence,
         "reason": None,
     }
+
+
+def _transition_target(transition: Mapping[str, Any]) -> Mapping[str, Any]:
+    target = transition.get("to")
+    if not isinstance(target, Mapping):
+        return {}
+    return target
+
+
+def _transition_to_status_name(transition: Mapping[str, Any]) -> str:
+    return str(_transition_target(transition).get("name") or "")
+
+
+def _read_failure_decision(
+    *,
+    required: bool,
+    issue_resolution: Mapping[str, Any],
+    exc: Exception,
+) -> PostMergeJiraCompletionDecision:
+    return PostMergeJiraCompletionDecision(
+        status="failed",
+        required=required,
+        issueResolution=dict(issue_resolution),
+        reason=_scrub_exception(exc)[:500],
+    )
+
+
+def _scrub_exception(exc: Exception) -> str:
+    return redact_sensitive_text(SecretRedactor().scrub(str(exc)))
 
 
 def select_done_transition(
@@ -300,7 +342,7 @@ def _transition_selection(
         "transition": {
             "transitionId": str(transition.get("id") or ""),
             "transitionName": str(transition.get("name") or ""),
-            "toStatusName": str(((transition.get("to") or {}) if isinstance(transition.get("to"), Mapping) else {}).get("name") or ""),
+            "toStatusName": _transition_to_status_name(transition),
             "toStatusCategory": _transition_category(transition),
         },
         "reason": None,
@@ -357,8 +399,15 @@ async def complete_post_merge_jira(
         )
 
     issue_key = str(resolution["issueKey"])
-    issue = await get_issue(issue_key)
-    transitions = await get_transitions(issue_key)
+    try:
+        issue = await get_issue(issue_key)
+        transitions = await get_transitions(issue_key)
+    except Exception as exc:
+        return _read_failure_decision(
+            required=config.required,
+            issue_resolution=resolution,
+            exc=exc,
+        )
     selected = select_done_transition(issue=issue, transitions=transitions, config=config)
     if selected["status"] == "noop_already_done":
         return PostMergeJiraCompletionDecision(
@@ -385,7 +434,7 @@ async def complete_post_merge_jira(
             required=config.required,
             issueResolution=resolution,
             transition=transition,
-            reason=SecretRedactor().scrub(str(exc))[:500],
+            reason=_scrub_exception(exc)[:500],
         )
     return PostMergeJiraCompletionDecision(
         status="succeeded",
@@ -411,9 +460,7 @@ def _issue_status(issue: Mapping[str, Any]) -> dict[str, str | None]:
 
 
 def _transition_category(transition: Mapping[str, Any]) -> str | None:
-    target = transition.get("to")
-    if not isinstance(target, Mapping):
-        return None
+    target = _transition_target(transition)
     category = target.get("statusCategory")
     if not isinstance(category, Mapping):
         return None
