@@ -1717,6 +1717,7 @@ class MoonMindRunWorkflow:
                 definition.key: definition for definition in skill_definitions
             }
 
+        previous_step_outputs: Mapping[str, Any] = {}
         for index, node in enumerate(ordered_nodes, start=1):
             tool = node.get("tool")
             skill = node.get("skill")
@@ -1909,6 +1910,9 @@ class MoonMindRunWorkflow:
                                     "workflow_id": workflow.info().workflow_id,
                                     "run_id": workflow.info().run_id,
                                     "node_id": node_id,
+                                    "ownerId": self._owner_id,
+                                    "ownerType": self._owner_type,
+                                    "previousOutputs": previous_step_outputs,
                                 },
                             }
                             if workflow.patched("idempotency_key_phase3"):
@@ -2158,6 +2162,7 @@ class MoonMindRunWorkflow:
                 execution_result, "outputs"
             )
             if isinstance(outputs_for_story_output, Mapping):
+                previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):
                     story_output_status = str(

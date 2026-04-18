@@ -102,6 +102,7 @@ from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.temporal.story_output_tools import (
     register_story_output_tool_handlers,
 )
+from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,24 @@ _OPENTELEMETRY_LOG_FORMAT = (
     "thread_id=%(managed_session_thread_id)s "
     "turn_id=%(managed_session_turn_id)s] %(message)s"
 )
+
+
+def _build_jira_orchestrate_execution_creator():
+    async def _create_execution(**kwargs):
+        async with get_async_session_context() as session:
+            service = TemporalExecutionService(session)
+            record = await service.create_execution(**kwargs)
+            return {
+                "workflowId": record.workflow_id,
+                "runId": record.run_id,
+                "title": (
+                    record.memo.get("title")
+                    if isinstance(record.memo, dict)
+                    else None
+                ),
+            }
+
+    return _create_execution
 
 _SUPPORTED_AGENT_RUNTIMES = frozenset({"codex", "gemini_cli", "claude", "jules"})
 _CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
@@ -232,7 +251,9 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
 
 
 _JIRA_AGENT_SKILLS = frozenset({"jira-issue-creator"})
-_JIRA_STORY_OUTPUT_TOOLS = frozenset({"story.create_jira_issues"})
+_JIRA_STORY_OUTPUT_TOOLS = frozenset(
+    {"story.create_jira_issues", "story.create_jira_orchestrate_tasks"}
+)
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
 
 
@@ -1064,7 +1085,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         planner = _build_runtime_planner()
 
         dispatcher = SkillActivityDispatcher()
-        register_story_output_tool_handlers(dispatcher)
+        register_story_output_tool_handlers(
+            dispatcher,
+            execution_creator=_build_jira_orchestrate_execution_creator(),
+        )
 
         run_store = None
         run_supervisor = None
