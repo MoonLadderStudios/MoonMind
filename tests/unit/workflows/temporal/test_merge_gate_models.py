@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from moonmind.schemas.temporal_models import (
     MergeAutomationConfigModel,
+    MergeAutomationPostMergeJiraModel,
     MergeAutomationStartInput,
     PullRequestRefModel,
     ReadinessEvidenceModel,
@@ -85,3 +86,33 @@ def test_policy_defaults_to_required_checks_and_reviews() -> None:
     assert policy.automated_review == "required"
     assert MergeAutomationConfigModel().gate.jira.status == "optional"
     assert MergeAutomationConfigModel().resolver.merge_method == "squash"
+
+
+def test_post_merge_jira_config_defaults_to_required_done_category() -> None:
+    config = MergeAutomationConfigModel(
+        postMergeJira={"enabled": True, "fields": {"resolution": {"name": "Done"}}}
+    )
+
+    assert config.post_merge_jira.enabled is True
+    assert config.post_merge_jira.required is True
+    assert config.post_merge_jira.strategy == "done_category"
+    assert config.post_merge_jira.fields == {"resolution": {"name": "Done"}}
+
+
+def test_post_merge_jira_config_rejects_unsupported_strategy() -> None:
+    with pytest.raises(ValidationError):
+        MergeAutomationPostMergeJiraModel(strategy="first_transition")
+
+
+def test_merge_automation_start_accepts_missing_post_merge_jira_for_compatibility() -> None:
+    payload = MergeAutomationStartInput(
+        workflowType="MoonMind.MergeAutomation",
+        parentWorkflowId="mm:parent",
+        publishContextRef="artifact://publish-context",
+        pullRequest=_valid_pull_request(),
+        resolverTemplate={"repository": "MoonLadderStudios/MoonMind"},
+    )
+
+    assert payload.config.post_merge_jira.enabled is False
+    dumped = payload.model_dump(by_alias=True)
+    assert "postMergeJira" in dumped["mergeAutomationConfig"]

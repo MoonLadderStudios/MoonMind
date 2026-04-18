@@ -3096,6 +3096,27 @@ class MoonMindRunWorkflow:
             timeout_config = candidate.get("timeouts")
             if not isinstance(timeout_config, Mapping):
                 timeout_config = {}
+            post_merge_jira_config = candidate.get("postMergeJira") or candidate.get(
+                "post_merge_jira"
+            )
+            if not isinstance(post_merge_jira_config, Mapping):
+                post_merge_jira_config = {}
+            jira_issue_key = self._coerce_text(
+                candidate.get("jiraIssueKey") or candidate.get("jira_issue_key"),
+                max_chars=40,
+            )
+            post_merge_issue_key = self._coerce_text(
+                post_merge_jira_config.get("issueKey")
+                or post_merge_jira_config.get("issue_key"),
+                max_chars=40,
+            )
+            effective_jira_issue_key = jira_issue_key or post_merge_issue_key
+            post_merge_jira: dict[str, Any] = dict(post_merge_jira_config)
+            if effective_jira_issue_key and "enabled" not in post_merge_jira:
+                post_merge_jira["enabled"] = True
+            if effective_jira_issue_key and "required" not in post_merge_jira:
+                post_merge_jira["required"] = True
+            post_merge_jira.setdefault("strategy", "done_category")
             return {
                 "enabled": True,
                 "checks": self._coerce_text(candidate.get("checks"), max_chars=20)
@@ -3116,10 +3137,8 @@ class MoonMindRunWorkflow:
                     max_chars=20,
                 )
                 or "squash",
-                "jiraIssueKey": self._coerce_text(
-                    candidate.get("jiraIssueKey") or candidate.get("jira_issue_key"),
-                    max_chars=40,
-                ),
+                "jiraIssueKey": effective_jira_issue_key,
+                "postMergeJira": post_merge_jira,
                 "fallbackPollSeconds": (
                     candidate.get("fallbackPollSeconds")
                     or candidate.get("fallback_poll_seconds")
@@ -3247,6 +3266,7 @@ class MoonMindRunWorkflow:
                     "mergeMethod": request.get("mergeMethod") or "squash",
                 },
                 "timeouts": timeouts,
+                "postMergeJira": request.get("postMergeJira") or {},
             },
             "resolverTemplate": {
                 "repository": repo,
@@ -3324,6 +3344,9 @@ class MoonMindRunWorkflow:
         ]
         if artifact_refs:
             summary["artifactRefs"] = dict(artifact_refs)
+        post_merge_jira = result_map.get("postMergeJira")
+        if isinstance(post_merge_jira, Mapping):
+            summary["postMergeJira"] = dict(post_merge_jira)
         return summary
 
     def _merge_automation_child_succeeded(self, result: Any) -> bool:

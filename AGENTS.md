@@ -189,6 +189,8 @@ Key diagnostics:
 - Existing Temporal artifact metadata tables and original task input snapshot artifacts; no new persistent storage (196-preserve-attachment-bindings)
 - Python 3.12; TypeScript/React + FastAPI dashboard runtime config helpers, Pydantic settings, `httpx`, React, Vitest, pytest (203-repository-dropdown)
 - No new persistent storage; options are derived from configuration and best-effort GitHub API responses at runtime (203-repository-dropdown)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, existing MoonMind Jira tool service, existing artifact and workflow activity catalogs (205-post-merge-jira-completion)
+- Existing Temporal workflow history, memo/search attributes, and artifact outputs; no new persistent database tables planned (205-post-merge-jira-completion)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

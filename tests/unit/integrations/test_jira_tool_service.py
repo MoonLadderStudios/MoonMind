@@ -14,6 +14,7 @@ from moonmind.integrations.jira.models import (
     CreateIssueRequest,
     CreateIssueLinkRequest,
     EditIssueRequest,
+    GetTransitionsRequest,
     SearchIssuesRequest,
     TransitionIssueRequest,
     VerifyConnectionRequest,
@@ -220,6 +221,30 @@ async def test_transition_issue_allows_preflight_without_get_transitions_allowli
         "transitionId": "31",
     }
     assert [call["method"] for call in service.calls] == ["GET", "POST"]
+
+
+async def test_get_transitions_expands_transition_fields_for_required_field_checks() -> None:
+    service = _StubJiraToolService(
+        atlassian_settings=_build_settings(),
+        responses=[
+            {
+                "transitions": [
+                    {
+                        "id": "41",
+                        "name": "Done",
+                        "fields": {"resolution": {"required": True}},
+                    }
+                ]
+            }
+        ],
+    )
+
+    result = await service.get_transitions(
+        GetTransitionsRequest(issueKey="ENG-123", expandFields=True)
+    )
+
+    assert result["transitions"][0]["fields"]["resolution"]["required"] is True
+    assert service.calls[0]["params"] == {"expand": "transitions.fields"}
 
 
 async def test_add_comment_converts_plain_text_to_adf() -> None:

@@ -66,8 +66,9 @@ When PR publishing is enabled (`publishMode = "pr"` in `MoonMind.Run` parameters
 6. When the gate opens, `MoonMind.MergeAutomation` starts a **child `MoonMind.Run`** dedicated to `pr-resolver`.
 7. The resolver child run attempts to remediate and merge.
 8. If resolver pushes a new commit and external review/check signal must be re-established, control returns to the gate.
-9. The parent task reaches terminal success only when merge automation returns `merged` or `already_merged`.
-10. Terminal `blocked`, `failed`, or `expired` outcomes fail the parent task; terminal `canceled` cancels the parent task so operator-initiated cancellation is not reported as failure.
+9. If the run is Jira-backed and post-merge Jira completion is enabled, `MoonMind.MergeAutomation` completes the selected Jira issue through the trusted Jira activity path after `merged` or `already_merged`.
+10. The parent task reaches terminal success only when merge automation returns `merged` or `already_merged` after any required post-merge Jira completion succeeds or no-ops.
+11. Terminal `blocked`, `failed`, or `expired` outcomes fail the parent task; terminal `canceled` cancels the parent task so operator-initiated cancellation is not reported as failure.
 
 ---
 
@@ -218,6 +219,94 @@ This fits the current lifecycle model, which already includes `awaiting_external
 
 ### 10.1 Input
 
+Jira-backed merge automation may include a `postMergeJira` block under
+`mergeAutomationConfig`. When `MoonMind.Run` starts merge automation from a
+PR-publishing task with a canonical Jira issue key, it enables this block by
+default so the issue is completed after verified merge success.
+
+```json
+{
+  "jiraIssueKey": "MM-403",
+  "mergeAutomationConfig": {
+    "postMergeJira": {
+      "enabled": true,
+      "issueKey": null,
+      "transitionId": null,
+      "transitionName": null,
+      "strategy": "done_category",
+      "required": true,
+      "fields": {}
+    }
+  }
+}
+```
+
+The post-merge step is intentionally owned by `MoonMind.MergeAutomation`, not by
+`pr-resolver`. The resolver reports the merge disposition; the workflow performs
+Jira mutation only after that disposition is `merged` or `already_merged`.
+
+### 10.2 Post-merge Jira completion
+
+Post-merge Jira completion uses the trusted Jira integration activity boundary.
+The workflow passes compact merge context to
+`merge_automation.complete_post_merge_jira`; the activity fetches the issue,
+fetches available transitions with field metadata, and applies one validated
+transition when it can do so safely.
+
+Target issue resolution is strict:
+
+- explicit `postMergeJira.issueKey` wins when provided;
+- otherwise the workflow uses the normalized merge automation `jiraIssueKey`;
+- captured task origin or publish context keys may be used when present;
+- PR metadata issue keys are only a strict exact-key fallback;
+- fuzzy Jira summary search and multi-issue completion are not part of this
+  behavior.
+
+Transition selection is also strict:
+
+- an explicit transition ID must be currently available;
+- an explicit transition name must match exactly, case-insensitively;
+- automatic selection succeeds only when exactly one available transition targets
+  Jira's done status category;
+- missing required transition fields block completion unless defaults are
+  configured in `postMergeJira.fields`;
+- an issue already in the done category is treated as successful no-op.
+
+If required completion returns `blocked` or `failed`, merge automation does not
+return terminal success. The failure is surfaced as a Jira-sourced blocker with
+operator-visible reason text.
+
+### 10.3 Output
+
+Merge automation summaries include compact `postMergeJira` evidence:
+
+```json
+{
+  "status": "merged",
+  "postMergeJira": {
+    "status": "succeeded",
+    "issueKey": "MM-403",
+    "issueKeySource": "merge_automation",
+    "transitionId": "41",
+    "transitionName": "Done",
+    "alreadyDone": false,
+    "transitioned": true
+  },
+  "artifactRefs": {
+    "postMergeJiraResolution": "artifact-id-resolution",
+    "postMergeJiraTransition": "artifact-id-transition"
+  }
+}
+```
+
+The evidence is compact and sanitized. It must explain selected issue, selection
+source, transition or no-op decision, completion status, and failure reason
+without embedding raw Jira credentials or large Jira payloads in workflow
+history.
+
+The full worker-bound input also includes parent workflow identity, publish
+context, and resolver launch template:
+
 ```json
 {
   "parentWorkflowId": "mm:parent",
@@ -233,7 +322,7 @@ This fits the current lifecycle model, which already includes `awaiting_external
 }
 ```
 
-### 10.2 Output
+### 10.4 Terminal status summary
 
 ```json
 {
@@ -246,7 +335,12 @@ This fits the current lifecycle model, which already includes `awaiting_external
     "merge-auto-resolver:mm-parent:2"
   ],
   "lastHeadSha": "abc123",
-  "blockers": []
+  "blockers": [],
+  "postMergeJira": {
+    "status": "succeeded",
+    "issueKey": "MM-403",
+    "transitioned": true
+  }
 }
 ```
 
