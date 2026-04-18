@@ -277,7 +277,7 @@ Each step region must expose:
 - `Instructions`
 - `Images` or `Input Attachments` when attachment policy is enabled
 - `Skill (optional)`
-- `Skill Args (optional JSON object)` when a non-empty explicit skill is selected
+- `Skill Args (optional JSON object)` in Advanced Settings
 - `Skill Required Capabilities (optional CSV)` in Advanced Settings
 
 Rules:

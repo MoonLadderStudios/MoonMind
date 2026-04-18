@@ -138,3 +138,30 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert code_review_step == jira_orchestrate_template.latest_version.steps[-1]
         assert "Code Review" in code_review_step["instructions"]
         assert "pull_request_url" in code_review_step["instructions"]
+
+        result = await session.execute(
+            select(TaskStepTemplate)
+            .where(
+                TaskStepTemplate.slug == "jira-breakdown-orchestrate",
+                TaskStepTemplate.scope_type == TaskTemplateScopeType.GLOBAL,
+                TaskStepTemplate.scope_ref.is_(None),
+            )
+            .options(selectinload(TaskStepTemplate.latest_version))
+        )
+        composite_template = result.scalar_one_or_none()
+        assert composite_template is not None
+        assert composite_template.latest_version is not None
+        assert [
+            step["skill"]["id"]
+            for step in composite_template.latest_version.steps
+        ] == [
+            "moonspec-breakdown",
+            "story.create_jira_issues",
+            "story.create_jira_orchestrate_tasks",
+        ]
+        downstream_step = composite_template.latest_version.steps[2]
+        assert "trusted Jira story output" in downstream_step["instructions"]
+        assert "dependsOn" in downstream_step["instructions"]
+        assert downstream_step["jiraOrchestration"]["task"]["orchestrationMode"] == (
+            "{{ inputs.orchestration_mode }}"
+        )
