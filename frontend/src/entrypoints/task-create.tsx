@@ -2930,8 +2930,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
+  const selectedPresetDeleteEnabled =
+    taskTemplateSaveEnabled && selectedPreset?.scope === "personal";
   const deletePresetTooltip = selectedPreset
-    ? "Delete the selected preset"
+    ? selectedPresetDeleteEnabled
+      ? "Delete the selected preset"
+      : "Only personal presets can be deleted"
     : "Choose a preset to delete";
   const effectiveSkillId = useMemo(
     () =>
@@ -4236,7 +4240,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   }
 
   async function handleDeleteSelectedPreset() {
-    if (!selectedPreset || isDeletingPreset) {
+    if (!selectedPreset || !selectedPresetDeleteEnabled || isDeletingPreset) {
       return;
     }
     const confirmed = window.confirm(
@@ -6123,19 +6127,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <SaveIcon />
                 </button>
               ) : null}
-              <button
-                type="button"
-                id="queue-template-delete-current"
-                className="queue-step-icon-button destructive"
-                aria-label="Delete preset"
-                aria-disabled={!selectedPreset || isDeletingPreset}
-                aria-busy={isDeletingPreset}
-                title={deletePresetTooltip}
-                disabled={!selectedPreset || isDeletingPreset}
-                onClick={handleDeleteSelectedPreset}
-              >
-                <TrashIcon />
-              </button>
+              {taskTemplateSaveEnabled ? (
+                <button
+                  type="button"
+                  id="queue-template-delete-current"
+                  className="queue-step-icon-button destructive"
+                  aria-label="Delete preset"
+                  aria-disabled={
+                    !selectedPresetDeleteEnabled || isDeletingPreset
+                  }
+                  aria-busy={isDeletingPreset}
+                  title={deletePresetTooltip}
+                  disabled={!selectedPresetDeleteEnabled || isDeletingPreset}
+                  onClick={handleDeleteSelectedPreset}
+                >
+                  <TrashIcon />
+                </button>
+              ) : null}
               <button
                 type="button"
                 id="queue-template-apply"
