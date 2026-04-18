@@ -3699,6 +3699,18 @@ describe("Task Create Entrypoint", () => {
 
     expect(document.querySelector("#queue-advanced-settings")).toBeNull();
 
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "custom-skill" },
+      },
+    );
+    expect(
+      within(primaryStep as HTMLElement).queryByLabelText(
+        /skill args/i,
+      ),
+    ).toBeNull();
+
     const advancedToggle = screen.getByLabelText("Show advanced step options");
     expect(advancedToggle.closest('[data-canonical-create-section="Submit"]')).not.toBeNull();
     fireEvent.click(advancedToggle);
@@ -4219,6 +4231,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "pr-resolver" },
       },
     );
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
     await waitFor(() => {
       expect(
         within(additionalStep as HTMLElement).getByLabelText(
@@ -6153,6 +6166,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "pr-resolver" },
       },
     );
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
     await waitFor(() => {
       expect(
         within(primaryStep as HTMLElement).getByLabelText(
