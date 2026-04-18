@@ -3780,11 +3780,13 @@ class TemporalAgentRuntimeActivities:
             if (
                 pr_resolver_expected
                 and result.failure_class is not None
-                and target_branch
+                and head_branch
                 and "pr_not_found" in (result.summary or "").lower()
             ):
                 merged_pr = self._reverify_pr_merged_state(
-                    run_id=run_id, target_branch=target_branch,
+                    run_id=run_id,
+                    head_branch=head_branch,
+                    base_branch=target_branch,
                 )
                 if merged_pr is not None:
                     result = self._apply_pr_reverify_override(
@@ -4328,6 +4330,8 @@ class TemporalAgentRuntimeActivities:
             )
         if support_gitconfig.exists():
             env["GIT_CONFIG_GLOBAL"] = str(support_gitconfig)
+        else:
+            env.pop("GIT_CONFIG_GLOBAL", None)
         git_name = str(settings.workflow.git_user_name or "").strip()
         git_email = str(settings.workflow.git_user_email or "").strip()
         if git_name:
@@ -4838,16 +4842,18 @@ class TemporalAgentRuntimeActivities:
         self,
         *,
         run_id: str,
-        target_branch: str | None,
+        head_branch: str | None,
+        base_branch: str | None = None,
     ) -> dict[str, Any] | None:
-        """Return PR metadata when *target_branch*'s PR is merged on GitHub.
+        """Return PR metadata when *head_branch*'s PR is merged on GitHub.
 
         Used to recover from pr-resolver's pr_not_found misclassification when
         the managed session container lacks working GitHub CLI auth.
         """
         import subprocess
 
-        branch = (target_branch or "").strip()
+        branch = (head_branch or "").strip()
+        expected_base = (base_branch or "").strip()
         if not branch or self._run_store is None:
             return None
         record = self._run_store.load(run_id)
@@ -4859,15 +4865,18 @@ class TemporalAgentRuntimeActivities:
             repo = self._detect_repo_from_workspace(workspace)
             if not repo:
                 return None
+            pr_list_cmd = [
+                "gh", "pr", "list",
+                "--repo", repo,
+                "--head", branch,
+                "--state", "all",
+                "--json", "number,state,mergedAt,url,baseRefName,headRefName",
+                "--limit", "20",
+            ]
+            if expected_base:
+                pr_list_cmd.extend(["--base", expected_base])
             pr_result = subprocess.run(
-                [
-                    "gh", "pr", "list",
-                    "--repo", repo,
-                    "--head", branch,
-                    "--state", "all",
-                    "--json", "number,state,mergedAt,url",
-                    "--limit", "1",
-                ],
+                pr_list_cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -4876,7 +4885,19 @@ class TemporalAgentRuntimeActivities:
             )
             if pr_result.returncode != 0:
                 return None
-            prs = json.loads(pr_result.stdout.strip() or "[]")
+            raw_stdout = pr_result.stdout.strip()
+            try:
+                prs = json.loads(raw_stdout or "[]")
+            except json.JSONDecodeError:
+                logger.debug(
+                    "Failed to parse GitHub PR re-verify output for run %s; "
+                    "stdout=%r stderr=%r",
+                    run_id,
+                    raw_stdout[:500],
+                    (pr_result.stderr or "").strip()[:500],
+                    exc_info=True,
+                )
+                return None
         except Exception:
             logger.debug(
                 "Failed to re-verify PR state for run %s",
@@ -4887,12 +4908,16 @@ class TemporalAgentRuntimeActivities:
 
         if not isinstance(prs, list) or not prs:
             return None
-        first = prs[0]
-        if not isinstance(first, dict):
-            return None
-        if str(first.get("state") or "").strip().upper() != "MERGED":
-            return None
-        return first
+        for pr in prs:
+            if not isinstance(pr, dict):
+                continue
+            if expected_base:
+                actual_base = str(pr.get("baseRefName") or "").strip()
+                if actual_base != expected_base:
+                    continue
+            if str(pr.get("state") or "").strip().upper() == "MERGED":
+                return pr
+        return None
 
     @staticmethod
     def _apply_pr_reverify_override(

@@ -65,6 +65,7 @@ def _save_record(
     runtime_id: str = "codex_cli",
     failure_class: str | None = None,
     error_message: str | None = None,
+    workspace_path: str | None = None,
 ) -> None:
     store.save(
         ManagedRunRecord(
@@ -73,6 +74,7 @@ def _save_record(
             runtimeId=runtime_id,
             status=status,
             startedAt=datetime.now(tz=UTC),
+            workspacePath=workspace_path,
             failureClass=failure_class,
             errorMessage=error_message,
         )
@@ -1542,12 +1544,15 @@ async def test_fetch_result_reverifies_and_clears_pr_not_found_when_merged(
                 {
                     "run_id": "fr-reverify",
                     "pr_resolver_expected": True,
-                    "target_branch": "mm-398-e3573b0c",
+                    "target_branch": "main",
+                    "head_branch": "mm-398-e3573b0c",
                 }
             )
 
     mock_reverify.assert_called_once_with(
-        run_id="fr-reverify", target_branch="mm-398-e3573b0c"
+        run_id="fr-reverify",
+        head_branch="mm-398-e3573b0c",
+        base_branch="main",
     )
     assert result.failure_class is None, (
         "PR re-verified as merged: failure_class must be cleared"
@@ -1597,7 +1602,8 @@ async def test_fetch_result_preserves_failure_when_reverify_returns_none(
                 {
                     "run_id": "fr-preserve",
                     "pr_resolver_expected": True,
-                    "target_branch": "mm-398-e3573b0c",
+                    "target_branch": "main",
+                    "head_branch": "mm-398-e3573b0c",
                 }
             )
 
@@ -1607,10 +1613,10 @@ async def test_fetch_result_preserves_failure_when_reverify_returns_none(
     assert result.metadata.get("prResolverReverified") is None
 
 
-async def test_fetch_result_skips_reverify_without_target_branch(
+async def test_fetch_result_skips_reverify_without_head_branch(
     tmp_path: Path,
 ) -> None:
-    """No target_branch means re-verify has no key to look up — skip
+    """No head_branch means re-verify has no source PR key — skip
     the call entirely rather than waste a gh subprocess invocation."""
     from unittest.mock import patch
 
@@ -1634,11 +1640,110 @@ async def test_fetch_result_skips_reverify_without_target_branch(
             activities, "_reverify_pr_merged_state",
         ) as mock_reverify:
             result = await activities.agent_runtime_fetch_result(
-                {"run_id": "fr-skip", "pr_resolver_expected": True}
+                {
+                    "run_id": "fr-skip",
+                    "pr_resolver_expected": True,
+                    "target_branch": "main",
+                }
             )
 
     mock_reverify.assert_not_called()
     assert result.failure_class == "execution_error"
+
+
+async def test_reverify_pr_merged_state_queries_head_and_base_branch(
+    tmp_path: Path,
+) -> None:
+    """Regression: re-verify must query the PR source branch and constrain
+    by the expected base branch so a merged PR is not missed or confused
+    with another PR from the same source branch."""
+    import subprocess
+    from unittest.mock import patch
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    store = _make_store(tmp_path)
+    _save_record(
+        store,
+        run_id="fr-direct-reverify",
+        status="completed",
+        workspace_path=str(workspace),
+    )
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    calls: list[list[str]] = []
+
+    def _mock_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess:
+        calls.append(args)
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=(
+                '[{"number":1543,"state":"MERGED",'
+                '"url":"https://github.com/org/repo/pull/1543",'
+                '"mergedAt":"2026-04-17T23:48:24Z",'
+                '"baseRefName":"main","headRefName":"mm-398-e3573b0c"}]'
+            ),
+            stderr="",
+        )
+
+    with (
+        patch.object(
+            activities, "_detect_repo_from_workspace", return_value="org/repo",
+        ),
+        patch("subprocess.run", side_effect=_mock_run),
+    ):
+        merged_pr = activities._reverify_pr_merged_state(
+            run_id="fr-direct-reverify",
+            head_branch="mm-398-e3573b0c",
+            base_branch="main",
+        )
+
+    assert merged_pr is not None
+    assert merged_pr["number"] == 1543
+    gh_args = calls[0]
+    assert gh_args[gh_args.index("--head") + 1] == "mm-398-e3573b0c"
+    assert gh_args[gh_args.index("--base") + 1] == "main"
+
+
+async def test_reverify_pr_merged_state_rejects_malformed_json(
+    tmp_path: Path,
+) -> None:
+    """Malformed gh stdout is a parse failure, not an unhandled activity error."""
+    import subprocess
+    from unittest.mock import patch
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    store = _make_store(tmp_path)
+    _save_record(
+        store,
+        run_id="fr-bad-json",
+        status="completed",
+        workspace_path=str(workspace),
+    )
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+
+    with (
+        patch.object(
+            activities, "_detect_repo_from_workspace", return_value="org/repo",
+        ),
+        patch(
+            "subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="not json",
+                stderr="",
+            ),
+        ),
+    ):
+        merged_pr = activities._reverify_pr_merged_state(
+            run_id="fr-bad-json",
+            head_branch="feature/source",
+            base_branch="main",
+        )
+
+    assert merged_pr is None
 
 
 async def test_fetch_result_string_request_defaults_pr_resolver_expected_false(
