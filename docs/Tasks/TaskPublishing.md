@@ -37,6 +37,10 @@ For PR publication, the authored `branch` is the selected repository branch and 
 
 When merge automation is explicitly enabled for a PR-publishing task, successful PR publication starts a parent-owned `MoonMind.MergeAutomation` child workflow. The original `MoonMind.Run` remains in `awaiting_external` while merge automation waits for configured external readiness signals and runs `pr-resolver` with publish mode `none`; downstream dependencies on the original task are satisfied only after merge automation succeeds.
 
+For Jira-backed PR-publishing tasks, the authored or preset-provided Jira issue key must be preserved as the canonical `jiraIssueKey` in merge automation input. When that key is present, `MoonMind.Run` enables `mergeAutomationConfig.postMergeJira` by default so `MoonMind.MergeAutomation` can complete the same authoritative issue after verified merge success. If operators provide an explicit `postMergeJira.issueKey`, it overrides the canonical key for the post-merge completion step.
+
+The publish path must not infer post-merge completion targets through fuzzy summary search or by transitioning every issue key found in PR metadata. PR metadata is only a strict fallback when stronger configured or captured Jira context is unavailable.
+
 ## Branch Naming
 
 ### Auto-generated Branches

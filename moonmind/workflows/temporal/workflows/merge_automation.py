@@ -68,6 +68,9 @@ class MoonMindMergeAutomationWorkflow:
         self._gate_snapshot_artifact_refs: list[str] = []
         self._resolver_attempt_artifact_refs: list[str] = []
         self._summary_artifact_ref: str | None = None
+        self._post_merge_jira_resolution_artifact_ref: str | None = None
+        self._post_merge_jira_transition_artifact_ref: str | None = None
+        self._post_merge_jira_result: dict[str, Any] | None = None
         self._external_event_count = 0
         self._refresh_tracked_head_sha_on_next_evaluation = False
         self._summary: str | None = None
@@ -83,6 +86,14 @@ class MoonMindMergeAutomationWorkflow:
                 self._resolver_attempt_artifact_refs
             ),
         }
+        if self._post_merge_jira_resolution_artifact_ref:
+            artifact_refs["postMergeJiraResolution"] = (
+                self._post_merge_jira_resolution_artifact_ref
+            )
+        if self._post_merge_jira_transition_artifact_ref:
+            artifact_refs["postMergeJiraTransition"] = (
+                self._post_merge_jira_transition_artifact_ref
+            )
         payload = {
             "status": self._status,
             "prNumber": pr.number if pr is not None else None,
@@ -98,6 +109,8 @@ class MoonMindMergeAutomationWorkflow:
         }
         if self._summary:
             payload["summary"] = self._summary
+        if self._post_merge_jira_result is not None:
+            payload["postMergeJira"] = dict(self._post_merge_jira_result)
         return payload
 
     @staticmethod
@@ -279,6 +292,95 @@ class MoonMindMergeAutomationWorkflow:
         self._publish_visibility()
         return await self._finish()
 
+    async def _complete_post_merge_jira(
+        self,
+        *,
+        resolver_disposition: str,
+    ) -> bool:
+        if self._input is None:
+            return True
+        if not self._input.config.post_merge_jira.enabled:
+            return True
+        decision = await workflow.execute_activity(
+            "merge_automation.complete_post_merge_jira",
+            {
+                "parentWorkflowId": self._input.parent_workflow_id,
+                "parentRunId": self._input.parent_run_id,
+                "resolverDisposition": resolver_disposition,
+                "pullRequest": self._input.pull_request.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                "jiraIssueKey": self._input.jira_issue_key,
+                "postMergeJira": self._input.config.post_merge_jira.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                "candidateContext": {
+                    "publishContextIssueKey": self._input.jira_issue_key,
+                    "prMetadataKeys": [self._input.jira_issue_key]
+                    if self._input.jira_issue_key
+                    else [],
+                },
+            },
+            start_to_close_timeout=timedelta(minutes=2),
+            task_queue=INTEGRATIONS_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        decision_map = dict(decision) if isinstance(decision, Mapping) else {}
+        self._post_merge_jira_result = {
+            key: value
+            for key, value in decision_map.items()
+            if key not in {"issueResolution", "transition", "artifactRefs"}
+        }
+        resolution = decision_map.get("issueResolution")
+        if isinstance(resolution, Mapping):
+            artifact_id = await self._write_json_artifact(
+                name="artifacts/merge_automation/post_merge_jira_resolution.json",
+                payload=dict(resolution),
+            )
+            if artifact_id:
+                self._post_merge_jira_resolution_artifact_ref = artifact_id
+        transition = decision_map.get("transition")
+        if isinstance(transition, Mapping):
+            artifact_id = await self._write_json_artifact(
+                name="artifacts/merge_automation/post_merge_jira_transition.json",
+                payload=dict(transition),
+            )
+            if artifact_id:
+                self._post_merge_jira_transition_artifact_ref = artifact_id
+
+        if self._post_merge_jira_resolution_artifact_ref:
+            self._post_merge_jira_result["artifactRefs"] = {
+                "resolution": self._post_merge_jira_resolution_artifact_ref
+            }
+        if self._post_merge_jira_transition_artifact_ref:
+            self._post_merge_jira_result.setdefault("artifactRefs", {})[
+                "transition"
+            ] = self._post_merge_jira_transition_artifact_ref
+
+        status = str(decision_map.get("status") or "").strip()
+        required = bool(decision_map.get("required", True))
+        if required and status in {"blocked", "failed"}:
+            reason = str(
+                decision_map.get("reason")
+                or "Required post-merge Jira completion did not succeed."
+            ).strip()
+            self._status = STATE_FAILED
+            self._summary = reason
+            self._blockers = [
+                ReadinessBlockerModel.model_validate(
+                    {
+                        "kind": DISPOSITION_FAILED,
+                        "summary": reason,
+                        "retryable": False,
+                        "source": "jira",
+                    }
+                )
+            ]
+            self._publish_visibility()
+            return False
+        return True
+
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._input = MergeAutomationStartInput.model_validate(payload)
@@ -392,10 +494,18 @@ class MoonMindMergeAutomationWorkflow:
                     self._publish_visibility()
                     continue
                 if resolver_disposition == DISPOSITION_ALREADY_MERGED:
+                    if not await self._complete_post_merge_jira(
+                        resolver_disposition=resolver_disposition
+                    ):
+                        return await self._finish()
                     self._status = STATE_ALREADY_MERGED
                     self._publish_visibility()
                     return await self._finish()
                 if resolver_disposition == DISPOSITION_MERGED:
+                    if not await self._complete_post_merge_jira(
+                        resolver_disposition=resolver_disposition
+                    ):
+                        return await self._finish()
                     self._status = STATE_MERGED
                     self._publish_visibility()
                     return await self._finish()

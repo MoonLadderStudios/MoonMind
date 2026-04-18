@@ -72,6 +72,57 @@ async def test_parent_owned_merge_automation_awaits_child_success(
 
 
 @pytest.mark.asyncio
+async def test_parent_owned_merge_automation_preserves_post_merge_jira_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_workflow_context(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_context["branch"] = "feature"
+    workflow._publish_context["baseRef"] = "main"
+    workflow._publish_context["headSha"] = "abc123"
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert payload["mergeAutomationConfig"]["postMergeJira"]["enabled"] is True
+        return {
+            "status": "merged",
+            "prNumber": 350,
+            "prUrl": payload["pullRequest"]["url"],
+            "postMergeJira": {
+                "status": "noop_already_done",
+                "issueKey": "MM-350",
+                "alreadyDone": True,
+                "transitioned": False,
+            },
+            "artifactRefs": {"postMergeJiraResolution": "art-resolution"},
+        }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+
+    await workflow._maybe_start_merge_gate(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-350"},
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+    )
+
+    summary = workflow._merge_automation_summary_from_context()
+
+    assert summary is not None
+    assert summary["postMergeJira"]["status"] == "noop_already_done"
+    assert summary["artifactRefs"]["postMergeJiraResolution"] == "art-resolution"
+
+
+@pytest.mark.asyncio
 async def test_parent_owned_merge_automation_blocks_parent_success_on_child_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

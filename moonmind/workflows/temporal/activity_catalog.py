@@ -771,6 +771,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
+            activity_type="merge_automation.complete_post_merge_jira",
+            family="merge_automation",
+            capability_class="integration:jira",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(120, 300),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
+        ),
+        TemporalActivityDefinition(
             activity_type="integration.resolve_adapter_metadata",
             family="integration",
             capability_class="workflow",

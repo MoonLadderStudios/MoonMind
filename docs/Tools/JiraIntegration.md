@@ -126,6 +126,13 @@ The agent should only receive a tool capability such as:
 - `jira.add_comment`
 - `jira.search_issues`
 
+Post-merge Jira completion for merge automation follows the same rule. The
+`MoonMind.MergeAutomation` workflow invokes a trusted activity,
+`merge_automation.complete_post_merge_jira`, rather than asking `pr-resolver` or
+an agent shell to call Jira. That activity uses `JiraToolService.get_issue`,
+`JiraToolService.get_transitions`, and `JiraToolService.transition_issue` from
+MoonMind backend code.
+
 ### Resolve secrets just in time
 
 When a Jira tool call is made:
@@ -148,6 +155,11 @@ The Jira tool path must never write plaintext credentials into:
 - diagnostics
 - structured logs
 - exception text returned to the model
+
+Post-merge completion artifacts and summaries may include the selected issue key,
+candidate sources, transition ID/name, done/no-op status, and sanitized failure
+reason. They must not include auth headers, cookies, tokens, raw SecretRef
+resolution results, or full Jira account payloads.
 
 ### Redaction
 
@@ -711,3 +723,22 @@ The best MoonMind design is:
 - **bounded retries, redaction, and least-privilege credentials**
 
 This approach lines up with MoonMind's current move toward Provider Profiles, launch-only secret resolution, and strict avoidance of raw secrets in durable contracts.
+
+### Post-merge transition lookup
+
+For automated post-merge completion, the trusted Jira path must:
+
+1. fetch the selected issue by exact key through `get_issue`;
+2. fetch transitions through `get_transitions` with field expansion enabled;
+3. treat an existing done-category issue status as a successful no-op;
+4. validate any explicit transition ID or exact transition name against the
+   currently available transitions;
+5. otherwise select a transition only when exactly one available transition
+   targets Jira's done status category;
+6. fail closed when zero or multiple done transitions are available, or when
+   required transition fields have no configured defaults;
+7. apply the selected transition through `transition_issue`.
+
+The trusted Jira path must not use fuzzy summary search to infer a target issue
+for post-merge completion, and it must not transition more than one Jira issue
+for one merge automation run.

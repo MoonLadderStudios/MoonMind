@@ -44,6 +44,17 @@ def _payload() -> dict[str, Any]:
     }
 
 
+def _payload_with_post_merge_jira(**post_merge_overrides: Any) -> dict[str, Any]:
+    payload = _payload()
+    payload["mergeAutomationConfig"]["postMergeJira"] = {
+        "enabled": True,
+        "required": True,
+        "strategy": "done_category",
+        **post_merge_overrides,
+    }
+    return payload
+
+
 def test_merge_automation_extracts_artifact_id_from_ref_shapes() -> None:
     assert (
         MoonMindMergeAutomationWorkflow._artifact_id_from_ref(
@@ -278,6 +289,168 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
 
     assert result["status"] == "merged"
     assert child_kwargs["cancellation_type"] == ChildWorkflowCancellationType.TRY_CANCEL
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_runs_post_merge_jira_before_merged_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    activity_calls: list[str] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append(activity_type)
+        if activity_type == "merge_automation.evaluate_readiness":
+            return {
+                "headSha": "abc123",
+                "ready": True,
+                "pullRequestOpen": True,
+                "policyAllowed": True,
+                "checksComplete": True,
+                "checksPassing": True,
+                "automatedReviewComplete": True,
+                "jiraStatusAllowed": True,
+            }
+        if activity_type == "merge_automation.complete_post_merge_jira":
+            assert payload["resolverDisposition"] == "merged"
+            assert payload["jiraIssueKey"] == "MM-350"
+            return {
+                "status": "succeeded",
+                "required": True,
+                "issueKey": "MM-350",
+                "issueKeySource": "merge_automation",
+                "transitionId": "41",
+                "transitionName": "Done",
+                "alreadyDone": False,
+                "transitioned": True,
+            }
+        raise AssertionError(activity_type)
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert "merge_automation.complete_post_merge_jira" not in activity_calls
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_search_attributes", lambda _attrs: None)
+
+    result = await workflow.run(_payload_with_post_merge_jira())
+
+    assert result["status"] == "merged"
+    assert activity_calls.index("merge_automation.evaluate_readiness") < activity_calls.index(
+        "merge_automation.complete_post_merge_jira"
+    )
+    assert result["postMergeJira"]["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_blocks_when_required_post_merge_jira_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "merge_automation.evaluate_readiness":
+            return {
+                "headSha": "abc123",
+                "ready": True,
+                "pullRequestOpen": True,
+                "policyAllowed": True,
+                "checksComplete": True,
+                "checksPassing": True,
+                "automatedReviewComplete": True,
+                "jiraStatusAllowed": True,
+            }
+        if activity_type == "merge_automation.complete_post_merge_jira":
+            return {
+                "status": "blocked",
+                "required": True,
+                "reason": "Multiple done transitions are available.",
+                "issueKey": "MM-350",
+                "transitioned": False,
+            }
+        raise AssertionError(activity_type)
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        return {"status": "success", "mergeAutomationDisposition": "already_merged"}
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_search_attributes", lambda _attrs: None)
+
+    result = await workflow.run(_payload_with_post_merge_jira())
+
+    assert result["status"] == "failed"
+    assert result["postMergeJira"]["status"] == "blocked"
+    assert result["blockers"][0]["source"] == "jira"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disposition", ["manual_review", "failed"])
+async def test_merge_automation_does_not_run_post_merge_jira_for_non_success_dispositions(
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    child_calls = 0
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        nonlocal child_calls
+        child_calls += 1
+        return {"status": "success", "mergeAutomationDisposition": disposition}
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_search_attributes", lambda _attrs: None)
+
+    result = await workflow.run(_payload_with_post_merge_jira())
+    assert child_calls == 1
+    assert result["status"] == "failed"
+    assert "postMergeJira" not in result
 
 
 @pytest.mark.asyncio

@@ -444,6 +444,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "merge_automation_evaluate_readiness",
     ),
+    "merge_automation.complete_post_merge_jira": (
+        "integrations",
+        "merge_automation_complete_post_merge_jira",
+    ),
     "agent_runtime.build_launch_context": (
         "agent_runtime",
         "agent_runtime_build_launch_context",
@@ -2011,6 +2015,60 @@ class TemporalIntegrationActivities:
             evidence["jiraStatusAllowed"] = True
 
         return evidence
+
+    async def merge_automation_complete_post_merge_jira(self, payload, /, **kwargs):
+        if not isinstance(payload, Mapping):
+            return {
+                "status": "blocked",
+                "required": True,
+                "reason": "Post-merge Jira completion payload is invalid.",
+                "issueResolution": {"status": "invalid", "candidates": []},
+            }
+
+        from moonmind.integrations.jira.models import (
+            GetIssueRequest,
+            GetTransitionsRequest,
+            TransitionIssueRequest,
+        )
+        from moonmind.integrations.jira.tool import JiraToolService
+        from moonmind.workflows.temporal.post_merge_jira_completion import (
+            complete_post_merge_jira,
+        )
+
+        service = JiraToolService()
+
+        async def get_issue(issue_key: str) -> dict[str, Any]:
+            return await service.get_issue(
+                GetIssueRequest(issueKey=issue_key, fields=["status"])
+            )
+
+        async def get_transitions(issue_key: str) -> list[dict[str, Any]]:
+            result = await service.get_transitions(
+                GetTransitionsRequest(issueKey=issue_key, expandFields=True)
+            )
+            transitions = result.get("transitions")
+            return list(transitions) if isinstance(transitions, list) else []
+
+        async def transition_issue(
+            issue_key: str,
+            transition_id: str,
+            fields: dict[str, Any],
+        ) -> dict[str, Any]:
+            return await service.transition_issue(
+                TransitionIssueRequest(
+                    issueKey=issue_key,
+                    transitionId=transition_id,
+                    fields=fields,
+                )
+            )
+
+        decision = await complete_post_merge_jira(
+            payload,
+            get_issue=get_issue,
+            get_transitions=get_transitions,
+            transition_issue=transition_issue,
+        )
+        return decision.model_dump(by_alias=True, mode="json")
 
     async def _merge_gate_jira_status_allowed(
         self,
@@ -4309,6 +4367,8 @@ class TemporalAgentRuntimeActivities:
             )
         if support_gitconfig.exists():
             env["GIT_CONFIG_GLOBAL"] = str(support_gitconfig)
+        else:
+            env.pop("GIT_CONFIG_GLOBAL", None)
         git_name = str(settings.workflow.git_user_name or "").strip()
         git_email = str(settings.workflow.git_user_email or "").strip()
         if git_name:

@@ -91,6 +91,7 @@ class PullRequestRefModel(BaseModel):
 
 MergeAutomationPolicySetting = Literal["required", "optional", "disabled"]
 MergeMethod = Literal["merge", "squash", "rebase"]
+PostMergeJiraStrategy = Literal["done_category"]
 
 
 class MergeAutomationGitHubGateModel(BaseModel):
@@ -172,6 +173,33 @@ class MergeAutomationTimeoutsModel(BaseModel):
         return min(candidate, 2_592_000)
 
 
+class MergeAutomationPostMergeJiraModel(BaseModel):
+    """Runtime policy for Jira completion after verified merge success."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = Field(False, alias="enabled")
+    issue_key: str | None = Field(None, alias="issueKey")
+    transition_id: str | None = Field(None, alias="transitionId")
+    transition_name: str | None = Field(None, alias="transitionName")
+    strategy: PostMergeJiraStrategy = Field("done_category", alias="strategy")
+    required: bool = Field(True, alias="required")
+    fields: dict[str, Any] = Field(default_factory=dict, alias="fields")
+
+    @field_validator("issue_key", "transition_id", "transition_name", mode="before")
+    @classmethod
+    def _normalize_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("fields", mode="before")
+    @classmethod
+    def _validate_fields(cls, value: Any) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(value, field_name="postMergeJira.fields")
+
+
 class MergeAutomationConfigModel(BaseModel):
     """Full merge automation configuration carried by workflow input."""
 
@@ -188,6 +216,10 @@ class MergeAutomationConfigModel(BaseModel):
     timeouts: MergeAutomationTimeoutsModel = Field(
         default_factory=MergeAutomationTimeoutsModel,
         alias="timeouts",
+    )
+    post_merge_jira: MergeAutomationPostMergeJiraModel = Field(
+        default_factory=MergeAutomationPostMergeJiraModel,
+        alias="postMergeJira",
     )
 
 
