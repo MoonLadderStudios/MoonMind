@@ -26,18 +26,18 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm active MM-404 feature context in `.specify/feature.json` and `specs/207-jira-breakdown-orchestrate-skill/spec.md`
-- [ ] T002 Review existing Jira Breakdown, Jira Orchestrate, story output, and task dependency surfaces in `api_service/data/task_step_templates/jira-breakdown.yaml`, `api_service/data/task_step_templates/jira-orchestrate.yaml`, `moonmind/workflows/temporal/story_output_tools.py`, and `docs/Tasks/TaskDependencies.md`
+- [X] T001 Confirm active MM-404 feature context in `.specify/feature.json` and `specs/207-jira-breakdown-orchestrate-skill/spec.md`
+- [X] T002 Review existing Jira Breakdown, Jira Orchestrate, story output, and task dependency surfaces in `api_service/data/task_step_templates/jira-breakdown.yaml`, `api_service/data/task_step_templates/jira-orchestrate.yaml`, `moonmind/workflows/temporal/story_output_tools.py`, and `docs/Tasks/TaskDependencies.md`
 
 ## Phase 2: Foundational Tests
 
-- [ ] T003 [P] Add failing unit tests for the new composite seeded preset and expansion contract in `tests/unit/api/test_task_step_templates_service.py` covering FR-001, FR-002, FR-003, FR-011, FR-012, FR-013, FR-014, SC-006
-- [ ] T004 [P] Add failing unit tests for downstream Jira Orchestrate task creation from three, one, and zero ordered issue mappings in `tests/unit/workflows/temporal/test_story_output_tools.py` covering FR-004, FR-005, FR-006, FR-008, FR-009, SC-001, SC-003, SC-004
-- [ ] T005 [P] Add failing unit tests for dependency wiring, stable idempotency keys, and partial downstream creation outcomes in `tests/unit/workflows/temporal/test_story_output_tools.py` covering FR-007, FR-010, SC-002, SC-005
-- [ ] T006 [P] Add failing unit tests for runtime registration and selected skill dispatch for `story.create_jira_orchestrate_tasks` in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py` covering FR-001, FR-005
-- [ ] T007 [P] Add failing service-boundary tests for task dependency validation and create-time `dependsOn` preservation used by downstream tasks in `tests/unit/workflows/temporal/test_temporal_service.py` covering FR-007, SC-002
-- [ ] T008 [P] Add failing startup seeding integration assertions for the composite preset in `tests/integration/test_startup_task_template_seeding.py` covering FR-001, FR-003, FR-011, SC-006
-- [ ] T009 Confirm red-first failure for targeted unit and integration tests before production code in `specs/207-jira-breakdown-orchestrate-skill/tasks.md`
+- [X] T003 [P] Add failing unit tests for the new composite seeded preset and expansion contract in `tests/unit/api/test_task_step_templates_service.py` covering FR-001, FR-002, FR-003, FR-011, FR-012, FR-013, FR-014, SC-006
+- [X] T004 [P] Add failing unit tests for downstream Jira Orchestrate task creation from three, one, and zero ordered issue mappings in `tests/unit/workflows/temporal/test_story_output_tools.py` covering FR-004, FR-005, FR-006, FR-008, FR-009, SC-001, SC-003, SC-004
+- [X] T005 [P] Add failing unit tests for dependency wiring, stable idempotency keys, and partial downstream creation outcomes in `tests/unit/workflows/temporal/test_story_output_tools.py` covering FR-007, FR-010, SC-002, SC-005
+- [X] T006 [P] Add failing unit tests for runtime registration and selected skill dispatch for `story.create_jira_orchestrate_tasks` in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py` covering FR-001, FR-005
+- [X] T007 [P] Add failing service-boundary tests for task dependency validation and create-time `dependsOn` preservation used by downstream tasks in `tests/unit/workflows/temporal/test_temporal_service.py` covering FR-007, SC-002
+- [X] T008 [P] Add failing startup seeding integration assertions for the composite preset in `tests/integration/test_startup_task_template_seeding.py` covering FR-001, FR-003, FR-011, SC-006
+- [X] T009 Confirm red-first failure for targeted unit and integration tests before production code in `specs/207-jira-breakdown-orchestrate-skill/tasks.md`
 
 ## Phase 3: Story Implementation
 
@@ -53,26 +53,26 @@
 - Startup seeding integration verifies the new global composite preset is persisted with the expected steps and trusted-tool instructions.
 - Hermetic integration runner verifies required `integration_ci` coverage when Docker is available.
 
-- [ ] T010 Add the global `jira-breakdown-orchestrate` seed template with source input, Jira target inputs, runtime/publish inputs, normal Jira Breakdown steps, and downstream task creation step in `api_service/data/task_step_templates/jira-breakdown-orchestrate.yaml` covering FR-001, FR-002, FR-003, FR-011, FR-012, FR-013, FR-014
-- [ ] T011 Implement `story.create_jira_orchestrate_tasks` registration and exported handler alongside existing story output tools in `moonmind/workflows/temporal/story_output_tools.py` covering FR-001, FR-005, FR-006
-- [ ] T012 Implement ordered issue mapping normalization, missing issue-key handling, one-story handling, zero-story outcome handling, and MM-404 traceability propagation in `moonmind/workflows/temporal/story_output_tools.py` covering FR-004, FR-006, FR-008, FR-009, FR-015, SC-003, SC-004, SC-007
-- [ ] T013 Implement downstream Jira Orchestrate task payload construction with Jira issue key, runtime mode, publish mode, repository, source story metadata, and original brief reference in `moonmind/workflows/temporal/story_output_tools.py` covering FR-005, FR-006, FR-014, SC-006
-- [ ] T014 Implement sequential downstream task creation with stable per-story idempotency keys and `dependsOn` pointing to the previous created workflow ID in `moonmind/workflows/temporal/story_output_tools.py` covering FR-007, SC-001, SC-002
-- [ ] T015 Implement structured orchestration result reporting for completed, partial, no-downstream-task, skipped-story, dependency, and failure outcomes in `moonmind/workflows/temporal/story_output_tools.py` covering FR-010, SC-005
-- [ ] T016 Wire any required runtime execution-creation context or factory injection for the new story output tool in `moonmind/workflows/temporal/worker_runtime.py` covering FR-005, FR-007, FR-011
-- [ ] T017 Update seeded template catalog expectations for the new composite preset while preserving existing Jira Breakdown and Jira Orchestrate assertions in `tests/unit/api/test_task_step_templates_service.py` covering FR-001, FR-012, FR-013
-- [ ] T018 Update startup seed integration expectations for the new composite preset while preserving existing seeded template assertions in `tests/integration/test_startup_task_template_seeding.py` covering FR-001, FR-003, FR-011
-- [ ] T019 Run targeted unit tests for the story and fix only MM-404-related failures in `tests/unit/api/test_task_step_templates_service.py`, `tests/unit/workflows/temporal/test_story_output_tools.py`, `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, and `tests/unit/workflows/temporal/test_temporal_service.py`
-- [ ] T020 Run startup seeding integration coverage or record Docker/runtime blocker in `specs/207-jira-breakdown-orchestrate-skill/quickstart.md`
-- [ ] T021 Validate the independent story by exercising a stubbed three-story result and confirming three downstream tasks plus two dependency edges in `specs/207-jira-breakdown-orchestrate-skill/quickstart.md`
+- [X] T010 Add the global `jira-breakdown-orchestrate` seed template with source input, Jira target inputs, runtime/publish inputs, normal Jira Breakdown steps, and downstream task creation step in `api_service/data/task_step_templates/jira-breakdown-orchestrate.yaml` covering FR-001, FR-002, FR-003, FR-011, FR-012, FR-013, FR-014
+- [X] T011 Implement `story.create_jira_orchestrate_tasks` registration and exported handler alongside existing story output tools in `moonmind/workflows/temporal/story_output_tools.py` covering FR-001, FR-005, FR-006
+- [X] T012 Implement ordered issue mapping normalization, missing issue-key handling, one-story handling, zero-story outcome handling, and MM-404 traceability propagation in `moonmind/workflows/temporal/story_output_tools.py` covering FR-004, FR-006, FR-008, FR-009, FR-015, SC-003, SC-004, SC-007
+- [X] T013 Implement downstream Jira Orchestrate task payload construction with Jira issue key, runtime mode, publish mode, repository, source story metadata, and original brief reference in `moonmind/workflows/temporal/story_output_tools.py` covering FR-005, FR-006, FR-014, SC-006
+- [X] T014 Implement sequential downstream task creation with stable per-story idempotency keys and `dependsOn` pointing to the previous created workflow ID in `moonmind/workflows/temporal/story_output_tools.py` covering FR-007, SC-001, SC-002
+- [X] T015 Implement structured orchestration result reporting for completed, partial, no-downstream-task, skipped-story, dependency, and failure outcomes in `moonmind/workflows/temporal/story_output_tools.py` covering FR-010, SC-005
+- [X] T016 Wire any required runtime execution-creation context or factory injection for the new story output tool in `moonmind/workflows/temporal/worker_runtime.py` covering FR-005, FR-007, FR-011
+- [X] T017 Update seeded template catalog expectations for the new composite preset while preserving existing Jira Breakdown and Jira Orchestrate assertions in `tests/unit/api/test_task_step_templates_service.py` covering FR-001, FR-012, FR-013
+- [X] T018 Update startup seed integration expectations for the new composite preset while preserving existing seeded template assertions in `tests/integration/test_startup_task_template_seeding.py` covering FR-001, FR-003, FR-011
+- [X] T019 Run targeted unit tests for the story and fix only MM-404-related failures in `tests/unit/api/test_task_step_templates_service.py`, `tests/unit/workflows/temporal/test_story_output_tools.py`, `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, and `tests/unit/workflows/temporal/test_temporal_service.py`
+- [X] T020 Run startup seeding integration coverage or record Docker/runtime blocker in `specs/207-jira-breakdown-orchestrate-skill/quickstart.md`
+- [X] T021 Validate the independent story by exercising a stubbed three-story result and confirming three downstream tasks plus two dependency edges in `specs/207-jira-breakdown-orchestrate-skill/quickstart.md`
 
 ## Final Phase: Polish And Verification
 
-- [ ] T022 [P] Run traceability check for MM-404 across spec, plan, tasks, quickstart, and implementation files in `specs/207-jira-breakdown-orchestrate-skill/tasks.md`
-- [ ] T023 [P] Check that no raw Jira credential access or direct Jira shell mutation was introduced in `moonmind/workflows/temporal/story_output_tools.py` and `api_service/data/task_step_templates/jira-breakdown-orchestrate.yaml`
-- [ ] T024 Run the full unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and record results in `specs/207-jira-breakdown-orchestrate-skill/quickstart.md`
-- [ ] T025 Run `./tools/test_integration.sh` when Docker is available, or record the Docker/socket blocker in `specs/207-jira-breakdown-orchestrate-skill/quickstart.md`
-- [ ] T026 Run `moonspec-verify` for MM-404 after implementation and tests pass, equivalent to the final `/speckit.verify` gate, then record the verification verdict and evidence in `specs/207-jira-breakdown-orchestrate-skill/verification.md`
+- [X] T022 [P] Run traceability check for MM-404 across spec, plan, tasks, quickstart, and implementation files in `specs/207-jira-breakdown-orchestrate-skill/tasks.md`
+- [X] T023 [P] Check that no raw Jira credential access or direct Jira shell mutation was introduced in `moonmind/workflows/temporal/story_output_tools.py` and `api_service/data/task_step_templates/jira-breakdown-orchestrate.yaml`
+- [X] T024 Run the full unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and record results in `specs/207-jira-breakdown-orchestrate-skill/quickstart.md`
+- [X] T025 Run `./tools/test_integration.sh` when Docker is available, or record the Docker/socket blocker in `specs/207-jira-breakdown-orchestrate-skill/quickstart.md`
+- [X] T026 Run `moonspec-verify` for MM-404 after implementation and tests pass, equivalent to the final `/speckit.verify` gate, then record the verification verdict and evidence in `specs/207-jira-breakdown-orchestrate-skill/verification.md`
 
 ## Dependencies And Execution Order
 

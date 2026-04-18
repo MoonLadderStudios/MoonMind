@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import inspect
 import json
 import re
@@ -21,7 +22,11 @@ from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 
-JIRA_STORY_TOOL_NAMES = frozenset({"story.create_jira_issues"})
+JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
+JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
+JIRA_STORY_TOOL_NAMES = frozenset(
+    {JIRA_CREATE_ISSUES_TOOL_NAME, JIRA_ORCHESTRATE_TASKS_TOOL_NAME}
+)
 JIRA_DESCRIPTION_MAX_CHARS = 32767
 JIRA_DESCRIPTION_TRUNCATION_SUFFIX = "\n\n[Truncated by MoonMind before Jira export]"
 JIRA_DEPENDENCY_MODE_NONE = "none"
@@ -35,6 +40,7 @@ StoryFetcher = Callable[
     str | Awaitable[str],
 ]
 JiraServiceFactory = Callable[[], JiraToolService]
+ExecutionCreator = Callable[..., Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -259,6 +265,305 @@ def _story_id(story: Mapping[str, Any], *, index: int) -> str:
         if value:
             return value
     return f"STORY-{index:03d}"
+
+
+def _issue_mappings_from_inputs(inputs: Mapping[str, Any]) -> list[dict[str, Any]]:
+    jira_payload = _mapping(inputs.get("jira"))
+    candidates = (
+        jira_payload.get("issueMappings")
+        or jira_payload.get("issue_mappings")
+        or inputs.get("issueMappings")
+        or inputs.get("issue_mappings")
+        or jira_payload.get("createdIssues")
+        or inputs.get("createdIssues")
+        or []
+    )
+    mappings = [dict(item) for item in _list(candidates) if isinstance(item, Mapping)]
+
+    def sort_key(item: Mapping[str, Any]) -> tuple[int, str]:
+        raw_index = item.get("storyIndex") or item.get("story_index") or 0
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            index = 0
+        return index, _string(item.get("storyId") or item.get("story_id"))
+
+    return sorted(mappings, key=sort_key)
+
+
+def _source_issue_key(
+    *,
+    inputs: Mapping[str, Any],
+    traceability: Mapping[str, Any],
+) -> str:
+    for source in (traceability, inputs):
+        value = source.get("sourceIssueKey") or source.get("source_issue_key")
+        if value:
+            return _string(value)
+    return ""
+
+
+def _stable_idempotency_key(
+    *,
+    source_issue_key: str,
+    story_id: str,
+    issue_key: str,
+) -> str:
+    raw = f"jira-orchestrate:{source_issue_key}:{story_id}:{issue_key}"
+    if len(raw) <= 128:
+        return raw
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"jira-orchestrate:{source_issue_key}:{digest}"[:128]
+
+
+def _downstream_task_payload(
+    *,
+    mapping: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+    traceability: Mapping[str, Any],
+    depends_on: list[str],
+) -> tuple[str, dict[str, Any]]:
+    issue_key = _string(mapping.get("issueKey") or mapping.get("issue_key"))
+    story_id = _string(mapping.get("storyId") or mapping.get("story_id"))
+    summary = _string(mapping.get("summary")) or issue_key
+    source_issue_key = _source_issue_key(inputs={}, traceability=traceability)
+    source_brief_ref = _string(
+        traceability.get("sourceBriefRef") or traceability.get("source_brief_ref")
+    )
+    orchestration_mode = _string(
+        task_payload.get("orchestrationMode")
+        or task_payload.get("orchestration_mode")
+        or "runtime"
+    )
+    instructions = (
+        f"Run Jira Orchestrate for {issue_key}.\n\n"
+        f"Source story: {story_id or summary}.\n"
+        f"Source summary: {summary}.\n"
+        f"Source Jira issue: {source_issue_key or 'unknown'}.\n"
+        f"Original brief reference: {source_brief_ref or 'not provided'}.\n\n"
+        "Use the existing Jira Orchestrate workflow for this Jira issue. "
+        "Do not run implementation inline inside the breakdown task."
+    )
+    runtime = _mapping(task_payload.get("runtime"))
+    publish = _mapping(task_payload.get("publish"))
+    repository = _string(task_payload.get("repository") or task_payload.get("repo"))
+    task: dict[str, Any] = {
+        "title": f"Run Jira Orchestrate for {issue_key}: {summary}",
+        "instructions": instructions,
+        "inputs": {
+            "jira_issue_key": issue_key,
+            "orchestration_mode": orchestration_mode,
+            "source_design_path": "",
+            "constraints": (
+                f"Preserve source issue {source_issue_key} traceability."
+                if source_issue_key
+                else ""
+            ),
+        },
+        "taskTemplate": {
+            "slug": "jira-orchestrate",
+            "version": "1.0.0",
+        },
+    }
+    if runtime:
+        task["runtime"] = runtime
+    if publish:
+        task["publish"] = publish
+    if repository:
+        task["repository"] = repository
+    if depends_on:
+        task["dependsOn"] = list(depends_on)
+    return task["title"], task
+
+
+async def create_jira_orchestrate_tasks_from_issue_mappings(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    execution_creator: ExecutionCreator | None = None,
+) -> ToolResult:
+    """Create dependent Jira Orchestrate tasks from ordered Jira issue mappings."""
+
+    if execution_creator is None:
+        raise ValueError("execution_creator is required for Jira Orchestrate task creation.")
+
+    issue_mappings = _issue_mappings_from_inputs(inputs)
+    orchestration_payload = _mapping(
+        inputs.get("jiraOrchestration") or inputs.get("jira_orchestration")
+    )
+    task_payload = _mapping(
+        orchestration_payload.get("task")
+        or inputs.get("task")
+    )
+    traceability = _mapping(
+        orchestration_payload.get("traceability")
+        or inputs.get("traceability")
+    )
+    source_issue_key = _source_issue_key(inputs=inputs, traceability=traceability)
+    source_brief_ref = _string(
+        traceability.get("sourceBriefRef") or traceability.get("source_brief_ref")
+    )
+    repository = _string(task_payload.get("repository") or task_payload.get("repo"))
+    owner_id = (
+        _string(task_payload.get("ownerId") or task_payload.get("owner_id"))
+        or _string(inputs.get("ownerId") or inputs.get("owner_id"))
+        or _string((_context or {}).get("ownerId") or (_context or {}).get("owner_id"))
+        or None
+    )
+    owner_type = (
+        _string(task_payload.get("ownerType") or task_payload.get("owner_type"))
+        or _string(inputs.get("ownerType") or inputs.get("owner_type"))
+        or _string((_context or {}).get("ownerType") or (_context or {}).get("owner_type"))
+        or None
+    )
+
+    tasks: list[dict[str, Any]] = []
+    dependencies: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    skipped_stories: list[dict[str, Any]] = []
+    previous_workflow_id = ""
+
+    for index, mapping in enumerate(issue_mappings, start=1):
+        story_id = _string(mapping.get("storyId") or mapping.get("story_id")) or f"STORY-{index:03d}"
+        story_index = mapping.get("storyIndex") or mapping.get("story_index") or index
+        issue_key = _string(mapping.get("issueKey") or mapping.get("issue_key"))
+        summary = _string(mapping.get("summary"))
+        base_result = {
+            "storyId": story_id,
+            "storyIndex": story_index,
+            "jiraIssueKey": issue_key,
+        }
+        if not issue_key:
+            failures.append(
+                {
+                    **base_result,
+                    "errorCode": "missing_issue_key",
+                    "message": "Jira Orchestrate task creation requires issueKey.",
+                }
+            )
+            skipped_stories.append({**base_result, "summary": summary})
+            continue
+
+        depends_on = [previous_workflow_id] if previous_workflow_id else []
+        title, task = _downstream_task_payload(
+            mapping=mapping,
+            task_payload=task_payload,
+            traceability=traceability,
+            depends_on=depends_on,
+        )
+        idempotency_key = _stable_idempotency_key(
+            source_issue_key=source_issue_key,
+            story_id=story_id,
+            issue_key=issue_key,
+        )
+        try:
+            created = execution_creator(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                owner_type=owner_type,
+                title=title,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "requestType": "task",
+                    "repository": repository or None,
+                    "targetRuntime": _string(_mapping(task.get("runtime")).get("mode")) or None,
+                    "publishMode": _string(_mapping(task.get("publish")).get("mode")) or None,
+                    "task": task,
+                    "traceability": {
+                        "sourceIssueKey": source_issue_key,
+                        "sourceBriefRef": source_brief_ref,
+                    },
+                },
+                idempotency_key=idempotency_key,
+                repository=repository or None,
+                integration="jira",
+                summary=f"Jira Orchestrate task for {issue_key}.",
+            )
+            if inspect.isawaitable(created):
+                created = await created  # type: ignore[assignment]
+        except Exception as exc:
+            failures.append(
+                {
+                    **base_result,
+                    "errorCode": "task_creation_failed",
+                    "message": str(exc) or "Downstream task creation failed.",
+                    "dependsOn": depends_on,
+                }
+            )
+            remaining = issue_mappings[index:]
+            for skipped in remaining:
+                skipped_stories.append(
+                    {
+                        "storyId": _string(
+                            skipped.get("storyId") or skipped.get("story_id")
+                        ),
+                        "storyIndex": skipped.get("storyIndex")
+                        or skipped.get("story_index"),
+                        "jiraIssueKey": _string(
+                            skipped.get("issueKey") or skipped.get("issue_key")
+                        ),
+                        "errorCode": "dependency_not_created",
+                        "message": "Earlier downstream task creation failed.",
+                    }
+                )
+            break
+
+        created_mapping = dict(created)
+        workflow_id = _string(
+            created_mapping.get("workflowId") or created_mapping.get("workflow_id")
+        )
+        task_result = {
+            **base_result,
+            "workflowId": workflow_id,
+            "runId": _string(created_mapping.get("runId") or created_mapping.get("run_id")),
+            "title": _string(created_mapping.get("title")) or title,
+            "created": not bool(created_mapping.get("existing")),
+            "existing": bool(created_mapping.get("existing")),
+            "dependsOn": depends_on,
+            "idempotencyKey": idempotency_key,
+        }
+        tasks.append(task_result)
+        if depends_on:
+            dependencies.append(
+                {
+                    "fromWorkflowId": depends_on[0],
+                    "toWorkflowId": workflow_id,
+                    "fromStoryId": tasks[-2]["storyId"] if len(tasks) > 1 else "",
+                    "toStoryId": story_id,
+                    "status": "created",
+                }
+            )
+        previous_workflow_id = workflow_id
+
+    if not issue_mappings:
+        status = "no_downstream_tasks"
+    elif failures or skipped_stories:
+        status = "partial" if tasks else "no_downstream_tasks"
+    else:
+        status = "completed"
+
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "jiraOrchestration": {
+                "status": status,
+                "storyCount": len(issue_mappings),
+                "createdTaskCount": len(tasks),
+                "dependencyCount": len(dependencies),
+                "tasks": tasks,
+                "dependencies": dependencies,
+                "skippedStories": skipped_stories,
+                "failures": failures,
+                "traceability": {
+                    "sourceIssueKey": source_issue_key,
+                    "sourceBriefRef": source_brief_ref,
+                },
+            }
+        },
+    )
 
 
 def _dependency_mode(
@@ -806,17 +1111,37 @@ async def create_jira_issues_from_stories(
     )
 
 
-def register_story_output_tool_handlers(dispatcher: Any) -> None:
-    for name in JIRA_STORY_TOOL_NAMES:
-        dispatcher.register_skill(
-            skill_name=name,
-            version="1.0",
-            handler=create_jira_issues_from_stories,
+def register_story_output_tool_handlers(
+    dispatcher: Any,
+    *,
+    execution_creator: ExecutionCreator | None = None,
+) -> None:
+    dispatcher.register_skill(
+        skill_name=JIRA_CREATE_ISSUES_TOOL_NAME,
+        version="1.0",
+        handler=create_jira_issues_from_stories,
+    )
+
+    async def _create_jira_orchestrate_tasks(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await create_jira_orchestrate_tasks_from_issue_mappings(
+            inputs,
+            context,
+            execution_creator=execution_creator,
         )
+
+    dispatcher.register_skill(
+        skill_name=JIRA_ORCHESTRATE_TASKS_TOOL_NAME,
+        version="1.0",
+        handler=_create_jira_orchestrate_tasks,
+    )
 
 
 __all__ = [
     "JIRA_STORY_TOOL_NAMES",
     "create_jira_issues_from_stories",
+    "create_jira_orchestrate_tasks_from_issue_mappings",
     "register_story_output_tool_handlers",
 ]

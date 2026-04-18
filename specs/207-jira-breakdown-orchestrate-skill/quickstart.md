@@ -92,6 +92,14 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
 
 If Docker is unavailable in the managed runtime, record the blocker and rely on unit plus startup-seeding evidence.
 
+Managed-runtime evidence on 2026-04-18: `./tools/test_integration.sh` could not run because Docker was unavailable at `unix:///var/run/docker.sock` (`connect: no such file or directory`). Startup seeding behavior is covered by `tests/integration/test_startup_task_template_seeding.py`, but the compose-backed integration runner remains blocked in this container.
+
+Targeted unit evidence on 2026-04-18: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_task_step_templates_service.py tests/unit/workflows/temporal/test_story_output_tools.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_temporal_service.py` passed. Python target set: 148 passed. Frontend suite run by the wrapper: 10 files, 286 tests passed.
+
+Full unit evidence on 2026-04-18: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` passed. Python unit suite: 3589 passed, 1 xpassed, 16 subtests passed. Frontend suite run by the wrapper: 10 files, 286 tests passed.
+
+Direct startup integration evidence on 2026-04-18: `MOONMIND_FORCE_LOCAL_TESTS=1 pytest tests/integration/test_startup_task_template_seeding.py -q --tb=short` passed with 1 test and 2 pre-existing warnings.
+
 ## End-to-End Story Verification
 
 Use stubbed trusted Jira and execution-creation responses to exercise one composite run:
@@ -119,3 +127,5 @@ rg -n "MM-404|Jira Breakdown and Orchestrate" \
   specs/207-jira-breakdown-orchestrate-skill \
   docs/tmp/jira-orchestration-inputs/MM-404-moonspec-orchestration-input.md
 ```
+
+Story validation evidence on 2026-04-18: `test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_traceability` exercises a stubbed three-story result and confirms three downstream tasks, two `dependsOn` edges, stable idempotency keys, and MM-404 traceability.

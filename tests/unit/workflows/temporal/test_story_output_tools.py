@@ -6,6 +6,7 @@ import pytest
 
 from moonmind.workflows.temporal.story_output_tools import (
     create_jira_issues_from_stories,
+    create_jira_orchestrate_tasks_from_issue_mappings,
 )
 
 
@@ -67,6 +68,23 @@ class _FakeJiraService:
             "blocksIssueKey": request.blocks_issue_key,
             "blockedIssueKey": request.blocked_issue_key,
             "linkType": request.link_type,
+        }
+
+
+class _FakeExecutionCreator:
+    def __init__(self, *, fail_at: int | None = None) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.fail_at = fail_at
+
+    async def __call__(self, **kwargs):
+        self.requests.append(kwargs)
+        if self.fail_at is not None and len(self.requests) == self.fail_at:
+            raise RuntimeError("execution service unavailable")
+        index = len(self.requests)
+        return {
+            "workflowId": f"mm:story-{index}",
+            "runId": f"run-{index}",
+            "title": kwargs.get("title"),
         }
 
 
@@ -601,3 +619,131 @@ async def test_create_jira_issues_fallback_preserves_dependency_mode_metadata():
     assert result.outputs["storyOutput"]["status"] == "fallback"
     assert result.outputs["storyOutput"]["dependencyMode"] == "linear_blocker_chain"
     assert result.outputs["storyOutput"]["reason"] == "Jira projectKey and issueTypeId are required."
+
+
+@pytest.mark.asyncio
+async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_traceability():
+    creator = _FakeExecutionCreator()
+
+    result = await create_jira_orchestrate_tasks_from_issue_mappings(
+        {
+            "jira": {
+                "issueMappings": [
+                    {"storyId": "STORY-003", "storyIndex": 3, "summary": "Third", "issueKey": "MM-503"},
+                    {"storyId": "STORY-001", "storyIndex": 1, "summary": "First", "issueKey": "MM-501"},
+                    {"storyId": "STORY-002", "storyIndex": 2, "summary": "Second", "issueKey": "MM-502"},
+                ]
+            },
+            "task": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                "orchestrationMode": "runtime",
+            },
+            "traceability": {
+                "sourceIssueKey": "MM-404",
+                "sourceBriefRef": "docs/tmp/jira-orchestration-inputs/MM-404-moonspec-orchestration-input.md",
+            },
+        },
+        execution_creator=creator,
+    )
+
+    assert result.status == "COMPLETED"
+    orchestration = result.outputs["jiraOrchestration"]
+    assert orchestration["status"] == "completed"
+    assert orchestration["storyCount"] == 3
+    assert orchestration["createdTaskCount"] == 3
+    assert orchestration["dependencyCount"] == 2
+    assert [task["jiraIssueKey"] for task in orchestration["tasks"]] == [
+        "MM-501",
+        "MM-502",
+        "MM-503",
+    ]
+    assert orchestration["tasks"][0]["dependsOn"] == []
+    assert orchestration["tasks"][1]["dependsOn"] == ["mm:story-1"]
+    assert orchestration["tasks"][2]["dependsOn"] == ["mm:story-2"]
+    assert orchestration["traceability"]["sourceIssueKey"] == "MM-404"
+
+    assert creator.requests[0]["initial_parameters"]["task"].get("dependsOn") is None
+    assert creator.requests[1]["initial_parameters"]["task"]["dependsOn"] == ["mm:story-1"]
+    assert creator.requests[2]["initial_parameters"]["task"]["dependsOn"] == ["mm:story-2"]
+    assert creator.requests[0]["idempotency_key"] == (
+        "jira-orchestrate:MM-404:STORY-001:MM-501"
+    )
+    assert "Run Jira Orchestrate for MM-501" in creator.requests[0]["title"]
+    assert "MM-404" in creator.requests[0]["initial_parameters"]["task"]["instructions"]
+
+
+@pytest.mark.asyncio
+async def test_create_jira_orchestrate_tasks_handles_one_and_zero_story_results():
+    one_creator = _FakeExecutionCreator()
+
+    one = await create_jira_orchestrate_tasks_from_issue_mappings(
+        {
+            "jira": {
+                "issueMappings": [
+                    {"storyId": "STORY-001", "storyIndex": 1, "summary": "Only", "issueKey": "MM-501"}
+                ]
+            },
+            "traceability": {"sourceIssueKey": "MM-404"},
+        },
+        execution_creator=one_creator,
+    )
+
+    assert one.outputs["jiraOrchestration"]["status"] == "completed"
+    assert one.outputs["jiraOrchestration"]["createdTaskCount"] == 1
+    assert one.outputs["jiraOrchestration"]["dependencyCount"] == 0
+    assert one.outputs["jiraOrchestration"]["tasks"][0]["dependsOn"] == []
+
+    zero = await create_jira_orchestrate_tasks_from_issue_mappings(
+        {"jira": {"issueMappings": []}, "traceability": {"sourceIssueKey": "MM-404"}},
+        execution_creator=_FakeExecutionCreator(),
+    )
+
+    assert zero.outputs["jiraOrchestration"]["status"] == "no_downstream_tasks"
+    assert zero.outputs["jiraOrchestration"]["createdTaskCount"] == 0
+    assert zero.outputs["jiraOrchestration"]["dependencyCount"] == 0
+
+
+@pytest.mark.asyncio
+async def test_create_jira_orchestrate_tasks_reports_missing_issue_key_and_partial_failures():
+    missing_key = await create_jira_orchestrate_tasks_from_issue_mappings(
+        {
+            "jira": {
+                "issueMappings": [
+                    {"storyId": "STORY-001", "storyIndex": 1, "summary": "Missing key"},
+                    {"storyId": "STORY-002", "storyIndex": 2, "summary": "Second", "issueKey": "MM-502"},
+                ]
+            },
+            "traceability": {"sourceIssueKey": "MM-404"},
+        },
+        execution_creator=_FakeExecutionCreator(),
+    )
+
+    assert missing_key.outputs["jiraOrchestration"]["status"] == "partial"
+    assert missing_key.outputs["jiraOrchestration"]["createdTaskCount"] == 1
+    assert missing_key.outputs["jiraOrchestration"]["failures"][0]["errorCode"] == (
+        "missing_issue_key"
+    )
+
+    creator = _FakeExecutionCreator(fail_at=2)
+    partial = await create_jira_orchestrate_tasks_from_issue_mappings(
+        {
+            "jira": {
+                "issueMappings": [
+                    {"storyId": "STORY-001", "storyIndex": 1, "summary": "First", "issueKey": "MM-501"},
+                    {"storyId": "STORY-002", "storyIndex": 2, "summary": "Second", "issueKey": "MM-502"},
+                    {"storyId": "STORY-003", "storyIndex": 3, "summary": "Third", "issueKey": "MM-503"},
+                ]
+            },
+            "traceability": {"sourceIssueKey": "MM-404"},
+        },
+        execution_creator=creator,
+    )
+
+    orchestration = partial.outputs["jiraOrchestration"]
+    assert orchestration["status"] == "partial"
+    assert orchestration["createdTaskCount"] == 1
+    assert orchestration["dependencyCount"] == 0
+    assert orchestration["failures"][0]["storyId"] == "STORY-002"
+    assert orchestration["failures"][0]["errorCode"] == "task_creation_failed"
