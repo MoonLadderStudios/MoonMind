@@ -448,7 +448,7 @@ describe('ProviderProfilesManager form controls', () => {
     expect(await screen.findByText('OAuth: Pending')).toBeTruthy();
   });
 
-  it('supports OAuth finalize and retry actions from Settings state', async () => {
+  it('supports OAuth finalize without offering reconnect after success', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch')
       .mockResolvedValueOnce({
         ok: true,
@@ -463,16 +463,6 @@ describe('ProviderProfilesManager form controls', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ status: 'succeeded' }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          session_id: 'oas_settings_retry',
-          runtime_id: 'codex_cli',
-          profile_id: 'codex-oauth',
-          status: 'pending',
-          session_transport: 'moonmind_pty_ws',
-        }),
       } as Response);
     vi.spyOn(window, 'open').mockReturnValue(null);
     const { queryClient } = renderProviderProfilesManager([codexOauthProfile]);
@@ -491,11 +481,43 @@ describe('ProviderProfilesManager form controls', () => {
     });
     expect(await screen.findByText('OAuth: Succeeded')).toBeTruthy();
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+    expect(screen.queryByRole('button', { name: 'Retry codex-oauth' })).toBeNull();
+  });
 
+  it('supports OAuth retry actions for failed Settings sessions', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          session_id: 'oas_settings_failed',
+          runtime_id: 'codex_cli',
+          profile_id: 'codex-oauth',
+          status: 'failed',
+          failure_reason: 'runner startup failed',
+          session_transport: 'moonmind_pty_ws',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          session_id: 'oas_settings_retry',
+          runtime_id: 'codex_cli',
+          profile_id: 'codex-oauth',
+          status: 'pending',
+          session_transport: 'moonmind_pty_ws',
+        }),
+      } as Response);
+    vi.spyOn(window, 'open').mockReturnValue(null);
+
+    renderProviderProfilesManager([codexOauthProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auth codex-oauth' }));
+
+    expect(await screen.findByText('OAuth: Failed')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Retry codex-oauth' }));
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/v1/oauth-sessions/oas_settings_finalize/reconnect',
+        '/api/v1/oauth-sessions/oas_settings_failed/reconnect',
         expect.objectContaining({ method: 'POST' }),
       );
     });

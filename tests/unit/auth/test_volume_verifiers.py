@@ -9,6 +9,7 @@ import pytest
 
 from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
     PROVIDER_CREDENTIAL_PATHS,
+    _build_credential_check_command,
     verify_volume_credentials,
 )
 
@@ -32,6 +33,41 @@ class TestProviderCredentialPaths:
         paths = PROVIDER_CREDENTIAL_PATHS["claude_code"]
         assert len(paths) >= 1
         assert any("claude" in p for p in paths)
+
+
+class TestCredentialCheckCommand:
+    """Verify shell command construction for volume checks."""
+
+    def test_quotes_provider_mount_paths_before_shell_execution(self) -> None:
+        mount_path = '/mnt/auth"; touch /tmp/injected; echo "'
+
+        command = _build_credential_check_command(
+            runtime_id="codex_cli",
+            mount_path=mount_path,
+            credential_paths=PROVIDER_CREDENTIAL_PATHS["codex_cli"],
+        )
+
+        assert 'touch /tmp/injected' in command
+        assert '"/mnt/auth"; touch /tmp/injected; echo "/auth.json"' not in command
+        assert (
+            "'/mnt/auth\"; touch /tmp/injected; echo \"/auth.json'"
+            in command
+        )
+
+    def test_quotes_generic_credential_paths_before_shell_execution(self) -> None:
+        command = _build_credential_check_command(
+            runtime_id="gemini_cli",
+            mount_path='/mnt/auth"; touch /tmp/injected; echo "',
+            credential_paths=(".config/gemini/credentials.json",),
+        )
+
+        assert 'touch /tmp/injected' in command
+        assert '"/mnt/auth"; touch /tmp/injected; echo "/.config' not in command
+        assert (
+            "'/mnt/auth\"; touch /tmp/injected; echo "
+            "\"/.config/gemini/credentials.json'"
+            in command
+        )
 
 
 class TestVerifyVolumeCredentials:

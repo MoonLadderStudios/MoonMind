@@ -244,7 +244,7 @@ function canFinalizeOAuthStatus(status: OAuthSessionStatus): boolean {
 }
 
 function canRetryOAuthStatus(status: OAuthSessionStatus): boolean {
-  return status === 'failed' || status === 'cancelled' || status === 'expired' || status === 'succeeded';
+  return status === 'failed' || status === 'cancelled' || status === 'expired';
 }
 
 function buildSavePayload(form: ProviderProfileFormState): ProviderProfileSavePayload {
@@ -620,14 +620,25 @@ export function ProviderProfilesManager({
 
       setOauthSessions((current) => {
         const next = { ...current };
+        let hasChanges = false;
         for (const { profileId, session } of appliedUpdates) {
+          const existing = current[profileId];
+          if (
+            existing &&
+            existing.sessionId === session.session_id &&
+            existing.status === session.status &&
+            existing.failureReason === session.failure_reason
+          ) {
+            continue;
+          }
           next[profileId] = {
             sessionId: session.session_id,
             status: session.status,
             failureReason: session.failure_reason,
           };
+          hasChanges = true;
         }
-        return next;
+        return hasChanges ? next : current;
       });
 
       if (appliedUpdates.some(({ session }) => session.status === 'succeeded')) {

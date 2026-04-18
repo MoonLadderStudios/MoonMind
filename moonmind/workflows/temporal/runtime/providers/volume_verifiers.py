@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -71,24 +72,27 @@ def _build_credential_check_command(
     credential_paths: tuple[str, ...],
 ) -> str:
     if runtime_id == "codex_cli":
-        auth_path = f"{mount_path}/auth.json"
-        config_path = f"{mount_path}/config.toml"
+        auth_path = shlex.quote(f"{mount_path}/auth.json")
+        config_path = shlex.quote(f"{mount_path}/config.toml")
         return " && ".join(
             (
                 (
-                    f'( test -s "{auth_path}" '
-                    f'&& grep -Eq \'"(tokens|access_token|refresh_token|id_token|api_key|OPENAI_API_KEY)"\' "{auth_path}" '
+                    f"( test -s {auth_path} "
+                    f"&& grep -Eq '\"(tokens|access_token|refresh_token|id_token|api_key|OPENAI_API_KEY)\"' {auth_path} "
                     '&& echo "VALID:auth.json" ) || echo "INVALID:auth.json"'
                 ),
                 (
-                    f'( test -s "{config_path}" && echo "FOUND:config.toml" ) '
+                    f"( test -s {config_path} && echo \"FOUND:config.toml\" ) "
                     '|| echo "MISSING:config.toml"'
                 ),
             )
         )
 
     return " && ".join(
-        f'( test -f "{mount_path}/{path}" && echo "FOUND:{path}" ) || echo "MISSING:{path}"'
+        (
+            f"( test -f {shlex.quote(f'{mount_path}/{path}')} "
+            f'&& echo "FOUND:{path}" ) || echo "MISSING:{path}"'
+        )
         for path in credential_paths
     )
 
