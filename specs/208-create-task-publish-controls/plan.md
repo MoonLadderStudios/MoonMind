@@ -7,7 +7,9 @@
 
 Implement MM-412 by converting merge automation from a separate Execution context checkbox into a PR-specific Publish Mode choice inside the existing Steps-card publish control group. The code already has repository, Branch, and Publish Mode in the Steps card, so the remaining runtime work is to introduce a UI-layer combined publish selection, preserve existing submission semantics, update edit/rerun hydration, remove the standalone checkbox, and update focused Create-page tests plus the desired-state Create Page doc.
 
-## Requirement Status
+## Initial Requirement Gap Analysis
+
+This table records the pre-implementation repository state used to generate `tasks.md`. Current implementation verification is recorded in `verification.md`.
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |

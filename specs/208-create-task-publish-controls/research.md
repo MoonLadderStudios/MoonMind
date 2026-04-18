@@ -1,5 +1,7 @@
 # Research: Create Task Publish Controls
 
+This research records the pre-implementation repository inspection and decisions that shaped the MM-412 task plan. Current completion evidence is recorded in `verification.md`.
+
 ## Input Classification
 
 Decision: Single-story runtime feature request.
