@@ -932,6 +932,54 @@ def test_runtime_planner_publish_pr_uses_task_title_for_target_branch_prefix():
     assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", target)
 
 
+def test_runtime_planner_publish_pr_treats_git_branch_as_base_not_head():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Update the branch selector.",
+                "title": "Branch dropdown",
+                "git": {"branch": "main"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][-1]["inputs"]
+    assert node_inputs["branch"] == "main"
+    assert node_inputs["targetBranch"] != "main"
+    assert node_inputs["targetBranch"].startswith("branch-dropdown-")
+
+
+def test_runtime_planner_publish_pr_replaces_protected_target_branch():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Update the branch selector.",
+                "title": "Branch dropdown",
+                "git": {"branch": "main", "targetBranch": "main"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][-1]["inputs"]
+    assert node_inputs["branch"] == "main"
+    assert node_inputs["targetBranch"] != "main"
+    assert node_inputs["targetBranch"].startswith("branch-dropdown-")
+
+
 def test_runtime_planner_publish_pr_uses_step_title_for_target_branch_prefix():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()

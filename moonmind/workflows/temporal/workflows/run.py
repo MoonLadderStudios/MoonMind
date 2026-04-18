@@ -2265,16 +2265,16 @@ class MoonMindRunWorkflow:
                     or agent_outputs.get("branch")
                     or agent_outputs.get("targetBranch")
                     or ws.get("targetBranch")
-                    or ws.get("branch")
                     or parameters.get("targetBranch")
                     or last_node_inputs.get("targetBranch")
-                    or last_node_inputs.get("branch")
                     or ""
                 )
                 publish_payload = self._resolve_publish_payload(parameters)
                 base_branch = self._resolve_publish_base_branch(publish_payload) or (
                     ws.get("startingBranch")
+                    or ws.get("branch")
                     or last_node_inputs.get("startingBranch")
+                    or last_node_inputs.get("branch")
                     or "main"
                 )
                 pr_title = self._title or "Automated changes by MoonMind"
@@ -2285,7 +2285,9 @@ class MoonMindRunWorkflow:
                         self._resolve_publish_base_branch(publish_payload)
                         or (
                             ws.get("startingBranch")
+                            or ws.get("branch")
                             or last_node_inputs.get("startingBranch")
+                            or last_node_inputs.get("branch")
                             or "main"
                         )
                     )
@@ -2306,9 +2308,30 @@ class MoonMindRunWorkflow:
                         "on branch '%s'.",
                         agent_outputs.get("push_branch") or head_branch,
                     )
+                elif push_status == "protected_branch":
+                    self._get_logger().warning(
+                        "Skipping native PR creation: resolved work branch '%s' "
+                        "is protected.",
+                        agent_outputs.get("push_branch") or head_branch,
+                    )
+                elif self._publish_status == "failed":
+                    self._get_logger().warning(
+                        "Skipping native PR creation because publish already failed: %s",
+                        self._publish_reason or "unknown publish failure",
+                    )
                 elif not self._repo or not head_branch:
                     raise ValueError(
                         "publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively"
+                    )
+                elif self._is_protected_native_pr_head_branch(head_branch):
+                    raise ValueError(
+                        "publishMode 'pr' requested but resolved PR head branch "
+                        f"'{head_branch}' is protected"
+                    )
+                elif head_branch == base_branch:
+                    raise ValueError(
+                        "publishMode 'pr' requested but resolved PR head branch "
+                        f"'{head_branch}' matches base branch '{base_branch}'"
                     )
                 else:
                     self._get_logger().info(
@@ -2422,6 +2445,11 @@ class MoonMindRunWorkflow:
             return ""
         normalized = value.strip().lower()
         return normalized if normalized in {"none", "branch", "pr"} else ""
+
+    @staticmethod
+    def _is_protected_native_pr_head_branch(value: Any) -> bool:
+        branch = str(value or "").strip()
+        return not branch or branch in {"main", "master", "HEAD"}
 
     def _managed_session_runtime_id(
         self, request: AgentExecutionRequest

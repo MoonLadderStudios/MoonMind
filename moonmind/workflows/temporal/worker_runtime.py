@@ -224,6 +224,11 @@ def _derive_pr_resolver_title(
     ).strip()
 
 
+def _is_protected_pr_head_branch(value: Any) -> bool:
+    branch = str(value or "").strip()
+    return not branch or branch in {"main", "master", "HEAD"}
+
+
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
@@ -544,7 +549,15 @@ def _build_runtime_planner():
             and isinstance(publish_mode, str)
             and publish_mode.strip().lower() == "pr"
         ):
-            if not node_inputs.get("targetBranch") and not node_inputs.get("branch"):
+            target_branch = str(node_inputs.get("targetBranch") or "").strip()
+            base_branches = {
+                str(node_inputs.get("branch") or "").strip(),
+                str(node_inputs.get("startingBranch") or "").strip(),
+            }
+            if (
+                _is_protected_pr_head_branch(target_branch)
+                or target_branch in {base for base in base_branches if base}
+            ):
                 prefix = _derive_pr_branch_prefix(
                     task_payload=task_payload,
                     publish_payload=publish_payload,

@@ -1493,6 +1493,121 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
     assert captured_create_payload["payload"]["head"] == "actual-pushed-branch"
 
 
+@pytest.mark.asyncio
+async def test_run_execution_stage_publish_mode_pr_does_not_create_pr_from_protected_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    create_pr_called = False
+
+    async def fake_bind_task_scoped_session(
+        self: MoonMindRunWorkflow,
+        request: object,
+    ) -> object:
+        return request
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+            raise AssertionError("repo.create_pr must not use a protected head branch")
+
+        if activity_type == "artifact.read":
+            if (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            ) == "artifact://registry/1":
+                return json.dumps({"skills": []}).encode("utf-8")
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Publish Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "node-1",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "codex_cli",
+                                "version": "1.0",
+                            },
+                            "inputs": {
+                                "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
+                                "instructions": "Update branch selector behavior.",
+                                "branch": "main",
+                                "targetBranch": "branch-dropdown-12345678",
+                            },
+                            "options": {},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        args: object,
+        **_kwargs: object,
+    ) -> object:
+        return {
+            "summary": "Completed with status completed",
+            "metadata": {
+                "push_status": "protected_branch",
+                "push_branch": "main",
+            },
+            "output_refs": [],
+        }
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_task_scoped_session",
+        fake_bind_task_scoped_session,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={
+            "repo": "MoonLadderStudios/MoonMind",
+            "publishMode": "pr",
+        },
+        plan_ref="art_plan_1",
+    )
+
+    assert create_pr_called is False
+    assert workflow._publish_status == "failed"
+    assert workflow._publish_reason == "publish failed: working branch 'main' is protected"
+
+
 def test_activity_result_failure_message_prefers_stderr_tail_over_progress_details() -> None:
     workflow = MoonMindRunWorkflow()
     message = workflow._activity_result_failure_message(
