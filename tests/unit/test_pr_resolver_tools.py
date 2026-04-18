@@ -920,6 +920,46 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     assert int(raised_strict.value.code) == int(exit_code_blocked)
 
 
+def test_run_snapshot_captures_stderr_for_auth_classifier(
+    pr_resolve_finalize_module: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    """Regression: _run_snapshot must capture stdout/stderr so that auth
+    failures emitted by pr_resolve_snapshot.py surface through
+    CalledProcessError.stderr, letting _snapshot_failed_reason detect
+    them via _GITHUB_AUTH_FAILURE_MARKERS.
+
+    Before the fix, subprocess.run was called without capture_output=True,
+    so CalledProcessError.stderr was always None and every snapshot
+    failure (including auth) was misclassified as pr_not_found.
+    """
+    import subprocess
+
+    _run_snapshot = pr_resolve_finalize_module["_run_snapshot"]
+    snapshot_failed_reason = pr_resolve_finalize_module["_snapshot_failed_reason"]
+
+    fake_snapshot = tmp_path / "fake_snapshot.py"
+    fake_snapshot.write_text(
+        "import sys\n"
+        "print('You are not logged into any GitHub hosts. "
+        "Run gh auth login to authenticate.', file=sys.stderr)\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    snapshot_path = tmp_path / "snapshot.json"
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        _run_snapshot(fake_snapshot, None, snapshot_path)
+
+    exc = excinfo.value
+    assert exc.stderr is not None, (
+        "_run_snapshot must pass capture_output=True so CalledProcessError.stderr "
+        "is populated for downstream auth-failure classification"
+    )
+    assert "not logged into any github hosts" in exc.stderr.lower()
+    assert snapshot_failed_reason(exc) == "publish_unavailable"
+
+
 def test_finalize_snapshot_auth_failure_reports_publish_unavailable(
     pr_resolve_finalize_module: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,

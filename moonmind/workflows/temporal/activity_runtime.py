@@ -3830,6 +3830,27 @@ class TemporalAgentRuntimeActivities:
                     record=record,
                 )
 
+            # pr-resolver runs inside the session container where GitHub auth
+            # may be unavailable; transient auth errors get misclassified as
+            # pr_not_found. The activity worker has a valid token, so re-check
+            # against GitHub before surfacing execution_error. If the PR is
+            # actually merged, clear the failure so the workflow sees success.
+            if (
+                pr_resolver_expected
+                and result.failure_class is not None
+                and head_branch
+                and "pr_not_found" in (result.summary or "").lower()
+            ):
+                merged_pr = self._reverify_pr_merged_state(
+                    run_id=run_id,
+                    head_branch=head_branch,
+                    base_branch=target_branch,
+                )
+                if merged_pr is not None:
+                    result = self._apply_pr_reverify_override(
+                        result=result, merged_pr=merged_pr,
+                    )
+
             # Build merged metadata from the typed result, then enrich with
             # push/PR URL info using model_copy to preserve the typed contract.
             meta = dict(result.metadata or {})
@@ -4874,6 +4895,116 @@ class TemporalAgentRuntimeActivities:
         # Match github.com/owner/repo or github.com:owner/repo
         match = re.search(r"github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$", url)
         return match.group(1) if match else ""
+
+    def _reverify_pr_merged_state(
+        self,
+        *,
+        run_id: str,
+        head_branch: str | None,
+        base_branch: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return PR metadata when *head_branch*'s PR is merged on GitHub.
+
+        Used to recover from pr-resolver's pr_not_found misclassification when
+        the managed session container lacks working GitHub CLI auth.
+        """
+        import subprocess
+
+        branch = (head_branch or "").strip()
+        expected_base = (base_branch or "").strip()
+        if not branch or self._run_store is None:
+            return None
+        record = self._run_store.load(run_id)
+        if record is None or not record.workspace_path:
+            return None
+
+        workspace = record.workspace_path
+        try:
+            repo = self._detect_repo_from_workspace(workspace)
+            if not repo:
+                return None
+            pr_list_cmd = [
+                "gh", "pr", "list",
+                "--repo", repo,
+                "--head", branch,
+                "--state", "all",
+                "--json", "number,state,mergedAt,url,baseRefName,headRefName",
+                "--limit", "20",
+            ]
+            if expected_base:
+                pr_list_cmd.extend(["--base", expected_base])
+            pr_result = subprocess.run(
+                pr_list_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=workspace,
+                env=self._workspace_command_env(workspace),
+            )
+            if pr_result.returncode != 0:
+                return None
+            raw_stdout = pr_result.stdout.strip()
+            try:
+                prs = json.loads(raw_stdout or "[]")
+            except json.JSONDecodeError:
+                logger.debug(
+                    "Failed to parse GitHub PR re-verify output for run %s; "
+                    "stdout=%r stderr=%r",
+                    run_id,
+                    raw_stdout[:500],
+                    (pr_result.stderr or "").strip()[:500],
+                    exc_info=True,
+                )
+                return None
+        except Exception:
+            logger.debug(
+                "Failed to re-verify PR state for run %s",
+                run_id,
+                exc_info=True,
+            )
+            return None
+
+        if not isinstance(prs, list) or not prs:
+            return None
+        for pr in prs:
+            if not isinstance(pr, dict):
+                continue
+            if expected_base:
+                actual_base = str(pr.get("baseRefName") or "").strip()
+                if actual_base != expected_base:
+                    continue
+            if str(pr.get("state") or "").strip().upper() == "MERGED":
+                return pr
+        return None
+
+    @staticmethod
+    def _apply_pr_reverify_override(
+        *,
+        result: AgentRunResult,
+        merged_pr: Mapping[str, Any],
+    ) -> AgentRunResult:
+        """Return *result* with pr-resolver failure cleared after server re-verify."""
+        override_meta = dict(result.metadata or {})
+        override_meta["prResolverReverified"] = True
+        override_meta["mergeAutomationDisposition"] = "already_merged"
+        if result.summary:
+            override_meta["prResolverStaleSummary"] = result.summary
+        url = str(merged_pr.get("url") or "").strip()
+        if url:
+            override_meta["pull_request_url"] = url
+        number = merged_pr.get("number")
+        new_summary = (
+            f"pr-resolver reported pr_not_found; PR "
+            f"#{number} confirmed merged on GitHub"
+        )
+        return result.model_copy(
+            update={
+                "summary": new_summary,
+                "failure_class": None,
+                "provider_error_code": None,
+                "metadata": override_meta,
+            }
+        )
 
     async def agent_runtime_cancel(
         self,
