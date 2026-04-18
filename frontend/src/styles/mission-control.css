@@ -1593,14 +1593,17 @@ button.secondary:hover {
 }
 
 .queue-inline-selector {
-  display: grid;
-  grid-template-columns: 1.35rem minmax(0, 1fr);
-  gap: 0.45rem;
-  align-items: center;
+  position: relative;
   min-width: 0;
 }
 
 .queue-inline-selector svg {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  pointer-events: none;
   width: 1.15rem;
   height: 1.15rem;
   stroke: currentColor;
@@ -1612,6 +1615,7 @@ button.secondary:hover {
 .queue-inline-selector select {
   width: 100%;
   min-height: 2.35rem;
+  padding-left: 2.35rem;
 }
 
 .queue-step-header {
