@@ -520,6 +520,85 @@ def test_build_repository_branch_options_uses_github_lookup(monkeypatch) -> None
     }
 
 
+def test_fetch_github_branch_options_follows_pagination(monkeypatch) -> None:
+    responses = [
+        {
+            "json": [{"name": "main"}, {"name": "feature/page-one"}],
+            "links": {"next": {"url": "https://api.github.com/page/2"}},
+        },
+        {
+            "json": [{"name": "feature/page-two"}, {"name": "main"}],
+            "links": {},
+        },
+    ]
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+            self.links = payload["links"]
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> object:
+            return self._payload["json"]
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            params: dict[str, int] | None = None,
+        ) -> FakeResponse:
+            calls.append({"url": url, "headers": headers, "params": params})
+            return FakeResponse(responses[len(calls) - 1])
+
+    monkeypatch.setattr(dashboard_view_model.httpx, "Client", FakeClient)
+
+    options, error = dashboard_view_model._fetch_github_branch_options(
+        "ghp_test_token",
+        "Octo/Repo",
+    )
+
+    assert error is None
+    assert [option.value for option in options] == [
+        "main",
+        "feature/page-one",
+        "feature/page-two",
+    ]
+    assert calls == [
+        {
+            "url": "https://api.github.com/repos/Octo/Repo/branches",
+            "headers": {
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer ghp_test_token",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            "params": {"per_page": 100},
+        },
+        {
+            "url": "https://api.github.com/page/2",
+            "headers": {
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer ghp_test_token",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            "params": None,
+        },
+    ]
+
+
 def test_build_repository_branch_options_sanitizes_errors(monkeypatch) -> None:
     monkeypatch.setattr(settings.github, "github_token", "ghp_secret_token")
     monkeypatch.setattr(settings.github, "github_enabled", True)

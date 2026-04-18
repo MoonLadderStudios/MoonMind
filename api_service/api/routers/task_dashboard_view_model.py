@@ -224,35 +224,44 @@ def _fetch_github_branch_options(
         "Authorization": f"Bearer {token}",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+    options: list[BranchOption] = []
+    seen: set[str] = set()
+    next_url: str | None = _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE.format(
+        repository=normalized_repository
+    )
+    params: dict[str, int] | None = {"per_page": 100}
     try:
         with httpx.Client(
             timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
         ) as client:
-            response = client.get(
-                _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE.format(
-                    repository=normalized_repository
-                ),
-                headers=headers,
-                params={"per_page": 100},
-            )
-            response.raise_for_status()
-            data = response.json()
+            while next_url:
+                response = client.get(
+                    next_url,
+                    headers=headers,
+                    params=params,
+                )
+                params = None
+                response.raise_for_status()
+                data = response.json()
+                if isinstance(data, list):
+                    for item in data:
+                        if not isinstance(item, Mapping):
+                            continue
+                        branch_name = str(item.get("name") or "").strip()
+                        if not branch_name or branch_name in seen:
+                            continue
+                        seen.add(branch_name)
+                        options.append(
+                            BranchOption(
+                                value=branch_name,
+                                label=branch_name,
+                                source="github",
+                            )
+                        )
+                next_url = response.links.get("next", {}).get("url")
     except (httpx.HTTPError, ValueError):
         return [], "GitHub branch lookup is unavailable."
 
-    options: list[BranchOption] = []
-    seen: set[str] = set()
-    if isinstance(data, list):
-        for item in data:
-            if not isinstance(item, Mapping):
-                continue
-            branch_name = str(item.get("name") or "").strip()
-            if not branch_name or branch_name in seen:
-                continue
-            seen.add(branch_name)
-            options.append(
-                BranchOption(value=branch_name, label=branch_name, source="github")
-            )
     return options, None
 
 

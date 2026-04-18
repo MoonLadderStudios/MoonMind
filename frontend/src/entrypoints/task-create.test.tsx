@@ -676,6 +676,8 @@ describe("Task Create Entrypoint", () => {
               inputParameters: {
                 targetRuntime: "gemini_cli",
                 operatorNote: "Keep this unedited top-level value.",
+                startingBranch: "stale-legacy-source",
+                targetBranch: "stale-legacy-target",
                 task: {
                   instructions: "Rebuild the Temporal task draft.",
                   proposeTasks: true,
@@ -3123,6 +3125,8 @@ describe("Task Create Entrypoint", () => {
         },
       },
     });
+    expect(request.parametersPatch).not.toHaveProperty("startingBranch");
+    expect(request.parametersPatch).not.toHaveProperty("targetBranch");
     expect(request.inputArtifactRef).toBeUndefined();
     await waitFor(() => {
       expect(navigateTo).toHaveBeenCalledWith(
@@ -5125,6 +5129,46 @@ describe("Task Create Entrypoint", () => {
     expect(task.git).toEqual({ branch: "feature/create-page" });
     expect(JSON.stringify(task)).not.toContain("targetBranch");
     expect(JSON.stringify(task)).not.toContain("startingBranch");
+  });
+
+  it("loads branches for URL repository values accepted by submission", async () => {
+    renderWithClient(
+      <TaskCreatePage
+        payload={{
+          ...mockPayload,
+          initialData: {
+            ...mockPayload.initialData,
+            dashboardConfig: {
+              ...mockPayload.initialData.dashboardConfig,
+              system: {
+                ...mockPayload.initialData.dashboardConfig.system,
+                defaultRepository:
+                  "https://github.com/MoonLadderStudios/MoonMind.git",
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    const branchSelect = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(
+        Array.from((branchSelect as HTMLSelectElement).options).some(
+          (option) => option.value === "feature/create-page",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).startsWith(
+          "/api/github/branches?repository=https%3A%2F%2Fgithub.com%2FMoonLadderStudios%2FMoonMind.git",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      screen.queryByText("Branch lookup requires a valid GitHub repository value."),
+    ).toBeNull();
   });
 
   it("uses only MoonMind REST endpoints while submitting a manually authored task", async () => {

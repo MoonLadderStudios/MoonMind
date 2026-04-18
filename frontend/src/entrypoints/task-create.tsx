@@ -615,11 +615,14 @@ function buildEditParametersPatch({
     delete mergedTask.git;
   }
 
-  return {
+  const parametersPatch: Record<string, unknown> = {
     ...baseParameters,
     ...submittedPayload,
     task: mergedTask,
   };
+  delete parametersPatch.startingBranch;
+  delete parametersPatch.targetBranch;
+  return parametersPatch;
 }
 
 function readJiraItems<T>(data: unknown): T[] {
@@ -1105,7 +1108,7 @@ function isValidRepositoryInput(value: string): boolean {
 }
 
 function canLookupRepositoryBranches(value: string): boolean {
-  return OWNER_REPO_PATTERN.test(value.trim());
+  return isValidRepositoryInput(value);
 }
 
 function scopeLabel(scope: TemplateScope): string {
@@ -3732,7 +3735,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return "Branch lookup is not configured.";
     }
     if (!branchLookupRepository) {
-      return "Branch lookup requires an owner/repo repository value.";
+      return "Branch lookup requires a valid GitHub repository value.";
     }
     if (branchOptionsQuery.isLoading || branchOptionsQuery.isFetching) {
       return "Loading branches...";
