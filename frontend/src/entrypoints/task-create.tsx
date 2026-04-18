@@ -620,6 +620,9 @@ function buildEditParametersPatch({
     ...submittedPayload,
     task: mergedTask,
   };
+  if (!("mergeAutomation" in submittedPayload)) {
+    delete parametersPatch.mergeAutomation;
+  }
   delete parametersPatch.startingBranch;
   delete parametersPatch.targetBranch;
   return parametersPatch;
@@ -1380,6 +1383,19 @@ function deriveRequiredCapabilities(args: {
       ].filter(Boolean),
     ),
   );
+}
+
+const PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = "pr_with_merge_automation";
+
+function normalizePublishModeForSubmit(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return normalized === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE
+    ? "pr"
+    : normalized;
+}
+
+function isMergeAutomationPublishMode(value: string): boolean {
+  return value.trim().toLowerCase() === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE;
 }
 
 function mapExpandedStepToState(
@@ -2210,8 +2226,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const [repository, setRepository] = useState(defaultRepository);
   const [providerProfile, setProviderProfile] = useState("");
   const [branch, setBranch] = useState("");
-  const [publishMode, setPublishMode] = useState(defaultPublishMode);
-  const [mergeAutomationEnabled, setMergeAutomationEnabled] = useState(false);
+  const [publishMode, setPublishMode] = useState(
+    normalizePublishModeForSubmit(defaultPublishMode),
+  );
   const [priority, setPriority] = useState(0);
   const [maxAttempts, setMaxAttempts] = useState(3);
   const [proposeTasks, setProposeTasks] = useState(() =>
@@ -2553,7 +2570,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       setSubmitMessage(draft.legacyBranchWarning);
     }
     if (draft.publishMode) {
-      setPublishMode(draft.publishMode);
+      const normalizedDraftPublishMode = normalizePublishModeForSubmit(
+        draft.publishMode,
+      );
+      setPublishMode(
+        normalizedDraftPublishMode === "pr" && draft.mergeAutomationEnabled
+          ? PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE
+          : normalizedDraftPublishMode,
+      );
     }
     const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
     setSteps(reconstructedSteps);
@@ -2987,16 +3011,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
   }, [pageMode.mode, selectedPreset?.slug]);
 
-  const mergeAutomationAvailable =
-    pageMode.mode === "create" &&
-    publishMode.trim().toLowerCase() === "pr" &&
-    !isResolverSkill(effectiveSkillId);
+  const mergeAutomationAvailable = !isResolverSkill(effectiveSkillId);
 
   useEffect(() => {
-    if (!mergeAutomationAvailable && mergeAutomationEnabled) {
-      setMergeAutomationEnabled(false);
+    if (!mergeAutomationAvailable && isMergeAutomationPublishMode(publishMode)) {
+      setPublishMode(isResolverSkill(effectiveSkillId) ? "none" : "pr");
     }
-  }, [mergeAutomationAvailable, mergeAutomationEnabled]);
+  }, [effectiveSkillId, mergeAutomationAvailable, publishMode]);
 
   const availableDependencyOptions = useMemo(
     () =>
@@ -4486,7 +4507,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    const normalizedPublishMode = publishMode.trim().toLowerCase();
+    const normalizedPublishMode = normalizePublishModeForSubmit(publishMode);
     if (!["none", "branch", "pr"].includes(normalizedPublishMode)) {
       setSubmitMessage("Publish mode must be one of: none, branch, pr.");
       return;
@@ -5003,8 +5024,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       : primaryStepSkill;
 
     const shouldSubmitMergeAutomation =
-      mergeAutomationEnabled &&
-      pageMode.mode === "create" &&
+      isMergeAutomationPublishMode(publishMode) &&
       normalizedPublishMode === "pr" &&
       !isResolverSkill(effectiveSubmissionSkillId);
 
@@ -5968,12 +5988,23 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     value={publishMode}
                     onChange={(event) => setPublishMode(event.target.value)}
                   >
-                    <option value="pr">pr</option>
-                    <option value="branch">branch</option>
-                    <option value="none">none</option>
+                    <option value="none">None</option>
+                    <option value="branch">Branch</option>
+                    <option value="pr">PR</option>
+                    {mergeAutomationAvailable ? (
+                      <option value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}>
+                        PR with Merge Automation
+                      </option>
+                    ) : null}
                   </select>
                 </div>
               </div>
+              {mergeAutomationAvailable ? (
+                <p className="small">
+                  PR with Merge Automation uses pr-resolver after the PR
+                  readiness gate opens; it does not bypass resolver handling.
+                </p>
+              ) : null}
               {branchStatusMessage ? (
                 <p
                   className={
@@ -6388,24 +6419,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           </label>
         </div>
 
-        {mergeAutomationAvailable ? (
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              name="mergeAutomationEnabled"
-              aria-label="Enable merge automation"
-              checked={mergeAutomationEnabled}
-              onChange={(event) =>
-                setMergeAutomationEnabled(event.target.checked)
-              }
-            />
-            Enable merge automation
-            <span className="small">
-              Uses pr-resolver after the PR readiness gate opens; it does not
-              bypass resolver handling.
-            </span>
-          </label>
-        ) : null}
         </section>
 
         <section

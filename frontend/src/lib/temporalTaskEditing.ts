@@ -61,6 +61,7 @@ export type TemporalSubmissionDraft = {
   branch: string | null;
   legacyBranchWarning: string | null;
   publishMode: string | null;
+  mergeAutomationEnabled: boolean;
   taskInstructions: string;
   primarySkill: string | null;
   inputAttachments: TemporalTaskInputAttachmentRef[];
@@ -659,6 +660,10 @@ export function buildTemporalSubmissionDraftFromExecution(
   const artifactGit = objectValue(artifactTask.git);
   const publish = objectValue(task.publish);
   const artifactPublish = objectValue(artifactTask.publish);
+  const mergeAutomation = objectValue(params.mergeAutomation);
+  const artifactMergeAutomation = objectValue(artifactParams.mergeAutomation);
+  const taskMergeAutomation = objectValue(task.mergeAutomation);
+  const artifactTaskMergeAutomation = objectValue(artifactTask.mergeAutomation);
   const tool = objectValue(task.tool);
   const skill = objectValue(task.skill);
   const artifactTool = objectValue(artifactTask.tool);
@@ -759,6 +764,12 @@ export function buildTemporalSubmissionDraftFromExecution(
     branch: legacyBranchDraft.branch,
     legacyBranchWarning: legacyBranchDraft.warning,
     publishMode,
+    mergeAutomationEnabled: Boolean(
+      mergeAutomation.enabled ||
+        artifactMergeAutomation.enabled ||
+        taskMergeAutomation.enabled ||
+        artifactTaskMergeAutomation.enabled,
+    ),
     taskInstructions:
       Object.keys(snapshotDraft).length > 0
         ? taskInstructionsFrom(artifactTask, task)
