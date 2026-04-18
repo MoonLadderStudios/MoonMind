@@ -1114,6 +1114,22 @@ function attachmentFileKey(file: File): string {
   ].join(":");
 }
 
+function appendDedupedAttachmentFiles(
+  currentFiles: File[],
+  filesToAdd: File[],
+): File[] {
+  const nextFiles = [...currentFiles];
+  const seenKeys = new Set(currentFiles.map(attachmentFileKey));
+  filesToAdd.forEach((file) => {
+    const key = attachmentFileKey(file);
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      nextFiles.push(file);
+    }
+  });
+  return nextFiles;
+}
+
 function attachmentTargetKey(target: "objective" | string): string {
   return target === "objective" ? "objective" : `step:${target}`;
 }
@@ -1127,6 +1143,22 @@ function isImageOnlyPolicy(policy: AttachmentPolicy): boolean {
 
 function attachmentControlLabel(policy: AttachmentPolicy): string {
   return isImageOnlyPolicy(policy) ? "Images" : "Input Attachments";
+}
+
+function attachmentAddButtonLabel(
+  policy: AttachmentPolicy,
+  stepNumber: number,
+): string {
+  const noun = isImageOnlyPolicy(policy) ? "images" : "attachments";
+  return `Add ${noun} to Step ${stepNumber}`;
+}
+
+function attachmentFilePickerLabel(
+  policy: AttachmentPolicy,
+  stepNumber: number,
+): string {
+  const noun = isImageOnlyPolicy(policy) ? "image" : "attachment";
+  return `Step ${stepNumber} ${noun} file picker`;
 }
 
 function validateAttachmentFiles(
@@ -3347,6 +3379,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   function updateStepAttachments(localId: string, files: File[]) {
     const targetKey = attachmentTargetKey(localId);
+    const mergedFilesForBinding = appendDedupedAttachmentFiles(
+      selectedStepAttachmentFiles[localId] || [],
+      files,
+    );
     setAttachmentTargetErrors((current) => {
       const next = { ...current };
       delete next[targetKey];
@@ -3358,7 +3394,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           step.localId !== localId ||
           !step.templateStepId ||
           step.id !== step.templateStepId ||
-          isTemplateBoundStepForAttachments(step, files)
+          isTemplateBoundStepForAttachments(step, mergedFilesForBinding)
         ) {
           return step;
         }
@@ -3366,9 +3402,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }),
     );
     setSelectedStepAttachmentFiles((current) => {
+      const mergedFiles = appendDedupedAttachmentFiles(
+        current[localId] || [],
+        files,
+      );
       const next = { ...current };
-      if (files.length > 0) {
-        next[localId] = files;
+      if (mergedFiles.length > 0) {
+        next[localId] = mergedFiles;
       } else {
         delete next[localId];
       }
@@ -5365,23 +5405,52 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     />
                     {attachmentPolicy.enabled ? (
                       <div className="queue-step-attachments">
-                        <label>
-                          {`Step ${index + 1} ${attachmentLabel} (optional)`}
+                        <div className="queue-step-attachment-control">
+                          <span className="queue-step-attachment-label">
+                            {`Step ${index + 1} ${attachmentLabel} (optional)`}
+                          </span>
+                          <button
+                            type="button"
+                            className="queue-step-attachment-add-button"
+                            aria-label={attachmentAddButtonLabel(
+                              attachmentPolicy,
+                              index + 1,
+                            )}
+                            title={attachmentAddButtonLabel(
+                              attachmentPolicy,
+                              index + 1,
+                            )}
+                            onClick={() =>
+                              document
+                                .getElementById(
+                                  `queue-step-attachments-${step.localId}`,
+                                )
+                                ?.click()
+                            }
+                          >
+                            +
+                          </button>
                           <input
+                            id={`queue-step-attachments-${step.localId}`}
+                            className="sr-only"
                             type="file"
                             data-step-field="attachments"
                             data-step-index={String(index)}
                             accept={attachmentPolicy.allowedContentTypes.join(",")}
                             multiple
-                            aria-label={`Step ${index + 1} attachments`}
-                            onChange={(event) =>
+                            aria-label={attachmentFilePickerLabel(
+                              attachmentPolicy,
+                              index + 1,
+                            )}
+                            onChange={(event) => {
                               updateStepAttachments(
                                 step.localId,
                                 Array.from(event.currentTarget.files || []),
-                              )
-                            }
+                              );
+                              event.currentTarget.value = "";
+                            }}
                           />
-                        </label>
+                        </div>
                         <p className="small">
                           {`Up to ${attachmentPolicy.maxCount} files across all steps, ${formatAttachmentBytes(attachmentPolicy.maxBytes)} each, ${formatAttachmentBytes(attachmentPolicy.totalBytes)} total.`}
                         </p>
