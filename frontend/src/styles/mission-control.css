@@ -846,12 +846,12 @@ button {
   transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease;
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.table-sort-button) {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-extension-button):not(.table-sort-button) {
   border-color: rgb(255 255 255 / 0.52);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.table-sort-button):hover {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-extension-button):not(.table-sort-button):hover {
   background: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -868,8 +868,8 @@ button:focus-visible {
   outline-offset: 3px;
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.table-sort-button):active,
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.table-sort-button).is-clicked {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-extension-button):not(.table-sort-button):active,
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-extension-button):not(.table-sort-button).is-clicked {
   background: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -1558,6 +1558,63 @@ button.secondary:hover {
 
 .queue-step-section {
   padding: 0;
+}
+
+.queue-step-extension {
+  margin: 0.25rem 0 0.4rem;
+}
+
+.queue-step-extension-button {
+  align-items: center;
+  background: linear-gradient(
+    180deg,
+    rgb(var(--mm-panel) / 0.72) 0%,
+    rgb(var(--mm-accent) / 0.06) 100%
+  );
+  border: 1px dashed rgb(var(--mm-border));
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.34);
+  color: rgb(var(--mm-ink));
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  min-height: 3rem;
+  width: 100%;
+}
+
+.queue-step-extension-button:hover {
+  background: linear-gradient(
+    180deg,
+    rgb(var(--mm-panel) / 0.9) 0%,
+    rgb(var(--mm-accent) / 0.1) 100%
+  );
+  border-color: rgb(var(--mm-accent) / 0.72);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.42),
+    0 10px 24px -20px rgb(var(--mm-accent) / 0.86);
+  color: rgb(var(--mm-ink));
+  transform: translateY(-1px);
+}
+
+.queue-step-extension-button:active,
+.queue-step-extension-button.is-clicked {
+  background: rgb(var(--mm-accent) / 0.12);
+  border-color: rgb(var(--mm-accent));
+  box-shadow: inset 0 1px 2px rgb(var(--mm-ink) / 0.12);
+  transform: translateY(0);
+}
+
+.queue-step-extension-plus {
+  align-items: center;
+  border: 1px solid rgb(var(--mm-accent) / 0.45);
+  border-radius: 8px;
+  color: rgb(var(--mm-accent));
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 1.35rem;
+  justify-content: center;
+  line-height: 1;
+  width: 1.35rem;
 }
 
 .queue-step-bottom-controls {

@@ -5615,6 +5615,21 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               );
             })}
 
+            <div className="queue-step-extension">
+              <button
+                type="button"
+                className="queue-step-extension-button"
+                data-step-action="add"
+                title="Add another task step"
+                onClick={addStep}
+              >
+                <span className="queue-step-extension-plus" aria-hidden="true">
+                  +
+                </span>
+                <span>Add Step</span>
+              </button>
+            </div>
+
             <div className="queue-step-bottom-controls stack">
               <label>
                 GitHub Repo
@@ -5657,14 +5672,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </div>
 
             <div className="actions queue-step-add queue-step-actions">
-              <button
-                type="button"
-                data-step-action="add"
-                title="Add another task step"
-                onClick={addStep}
-              >
-                Add Step
-              </button>
               <button
                 type="submit"
                 className={
