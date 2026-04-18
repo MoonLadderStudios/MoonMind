@@ -873,7 +873,7 @@ function hasAdvancedStepOptionValues(steps: StepState[]): boolean {
   return steps.some(
     (step) =>
       Boolean(step.skillRequiredCapabilities.trim()) ||
-      (Boolean(step.skillArgs.trim()) && !shouldShowSkillArgs(step)),
+      Boolean(step.skillArgs.trim()),
   );
 }
 
@@ -909,10 +909,6 @@ function resolveEffectiveSkillId(
     return lastTemplate?.slug ?? primarySkillId;
   }
   return primarySkillId;
-}
-
-function shouldShowSkillArgs(step: StepState | null | undefined): boolean {
-  return hasExplicitSkillSelection(String(step?.skillId || ""));
 }
 
 function parseCapabilitiesCsv(value: string): string[] {
@@ -3631,8 +3627,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         }
         if (
           Object.prototype.hasOwnProperty.call(updates, "skillId") &&
-          !showAdvancedStepOptions &&
-          !shouldShowSkillArgs(nextStep)
+          !showAdvancedStepOptions
         ) {
           nextStep.skillArgs = "";
         }
@@ -3884,6 +3879,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const expandedSteps = (expanded.steps || []).map((step, index) =>
         mapExpandedStepToState(nextStepNumber + index, step),
       );
+      if (hasAdvancedStepOptionValues(expandedSteps)) {
+        setShowAdvancedStepOptions(true);
+      }
       const replaceEmptyDefault =
         steps.length === 1 && isEmptyStepStateEntry(steps[0]);
 
@@ -3976,9 +3974,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const caps = showAdvancedStepOptions
         ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
         : [];
-      const skillArgsRaw = showAdvancedStepOptions || shouldShowSkillArgs(step)
-        ? step.skillArgs.trim()
-        : "";
+      const skillArgsRaw = showAdvancedStepOptions ? step.skillArgs.trim() : "";
       if (skillId || skillArgsRaw || caps.length > 0) {
         let skillArgs: Record<string, unknown> = {};
         if (skillArgsRaw) {
@@ -4227,8 +4223,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
 
     const primarySkillId = primaryValidation.value.skillId.trim() || "auto";
-    const primarySkillArgsRaw =
-      showAdvancedStepOptions || shouldShowSkillArgs(primaryStep)
+    const primarySkillArgsRaw = showAdvancedStepOptions
       ? String(primaryStep?.skillArgs || "").trim()
       : "";
     const taskSkillRequiredCapabilities = showAdvancedStepOptions
@@ -4289,8 +4284,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         continue;
       }
       const stepSkillId = step.skillId.trim();
-      const stepSkillArgsRaw =
-        showAdvancedStepOptions || shouldShowSkillArgs(step)
+      const stepSkillArgsRaw = showAdvancedStepOptions
         ? step.skillArgs.trim()
         : "";
       const stepSkillCaps = showAdvancedStepOptions
@@ -5263,8 +5257,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             {steps.map((step, index) => {
               const isPrimaryStep = index === 0;
               const stepLabel = isPrimaryStep ? " (Primary)" : "";
-              const showSkillArgsField =
-                showAdvancedStepOptions || shouldShowSkillArgs(step);
+              const showSkillArgsField = showAdvancedStepOptions;
               return (
                 <section
                   key={step.localId}
