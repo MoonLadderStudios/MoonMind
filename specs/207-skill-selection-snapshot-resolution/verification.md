@@ -1,9 +1,9 @@
 # MoonSpec Verification Report
 
-**Feature**: Skill Selection and Snapshot Resolution  
-**Spec**: `/work/agent_jobs/mm:a5ced108-472d-4af5-b351-41150acbaf00/repo/specs/207-skill-selection-snapshot-resolution/spec.md`  
-**Original Request Source**: `spec.md` `Input`, preserving Jira issue `MM-406` and `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md`  
-**Verdict**: ADDITIONAL_WORK_NEEDED  
+**Feature**: Skill Selection and Snapshot Resolution
+**Spec**: `/work/agent_jobs/mm:a5ced108-472d-4af5-b351-41150acbaf00/repo/specs/207-skill-selection-snapshot-resolution/spec.md`
+**Original Request Source**: `spec.md` `Input`, preserving Jira issue `MM-406` and `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md`
+**Verdict**: ADDITIONAL_WORK_NEEDED
 **Confidence**: MEDIUM
 
 ## Test Results

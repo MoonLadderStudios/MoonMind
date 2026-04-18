@@ -1,9 +1,9 @@
 # Tasks: Skill Selection and Snapshot Resolution
 
-**Input**: `specs/207-skill-selection-snapshot-resolution/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/skill-snapshot-resolution.md`, `quickstart.md`  
-**Prerequisites**: `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md`; existing agent-skill resolver/activity/materializer services  
-**Unit Test Command**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/services/test_skill_resolution.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py tests/unit/services/test_skill_materialization.py`  
-**Integration Test Command**: `./tools/test_integration.sh` when Docker is available  
+**Input**: `specs/207-skill-selection-snapshot-resolution/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/skill-snapshot-resolution.md`, `quickstart.md`
+**Prerequisites**: `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md`; existing agent-skill resolver/activity/materializer services
+**Unit Test Command**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/services/test_skill_resolution.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py tests/unit/services/test_skill_materialization.py`
+**Integration Test Command**: `./tools/test_integration.sh` when Docker is available
 **Source Traceability**: FR-001 through FR-012; acceptance scenarios 1-5; SC-001 through SC-006; DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-019; Jira issue MM-406.
 
 ## Phase 1: Setup
@@ -18,8 +18,8 @@
 
 ## Phase 3: Story - Resolve Skill Snapshots Before Runtime Launch
 
-**Story Summary**: Resolve task-wide and step-specific skill intent into an immutable, artifact-backed snapshot before runtime launch.  
-**Independent Test**: Validate selector merge behavior, pre-launch resolution, compact `resolvedSkillsetRef` propagation, fail-fast pinned errors, and snapshot reuse without requiring a full external provider run.  
+**Story Summary**: Resolve task-wide and step-specific skill intent into an immutable, artifact-backed snapshot before runtime launch.
+**Independent Test**: Validate selector merge behavior, pre-launch resolution, compact `resolvedSkillsetRef` propagation, fail-fast pinned errors, and snapshot reuse without requiring a full external provider run.
 **Traceability**: FR-001-FR-012; acceptance scenarios 1-5; SC-001-SC-006; DESIGN-REQ-006-DESIGN-REQ-010; DESIGN-REQ-019.
 
 ### Unit Test Plan

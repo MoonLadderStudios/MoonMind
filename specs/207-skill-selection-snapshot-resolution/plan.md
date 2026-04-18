@@ -1,6 +1,6 @@
 # Implementation Plan: Skill Selection and Snapshot Resolution
 
-**Branch**: `207-skill-selection-snapshot-resolution` | **Date**: 2026-04-18 | **Spec**: [spec.md](spec.md)  
+**Branch**: `207-skill-selection-snapshot-resolution` | **Date**: 2026-04-18 | **Spec**: [spec.md](spec.md)
 **Input**: Single-story runtime feature specification from `specs/207-skill-selection-snapshot-resolution/spec.md`
 
 ## Summary
@@ -38,15 +38,15 @@ Implement MM-406 by wiring task-wide and step-specific agent skill intent into t
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 with Pydantic v2 models and Temporal Python SDK activity boundaries  
-**Primary Dependencies**: Pydantic v2, Temporal activity wrappers, existing agent-skill resolver/materializer services, existing task contract models  
-**Storage**: Existing artifact-backed skill snapshot manifests; no new persistent database tables planned  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/test_skill_resolution.py tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py` for focused iteration; final `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
-**Integration Testing**: `./tools/test_integration.sh` for required hermetic integration checks when Docker is available; targeted Temporal workflow-boundary tests should be unit or local integration where practical  
-**Target Platform**: MoonMind API service, Temporal orchestration workflow, `MoonMind.AgentRun`, managed and external runtime adapters  
-**Project Type**: Python web service and Temporal workflow system  
-**Performance Goals**: Resolve at most once per task step preparation unless explicit re-resolution is requested; workflow payload carries compact refs only  
-**Constraints**: Runtime mode; no raw credentials; do not mutate checked-in skill folders; keep large skill bodies and source traces out of workflow history; preserve MM-406 traceability; source loading stays outside deterministic workflow code  
+**Language/Version**: Python 3.12 with Pydantic v2 models and Temporal Python SDK activity boundaries
+**Primary Dependencies**: Pydantic v2, Temporal activity wrappers, existing agent-skill resolver/materializer services, existing task contract models
+**Storage**: Existing artifact-backed skill snapshot manifests; no new persistent database tables planned
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/test_skill_resolution.py tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py` for focused iteration; final `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
+**Integration Testing**: `./tools/test_integration.sh` for required hermetic integration checks when Docker is available; targeted Temporal workflow-boundary tests should be unit or local integration where practical
+**Target Platform**: MoonMind API service, Temporal orchestration workflow, `MoonMind.AgentRun`, managed and external runtime adapters
+**Project Type**: Python web service and Temporal workflow system
+**Performance Goals**: Resolve at most once per task step preparation unless explicit re-resolution is requested; workflow payload carries compact refs only
+**Constraints**: Runtime mode; no raw credentials; do not mutate checked-in skill folders; keep large skill bodies and source traces out of workflow history; preserve MM-406 traceability; source loading stays outside deterministic workflow code
 **Scale/Scope**: One runtime story covering task/step selector inheritance, pre-launch snapshot resolution, artifact discipline, and runtime launch ref propagation
 
 ## Constitution Check
