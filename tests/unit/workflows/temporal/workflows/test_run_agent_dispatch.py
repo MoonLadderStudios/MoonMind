@@ -137,9 +137,12 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ref, "artifact://skillsets/step-1")
         execute_activity.assert_awaited_once()
-        args, _kwargs = execute_activity.call_args
+        args, kwargs = execute_activity.call_args
         self.assertEqual(args[0], "agent_skill.resolve")
-        selector = args[1]
+        self.assertEqual(len(args), 1)
+        activity_args = kwargs["args"]
+        self.assertEqual(activity_args[1:], ["owner-1", None, False, False])
+        selector = activity_args[0]
         self.assertEqual(
             [(entry.name, entry.version) for entry in selector.include],
             [("baseline", "1.0.0"), ("step-only", None)],
@@ -176,8 +179,11 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(ref, "artifact://skillsets/step-canonical")
-        args, _kwargs = execute_activity.call_args
-        selector = args[1]
+        args, kwargs = execute_activity.call_args
+        self.assertEqual(args, ("agent_skill.resolve",))
+        activity_args = kwargs["args"]
+        self.assertEqual(activity_args[1:], ["owner-1", None, False, False])
+        selector = activity_args[0]
         self.assertEqual(
             [(entry.name, entry.version) for entry in selector.include],
             [("baseline", None), ("canonical-step", None)],

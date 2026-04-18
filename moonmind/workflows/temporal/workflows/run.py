@@ -3531,11 +3531,13 @@ class MoonMindRunWorkflow:
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("agent_skill.resolve")
         resolved = await workflow.execute_activity(
             "agent_skill.resolve",
-            selector,
-            self._principal(),
-            node_inputs.get("workspaceRoot"),
-            False,
-            False,
+            args=[
+                selector,
+                self._principal(),
+                node_inputs.get("workspaceRoot"),
+                False,
+                False,
+            ],
             **self._execute_kwargs_for_route(route),
         )
         manifest_ref = getattr(resolved, "manifest_ref", None)
