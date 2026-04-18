@@ -15,7 +15,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/test_skill_resolution.py tests/unit/api/test_agent_skills_service.py tests/unit/services/test_skill_materialization.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py`
 - Integration tests: `./tools/test_integration.sh` when Docker is available
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -98,7 +98,7 @@
 - [X] T020 Review `docs/Tasks/AgentSkillSystem.md` and `docs/Tasks/SkillAndPlanContracts.md` for consistency with implemented MM-405 behavior; update only if the runtime behavior reveals a mismatch, covering FR-001, FR-002, DESIGN-REQ-001, and DESIGN-REQ-004.
 - [X] T021 Run final unit suite `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and fix only MM-405-scoped failures.
 - [X] T022 Run required hermetic integration suite `./tools/test_integration.sh` when Docker is available; if unavailable, record the exact Docker availability blocker in `specs/206-agent-skill-catalog-source-policy/verification.md`.
-- [X] T023 Run `/speckit.verify` against `specs/206-agent-skill-catalog-source-policy/spec.md` after implementation and tests pass, then record the final verdict and evidence in `specs/206-agent-skill-catalog-source-policy/verification.md`.
+- [X] T023 Run `/moonspec-verify` against `specs/206-agent-skill-catalog-source-policy/spec.md` after implementation and tests pass, then record the final verdict and evidence in `specs/206-agent-skill-catalog-source-policy/verification.md`.
 
 ---
 
@@ -148,7 +148,7 @@ Task: "Add immutable version preservation test in tests/unit/api/test_agent_skil
 4. Add explicit repo-source policy to resolver context and repo loader behavior.
 5. Propagate policy through the activity boundary.
 6. Re-run focused tests until they pass.
-7. Run final unit, integration when available, traceability, and `/speckit.verify`.
+7. Run final unit, integration when available, traceability, and `/moonspec-verify`.
 
 ### Requirement Status Handling
 
