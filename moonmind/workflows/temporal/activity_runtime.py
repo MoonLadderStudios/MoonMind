@@ -4831,9 +4831,12 @@ class TemporalAgentRuntimeActivities:
         raw_ref = stdout.decode("utf-8", errors="replace").strip()
         if raw_ref.startswith("origin/"):
             branch = raw_ref.removeprefix("origin/").strip()
-            if branch:
+            if branch and branch != "HEAD":
                 return branch
-        return raw_ref or "main"
+            return "main"
+        if raw_ref and raw_ref != "HEAD":
+            return raw_ref
+        return "main"
 
     async def _count_branch_commits_ahead(
         self,

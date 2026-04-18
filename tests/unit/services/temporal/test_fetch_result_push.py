@@ -367,6 +367,30 @@ class TestPushWorkspaceBranch:
         assert "push_error" not in result
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw_ref", [b"origin/\n", b"origin/HEAD\n", b"HEAD\n"])
+    async def test_resolve_workspace_default_branch_rejects_non_branch_refs(
+        self,
+        raw_ref: bytes,
+    ):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+
+        async def _mock_exec(*args, **kwargs):
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(raw_ref, b""))
+            proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._resolve_workspace_default_branch(
+                workspace="/work/agent_jobs/run-1/repo",
+                run_id="run-1",
+                env={},
+            )
+
+        assert result == "main"
+
+    @pytest.mark.asyncio
     async def test_push_marks_workspace_safe_for_git_commands(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)

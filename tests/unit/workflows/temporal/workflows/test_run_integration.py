@@ -9,6 +9,8 @@ pytest.importorskip("temporalio")
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import (
     INTEGRATION_POLL_LOOP_PATCH,
+    NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+    NATIVE_PR_PUSH_STATUS_GATE_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.workloads.tool_bridge import build_dood_tool_definition_payload
@@ -863,6 +865,93 @@ def test_determine_publish_completion_fails_for_no_commit_pr_publish(
     assert "0 commits ahead" not in message
     assert "Files edited in this run: none." in message
     assert publish_failure is True
+
+
+def test_native_pr_branch_resolution_keeps_legacy_branch_only_replay_shape(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+
+    head_branch, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={"push_base_branch": "trunk"},
+        workspace_spec={"branch": "feature/existing"},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "release"},
+    )
+
+    assert head_branch == "feature/existing"
+    assert base_branch == "feature/existing"
+
+
+def test_native_pr_branch_resolution_uses_patched_publish_defaults(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == NATIVE_PR_BRANCH_DEFAULTS_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    head_branch, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={"push_base_branch": "trunk"},
+        workspace_spec={"branch": "feature/existing"},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "release"},
+    )
+
+    assert head_branch == ""
+    assert base_branch == "release"
+
+
+def test_native_pr_push_status_gate_preserves_legacy_protected_branch_fallback(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={
+            "outputs": {
+                "push_status": "protected_branch",
+                "push_branch": "feature/existing",
+            }
+        },
+    )
+
+    assert mock_run_workflow._native_pr_push_status_blocks_creation(
+        "protected_branch"
+    ) is False
+    assert mock_run_workflow._publish_status is None
+
+
+def test_native_pr_push_status_gate_blocks_protected_branch_when_patched(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == NATIVE_PR_PUSH_STATUS_GATE_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={
+            "outputs": {
+                "push_status": "protected_branch",
+                "push_branch": "feature/existing",
+            }
+        },
+    )
+
+    assert mock_run_workflow._native_pr_push_status_blocks_creation(
+        "protected_branch"
+    ) is True
+    assert mock_run_workflow._publish_status == "failed"
+    assert "feature/existing" in (mock_run_workflow._publish_reason or "")
 
 
 def test_record_execution_context_resets_last_step_fields_when_current_node_has_no_summary(
