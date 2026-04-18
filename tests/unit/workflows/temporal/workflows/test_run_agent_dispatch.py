@@ -182,7 +182,9 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ref, "artifact://skillsets/step-canonical")
         args, kwargs = execute_activity.call_args
         self.assertEqual(args, ("agent_skill.resolve",))
-        selector = kwargs["args"][0]
+        activity_args = kwargs["args"]
+        self.assertEqual(activity_args[1:], ["owner-1", None, False, False])
+        selector = activity_args[0]
         self.assertEqual(
             [(entry.name, entry.version) for entry in selector.include],
             [("baseline", None), ("canonical-step", None)],
