@@ -6,6 +6,7 @@ Pure unit tests — no Temporal test server needed.
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -137,14 +138,17 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ref, "artifact://skillsets/step-1")
         execute_activity.assert_awaited_once()
-        args, _kwargs = execute_activity.call_args
+        args, kwargs = execute_activity.call_args
         self.assertEqual(args[0], "agent_skill.resolve")
-        selector = args[1]
+        self.assertEqual(len(args), 1)
+        activity_args = kwargs["args"]
+        selector = activity_args[0]
         self.assertEqual(
             [(entry.name, entry.version) for entry in selector.include],
             [("baseline", "1.0.0"), ("step-only", None)],
         )
         self.assertEqual(selector.exclude, ["remove-me"])
+        self.assertEqual(activity_args[1:], ["owner-1", None, False, False])
 
     async def test_agent_node_reads_canonical_node_skills_before_inputs_skills(self) -> None:
         wf = MoonMindRunWorkflow()
@@ -176,13 +180,53 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(ref, "artifact://skillsets/step-canonical")
-        args, _kwargs = execute_activity.call_args
-        selector = args[1]
+        args, kwargs = execute_activity.call_args
+        self.assertEqual(args, ("agent_skill.resolve",))
+        selector = kwargs["args"][0]
         self.assertEqual(
             [(entry.name, entry.version) for entry in selector.include],
             [("baseline", None), ("canonical-step", None)],
         )
         self.assertEqual(selector.exclude, ["legacy-input-step"])
+
+    async def test_agent_node_uses_temporal_sdk_multi_arg_call_shape(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-wf-step-1",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/strict-call-shape",
+            skills=[],
+        )
+        calls: list[tuple[str, list[Any]]] = []
+
+        async def fake_execute_activity(
+            activity: str,
+            arg: Any = None,
+            *,
+            args: list[Any],
+            **_kwargs: Any,
+        ) -> ResolvedSkillSet:
+            if arg is not None:
+                raise AssertionError("multi-argument activities must use keyword args")
+            calls.append((activity, args))
+            return resolved
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+            new=fake_execute_activity,
+        ):
+            ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills={"include": [{"name": "baseline"}]},
+                node_inputs={"workspaceRoot": "/workspace/repo"},
+                node_id="step-1",
+                existing_skillset_ref=None,
+            )
+
+        self.assertEqual(ref, "artifact://skillsets/strict-call-shape")
+        self.assertEqual(calls[0][0], "agent_skill.resolve")
+        activity_args = calls[0][1]
+        self.assertEqual(activity_args[1:], ["owner-1", "/workspace/repo", False, False])
 
     async def test_agent_node_pinned_resolution_failure_happens_before_launch(self) -> None:
         wf = MoonMindRunWorkflow()
