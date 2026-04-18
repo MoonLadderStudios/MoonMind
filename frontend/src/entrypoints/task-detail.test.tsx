@@ -310,7 +310,7 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Plan work')).toBeTruthy();
       expect(screen.getByText('Apply patch')).toBeTruthy();
       expect(screen.getByText('Verify tests')).toBeTruthy();
-      expect(screen.getByText('Merge Automation Selected:').closest('.card')?.textContent).toContain('No');
+      expect(screen.getByText('Merge Automation').closest('div')?.textContent).toContain('—');
       expect(screen.getByText(/^Latest Run:?$/)).toBeTruthy();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
@@ -1310,9 +1310,10 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Example task')).toBeTruthy();
       expect(screen.getByText('Did work')).toBeTruthy();
       expect(screen.getByText('Gemini CLI')).toBeTruthy();
-      expect(screen.getByText('Skill:').closest('.card')?.textContent).toContain(
+      expect(screen.getByText('Explicit Selection').closest('div')?.textContent).toContain(
         'jira-pr-verify, fix-comments',
       );
+      expect(screen.getByText('Delegated Skill').closest('div')?.textContent).toContain('jira-pr-verify');
       expect(screen.getByText('Google')).toBeTruthy();
       expect(screen.getByText('profile:gemini-default')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
@@ -1321,7 +1322,7 @@ describe('Task Detail Entrypoint', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
   });
 
-  it('does not render a skill card when task skill metadata is missing', async () => {
+  it('renders empty skill provenance when task skill metadata is missing', async () => {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -1365,7 +1366,8 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('Example task')).toBeTruthy();
     });
 
-    expect(screen.queryByText('Skill:')).toBeNull();
+    expect(screen.getByText('Explicit Selection').closest('div')?.textContent).toContain('None');
+    expect(screen.getByText('Delegated Skill').closest('div')?.textContent).toContain('—');
   });
 
   it('renders structured run summary details from the summary artifact', async () => {
@@ -1578,8 +1580,12 @@ describe('Task Detail Entrypoint', () => {
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Merge Automation')).toBeTruthy();
-      expect(screen.getByText('Merge Automation Selected:').closest('.card')?.textContent).toContain('Yes');
+      expect(screen.getAllByText('Merge Automation').length).toBeGreaterThan(0);
+      expect(
+        screen
+          .getAllByText('Merge Automation')
+          .some((node) => node.closest('div')?.textContent?.includes('Selected')),
+      ).toBe(true);
       expect(screen.getByText('blocked')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/354' })).toBeTruthy();
       expect(screen.getByText('abc123')).toBeTruthy();
