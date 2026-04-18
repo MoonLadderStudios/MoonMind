@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
-import { formatRuntimeLabel, formatTaskSkills } from '../utils/formatters';
+import { formatRuntimeLabel } from '../utils/formatters';
 import {
   recordTemporalTaskEditingClientEvent,
   taskEditHref,
@@ -663,6 +663,24 @@ function Card({
   return (
     <div className="card">
       <strong>{label}:</strong> <span className="break-words">{children}</span>
+    </div>
+  );
+}
+
+function Fact({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
+
+function FactGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="td-group">
+      <h4>{title}</h4>
+      <dl>{children}</dl>
     </div>
   );
 }
@@ -3119,96 +3137,120 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
         <div className="notice error">{(detailQuery.error as Error).message}</div>
       ) : execution ? (
         <>
-          <div className="grid-2">
-            <Card label="Title">{execution.title}</Card>
-            <Card label="Status">
+          <div className="td-hero">
+            <div>
+              <h3>{execution.title}</h3>
+              <p className="meta-inline">
+                Temporal
+                {execution.workflowType ? (
+                  <>
+                    <span className="dot">·</span>
+                    {execution.workflowType}
+                  </>
+                ) : null}
+                {execution.entry ? (
+                  <>
+                    <span className="dot">·</span>
+                    {execution.entry}
+                  </>
+                ) : null}
+              </p>
+            </div>
+            <div className="td-hero-right">
               <span className={executionStatusPillClasses(execution.rawState || execution.state || execution.status)}>
                 {execution.rawState || execution.state || execution.status || '—'}
               </span>
-            </Card>
-            <Card label="Source">Temporal</Card>
-            <Card label="Workflow Type">{execution.workflowType || '—'}</Card>
-            <Card label="Entry">{execution.entry || '—'}</Card>
-            {execution.targetRuntime ? (
-              <Card label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Card>
+            </div>
+          </div>
+
+          <div className="td-summary-block">
+            <h4>Summary</h4>
+            <p className="whitespace-pre-wrap">{displayedSummary}</p>
+            {runSummary?.finishOutcome?.reason && runSummary.finishOutcome.reason !== displayedSummary ? (
+              <p className="small" style={{ marginTop: '0.4rem' }}>
+                Outcome: {runSummary.finishOutcome.reason}
+              </p>
             ) : null}
-            {execution.taskSkills?.length || execution.targetSkill ? (
-              <Card label="Skill">{formatTaskSkills(execution.taskSkills, execution.targetSkill)}</Card>
-            ) : null}
+          </div>
+
+          <SkillProvenanceBadge
+            resolvedSkillsetRef={execution.resolvedSkillsetRef}
+            taskSkills={execution.taskSkills}
+            targetSkill={execution.targetSkill}
+          />
+
+          <FactGroup title="Runtime">
+            {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
             {execution.model ? (
-              <Card label="Model">
+              <Fact label="Model">
                 <code className="text-xs">{execution.model}</code>
-              </Card>
+              </Fact>
             ) : null}
             {execution.profileId ? (
-              <Card label="Provider Profile">{renderProviderProfileSummary(execution)}</Card>
+              <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
             ) : null}
-            {execution.effort ? <Card label="Effort">{execution.effort}</Card> : null}
-            {execution.startingBranch ? (
-              <Card label="Starting Branch">
-                <code className="text-xs break-all">{execution.startingBranch}</code>
-              </Card>
-            ) : null}
-            {execution.targetBranch ? (
-              <Card label="Target Branch">
-                <code className="text-xs break-all">{execution.targetBranch}</code>
-              </Card>
-            ) : null}
+            {execution.effort ? <Fact label="Effort">{execution.effort}</Fact> : null}
+          </FactGroup>
+
+          <FactGroup title="Git & Publish">
             {execution.repository ? (
-              <Card label="Repository">
+              <Fact label="Repository">
                 <code className="text-xs break-all">{execution.repository}</code>
-              </Card>
+              </Fact>
             ) : null}
             {execution.publishMode ? (
-              <Card label="Publish Mode">
+              <Fact label="Publish Mode">
                 <code className="text-xs">{execution.publishMode}</code>
-              </Card>
+              </Fact>
             ) : null}
-            <Card label="Merge Automation Selected">
-              {execution.mergeAutomationSelected ? 'Yes' : 'No'}
-            </Card>
+            {execution.startingBranch ? (
+              <Fact label="Starting Branch">
+                <code className="text-xs break-all">{execution.startingBranch}</code>
+              </Fact>
+            ) : null}
+            {execution.targetBranch ? (
+              <Fact label="Target Branch">
+                <code className="text-xs break-all">{execution.targetBranch}</code>
+              </Fact>
+            ) : null}
+            <Fact label="Merge Automation">{execution.mergeAutomationSelected ? 'Selected' : '—'}</Fact>
             {prUrl ? (
-              <Card label="PR Link">
+              <Fact label="PR Link">
                 <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">
                   {prUrl}
                 </a>
-              </Card>
+              </Fact>
             ) : null}
-            <Card label="Temporal Status">{execution.temporalStatus || '—'}</Card>
-            <Card label="Current State">{execution.rawState || execution.state || '—'}</Card>
-            {execution.closeStatus ? <Card label="Close Status">{execution.closeStatus}</Card> : null}
-            {execution.waitingReason ? <Card label="Waiting Reason">{execution.waitingReason}</Card> : null}
-            {execution.scheduledFor ? <Card label="Scheduled For">{formatWhen(execution.scheduledFor)}</Card> : null}
-            <Card label="Created">{formatWhen(execution.createdAt)}</Card>
-            <Card label="Latest Run">
+          </FactGroup>
+
+          <FactGroup title="Lifecycle">
+            <Fact label="Created">{formatWhen(execution.createdAt)}</Fact>
+            <Fact label="Started">{formatWhen(execution.startedAt)}</Fact>
+            <Fact label="Updated">{formatWhen(execution.updatedAt)}</Fact>
+            <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
+            {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
+            {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
+          </FactGroup>
+
+          <FactGroup title="Temporal">
+            <Fact label="Temporal Status">{execution.temporalStatus || '—'}</Fact>
+            <Fact label="Current State">{execution.rawState || execution.state || '—'}</Fact>
+            {execution.closeStatus ? <Fact label="Close Status">{execution.closeStatus}</Fact> : null}
+            <Fact label="Source">Temporal</Fact>
+            <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
+            <Fact label="Entry">{execution.entry || '—'}</Fact>
+            <Fact label="Latest Run">
               <code className="text-xs break-all">{latestRunId || '—'}</code>
-            </Card>
+            </Fact>
             {resolvedTaskRunId ? (
-              <Card label="Task Run">
+              <Fact label="Task Run">
                 <code className="text-xs break-all">{resolvedTaskRunId}</code>
-              </Card>
+              </Fact>
             ) : null}
-            <Card label="Started">{formatWhen(execution.startedAt)}</Card>
-            <Card label="Updated">{formatWhen(execution.updatedAt)}</Card>
-            <Card label="Closed">{formatWhen(execution.closedAt)}</Card>
-            <Card label="Workflow ID">
+            <Fact label="Workflow ID">
               <code className="text-xs break-all">{workflowId}</code>
-            </Card>
-          </div>
-
-          <SkillProvenanceBadge 
-            resolvedSkillsetRef={execution.resolvedSkillsetRef} 
-            taskSkills={execution.taskSkills} 
-            targetSkill={execution.targetSkill} 
-          />
-
-          <section>
-            <h3>Summary</h3>
-            <p className="whitespace-pre-wrap">{displayedSummary}</p>
-            {runSummary?.finishOutcome?.reason && runSummary.finishOutcome.reason !== displayedSummary ? (
-              <p className="small">Outcome: {runSummary.finishOutcome.reason}</p>
-            ) : null}
-          </section>
+            </Fact>
+          </FactGroup>
 
           {runSummary ? (
             <section className="stack">
