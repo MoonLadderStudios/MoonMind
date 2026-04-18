@@ -411,7 +411,7 @@ class WorkflowSettings(BaseSettings):
         gt=0,
     )
     agent_job_attachment_enabled: bool = Field(
-        False,
+        True,
         alias="AGENT_JOB_ATTACHMENT_ENABLED",
         description="Toggle for allowing input image attachments during queue job creation.",
     )
