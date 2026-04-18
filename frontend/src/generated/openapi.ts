@@ -1800,6 +1800,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/github/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Dashboard Github Branches
+         * @description List GitHub branches through MoonMind so browsers never call GitHub directly.
+         */
+        get: operations["list_dashboard_github_branches_api_github_branches_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/task-step-templates": {
         parameters: {
             query?: never;
@@ -3061,6 +3081,37 @@ export interface components {
              * @description The markdown content of the new skill
              */
             markdown: string;
+        };
+        /**
+         * DashboardBranchListResponse
+         * @description Dashboard response containing branch options for one repository.
+         */
+        DashboardBranchListResponse: {
+            /** Items */
+            items?: components["schemas"]["DashboardBranchOption"][];
+            /** Error */
+            error?: string | null;
+        };
+        /**
+         * DashboardBranchOption
+         * @description Serializable Git branch option exposed to dashboard clients.
+         */
+        DashboardBranchOption: {
+            /**
+             * Value
+             * @description Branch name
+             */
+            value: string;
+            /**
+             * Label
+             * @description Display label
+             */
+            label: string;
+            /**
+             * Source
+             * @description Branch option source
+             */
+            source: string;
         };
         /**
          * DashboardSkillListResponse
@@ -9719,6 +9770,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_dashboard_github_branches_api_github_branches_get: {
+        parameters: {
+            query: {
+                repository: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardBranchListResponse"];
                 };
             };
             /** @description Validation Error */

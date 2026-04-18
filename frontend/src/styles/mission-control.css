@@ -1564,6 +1564,35 @@ button.secondary:hover {
   margin-top: 0.2rem;
 }
 
+.queue-inline-selector-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(10rem, 0.9fr);
+  gap: 0.7rem;
+  align-items: center;
+}
+
+.queue-inline-selector {
+  display: grid;
+  grid-template-columns: 1.35rem minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.queue-inline-selector svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  fill: none;
+  color: rgb(var(--mm-muted));
+}
+
+.queue-inline-selector select {
+  width: 100%;
+  min-height: 2.35rem;
+}
+
 .queue-step-header {
   display: flex;
   justify-content: space-between;
@@ -1923,6 +1952,10 @@ button.secondary:hover {
   }
 
   .grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .queue-inline-selector-row {
     grid-template-columns: 1fr;
   }
 
