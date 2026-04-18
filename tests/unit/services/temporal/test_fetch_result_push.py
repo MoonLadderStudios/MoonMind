@@ -347,7 +347,10 @@ class TestPushWorkspaceBranch:
             elif call_count == 2:  # status --porcelain
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 3:  # push
+            elif call_count == 3:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/trunk\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -359,6 +362,8 @@ class TestPushWorkspaceBranch:
             result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "pushed"
         assert result["push_branch"] == "feature/delete-spec-048"
+        assert result["push_base_branch"] == "trunk"
+        assert result["push_base_ref"] == "origin/trunk"
         assert "push_error" not in result
 
     @pytest.mark.asyncio
@@ -380,7 +385,10 @@ class TestPushWorkspaceBranch:
             elif call_count == 2:  # status --porcelain
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 3:  # push
+            elif call_count == 3:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count
@@ -392,7 +400,7 @@ class TestPushWorkspaceBranch:
             result = await activities._push_workspace_branch("run-1")
 
         assert result["push_status"] == "pushed"
-        assert len(recorded_calls) == 4
+        assert len(recorded_calls) == 5
         for call in recorded_calls:
             command = list(call)
             assert command[:5] == [
@@ -820,7 +828,10 @@ class TestPushWorkspaceBranch:
             elif call_count == 2:  # status --porcelain
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 3:  # push
+            elif call_count == 3:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count — simulate failure
@@ -850,7 +861,10 @@ class TestPushWorkspaceBranch:
             elif call_count == 2:  # status --porcelain
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 3:  # push
+            elif call_count == 3:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
             else:  # rev-list --count — non-zero exit with empty stdout

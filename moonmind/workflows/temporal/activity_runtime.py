@@ -4685,7 +4685,15 @@ class TemporalAgentRuntimeActivities:
                 and bool(target_branch_name)
                 and current_branch == target_branch_name
             )
-            base_ref = f"origin/{target_branch_name or 'main'}"
+            base_branch_name = (
+                target_branch_name
+                or await self._resolve_workspace_default_branch(
+                    workspace=workspace,
+                    run_id=run_id,
+                    env=command_env,
+                )
+            )
+            base_ref = f"origin/{base_branch_name}"
             commit_count: int | None = None
             if same_branch_publish:
                 commit_count = await self._count_branch_commits_ahead(
@@ -4708,7 +4716,10 @@ class TemporalAgentRuntimeActivities:
                 push_proc.communicate(), timeout=120,
             )
             if push_proc.returncode != 0:
-                error_detail = push_stderr.decode("utf-8", errors="replace").strip() or "(no stderr)"
+                error_detail = (
+                    push_stderr.decode("utf-8", errors="replace").strip()
+                    or "(no stderr)"
+                )
                 logger.error(
                     "Post-agent git push FAILED for run %s "
                     "(branch=%s, rc=%d): %s",
@@ -4747,6 +4758,7 @@ class TemporalAgentRuntimeActivities:
                 return {
                     "push_status": "no_commits",
                     "push_branch": current_branch,
+                    "push_base_branch": base_branch_name,
                     "push_base_ref": base_ref,
                     "push_commit_count": 0,
                 }
@@ -4759,6 +4771,7 @@ class TemporalAgentRuntimeActivities:
             result: dict[str, Any] = {
                 "push_status": "pushed",
                 "push_branch": current_branch,
+                "push_base_branch": base_branch_name,
                 "push_base_ref": base_ref,
             }
             result.update(commit_info)
@@ -4775,6 +4788,52 @@ class TemporalAgentRuntimeActivities:
                 "push_status": "failed",
                 "push_error": str(exc),
             }
+
+    async def _resolve_workspace_default_branch(
+        self,
+        *,
+        workspace: str,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> str:
+        """Resolve the remote default branch for branchless PR publishing."""
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *self._workspace_git_command(
+                    workspace,
+                    "symbolic-ref",
+                    "--quiet",
+                    "--short",
+                    "refs/remotes/origin/HEAD",
+                ),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except Exception:
+            logger.debug(
+                "Could not resolve remote default branch for run %s; using main",
+                run_id,
+                exc_info=True,
+            )
+            return "main"
+
+        if proc.returncode != 0:
+            logger.debug(
+                "Could not resolve remote default branch for run %s: %s",
+                run_id,
+                stderr.decode("utf-8", errors="replace").strip(),
+            )
+            return "main"
+
+        raw_ref = stdout.decode("utf-8", errors="replace").strip()
+        if raw_ref.startswith("origin/"):
+            branch = raw_ref.removeprefix("origin/").strip()
+            if branch:
+                return branch
+        return raw_ref or "main"
 
     async def _count_branch_commits_ahead(
         self,

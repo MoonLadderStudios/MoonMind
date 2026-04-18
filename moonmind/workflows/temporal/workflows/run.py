@@ -2270,16 +2270,19 @@ class MoonMindRunWorkflow:
                     or agent_outputs.get("branch")
                     or agent_outputs.get("targetBranch")
                     or ws.get("targetBranch")
-                    or ws.get("branch")
                     or parameters.get("targetBranch")
                     or last_node_inputs.get("targetBranch")
-                    or last_node_inputs.get("branch")
                     or ""
                 )
                 publish_payload = self._resolve_publish_payload(parameters)
                 base_branch = self._resolve_publish_base_branch(publish_payload) or (
-                    ws.get("startingBranch")
+                    agent_outputs.get("push_base_branch")
+                    or agent_outputs.get("baseBranch")
+                    or agent_outputs.get("base_branch")
+                    or ws.get("startingBranch")
+                    or ws.get("branch")
                     or last_node_inputs.get("startingBranch")
+                    or last_node_inputs.get("branch")
                     or "main"
                 )
                 pr_title = self._title or "Automated changes by MoonMind"
@@ -2289,8 +2292,13 @@ class MoonMindRunWorkflow:
                     base_branch = (
                         self._resolve_publish_base_branch(publish_payload)
                         or (
-                            ws.get("startingBranch")
+                            agent_outputs.get("push_base_branch")
+                            or agent_outputs.get("baseBranch")
+                            or agent_outputs.get("base_branch")
+                            or ws.get("startingBranch")
+                            or ws.get("branch")
                             or last_node_inputs.get("startingBranch")
+                            or last_node_inputs.get("branch")
                             or "main"
                         )
                     )
@@ -2310,6 +2318,12 @@ class MoonMindRunWorkflow:
                         "Skipping native PR creation: agent made no commits "
                         "on branch '%s'.",
                         agent_outputs.get("push_branch") or head_branch,
+                    )
+                elif push_status in {"failed", "protected_branch", "skipped"}:
+                    self._get_logger().info(
+                        "Skipping native PR creation: publish push already "
+                        "failed with status '%s'.",
+                        push_status,
                     )
                 elif not self._repo or not head_branch:
                     raise ValueError(
