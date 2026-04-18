@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from moonmind.workflows.tasks.task_contract import (
     build_canonical_task_view,
+    build_effective_task_skill_selectors,
     TaskExecutionSpec,
     TaskStepSpec,
 )
@@ -84,6 +85,54 @@ def test_task_step_spec_with_step_skills() -> None:
     assert spec.skills is not None
     assert spec.skills.exclude == ["bad-skill"]
     assert spec.skills.materialization_mode == "none"
+
+
+def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> None:
+    task_skills = TaskExecutionSpec.model_validate(
+        {
+            "repository": "test/repo",
+            "instructions": "execute",
+            "skills": {
+                "sets": ["default"],
+                "include": [
+                    {"name": "baseline", "version": "1.0.0"},
+                    {"name": "remove-me", "version": "2.0.0"},
+                ],
+                "exclude": ["legacy"],
+                "materializationMode": "hybrid",
+            },
+        }
+    ).skills
+    step_skills = TaskStepSpec.model_validate(
+        {
+            "id": "step1",
+            "skills": {
+                "sets": ["python"],
+                "include": [{"name": "step-only"}],
+                "exclude": ["remove-me"],
+                "materializationMode": "none",
+            },
+        }
+    ).skills
+
+    effective = build_effective_task_skill_selectors(task_skills, step_skills)
+
+    assert effective is not None
+    assert effective.sets == ["default", "python"]
+    assert [(item.name, item.version) for item in effective.include or []] == [
+        ("baseline", "1.0.0"),
+        ("step-only", None),
+    ]
+    assert effective.exclude == ["legacy", "remove-me"]
+    assert effective.materialization_mode == "none"
+    assert [item.name for item in task_skills.include or []] == [
+        "baseline",
+        "remove-me",
+    ]
+
+
+def test_effective_task_step_skills_returns_none_for_empty_intent() -> None:
+    assert build_effective_task_skill_selectors(None, None) is None
 
 
 def test_task_input_attachments_preserve_objective_and_step_targets() -> None:

@@ -4,13 +4,16 @@ Pure unit tests — no Temporal test server needed.
 """
 
 import unittest
+from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 pytest.importorskip("temporalio")
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_skill_models import ResolvedSkillSet
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
@@ -97,6 +100,87 @@ class TestSlotContinuityMetadata(unittest.TestCase):
         )
 
         self.assertEqual(request.parameters, {})
+
+
+class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
+    async def test_agent_node_resolves_effective_task_and_step_skills_before_launch(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-wf-step-1",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/step-1",
+            skills=[],
+        )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+            new=AsyncMock(return_value=resolved),
+        ) as execute_activity:
+            ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills={
+                    "include": [
+                        {"name": "baseline", "version": "1.0.0"},
+                        {"name": "remove-me"},
+                    ],
+                    "materializationMode": "hybrid",
+                },
+                node_inputs={
+                    "skills": {
+                        "include": [{"name": "step-only"}],
+                        "exclude": ["remove-me"],
+                    }
+                },
+                node_id="step-1",
+                existing_skillset_ref=None,
+            )
+
+        self.assertEqual(ref, "artifact://skillsets/step-1")
+        execute_activity.assert_awaited_once()
+        args, _kwargs = execute_activity.call_args
+        self.assertEqual(args[0], "agent_skill.resolve")
+        selector = args[1]
+        self.assertEqual(
+            [(entry.name, entry.version) for entry in selector.include],
+            [("baseline", "1.0.0"), ("step-only", None)],
+        )
+        self.assertEqual(selector.exclude, ["remove-me"])
+
+    async def test_agent_node_pinned_resolution_failure_happens_before_launch(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+            new=AsyncMock(side_effect=ValueError("Could not resolve pinned version")),
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "Could not resolve pinned version",
+            ):
+                await wf._resolve_agent_node_skillset_ref(
+                    task_skills={"include": [{"name": "baseline", "version": "9.9.9"}]},
+                    node_inputs={},
+                    node_id="step-1",
+                    existing_skillset_ref=None,
+                )
+
+    async def test_agent_node_reuses_existing_skillset_ref_without_reresolution(self) -> None:
+        wf = MoonMindRunWorkflow()
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+            new=AsyncMock(),
+        ) as execute_activity:
+            ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills={"include": [{"name": "baseline"}]},
+                node_inputs={"skills": {"exclude": ["baseline"]}},
+                node_id="step-1",
+                existing_skillset_ref="artifact://skillsets/original",
+            )
+
+        self.assertEqual(ref, "artifact://skillsets/original")
+        execute_activity.assert_not_called()
 
 
 class TestJiraAgentPublishHelpers(unittest.TestCase):
