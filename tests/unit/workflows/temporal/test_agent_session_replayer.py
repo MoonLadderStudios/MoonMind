@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -73,6 +74,22 @@ async def mock_replay_publish_session_artifacts(payload: dict[str, Any]) -> dict
     }
 
 
+async def _wait_for_status(
+    handle: Any,
+    predicate: Any,
+    *,
+    timeout_seconds: float = 5.0,
+) -> dict[str, Any]:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while True:
+        status = await handle.query("get_status")
+        if predicate(status):
+            return status
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"Timed out waiting for status; last={status!r}")
+        await asyncio.sleep(0.05)
+
+
 @pytest.mark.asyncio
 async def test_agent_session_terminate_history_replays_deterministically(
     monkeypatch: pytest.MonkeyPatch,
@@ -134,6 +151,11 @@ async def test_agent_session_terminate_history_replays_deterministically(
                 await handle.signal(
                     "attach_runtime_handles",
                     {"containerId": "ctr-replay", "threadId": "thread-replay"},
+                )
+                await _wait_for_status(
+                    handle,
+                    lambda status: status.get("containerId") == "ctr-replay"
+                    and status.get("threadId") == "thread-replay",
                 )
                 await handle.execute_update(
                     "TerminateSession",
