@@ -36,6 +36,7 @@ export type TemporalTaskEditingExecutionContract = {
   resolvedModel?: string | null;
   effort?: string | null;
   repository?: string | null;
+  branch?: string | null;
   startingBranch?: string | null;
   targetBranch?: string | null;
   publishMode?: string | null;
@@ -57,8 +58,8 @@ export type TemporalSubmissionDraft = {
   model: string | null;
   effort: string | null;
   repository: string | null;
-  startingBranch: string | null;
-  targetBranch: string | null;
+  branch: string | null;
+  legacyBranchWarning: string | null;
   publishMode: string | null;
   taskInstructions: string;
   primarySkill: string | null;
@@ -579,10 +580,12 @@ function snapshotDraftTask(
       : {}),
     ...(Array.isArray(snapshotDraft.steps) ? { steps: snapshotDraft.steps } : {}),
   };
+  const branch = stringValue(snapshotDraft.branch);
   const startingBranch = stringValue(snapshotDraft.startingBranch);
   const targetBranch = stringValue(snapshotDraft.targetBranch);
-  if (startingBranch || targetBranch) {
+  if (branch || startingBranch || targetBranch) {
     task.git = {
+      ...(branch ? { branch } : {}),
       ...(startingBranch ? { startingBranch } : {}),
       ...(targetBranch ? { targetBranch } : {}),
     };
@@ -600,6 +603,43 @@ function snapshotDraftTask(
     };
   }
   return task;
+}
+
+function normalizeLegacyBranchDraft({
+  publishMode,
+  branch,
+  startingBranch,
+  targetBranch,
+}: {
+  publishMode: string | null;
+  branch: string | null;
+  startingBranch: string | null;
+  targetBranch: string | null;
+}): { branch: string | null; warning: string | null } {
+  if (branch) {
+    return { branch, warning: null };
+  }
+  if (startingBranch && (!targetBranch || targetBranch === startingBranch)) {
+    return { branch: startingBranch, warning: null };
+  }
+  if (!startingBranch && targetBranch) {
+    return {
+      branch: targetBranch,
+      warning:
+        "This older task only stored a target branch. Review the reconstructed branch before submitting.",
+    };
+  }
+  if (startingBranch && targetBranch && publishMode === "pr") {
+    return { branch: startingBranch, warning: null };
+  }
+  if (startingBranch && targetBranch) {
+    return {
+      branch: startingBranch,
+      warning:
+        "This older task used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.",
+    };
+  }
+  return { branch: null, warning: null };
 }
 
 export function buildTemporalSubmissionDraftFromExecution(
@@ -637,6 +677,42 @@ export function buildTemporalSubmissionDraftFromExecution(
     ? execution.taskSkills
     : [];
   const artifactTaskSkills = skillSelectorNames(artifactTask.skills);
+  const publishMode = nullableStringValue(
+    execution.publishMode,
+    params.publishMode,
+    publish.mode,
+    artifactPublish.mode,
+  );
+  const legacyBranchDraft = normalizeLegacyBranchDraft({
+    publishMode,
+    branch: nullableStringValue(
+      snapshotDraft.branch,
+      execution.branch,
+      task.branch,
+      git.branch,
+      params.branch,
+      artifactTask.branch,
+      artifactGit.branch,
+    ),
+    startingBranch: nullableStringValue(
+      snapshotDraft.startingBranch,
+      execution.startingBranch,
+      task.startingBranch,
+      git.startingBranch,
+      params.startingBranch,
+      artifactTask.startingBranch,
+      artifactGit.startingBranch,
+    ),
+    targetBranch: nullableStringValue(
+      snapshotDraft.targetBranch,
+      execution.targetBranch,
+      task.targetBranch,
+      git.targetBranch,
+      params.targetBranch,
+      artifactTask.targetBranch,
+      artifactGit.targetBranch,
+    ),
+  });
 
   const draft: TemporalSubmissionDraft = {
     runtime: nullableStringValue(
@@ -680,30 +756,9 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactTask.repository,
       artifactGit.repository,
     ),
-    startingBranch: nullableStringValue(
-      snapshotDraft.startingBranch,
-      execution.startingBranch,
-      task.startingBranch,
-      git.startingBranch,
-      params.startingBranch,
-      artifactTask.startingBranch,
-      artifactGit.startingBranch,
-    ),
-    targetBranch: nullableStringValue(
-      snapshotDraft.targetBranch,
-      execution.targetBranch,
-      task.targetBranch,
-      git.targetBranch,
-      params.targetBranch,
-      artifactTask.targetBranch,
-      artifactGit.targetBranch,
-    ),
-    publishMode: nullableStringValue(
-      execution.publishMode,
-      params.publishMode,
-      publish.mode,
-      artifactPublish.mode,
-    ),
+    branch: legacyBranchDraft.branch,
+    legacyBranchWarning: legacyBranchDraft.warning,
+    publishMode,
     taskInstructions:
       Object.keys(snapshotDraft).length > 0
         ? taskInstructionsFrom(artifactTask, task)

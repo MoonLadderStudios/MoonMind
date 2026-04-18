@@ -38,6 +38,9 @@ const mockPayload: BootPayload = {
           create: "/api/executions",
           artifactCreate: "/api/artifacts",
         },
+        github: {
+          branches: "/api/github/branches?repository={repository}",
+        },
       },
       system: {
         defaultRepository: "MoonLadderStudios/MoonMind",
@@ -172,6 +175,30 @@ function withRepositoryOptions(payload: BootPayload = mockPayload): BootPayload 
             ],
             error: null,
           },
+        },
+      },
+    },
+  };
+}
+
+function withDefaultRepository(
+  defaultRepository: string,
+  payload: BootPayload = mockPayload,
+): BootPayload {
+  const initialData = payload.initialData as {
+    dashboardConfig: {
+      system?: Record<string, unknown>;
+    };
+  };
+  return {
+    ...payload,
+    initialData: {
+      ...initialData,
+      dashboardConfig: {
+        ...initialData.dashboardConfig,
+        system: {
+          ...initialData.dashboardConfig.system,
+          defaultRepository,
         },
       },
     },
@@ -393,6 +420,22 @@ describe("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               items: { worker: ["speckit-orchestrate", "pr-resolver"] },
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/github/branches")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                { value: "main", label: "main", source: "github" },
+                {
+                  value: "feature/create-page",
+                  label: "feature/create-page",
+                  source: "github",
+                },
+              ],
+              error: null,
             }),
           } as Response);
         }
@@ -657,6 +700,8 @@ describe("Task Create Entrypoint", () => {
               inputParameters: {
                 targetRuntime: "gemini_cli",
                 operatorNote: "Keep this unedited top-level value.",
+                startingBranch: "stale-legacy-source",
+                targetBranch: "stale-legacy-target",
                 task: {
                   instructions: "Rebuild the Temporal task draft.",
                   proposeTasks: true,
@@ -1915,8 +1960,7 @@ describe("Task Create Entrypoint", () => {
       model: "gemini-2.5-pro",
       effort: "high",
       repository: "MoonLadderStudios/MoonMind",
-      startingBranch: "main",
-      targetBranch: "task-editing-phase-2",
+      branch: "main",
       publishMode: "branch",
       targetSkill: "speckit-implement",
       inputParameters: {
@@ -1942,8 +1986,8 @@ describe("Task Create Entrypoint", () => {
       model: "gemini-2.5-pro",
       effort: "high",
       repository: "MoonLadderStudios/MoonMind",
-      startingBranch: "main",
-      targetBranch: "task-editing-phase-2",
+      branch: "main",
+      legacyBranchWarning: null,
       publishMode: "branch",
       taskInstructions: "Rebuild the Temporal task draft.",
       primarySkill: "speckit-implement",
@@ -1999,8 +2043,8 @@ describe("Task Create Entrypoint", () => {
       model: "gpt-5.4",
       effort: "medium",
       repository: "MoonLadderStudios/MoonMind",
-      startingBranch: "main",
-      targetBranch: "rerun-target",
+      branch: "main",
+      legacyBranchWarning: null,
       publishMode: "pr",
       taskInstructions: "Rerun from immutable artifact input.",
       primarySkill: "speckit-orchestrate",
@@ -2286,8 +2330,9 @@ describe("Task Create Entrypoint", () => {
       model: "gpt-5.4",
       effort: "medium",
       repository: "MoonLadderStudios/MoonMind",
-      startingBranch: "main",
-      targetBranch: "durable-task-edit-reconstruction",
+      branch: "main",
+      legacyBranchWarning:
+        "This older task used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.",
       publishMode: "none",
       taskInstructions: "",
       primarySkill: "moonspec-orchestrate",
@@ -2513,8 +2558,8 @@ describe("Task Create Entrypoint", () => {
       model: null,
       effort: null,
       repository: null,
-      startingBranch: null,
-      targetBranch: null,
+      branch: null,
+      legacyBranchWarning: null,
       publishMode: null,
       primarySkill: null,
       taskInstructions: "Only instructions are available.",
@@ -2570,13 +2615,8 @@ describe("Task Create Entrypoint", () => {
         (screen.getByLabelText(/GitHub Repo/) as HTMLInputElement).value,
       ).toBe("MoonLadderStudios/MoonMind");
       expect(
-        (screen.getByLabelText("Starting Branch (optional)") as HTMLInputElement)
-          .value,
+        (screen.getByLabelText("Branch") as HTMLSelectElement).value,
       ).toBe("main");
-      expect(
-        (screen.getByLabelText("Target Branch (optional)") as HTMLInputElement)
-          .value,
-      ).toBe("task-editing-phase-2");
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
       ).toBe("branch");
@@ -3091,8 +3131,7 @@ describe("Task Create Entrypoint", () => {
             profileId: "profile:gemini-default",
           },
           git: {
-            startingBranch: "main",
-            targetBranch: "task-editing-phase-2",
+            branch: "main",
           },
           publish: {
             mode: "branch",
@@ -3109,6 +3148,8 @@ describe("Task Create Entrypoint", () => {
         },
       },
     });
+    expect(request.parametersPatch).not.toHaveProperty("startingBranch");
+    expect(request.parametersPatch).not.toHaveProperty("targetBranch");
     expect(request.inputArtifactRef).toBeUndefined();
     await waitFor(() => {
       expect(navigateTo).toHaveBeenCalledWith(
@@ -3658,6 +3699,18 @@ describe("Task Create Entrypoint", () => {
 
     expect(document.querySelector("#queue-advanced-settings")).toBeNull();
 
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      {
+        target: { value: "custom-skill" },
+      },
+    );
+    expect(
+      within(primaryStep as HTMLElement).queryByLabelText(
+        /skill args/i,
+      ),
+    ).toBeNull();
+
     const advancedToggle = screen.getByLabelText("Show advanced step options");
     expect(advancedToggle.closest('[data-canonical-create-section="Submit"]')).not.toBeNull();
     fireEvent.click(advancedToggle);
@@ -4178,6 +4231,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "pr-resolver" },
       },
     );
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
     await waitFor(() => {
       expect(
         within(additionalStep as HTMLElement).getByLabelText(
@@ -4760,11 +4814,8 @@ describe("Task Create Entrypoint", () => {
     expect(
       await screen.findByLabelText("Feature Request / Initial Instructions"),
     ).not.toBeNull();
-    expect(
-      await screen.findByPlaceholderText(
-        "auto-generated unless starting branch is non-default",
-      ),
-    ).not.toBeNull();
+    expect(await screen.findByLabelText("Branch")).not.toBeNull();
+    expect(screen.queryByLabelText("Target Branch (optional)")).toBeNull();
     expect(await screen.findByDisplayValue("3")).not.toBeNull();
     expect(screen.getByText("Task Presets (optional)")).not.toBeNull();
     expect(screen.getByText("Schedule (optional)")).not.toBeNull();
@@ -5027,8 +5078,8 @@ describe("Task Create Entrypoint", () => {
     const addStepButton = screen.getByRole("button", { name: "Add Step" });
     const createButton = screen.getByRole("button", { name: "Create" });
     const repoInput = screen.getByLabelText(/GitHub Repo/);
-    const startingBranchInput = screen.getByLabelText("Starting Branch (optional)");
-    const targetBranchInput = screen.getByLabelText("Target Branch (optional)");
+    const branchSelect = screen.getByLabelText("Branch");
+    const publishModeSelect = screen.getByLabelText("Publish Mode");
     const stepActionRow = addStepButton.closest(".queue-step-actions");
 
     expect(stepActionRow).not.toBeNull();
@@ -5040,11 +5091,15 @@ describe("Task Create Entrypoint", () => {
       stepsSection,
     );
     expect(
-      startingBranchInput.closest('[data-canonical-create-section="Steps"]'),
+      branchSelect.closest('[data-canonical-create-section="Steps"]'),
     ).toBe(stepsSection);
     expect(
-      targetBranchInput.closest('[data-canonical-create-section="Steps"]'),
+      publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
     ).toBe(stepsSection);
+    expect(
+      publishModeSelect.closest('[data-canonical-create-section="Execution context"]'),
+    ).toBeNull();
+    expect(screen.queryByLabelText("Target Branch (optional)")).toBeNull();
     expect(Array.from(stepActionRow?.children || [])).toEqual([
       addStepButton,
       createButton,
@@ -5054,21 +5109,91 @@ describe("Task Create Entrypoint", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      repoInput.compareDocumentPosition(startingBranchInput) &
+      repoInput.compareDocumentPosition(branchSelect) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      startingBranchInput.compareDocumentPosition(targetBranchInput) &
+      branchSelect.compareDocumentPosition(publishModeSelect) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      targetBranchInput.compareDocumentPosition(addStepButton) &
+      publishModeSelect.compareDocumentPosition(addStepButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
       addStepButton.compareDocumentPosition(createButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("loads branches through MoonMind and submits one authored branch", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const branchSelect = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(
+        Array.from((branchSelect as HTMLSelectElement).options).some(
+          (option) => option.value === "feature/create-page",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).startsWith(
+          "/api/github/branches?repository=MoonLadderStudios%2FMoonMind",
+        ),
+      ),
+    ).toBe(true);
+
+    fireEvent.change(branchSelect, {
+      target: { value: "feature/create-page" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Implement single branch create page." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    const task = payload.task as Record<string, unknown>;
+    expect(task.git).toEqual({ branch: "feature/create-page" });
+    expect(JSON.stringify(task)).not.toContain("targetBranch");
+    expect(JSON.stringify(task)).not.toContain("startingBranch");
+  });
+
+  it("loads branches for URL repository values accepted by submission", async () => {
+    renderWithClient(
+      <TaskCreatePage
+        payload={withDefaultRepository(
+          "https://github.com/MoonLadderStudios/MoonMind.git",
+        )}
+      />,
+    );
+
+    const branchSelect = await screen.findByLabelText("Branch");
+    await waitFor(() => {
+      expect(
+        Array.from((branchSelect as HTMLSelectElement).options).some(
+          (option) => option.value === "feature/create-page",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).startsWith(
+          "/api/github/branches?repository=https%3A%2F%2Fgithub.com%2FMoonLadderStudios%2FMoonMind.git",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      screen.queryByText("Branch lookup requires a valid GitHub repository value."),
+    ).toBeNull();
   });
 
   it("uses only MoonMind REST endpoints while submitting a manually authored task", async () => {
@@ -6041,6 +6166,7 @@ describe("Task Create Entrypoint", () => {
         target: { value: "pr-resolver" },
       },
     );
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
     await waitFor(() => {
       expect(
         within(primaryStep as HTMLElement).getByLabelText(
