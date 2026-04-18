@@ -415,14 +415,14 @@ class DockerCodexManagedSessionController:
         self,
         request: LaunchCodexManagedSessionRequest,
         session_environment: dict[str, str],
-    ) -> None:
+    ) -> dict[str, str]:
         token = await resolve_github_token_for_launch(
             request.environment,
             github_credential=request.github_credential,
         )
         token = str(token or "").strip()
         if not token:
-            return
+            return {}
 
         support_root = Path(request.session_workspace_path) / ".moonmind"
         socket_path = str(support_root / "github-auth.sock")
@@ -439,6 +439,11 @@ class DockerCodexManagedSessionController:
         )
         touched_paths.append(Path(socket_path))
         self._normalize_container_path_owners(touched_paths)
+        # Codex shell tools can invoke nested `bash -lc` commands that bypass
+        # the workspace-local gh wrapper. Bind the token through Docker's
+        # inherited environment (`-e GITHUB_TOKEN`) so it is not rendered into
+        # the docker command line or the launch payload.
+        return {"GITHUB_TOKEN": token}
 
     @staticmethod
     def _record_status_from_handle_status(status: str) -> ManagedSessionRecordStatus:
@@ -1551,8 +1556,12 @@ class DockerCodexManagedSessionController:
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
                 session_environment["MOONMIND_URL"] = self._moonmind_url
         github_broker_started = False
+        container_secret_environment: dict[str, str] = {}
         try:
-            await self._configure_session_github_auth(request, session_environment)
+            container_secret_environment = await self._configure_session_github_auth(
+                request,
+                session_environment,
+            )
             github_broker_started = "GIT_CONFIG_GLOBAL" in session_environment
         except Exception:
             await self._github_auth_brokers.stop(request.session_id)
@@ -1593,6 +1602,8 @@ class DockerCodexManagedSessionController:
             )
         for key, value in sorted(session_environment.items()):
             run_command.extend(["-e", f"{key}={value}"])
+        for key in sorted(container_secret_environment):
+            run_command.extend(["-e", key])
         run_command.extend(
             [
                 request.image_ref,
@@ -1603,7 +1614,10 @@ class DockerCodexManagedSessionController:
             ]
         )
         try:
-            stdout, _stderr = await self._run(run_command)
+            stdout, _stderr = await self._run(
+                run_command,
+                extra_env=container_secret_environment or None,
+            )
             container_id = stdout.strip()
             if not container_id:
                 raise RuntimeError("docker run returned a blank container id")
