@@ -3793,8 +3793,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (!branchLookupRepository) {
       return "Branch lookup requires a valid GitHub repository value.";
     }
-    if (branchOptionsQuery.isLoading || branchOptionsQuery.isFetching) {
-      return "Loading branches...";
+    if (branchOptionsQuery.isLoading) {
+      return branch.trim() ? "Loading branches..." : "";
+    }
+    if (branchOptionsQuery.isFetching) {
+      return "";
     }
     if (branchOptionsQuery.isError) {
       const error = branchOptionsQuery.error;
