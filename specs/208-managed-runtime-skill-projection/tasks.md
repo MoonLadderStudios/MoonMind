@@ -13,7 +13,7 @@
 
 - Unit tests: `python -m pytest tests/unit/services/test_skill_materialization.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py tests/unit/workflows/test_workspace_links.py -q`
 - Integration tests: `./tools/test_integration.sh` when Docker is available; otherwise record the Docker/socket blocker because this story is covered by service and activity-boundary unit tests.
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -88,7 +88,7 @@
 - [X] T017 Run `git diff --check` for changed files and fix formatting issues.
 - [X] T018 Run `./tools/test_unit.sh` for final unit verification or record the exact blocker if the managed environment cannot complete it.
 - [X] T019 Run `./tools/test_integration.sh` if Docker is available; otherwise record the Docker/socket blocker because no compose-backed code path changed.
-- [X] T020 Run `/speckit.verify` by producing `specs/208-managed-runtime-skill-projection/verification.md` against the original MM-407 request, spec, plan, tasks, and test evidence.
+- [X] T020 Run `/moonspec-verify` by producing `specs/208-managed-runtime-skill-projection/verification.md` against the original MM-407 request, spec, plan, tasks, and test evidence.
 
 ---
 
