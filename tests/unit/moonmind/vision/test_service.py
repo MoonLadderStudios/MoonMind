@@ -284,6 +284,26 @@ def test_render_target_contexts_preserves_objective_and_step_targets(
     assert bundle.index["targets"][1]["attachmentRefs"] == ["artifact-step"]
     assert "artifact-objective" in bundle.artifacts[0].context.markdown
     assert "artifact-step" in bundle.artifacts[1].context.markdown
+    assert [event["event"] for event in bundle.diagnostics] == [
+        "image_context_generation_started",
+        "image_context_generation_completed",
+        "image_context_generation_started",
+        "image_context_generation_completed",
+    ]
+    assert bundle.diagnostics[0] == {
+        "event": "image_context_generation_started",
+        "status": "started",
+        "targetKind": "objective",
+        "attachmentRefs": ["artifact-objective"],
+        "sourcePaths": [
+            ".moonmind/inputs/objective/artifact-objective-shared.png"
+        ],
+    }
+    assert bundle.diagnostics[3]["targetKind"] == "step"
+    assert bundle.diagnostics[3]["stepRef"] == "review"
+    assert bundle.diagnostics[3]["contextPath"] == (
+        ".moonmind/vision/steps/review/image_context.md"
+    )
 
 
 def test_render_target_contexts_disabled_records_status_and_traceability(
@@ -318,6 +338,15 @@ def test_render_target_contexts_disabled_records_status_and_traceability(
         ".moonmind/inputs/objective/artifact-disabled-disabled.png"
     ]
     assert "Vision context generation disabled" in bundle.artifacts[0].context.markdown
+    assert [event["event"] for event in bundle.diagnostics] == [
+        "image_context_generation_started",
+        "image_context_generation_disabled",
+    ]
+    assert bundle.diagnostics[1]["status"] == "disabled"
+    assert bundle.diagnostics[1]["targetKind"] == "objective"
+    assert bundle.diagnostics[1]["contextPath"] == (
+        ".moonmind/vision/task/image_context.md"
+    )
 
 
 def test_render_target_contexts_sanitizes_step_ref_for_context_path(base_config):
@@ -347,6 +376,41 @@ def test_render_target_contexts_sanitizes_step_ref_for_context_path(base_config)
     assert bundle.index["targets"][0]["contextPath"] == (
         ".moonmind/vision/steps/review-step/image_context.md"
     )
+    assert bundle.diagnostics[1]["stepRef"] == "../Review Step!"
+    assert bundle.diagnostics[1]["contextPath"] == (
+        ".moonmind/vision/steps/review-step/image_context.md"
+    )
+
+
+@patch("moonmind.vision.service.settings")
+def test_render_target_contexts_failed_diagnostics_for_provider_unavailable(
+    mock_settings, base_config
+):
+    mock_settings.google.google_api_key = ""
+    attachment = AttachmentContextInput(
+        id="artifact-provider-missing",
+        filename="missing-provider.png",
+        content_type="image/png",
+        size_bytes=300,
+        digest=None,
+        local_path=".moonmind/inputs/steps/review/artifact-provider-missing.png",
+    )
+    service = VisionService(config=base_config)
+
+    bundle = service.render_target_contexts(
+        [VisionContextTargetInput.step("review", [attachment])]
+    )
+
+    assert [event["event"] for event in bundle.diagnostics] == [
+        "image_context_generation_started",
+        "image_context_generation_failed",
+    ]
+    failed = bundle.diagnostics[1]
+    assert failed["status"] == "failed"
+    assert failed["targetKind"] == "step"
+    assert failed["stepRef"] == "review"
+    assert failed["attachmentRefs"] == ["artifact-provider-missing"]
+    assert "provider credentials unavailable" in str(failed["error"])
 
 
 def test_render_target_contexts_rejects_colliding_sanitized_step_refs(base_config):

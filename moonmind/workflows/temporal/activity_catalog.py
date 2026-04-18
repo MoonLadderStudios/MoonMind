@@ -392,6 +392,24 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
+            activity_type="manifest.compile",
+            family="manifest",
+            capability_class="artifacts",
+            task_queue=cfg.activity_artifacts_task_queue,
+            fleet=ARTIFACTS_FLEET,
+            timeouts=TemporalActivityTimeouts(300, 600),
+            retries=_activity_retries(max_attempts=5, max_interval_seconds=60),
+        ),
+        TemporalActivityDefinition(
+            activity_type="manifest.write_summary",
+            family="manifest",
+            capability_class="artifacts",
+            task_queue=cfg.activity_artifacts_task_queue,
+            fleet=ARTIFACTS_FLEET,
+            timeouts=TemporalActivityTimeouts(300, 600),
+            retries=_activity_retries(max_attempts=5, max_interval_seconds=60),
+        ),
+        TemporalActivityDefinition(
             activity_type="plan.generate",
             family="plan",
             capability_class="llm",
@@ -1113,9 +1131,8 @@ def manifest_ingest_activity_routes(
     return tuple(
         resolved_catalog.resolve_activity(activity_type)
         for activity_type in (
-            "artifact.read",
-            "plan.generate",
-            "artifact.write_complete",
+            "manifest.compile",
+            "manifest.write_summary",
         )
     )
 

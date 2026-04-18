@@ -33,6 +33,15 @@ from pr_resolve_contract import (  # noqa: E402
 
 CONFLICTING_MERGEABLE = {"CONFLICTING", "DIRTY"}
 DIRECT_MERGE_STATE = {"CLEAN"}
+_GITHUB_AUTH_FAILURE_MARKERS = (
+    "not logged into any github hosts",
+    "gh auth login",
+    "populate the gh_token",
+    "populate the github_token",
+    "authentication required",
+    "could not read username for 'https://github.com'",
+    "could not read username for \"https://github.com\"",
+)
 
 
 def _check_pr_merged(selector: str | None) -> bool:
@@ -59,6 +68,23 @@ def _check_pr_merged(selector: str | None) -> bool:
         isinstance(payload, dict)
         and normalize_text(payload.get("state")).upper() == "MERGED"
     )
+
+
+def _called_process_detail(exc: subprocess.CalledProcessError) -> str:
+    parts = [
+        normalize_text(getattr(exc, "output", "")),
+        normalize_text(getattr(exc, "stdout", "")),
+        normalize_text(getattr(exc, "stderr", "")),
+        str(exc),
+    ]
+    return "\n".join(part for part in parts if part)
+
+
+def _snapshot_failed_reason(exc: subprocess.CalledProcessError) -> str:
+    detail = _called_process_detail(exc).lower()
+    if any(marker in detail for marker in _GITHUB_AUTH_FAILURE_MARKERS):
+        return "publish_unavailable"
+    return "pr_not_found"
 
 
 def _is_conflicting(pr: dict[str, Any]) -> bool:
@@ -237,15 +263,35 @@ def main() -> None:
                         )
                         print("PR is already merged (detected after snapshot failure).")
                         sys.exit(EXIT_CODE_MERGED)
+                    failure_reason = _snapshot_failed_reason(exc)
+                    if failure_reason == "publish_unavailable":
+                        _write_result(
+                            result_path,
+                            snapshot={"pr": {}},
+                            decision="blocked",
+                            merge_outcome="blocked",
+                            status="blocked",
+                            reason=failure_reason,
+                        )
+                        print(
+                            f"Blocked: {failure_reason}\n{_called_process_detail(exc)}",
+                            file=sys.stderr,
+                        )
+                        sys.exit(
+                            EXIT_CODE_BLOCKED if args.strict_exit_codes else 0
+                        )
                     _write_result(
                         result_path,
                         snapshot={"pr": {}},
                         decision="failed",
                         merge_outcome="failed",
                         status="failed",
-                        reason="pr_not_found",
+                        reason=failure_reason,
                     )
-                    print(f"Failed: pr_not_found\n{exc.stderr}", file=sys.stderr)
+                    print(
+                        f"Failed: {failure_reason}\n{_called_process_detail(exc)}",
+                        file=sys.stderr,
+                    )
                     sys.exit(EXIT_CODE_FAILED if args.strict_exit_codes else 0)
                 
                 # Snapshot refresh can fail transiently (network/auth/API blips).

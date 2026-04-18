@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import socket
 import sys
 from dataclasses import dataclass
@@ -197,13 +198,30 @@ def request_github_token(socket_path: str, *, command: str = "github_token") -> 
         client.close()
 
 
-def run_gh_wrapper(*, socket_path: str, real_gh_path: str) -> int:
+def _resolve_real_gh_path() -> str:
+    """Resolve gh from the container PATH without returning this wrapper."""
+
+    wrapper_path = Path(sys.argv[0]).resolve()
+    wrapper_dir = wrapper_path.parent
+    path_parts = [
+        item
+        for item in os.environ.get("PATH", "").split(os.pathsep)
+        if item and Path(item).resolve() != wrapper_dir
+    ]
+    resolved = shutil.which("gh", path=os.pathsep.join(path_parts))
+    if not resolved:
+        raise RuntimeError("Unable to locate real gh binary in managed session PATH")
+    return resolved
+
+
+def run_gh_wrapper(*, socket_path: str, real_gh_path: str | None = None) -> int:
     """Exec the real gh binary with a token fetched from the local broker."""
+    resolved_gh_path = str(real_gh_path or _resolve_real_gh_path())
     token = request_github_token(socket_path)
     env = dict(os.environ)
     env.pop("GH_TOKEN", None)
     env["GITHUB_TOKEN"] = token
-    os.execvpe(real_gh_path, [real_gh_path, *sys.argv[1:]], env)
+    os.execvpe(resolved_gh_path, [resolved_gh_path, *sys.argv[1:]], env)
     return 0
 
 

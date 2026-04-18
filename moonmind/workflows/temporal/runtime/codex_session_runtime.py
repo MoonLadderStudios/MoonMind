@@ -48,7 +48,7 @@ _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
     float(DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS)
 )
 _STDOUT_EOF = object()
-_AUTH_SEED_EXCLUDED_NAMES = frozenset({"config.toml", "sessions"})
+_AUTH_SEED_EXCLUDED_NAMES = frozenset({".tmp", "config.toml", "sessions"})
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
 _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
@@ -378,6 +378,22 @@ class CodexManagedSessionRuntime:
             return False
         return not any(name.startswith(prefix) for prefix in _AUTH_SEED_EXCLUDED_PREFIXES)
 
+    @staticmethod
+    def _copy_auth_seed_file(
+        source: str | os.PathLike[str],
+        destination: str | os.PathLike[str],
+    ) -> None:
+        destination_path = Path(destination)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        if destination_path.is_symlink() or destination_path.exists():
+            if destination_path.is_dir() and not destination_path.is_symlink():
+                raise RuntimeError(
+                    "cannot overwrite auth seed directory with file: "
+                    f"{destination_path}"
+                )
+            destination_path.unlink()
+        shutil.copy2(source, destination_path)
+
     def _seed_codex_home_from_auth_volume(self) -> None:
         if self._auth_volume_path is None:
             return
@@ -407,10 +423,14 @@ class CodexManagedSessionRuntime:
             if source_path.is_symlink():
                 continue
             if source_path.is_dir():
-                shutil.copytree(source_path, destination, dirs_exist_ok=True)
+                shutil.copytree(
+                    source_path,
+                    destination,
+                    dirs_exist_ok=True,
+                    copy_function=self._copy_auth_seed_file,
+                )
                 continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_path, destination)
+            self._copy_auth_seed_file(source_path, destination)
 
     def _append_spool(self, stream_name: str, text: str) -> None:
         if stream_name not in {"stdout", "stderr"}:

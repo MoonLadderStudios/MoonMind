@@ -51,8 +51,7 @@ Minimal payload:
     "model": "gpt-5.4",
     "effort": "medium",
     "repository": "owner/repo",
-    "startingBranch": "main",
-    "targetBranch": "feature/example",
+    "branch": "main",
     "publish": {"mode": "pr"},
     "instructions": "",
     "primarySkill": {
@@ -93,8 +92,8 @@ Minimal payload:
 | Model | `requestedModel`, `model`, task runtime model | Requested is original; resolved is derived | Snapshot requested model; resolved model read-only display | Editable | Editable only before runtime dispatch |
 | Effort | execution `effort`, task runtime effort | Original | Snapshot `draft.effort` | Editable | Editable only before runtime dispatch |
 | Repository | payload repository, search attr `mm_repo` | Original plus presentation | Snapshot `draft.repository`; search attr display | Editable | Read-only after workspace materialization unless backend supports change |
-| Starting branch | task git, execution field | Original | Snapshot `draft.startingBranch` | Editable | Read-only after clone/checkout begins unless backend supports safe point |
-| Target branch | task git, execution field | Original | Snapshot `draft.targetBranch` | Editable | Editable before publish branch exists |
+| Branch | task git, execution field | Original/normalized | Snapshot `draft.branch` | Editable | Read-only after clone/checkout begins unless backend supports safe point |
+| Legacy target branch | old task git or execution field | Historical metadata only | Snapshot legacy metadata, if retained | Read-only audit/debug only | Not executable intent |
 | Publish settings | task publish, execution `publishMode` | Original/normalized | Snapshot `draft.publish` | Editable | Editable before publish/finalization |
 | Dependencies | `inputParameters.task.dependsOn`, dependency rows | Original plus normalized dependency graph | Snapshot selected IDs; dependency rows read-only audit | Editable on rerun | Read-only for active edit unless workflow supports dependency recalculation |
 | Attachments | artifact links `input.attachment`, step payload refs | Original refs and artifact metadata | Snapshot `attachmentRefs` plus artifact links | Editable by add/remove refs, subject to read validation | Editable by add/remove refs before consumed |
@@ -118,6 +117,20 @@ Minimal payload:
 
 4. Block submit for degraded drafts until the operator supplies replacement authoritative input.
 5. Do not call plan-artifact-derived instructions `taskInstructions` without marking their source as derived and read-only.
+
+## Legacy Branch Migration Matrix
+
+Reconstructed drafts expose only `branch`; they never surface `targetBranch` as an editable field.
+
+| Legacy snapshot shape | Reconstruction result | Warning |
+| --- | --- | --- |
+| `startingBranch` only | `draft.branch = startingBranch` | None. |
+| `startingBranch == targetBranch` | `draft.branch = startingBranch` | None. |
+| `publish.mode == "pr"` with differing `startingBranch` and `targetBranch` | `draft.branch = startingBranch`; retain `targetBranch` only as historical PR-head context. | None unless other required data is missing. |
+| `publish.mode == "branch"` with differing `startingBranch` and `targetBranch` | Non-round-trippable under the single-branch model. Operator must review and choose the one active `branch`. | Required. |
+| `targetBranch` only | Incomplete legacy branch metadata; operator must select `branch`. | Required. |
+
+Any retained legacy `targetBranch` is historical context only and must not be used as active submission logic for edit or rerun.
 
 ## Persistence Lifecycle
 

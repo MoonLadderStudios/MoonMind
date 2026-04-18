@@ -140,6 +140,75 @@ def test_create_artifact_returns_upload_descriptor() -> None:
         )
 
 
+def test_create_artifact_returns_attachment_upload_started_diagnostic() -> None:
+    """MM-375: create response exposes target-aware upload-start diagnostics."""
+
+    for test_client, service in _client_with_service():
+        artifact = _build_artifact()
+        artifact.content_type = "image/png"
+        artifact.size_bytes = 42
+        upload = _build_upload(artifact.artifact_id)
+        service.create.return_value = (artifact, upload)
+
+        response = test_client.post(
+            "/api/artifacts",
+            json={
+                "content_type": "image/png",
+                "size_bytes": 42,
+                "metadata": {
+                    "targetKind": "objective",
+                    "filename": "objective.png",
+                },
+            },
+        )
+
+        assert response.status_code == 201
+        event = response.json()["diagnostics"]["events"][0]
+        assert event == {
+            "event": "attachment_upload_started",
+            "status": "started",
+            "targetKind": "objective",
+            "artifactId": artifact.artifact_id,
+            "filename": "objective.png",
+            "contentType": "image/png",
+            "sizeBytes": 42,
+        }
+
+
+def test_upload_content_returns_attachment_upload_completed_diagnostic() -> None:
+    """MM-375: upload completion response exposes target-aware diagnostics."""
+
+    for test_client, service in _client_with_service():
+        artifact = _build_artifact()
+        artifact.content_type = "image/png"
+        artifact.size_bytes = 42
+        artifact.metadata_json = {
+            "targetKind": "step",
+            "stepRef": "review-step",
+            "filename": "step.png",
+        }
+        service.write_complete.return_value = artifact
+
+        response = test_client.put(
+            f"/api/artifacts/{artifact.artifact_id}/content",
+            content=b"image-bytes",
+            headers={"content-type": "image/png"},
+        )
+
+        assert response.status_code == 200
+        event = response.json()["diagnostics"]["events"][0]
+        assert event == {
+            "event": "attachment_upload_completed",
+            "status": "completed",
+            "targetKind": "step",
+            "stepRef": "review-step",
+            "artifactId": artifact.artifact_id,
+            "filename": "step.png",
+            "contentType": "image/png",
+            "sizeBytes": 42,
+        }
+
+
 def test_upload_content_maps_validation_to_413() -> None:
     """Upload endpoint should map max-byte validation errors to HTTP 413."""
 

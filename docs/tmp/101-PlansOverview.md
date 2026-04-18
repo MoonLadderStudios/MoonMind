@@ -68,6 +68,8 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 | [`docs/Tasks/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md) | §14 implementation checklist (minimum to ship). |
 | [`docs/Tasks/ImageSystem.md`](../Tasks/ImageSystem.md) | § Rollout & Migration Notes — phased vision/artifact path. |
 
+Preset composition is a control-plane authoring concern resolved before `PlanDefinition` creation; see [`docs/Tasks/TaskPresetsSystem.md`](../Tasks/TaskPresetsSystem.md) for authoring-time composition semantics. Runtime plans remain flattened execution graphs of concrete nodes and edges; see [`docs/Tasks/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md) for execution-facing plan semantics.
+
 ---
 
 ## Managed agents

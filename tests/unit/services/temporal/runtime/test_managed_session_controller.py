@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
@@ -740,6 +741,20 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
     docker_commands: list[tuple[str, ...]] = []
     container_payloads: list[str | None] = []
 
+    class _FakeGitHubAuthBrokers:
+        def __init__(self) -> None:
+            self.starts: list[dict[str, str]] = []
+            self.stops: list[str] = []
+
+        async def start(self, *, run_id: str, token: str, socket_path: str) -> None:
+            self.starts.append(
+                {"run_id": run_id, "token": token, "socket_path": socket_path}
+            )
+
+        async def stop(self, run_id: str) -> None:
+            self.stops.append(run_id)
+
+    github_auth_brokers = _FakeGitHubAuthBrokers()
     monkeypatch.setenv("MM320_GITHUB_TOKEN", token)
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
@@ -749,7 +764,6 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
         "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
         lambda *_args, **_kwargs: None,
     )
-
     async def _fake_runner(
         command: tuple[str, ...],
         *,
@@ -790,21 +804,106 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
         workspace_root=str(workspace_root),
         command_runner=_fake_runner,
         ready_poll_interval_seconds=0,
+        github_auth_brokers=github_auth_brokers,
     )
 
-    await controller.launch_session(request)
+    handle = await controller.launch_session(request)
 
     assert git_envs
     assert git_envs[0] is not None
     assert git_envs[0]["GITHUB_TOKEN"] == token
     assert git_envs[0]["GIT_TERMINAL_PROMPT"] == "0"
     assert 'password="$GITHUB_TOKEN"' in git_envs[0]["GIT_CONFIG_VALUE_1"]
+    assert github_auth_brokers.starts == [
+        {
+            "run_id": request.session_id,
+            "token": token,
+            "socket_path": str(
+                Path(request.session_workspace_path)
+                / ".moonmind"
+                / "github-auth.sock"
+            ),
+        }
+    ]
     docker_run_text = " ".join(docker_commands[0])
     assert token not in docker_run_text
     assert "GITHUB_TOKEN=" not in docker_run_text
+    assert "GIT_CONFIG_GLOBAL=" in docker_run_text
+    assert ".moonmind/bin" in docker_run_text
     assert container_payloads
     assert token not in str(container_payloads[0])
     assert "githubCredential" in str(container_payloads[0])
+    assert "GIT_CONFIG_GLOBAL" in str(container_payloads[0])
+    assert (Path(request.session_workspace_path) / ".moonmind" / "bin" / "gh").exists()
+    assert (
+        Path(request.session_workspace_path)
+        / ".moonmind"
+        / "bin"
+        / "git-credential-moonmind"
+    ).exists()
+    git_config_text = (
+        Path(request.session_workspace_path) / ".moonmind" / "gitconfig"
+    ).read_text(encoding="utf-8")
+    assert "moonmind-managed-git-config" in git_config_text
+    assert "git-credential-moonmind" in git_config_text
+
+    await controller.terminate_session(
+        TerminateCodexManagedSessionRequest(
+            sessionId=handle.session_state.session_id,
+            sessionEpoch=handle.session_state.session_epoch,
+            containerId=handle.session_state.container_id,
+            threadId=handle.session_state.thread_id,
+            reason="test cleanup",
+        )
+    )
+    assert github_auth_brokers.stops == [request.session_id]
+
+
+def test_persist_brokered_github_config_preserves_container_visible_paths(
+    tmp_path: Path,
+) -> None:
+    workspace_target = tmp_path / "workspace-target"
+    workspace_target.mkdir()
+    workspace_path = tmp_path / "workspace-link"
+    workspace_path.symlink_to(workspace_target, target_is_directory=True)
+    repo_git_config_path = workspace_path / ".git" / "config"
+    repo_git_config_path.parent.mkdir()
+    repo_git_config_path.write_text(
+        "[core]\n\trepositoryformatversion = 0\n",
+        encoding="utf-8",
+    )
+    existing_global_config = tmp_path / "existing.gitconfig"
+    existing_global_config.write_text(
+        "[user]\n\tname = Existing User\n",
+        encoding="utf-8",
+    )
+    support_root = tmp_path / "session" / ".moonmind"
+    session_environment = {
+        "GIT_CONFIG_GLOBAL": str(existing_global_config),
+    }
+
+    touched_paths = DockerCodexManagedSessionController._persist_brokered_github_config(
+        session_environment,
+        workspace_path=str(workspace_path),
+        support_root=support_root,
+        github_socket_path="/tmp/github-auth.sock",
+    )
+
+    git_config_text = (support_root / "gitconfig").read_text(encoding="utf-8")
+    assert f"\tpath = \"{existing_global_config}\"" in git_config_text
+    assert f"\tdirectory = \"{workspace_path}\"" in git_config_text
+    assert f"\tdirectory = \"{workspace_target}\"" not in git_config_text
+    assert session_environment["GIT_CONFIG_GLOBAL"] == str(support_root / "gitconfig")
+    assert session_environment["PATH"] == (
+        f"{support_root / 'bin'}{os.pathsep}"
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    )
+    assert repo_git_config_path in touched_paths
+    assert "# moonmind-credential-helper" in repo_git_config_path.read_text(
+        encoding="utf-8"
+    )
+    gh_wrapper_text = (support_root / "bin" / "gh").read_text(encoding="utf-8")
+    assert "real_gh_path" not in gh_wrapper_text
 
 
 @pytest.mark.asyncio
@@ -976,12 +1075,20 @@ async def test_controller_launch_redacts_github_token_from_command_failures(
             )
         raise AssertionError(f"unexpected command: {command}")
 
+    class _FakeGitHubAuthBrokers:
+        async def start(self, *, run_id: str, token: str, socket_path: str) -> None:
+            return None
+
+        async def stop(self, run_id: str) -> None:
+            return None
+
     controller = DockerCodexManagedSessionController(
         workspace_volume_name="agent_workspaces",
         codex_volume_name="codex_auth_volume",
         workspace_root=str(workspace_root),
         command_runner=_fake_runner,
         ready_poll_interval_seconds=0,
+        github_auth_brokers=_FakeGitHubAuthBrokers(),
     )
 
     with pytest.raises(RuntimeError) as exc_info:

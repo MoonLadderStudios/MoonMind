@@ -176,12 +176,10 @@ def test_manifest_ingest_activity_routes_stay_at_activity_queue_boundaries():
     routes = manifest_ingest_activity_routes(build_default_activity_catalog())
 
     assert [route.activity_type for route in routes] == [
-        "artifact.read",
-        "plan.generate",
-        "artifact.write_complete",
+        "manifest.compile",
+        "manifest.write_summary",
     ]
     assert [route.task_queue for route in routes] == [
         ARTIFACTS_TASK_QUEUE,
-        LLM_TASK_QUEUE,
         ARTIFACTS_TASK_QUEUE,
     ]
