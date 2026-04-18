@@ -443,7 +443,16 @@ describe("Task Create Entrypoint", () => {
           return Promise.resolve({
             ok: true,
             json: async () => ({
-              items: [],
+              items: [
+                {
+                  slug: "personal-demo",
+                  scope: "personal",
+                  title: "Personal Demo",
+                  description: "A user-owned preset.",
+                  latestVersion: "1.0.0",
+                  version: "1.0.0",
+                },
+              ],
             }),
           } as Response);
         }
@@ -479,6 +488,26 @@ describe("Task Create Entrypoint", () => {
                 },
               ],
             }),
+          } as Response);
+        }
+        if (
+          path === "/api/task-step-templates/speckit-demo" &&
+          init?.method === "DELETE"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            status: 204,
+            text: async () => "",
+          } as Response);
+        }
+        if (
+          path === "/api/task-step-templates/personal-demo" &&
+          init?.method === "DELETE"
+        ) {
+          return Promise.resolve({
+            ok: true,
+            status: 204,
+            text: async () => "",
           } as Response);
         }
         if (
@@ -4974,6 +5003,9 @@ describe("Task Create Entrypoint", () => {
     const saveButton = within(presetsSection).getByRole("button", {
       name: "Save preset",
     });
+    const deleteButton = within(presetsSection).getByRole("button", {
+      name: "Delete preset",
+    });
     const applyButton = within(presetsSection).getByRole("button", {
       name: "Apply",
     });
@@ -4984,11 +5016,116 @@ describe("Task Create Entrypoint", () => {
       saveButton.compareDocumentPosition(applyButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    expect(
+      saveButton.compareDocumentPosition(deleteButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      deleteButton.compareDocumentPosition(applyButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(saveButton.getAttribute("title")).toBe(
       "Save the current steps as a reusable preset",
     );
     expect(saveButton.querySelector("svg")).not.toBeNull();
     expect(saveButton.textContent).toBe("");
+    expect(deleteButton.getAttribute("title")).toBe("Choose a preset to delete");
+    expect((deleteButton as HTMLButtonElement).disabled).toBe(true);
+    expect(deleteButton.querySelector("svg")).not.toBeNull();
+    expect(deleteButton.textContent).toBe("");
+  });
+
+  it("hides preset write actions when template saving is disabled", async () => {
+    const disabledPayload = JSON.parse(JSON.stringify(mockPayload)) as BootPayload;
+    (
+      disabledPayload.initialData as {
+        dashboardConfig: {
+          system: { taskTemplateCatalog: { templateSaveEnabled: boolean } };
+        };
+      }
+    ).dashboardConfig.system.taskTemplateCatalog.templateSaveEnabled = false;
+
+    renderWithClient(<TaskCreatePage payload={disabledPayload} />);
+
+    const presetsSection = await screen.findByLabelText("Task Presets");
+    expect(
+      within(presetsSection).queryByRole("button", { name: "Save preset" }),
+    ).toBeNull();
+    expect(
+      within(presetsSection).queryByRole("button", { name: "Delete preset" }),
+    ).toBeNull();
+    expect(within(presetsSection).getByRole("button", { name: "Apply" }))
+      .toBeTruthy();
+  });
+
+  it("disables preset deletion for global presets", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetsSection = await screen.findByLabelText("Task Presets");
+    await within(presetsSection).findByRole("option", {
+      name: "Spec Kit Demo (Global)",
+    });
+    fireEvent.change(within(presetsSection).getByLabelText("Preset"), {
+      target: { value: "global::::speckit-demo" },
+    });
+
+    const deleteButton = within(presetsSection).getByRole("button", {
+      name: "Delete preset",
+    }) as HTMLButtonElement;
+    await waitFor(() => {
+      expect(deleteButton.disabled).toBe(true);
+      expect(deleteButton.getAttribute("title")).toBe(
+        "Only personal presets can be deleted",
+      );
+    });
+    fireEvent.click(deleteButton);
+
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url).startsWith("/api/task-step-templates/speckit-demo") &&
+          init?.method === "DELETE",
+      ),
+    ).toBe(false);
+  });
+
+  it("deletes the selected preset from the Task Presets actions", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetsSection = await screen.findByLabelText("Task Presets");
+    await within(presetsSection).findByRole("option", {
+      name: "Personal Demo (Personal)",
+    });
+    fireEvent.change(within(presetsSection).getByLabelText("Preset"), {
+      target: { value: "personal::::personal-demo" },
+    });
+    await waitFor(() => {
+      expect(
+        within(presetsSection)
+          .getByRole("button", { name: "Delete preset" })
+          .getAttribute("title"),
+      ).toBe("Delete the selected preset");
+    });
+    fireEvent.click(
+      within(presetsSection).getByRole("button", { name: "Delete preset" }),
+    );
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/task-step-templates/personal-demo?scope=personal",
+        expect.objectContaining({
+          method: "DELETE",
+        }),
+      );
+    });
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Delete preset 'Personal Demo'? This cannot be undone.",
+    );
+    expect(await screen.findByText("Deleted preset 'Personal Demo'.")).toBeTruthy();
+
+    confirmSpy.mockRestore();
   });
 
   it("adds hover tooltips to Create page buttons", async () => {
