@@ -2030,6 +2030,26 @@ describe("Task Create Entrypoint", () => {
     ]);
   });
 
+  it("reconstructs pr publish with merge automation into draft state", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:merge-edit",
+      workflowType: "MoonMind.Run",
+      targetRuntime: "codex_cli",
+      repository: "MoonLadderStudios/MoonMind",
+      publishMode: "pr",
+      inputParameters: {
+        mergeAutomation: { enabled: true },
+        task: {
+          instructions: "Preserve PR merge automation state.",
+          publish: { mode: "pr" },
+        },
+      },
+    });
+
+    expect(draft.publishMode).toBe("pr");
+    expect(draft.mergeAutomationEnabled).toBe(true);
+  });
+
   it("reconstructs a draft from an artifact-backed execution contract", () => {
     const draft = buildTemporalSubmissionDraftFromExecution(
       {
@@ -4780,12 +4800,20 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
-  it("shows merge automation only for ordinary pr-publishing tasks", async () => {
+  it("shows merge automation as a publish mode choice only for ordinary pr-publishing tasks", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
+    const publishModeSelect = (await screen.findByLabelText(
+      "Publish Mode",
+    )) as HTMLSelectElement;
     expect(
-      await screen.findByLabelText("Enable merge automation"),
-    ).toBeTruthy();
+      Array.from(publishModeSelect.options).some(
+        (option) =>
+          option.value === "pr_with_merge_automation" &&
+          /merge automation/i.test(option.text),
+      ),
+    ).toBe(true);
+    expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
     expect(screen.getByText(/uses pr-resolver/i)).toBeTruthy();
     expect(screen.queryByText(/direct auto-merge/i)).toBeNull();
 
@@ -4793,7 +4821,11 @@ describe("Task Create Entrypoint", () => {
       target: { value: "branch" },
     });
     await waitFor(() => {
-      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+      expect(
+        Array.from(
+          (screen.getByLabelText("Publish Mode") as HTMLSelectElement).options,
+        ).some((option) => option.value === "pr_with_merge_automation"),
+      ).toBe(true);
     });
 
     fireEvent.change(screen.getByLabelText("Publish Mode"), {
@@ -4806,16 +4838,22 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Publish Mode"), {
       target: { value: "pr" },
     });
-    expect(await screen.findByLabelText("Enable merge automation")).toBeTruthy();
+    expect(
+      Array.from(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).options,
+      ).some((option) => option.value === "pr_with_merge_automation"),
+    ).toBe(true);
   });
 
   it("submits merge automation with the existing pr publish contracts", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
-      target: { value: "Implement MM-365." },
+      target: { value: "Implement MM-412." },
     });
-    fireEvent.click(await screen.findByLabelText("Enable merge automation"));
+    fireEvent.change(await screen.findByLabelText("Publish Mode"), {
+      target: { value: "pr_with_merge_automation" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => {
@@ -4863,7 +4901,9 @@ describe("Task Create Entrypoint", () => {
       "section",
     );
     expect(primaryStep).not.toBeNull();
-    fireEvent.click(await screen.findByLabelText("Enable merge automation"));
+    fireEvent.change(await screen.findByLabelText("Publish Mode"), {
+      target: { value: "pr_with_merge_automation" },
+    });
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
       {
@@ -4871,7 +4911,9 @@ describe("Task Create Entrypoint", () => {
       },
     );
     await waitFor(() => {
-      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("none");
     });
     fireEvent.change(
       within(primaryStep as HTMLElement).getByLabelText("Instructions"),
@@ -4897,7 +4939,12 @@ describe("Task Create Entrypoint", () => {
   it("hides merge automation when the effective template skill is a resolver", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    expect(await screen.findByLabelText("Enable merge automation")).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("Publish Mode"), {
+      target: { value: "pr_with_merge_automation" },
+    });
+    expect(
+      (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+    ).toBe("pr_with_merge_automation");
 
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
@@ -4914,7 +4961,9 @@ describe("Task Create Entrypoint", () => {
 
     await screen.findByDisplayValue("Resolve the current branch PR.");
     await waitFor(() => {
-      expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("pr");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -5391,6 +5440,7 @@ describe("Task Create Entrypoint", () => {
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Execution context"]'),
     ).toBeNull();
+    expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
     expect(screen.queryByLabelText("Target Branch (optional)")).toBeNull();
     expect(
       primaryStepLabel.compareDocumentPosition(repoInput) &
