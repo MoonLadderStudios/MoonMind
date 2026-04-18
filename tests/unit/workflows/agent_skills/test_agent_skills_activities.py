@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -24,7 +24,7 @@ async def test_resolve_skills_activity_returns_expected_payload():
     with patch("moonmind.workflows.agent_skills.agent_skills_activities.AgentSkillResolver.resolve") as mock_resolve:
         mock_resolve.return_value = ResolvedSkillSet(
             snapshot_id="skillset_test_abc123",
-            resolved_at=datetime.utcnow(),
+            resolved_at=datetime.now(UTC),
             skills=[
                 ResolvedSkillEntry(
                     skill_name="read_file",
@@ -39,6 +39,40 @@ async def test_resolve_skills_activity_returns_expected_payload():
     assert len(result.skills) == 1
     assert result.skills[0].skill_name == "read_file"
     assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+
+
+async def test_resolve_skills_activity_passes_repo_and_local_policy():
+    activities = AgentSkillsActivities()
+    env = ActivityEnvironment()
+
+    selector = SkillSelector(include=[{"name": "repo_skill"}])
+    with patch(
+        "moonmind.workflows.agent_skills.agent_skills_activities.AgentSkillResolver.resolve"
+    ) as mock_resolve:
+        mock_resolve.return_value = ResolvedSkillSet(
+            snapshot_id="skillset_test_abc123",
+            resolved_at=datetime.now(UTC),
+            skills=[],
+            policy_summary={
+                "repo_skills_allowed": False,
+                "local_skills_allowed": True,
+            },
+        )
+
+        result = await env.run(
+            activities.resolve_skills,
+            selector,
+            "run-1",
+            "/tmp/workspace",
+            True,
+            False,
+        )
+
+    context = mock_resolve.call_args.args[1]
+    assert context.allow_repo_skills is False
+    assert context.allow_local_skills is True
+    assert result.policy_summary["repo_skills_allowed"] is False
+    assert result.policy_summary["local_skills_allowed"] is True
 
 async def test_build_prompt_index_activity_returns_bundle():
     activities = AgentSkillsActivities()

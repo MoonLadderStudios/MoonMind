@@ -125,6 +125,7 @@ async def test_resolver_resolves_repo_skills_when_workspace_provided():
     context = SkillResolutionContext(
         snapshot_id="snap-123",
         workspace_root="/tmp/workspace",
+        allow_repo_skills=True,
         allow_local_skills=False
     )
     selector = SkillSelector(
@@ -173,6 +174,63 @@ async def test_resolver_ignores_repo_skills_when_no_workspace():
     assert len(result.skills) == 0
 
 
+async def test_resolver_filters_repo_skills_when_not_allowed(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    skill_dir = skills_dir / "repo_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Repo Skill\n", encoding="utf-8")
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=False,
+    )
+    selector = SkillSelector(include=[{"name": "repo_skill"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert result.skills == []
+    assert result.policy_summary["repo_skills_allowed"] is False
+
+
+async def test_resolver_resolves_repo_skills_when_allowed(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    skill_dir = skills_dir / "repo_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Repo Skill\n", encoding="utf-8")
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "repo_skill"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert len(result.skills) == 1
+    assert result.skills[0].skill_name == "repo_skill"
+    assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.REPO
+    assert result.policy_summary["repo_skills_allowed"] is True
+
+
+async def test_resolver_policy_summary_reports_repo_and_local_policy():
+    resolver = AgentSkillResolver(loaders=[])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        allow_repo_skills=False,
+        allow_local_skills=True,
+    )
+    selector = SkillSelector(include=[])
+
+    result = await resolver.resolve(selector, context)
+
+    assert result.policy_summary["repo_skills_allowed"] is False
+    assert result.policy_summary["local_skills_allowed"] is True
+
+
 async def test_repo_skill_loader_scans_fs(tmp_path):
     loader = RepoSkillLoader()
     skills_dir = tmp_path / ".agents" / "skills"
@@ -190,7 +248,11 @@ async def test_repo_skill_loader_scans_fs(tmp_path):
     skill3 = skills_dir / "not_a_skill"
     skill3.mkdir(parents=True)
     
-    context = SkillResolutionContext(snapshot_id="snap", workspace_root=str(tmp_path))
+    context = SkillResolutionContext(
+        snapshot_id="snap",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
     selector = SkillSelector(include=[{"name": "skill1"}])
     
     results = await loader.load_skills(selector, context)
@@ -208,7 +270,12 @@ async def test_local_skill_loader_scans_fs(tmp_path):
     skill1.mkdir(parents=True)
     (skill1 / "SKILL.md").touch()
     
-    context = SkillResolutionContext(snapshot_id="snap", workspace_root=str(tmp_path), allow_local_skills=True)
+    context = SkillResolutionContext(
+        snapshot_id="snap",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+        allow_local_skills=True,
+    )
     selector = SkillSelector(include=[])
     
     results = await loader.load_skills(selector, context)
