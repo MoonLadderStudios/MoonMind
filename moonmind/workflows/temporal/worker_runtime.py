@@ -565,7 +565,12 @@ def _build_runtime_planner():
             and isinstance(publish_mode, str)
             and publish_mode.strip().lower() == "pr"
         ):
-            if not node_inputs.get("targetBranch") and not node_inputs.get("branch"):
+            # In the single authored branch model, ``branch`` is the PR base,
+            # not the work/head branch. Always resolve a distinct head branch
+            # for PR publishing when one was not explicitly provided.
+            if node_inputs.get("branch") and not node_inputs.get("startingBranch"):
+                node_inputs["startingBranch"] = node_inputs["branch"]
+            if not node_inputs.get("targetBranch"):
                 prefix = _derive_pr_branch_prefix(
                     task_payload=task_payload,
                     publish_payload=publish_payload,
