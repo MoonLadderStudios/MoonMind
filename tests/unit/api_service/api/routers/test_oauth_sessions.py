@@ -130,6 +130,7 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
     async def _capture_start(session_model):
         captured["volume_ref"] = session_model.volume_ref
         captured["volume_mount_path"] = session_model.volume_mount_path
+        captured["session_transport"] = session_model.session_transport
         captured["metadata_json"] = session_model.metadata_json
 
     monkeypatch.setattr(
@@ -146,8 +147,10 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
         response = await client.post("/api/v1/oauth-sessions", json=payload)
 
     assert response.status_code == 201
+    assert response.json()["session_transport"] == "moonmind_pty_ws"
     assert captured["volume_ref"] == "codex_auth_volume"
     assert captured["volume_mount_path"] == "/home/app/.codex"
+    assert captured["session_transport"] == "moonmind_pty_ws"
     assert captured["metadata_json"]["provider_id"] == "openai"
     assert captured["metadata_json"]["provider_label"] == "OpenAI"
 
@@ -179,6 +182,51 @@ async def test_create_oauth_session_returns_terminal_transport_refs(
     assert body["terminal_session_id"] == f"term_{body['session_id']}"
     assert body["terminal_bridge_id"] == f"br_{body['session_id']}"
     assert body["session_transport"] == "moonmind_pty_ws"
+
+
+@pytest.mark.asyncio
+async def test_reconnect_oauth_session_preserves_terminal_transport(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = {}
+    old_session_id = "oas_reconnectpty1"
+    profile_id = "codex-cli-reconnect-pty"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=old_session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                session_transport="moonmind_pty_ws",
+                status=OAuthSessionStatus.FAILED,
+                requested_by_user_id="None",
+                metadata_json={"provider_id": "openai"},
+            )
+        )
+        await session.commit()
+
+    async def _capture_start(session_model):
+        captured["session_transport"] = session_model.session_transport
+        captured["session_id"] = session_model.session_id
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{old_session_id}/reconnect"
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["session_id"] != old_session_id
+    assert body["session_transport"] == "moonmind_pty_ws"
+    assert captured["session_transport"] == "moonmind_pty_ws"
 
 
 @pytest.mark.asyncio

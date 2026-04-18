@@ -335,6 +335,7 @@ async def create_oauth_session(
         profile_id=request.profile_id,
         volume_ref=volume_ref,
         volume_mount_path=volume_mount_path,
+        session_transport=_oauth_default(request.runtime_id, "session_transport") or "none",
         account_label=request.account_label,
         status=OAuthSessionStatus.PENDING,
         requested_by_user_id=str(current_user.id),
@@ -852,6 +853,9 @@ async def reconnect_oauth_session(
         runtime_id=old_session.runtime_id,
         volume_ref=old_session.volume_ref,
         volume_mount_path=old_session.volume_mount_path,
+        session_transport=old_session.session_transport
+        or _oauth_default(old_session.runtime_id, "session_transport")
+        or "none",
         account_label=old_session.account_label,
         requested_by_user_id=str(current_user.id),
         status=OAuthSessionStatus.PENDING,

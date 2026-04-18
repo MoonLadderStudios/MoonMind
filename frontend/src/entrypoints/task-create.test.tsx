@@ -1844,6 +1844,27 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
+  it("renders the create submit action with a right-pointing arrow and stable label", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const createButton = await screen.findByRole("button", { name: "Create" });
+    const arrow = createButton.querySelector<HTMLElement>(
+      "[data-submit-arrow='right']",
+    );
+
+    expect(arrow).not.toBeNull();
+    expect(arrow?.getAttribute("aria-hidden")).toBe("true");
+    const arrowIcon = arrow?.querySelector("svg");
+    expect(arrowIcon).not.toBeNull();
+    expect(arrowIcon?.getAttribute("aria-hidden")).toBe("true");
+    expect(arrowIcon?.getAttribute("focusable")).toBe("false");
+    expect(createButton.classList.contains("queue-submit-primary")).toBe(true);
+    expect(createButton.classList.contains("queue-submit-primary--with-arrow")).toBe(
+      true,
+    );
+    expect(createButton.textContent).toContain("Create");
+  });
+
   it("shows the primary step requirement only after submit validation fails", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
@@ -1854,6 +1875,9 @@ describe("Task Create Entrypoint", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
+    const createButton = screen.getByRole("button", { name: "Create" });
+    expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
+    expect(createButton.getAttribute("aria-busy")).toBe("false");
     expect(
       await screen.findByText(
         "Primary step must include instructions or an explicit skill.",
@@ -1862,6 +1886,24 @@ describe("Task Create Entrypoint", () => {
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
     ).toBe(false);
+  });
+
+  it("keeps create page authoring controls available with the arrow submit action", async () => {
+    renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
+
+    const createButton = await screen.findByRole("button", { name: "Create" });
+    expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Add Step" })).toBeTruthy();
+    expect(screen.getByLabelText("Runtime")).toBeTruthy();
+    expect(screen.getByLabelText("Publish Mode")).toBeTruthy();
+    expect(canonicalCreateSections()).toEqual(
+      expect.arrayContaining(["Task Presets", "Dependencies"]),
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Browse Jira issues for Step 1 instructions",
+      }),
+    ).toBeTruthy();
   });
 
   it("reconstructs a create-form draft from Temporal execution fields", () => {
@@ -3474,7 +3516,9 @@ describe("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const createButton = screen.getByRole("button", { name: "Create" });
+    expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
+    fireEvent.click(createButton);
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -3594,7 +3638,7 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
-  it("keeps manual skill capability routing in advanced settings", async () => {
+  it("reveals per-step advanced skill options from the bottom toggle", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
@@ -3603,19 +3647,30 @@ describe("Task Create Entrypoint", () => {
     expect(primaryStep).not.toBeNull();
     expect(
       within(primaryStep as HTMLElement).queryByLabelText(
+        /skill args/i,
+      ),
+    ).toBeNull();
+    expect(
+      within(primaryStep as HTMLElement).queryByLabelText(
         /skill required capabilities/i,
       ),
     ).toBeNull();
 
-    const advancedSettings = screen
-      .getByText("Advanced Settings")
-      .closest("details") as HTMLDetailsElement | null;
-    expect(advancedSettings).not.toBeNull();
-    expect(advancedSettings?.open).toBe(false);
+    expect(document.querySelector("#queue-advanced-settings")).toBeNull();
 
-    fireEvent.click(screen.getByText("Advanced Settings"));
+    const advancedToggle = screen.getByLabelText("Show advanced step options");
+    expect(advancedToggle.closest('[data-canonical-create-section="Submit"]')).not.toBeNull();
+    fireEvent.click(advancedToggle);
+
+    expect(
+      within(primaryStep as HTMLElement).getByLabelText(
+        "Step 1 Skill Args (optional JSON object)",
+      ),
+    ).toBeTruthy();
     fireEvent.change(
-      screen.getByLabelText("Step 1 skill required capabilities (optional CSV)"),
+      within(primaryStep as HTMLElement).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
       {
         target: { value: "docker, qdrant" },
       },
@@ -3649,6 +3704,63 @@ describe("Task Create Entrypoint", () => {
       "gh",
       "docker",
       "qdrant",
+    ]);
+  });
+
+  it("does not submit hidden advanced step capabilities after toggling advanced mode off", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        "Step 1 Skill Args (optional JSON object)",
+      ),
+      {
+        target: { value: '{"hidden":true}' },
+      },
+    );
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "docker, qdrant" },
+      },
+    );
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Run without hidden advanced routing." },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as {
+      task: { tool: Record<string, unknown> };
+      requiredCapabilities: string[];
+    };
+    expect(payload.task.tool).toEqual({
+      type: "skill",
+      name: "auto",
+      version: "1.0",
+    });
+    expect(payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "git",
+      "gh",
     ]);
   });
 
@@ -5959,6 +6071,83 @@ describe("Task Create Entrypoint", () => {
         ([url]) => String(url) === "/api/task-step-templates/save-from-task",
       ),
     ).toBe(false);
+
+    promptSpy.mockRestore();
+  });
+
+  it("persists advanced-mode skill args for auto steps when saving presets", async () => {
+    const promptSpy = vi
+      .spyOn(window, "prompt")
+      .mockImplementationOnce(() => "Saved preset title")
+      .mockImplementationOnce(() => "Saved preset description");
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText("Instructions"),
+      {
+        target: { value: "Capture auto skill args in a preset." },
+      },
+    );
+    fireEvent.click(screen.getByLabelText("Show advanced step options"));
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        "Step 1 Skill Args (optional JSON object)",
+      ),
+      {
+        target: { value: '{"mode":"advanced"}' },
+      },
+    );
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(
+        /Step 1 Skill Required Capabilities \(optional CSV\)/,
+      ),
+      {
+        target: { value: "docker" },
+      },
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save preset" }),
+    );
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/task-step-templates/save-from-task",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const saveCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/task-step-templates/save-from-task")
+      .at(-1);
+    const request = JSON.parse(String(saveCall?.[1]?.body)) as {
+      steps: Array<{
+        tool?: Record<string, unknown>;
+        skill?: Record<string, unknown>;
+      }>;
+    };
+    const savedStep = request.steps[0];
+    expect(savedStep).toBeDefined();
+    expect(savedStep?.tool).toEqual({
+      type: "skill",
+      name: "auto",
+      version: "1.0",
+      inputs: { mode: "advanced" },
+      requiredCapabilities: ["docker"],
+    });
+    expect(savedStep?.skill).toEqual({
+      id: "auto",
+      args: { mode: "advanced" },
+      requiredCapabilities: ["docker"],
+    });
 
     promptSpy.mockRestore();
   });

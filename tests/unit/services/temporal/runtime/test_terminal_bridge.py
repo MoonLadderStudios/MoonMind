@@ -189,13 +189,13 @@ async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
         volume_ref="codex_auth_volume",
         volume_mount_path="/home/app/.codex",
         session_ttl=1800,
-        bootstrap_command=("codex", "login"),
+        bootstrap_command=("codex", "login", "--device-auth"),
     )
 
     assert result["container_name"] == "moonmind_auth_oas_terminal_runner"
     assert "-v" in observed
     assert "codex_auth_volume:/home/app/.codex" in observed
-    assert observed[-2:] == ["codex", "login"]
+    assert observed[-3:] == ["codex", "login", "--device-auth"]
     assert "sleep" not in observed
 
 
@@ -222,7 +222,7 @@ async def test_start_terminal_bridge_container_redacts_startup_failures(
             volume_ref="codex_auth_volume",
             volume_mount_path="/home/app/.codex",
             session_ttl=1800,
-            bootstrap_command=("codex", "login"),
+            bootstrap_command=("codex", "login", "--device-auth"),
         )
 
     message = str(exc_info.value)

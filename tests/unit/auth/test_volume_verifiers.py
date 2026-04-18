@@ -9,6 +9,7 @@ import pytest
 
 from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
     PROVIDER_CREDENTIAL_PATHS,
+    _build_credential_check_command,
     verify_volume_credentials,
 )
 
@@ -32,6 +33,41 @@ class TestProviderCredentialPaths:
         paths = PROVIDER_CREDENTIAL_PATHS["claude_code"]
         assert len(paths) >= 1
         assert any("claude" in p for p in paths)
+
+
+class TestCredentialCheckCommand:
+    """Verify shell command construction for volume checks."""
+
+    def test_quotes_provider_mount_paths_before_shell_execution(self) -> None:
+        mount_path = '/mnt/auth"; touch /tmp/injected; echo "'
+
+        command = _build_credential_check_command(
+            runtime_id="codex_cli",
+            mount_path=mount_path,
+            credential_paths=PROVIDER_CREDENTIAL_PATHS["codex_cli"],
+        )
+
+        assert 'touch /tmp/injected' in command
+        assert '"/mnt/auth"; touch /tmp/injected; echo "/auth.json"' not in command
+        assert (
+            "'/mnt/auth\"; touch /tmp/injected; echo \"/auth.json'"
+            in command
+        )
+
+    def test_quotes_generic_credential_paths_before_shell_execution(self) -> None:
+        command = _build_credential_check_command(
+            runtime_id="gemini_cli",
+            mount_path='/mnt/auth"; touch /tmp/injected; echo "',
+            credential_paths=(".config/gemini/credentials.json",),
+        )
+
+        assert 'touch /tmp/injected' in command
+        assert '"/mnt/auth"; touch /tmp/injected; echo "/.config' not in command
+        assert (
+            "'/mnt/auth\"; touch /tmp/injected; echo "
+            "\"/.config/gemini/credentials.json'"
+            in command
+        )
 
 
 class TestVerifyVolumeCredentials:
@@ -136,7 +172,7 @@ class TestVerifyVolumeCredentials:
             "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
             new_callable=AsyncMock,
             return_value=(
-                b"FOUND:auth.json\nMISSING:config.toml\n",
+                b"VALID:auth.json\nMISSING:config.toml\n",
                 b"",
             ),
         ):
@@ -155,6 +191,35 @@ class TestVerifyVolumeCredentials:
         docker_args = exec_mock.call_args.args
         assert "-v" in docker_args
         assert "codex_auth_volume:/home/app/.codex:ro" in docker_args
+
+    @pytest.mark.asyncio
+    async def test_codex_verification_rejects_malformed_auth_without_leaking_values(
+        self,
+    ) -> None:
+        mock_process = AsyncMock()
+        mock_process.communicate = MagicMock(return_value="dummy")
+        mock_process.returncode = 0
+
+        with patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
+            new_callable=AsyncMock,
+            return_value=(
+                b"INVALID:auth.json sensitive-placeholder\nFOUND:config.toml\n",
+                b"",
+            ),
+        ):
+            result = await verify_volume_credentials(
+                runtime_id="codex_cli",
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+            )
+
+        assert result["verified"] is False
+        assert result["reason"] == "codex_auth_invalid"
+        assert "sensitive-placeholder" not in repr(result)
 
     @pytest.mark.asyncio
     async def test_no_credentials_found(self) -> None:

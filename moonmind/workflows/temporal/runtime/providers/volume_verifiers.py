@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,38 @@ def _verification_result(
     }
 
 
+def _build_credential_check_command(
+    *,
+    runtime_id: str,
+    mount_path: str,
+    credential_paths: tuple[str, ...],
+) -> str:
+    if runtime_id == "codex_cli":
+        auth_path = shlex.quote(f"{mount_path}/auth.json")
+        config_path = shlex.quote(f"{mount_path}/config.toml")
+        return " && ".join(
+            (
+                (
+                    f"( test -s {auth_path} "
+                    f"&& grep -Eq '\"(tokens|access_token|refresh_token|id_token|api_key|OPENAI_API_KEY)\"' {auth_path} "
+                    '&& echo "VALID:auth.json" ) || echo "INVALID:auth.json"'
+                ),
+                (
+                    f"( test -s {config_path} && echo \"FOUND:config.toml\" ) "
+                    '|| echo "MISSING:config.toml"'
+                ),
+            )
+        )
+
+    return " && ".join(
+        (
+            f"( test -f {shlex.quote(f'{mount_path}/{path}')} "
+            f'&& echo "FOUND:{path}" ) || echo "MISSING:{path}"'
+        )
+        for path in credential_paths
+    )
+
+
 async def verify_volume_credentials(
     runtime_id: str,
     volume_ref: str,
@@ -108,10 +141,10 @@ async def verify_volume_credentials(
 
     mount_path = volume_mount_path or "/mnt/auth"
 
-    # Build a shell command that checks each credential path
-    check_commands = " && ".join(
-        f'( test -f "{mount_path}/{path}" && echo "FOUND:{path}" ) || echo "MISSING:{path}"'
-        for path in credential_paths
+    check_commands = _build_credential_check_command(
+        runtime_id=runtime_id,
+        mount_path=mount_path,
+        credential_paths=credential_paths,
     )
 
     docker_cmd = [
@@ -182,16 +215,28 @@ async def verify_volume_credentials(
     output_text = stdout.decode("utf-8", errors="replace")
     found: list[str] = []
     missing: list[str] = []
+    valid: list[str] = []
+    invalid: list[str] = []
 
     for line in output_text.strip().splitlines():
         line = line.strip()
-        if line.startswith("FOUND:"):
+        if line.startswith("VALID:"):
+            valid.append(line[6:])
+            found.append(line[6:])
+        elif line.startswith("INVALID:"):
+            invalid.append(line[8:])
+        elif line.startswith("FOUND:"):
             found.append(line[6:])
         elif line.startswith("MISSING:"):
             missing.append(line[8:])
 
-    # At least one credential file must exist
-    verified = len(found) > 0
+    if runtime_id == "codex_cli":
+        verified = bool(valid) and not invalid
+        reason = "ok" if verified else "codex_auth_invalid"
+    else:
+        # At least one credential file must exist
+        verified = len(found) > 0
+        reason = "ok" if verified else "no_credentials_found"
 
     logger.info(
         "Volume verification for %s: verified=%s, found=%d, missing=%d",
@@ -204,7 +249,7 @@ async def verify_volume_credentials(
     return _verification_result(
         verified=verified,
         runtime_id=runtime_id,
-        reason="ok" if verified else "no_credentials_found",
+        reason=reason,
         found_count=len(found),
         missing_count=len(missing),
     )

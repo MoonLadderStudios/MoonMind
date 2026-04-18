@@ -869,6 +869,14 @@ function createStepStateEntriesFromTemporalDraft(
   });
 }
 
+function hasAdvancedStepOptionValues(steps: StepState[]): boolean {
+  return steps.some(
+    (step) =>
+      Boolean(step.skillRequiredCapabilities.trim()) ||
+      (Boolean(step.skillArgs.trim()) && !shouldShowSkillArgs(step)),
+  );
+}
+
 function stepAttachmentRefFromTemporal(
   attachment: TemporalTaskInputAttachmentRef,
 ): StepAttachmentRef {
@@ -1905,6 +1913,14 @@ function ArrowDownIcon() {
   );
 }
 
+function ArrowRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 12h14m0 0-5-5m5 5-5 5" />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -2041,6 +2057,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const [nextStepNumber, setNextStepNumber] = useState(2);
+  const [showAdvancedStepOptions, setShowAdvancedStepOptions] = useState(false);
   const [runtime, setRuntime] = useState(defaultRuntime);
   const [model, setModel] = useState(
     String(
@@ -2407,6 +2424,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
     const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
     setSteps(reconstructedSteps);
+    setShowAdvancedStepOptions(hasAdvancedStepOptionValues(reconstructedSteps));
     setNextStepNumber(reconstructedSteps.length + 1);
     setPersistedObjectiveAttachments(
       draft.inputAttachments.map(stepAttachmentRefFromTemporal),
@@ -3613,6 +3631,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         }
         if (
           Object.prototype.hasOwnProperty.call(updates, "skillId") &&
+          !showAdvancedStepOptions &&
           !shouldShowSkillArgs(nextStep)
         ) {
           nextStep.skillArgs = "";
@@ -3954,8 +3973,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       }
       const blueprint: Record<string, unknown> = { instructions };
       const skillId = step.skillId.trim();
-      const caps = parseCapabilitiesCsv(step.skillRequiredCapabilities);
-      const skillArgsRaw = shouldShowSkillArgs(step)
+      const caps = showAdvancedStepOptions
+        ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
+        : [];
+      const skillArgsRaw = showAdvancedStepOptions || shouldShowSkillArgs(step)
         ? step.skillArgs.trim()
         : "";
       if (skillId || skillArgsRaw || caps.length > 0) {
@@ -4206,12 +4227,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
 
     const primarySkillId = primaryValidation.value.skillId.trim() || "auto";
-    const primarySkillArgsRaw = shouldShowSkillArgs(primaryStep)
+    const primarySkillArgsRaw =
+      showAdvancedStepOptions || shouldShowSkillArgs(primaryStep)
       ? String(primaryStep?.skillArgs || "").trim()
       : "";
-    const taskSkillRequiredCapabilities = parseCapabilitiesCsv(
-      String(primaryStep?.skillRequiredCapabilities || ""),
-    );
+    const taskSkillRequiredCapabilities = showAdvancedStepOptions
+      ? parseCapabilitiesCsv(String(primaryStep?.skillRequiredCapabilities || ""))
+      : [];
 
     let primarySkillArgs: Record<string, unknown> = {};
     if (primarySkillArgsRaw) {
@@ -4267,12 +4289,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         continue;
       }
       const stepSkillId = step.skillId.trim();
-      const stepSkillArgsRaw = shouldShowSkillArgs(step)
+      const stepSkillArgsRaw =
+        showAdvancedStepOptions || shouldShowSkillArgs(step)
         ? step.skillArgs.trim()
         : "";
-      const stepSkillCaps = parseCapabilitiesCsv(
-        step.skillRequiredCapabilities,
-      );
+      const stepSkillCaps = showAdvancedStepOptions
+        ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
+        : [];
       const stepAttachmentFiles = selectedStepAttachmentFiles[step.localId] || [];
       const hasStepContent =
         Boolean(step.instructions) ||
@@ -4932,6 +4955,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       : pageMode.mode === "rerun"
         ? "Rerun Task"
         : "Create";
+  const showPrimaryCtaArrow = pageMode.mode === "create";
   const primaryCtaTooltip =
     pageMode.mode === "edit"
       ? "Save changes to this task draft"
@@ -5239,7 +5263,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             {steps.map((step, index) => {
               const isPrimaryStep = index === 0;
               const stepLabel = isPrimaryStep ? " (Primary)" : "";
-              const showSkillArgsField = shouldShowSkillArgs(step);
+              const showSkillArgsField =
+                showAdvancedStepOptions || shouldShowSkillArgs(step);
               return (
                 <section
                   key={step.localId}
@@ -5550,28 +5575,42 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                     )}
                   </label>
 
-                  <label
-                    className={
-                      showSkillArgsField
-                        ? "queue-step-skill-args-field"
-                        : "queue-step-skill-args-field hidden"
-                    }
-                    data-skill-args-index={String(index)}
-                  >
-                    Skill Args (optional JSON object)
-                    <textarea
-                      className="queue-step-skill-args"
-                      data-step-field="skillArgs"
-                      data-step-index={String(index)}
-                      placeholder='{"notes":"optional context"}'
-                      value={step.skillArgs}
-                      onChange={(event) =>
-                        updateStep(step.localId, {
-                          skillArgs: event.target.value,
-                        })
-                      }
-                    />
-                  </label>
+                  {showSkillArgsField ? (
+                    <label
+                      className="queue-step-skill-args-field"
+                      data-skill-args-index={String(index)}
+                    >
+                      {`Step ${index + 1} Skill Args (optional JSON object)`}
+                      <textarea
+                        className="queue-step-skill-args"
+                        data-step-field="skillArgs"
+                        data-step-index={String(index)}
+                        placeholder='{"notes":"optional context"}'
+                        value={step.skillArgs}
+                        onChange={(event) =>
+                          updateStep(step.localId, {
+                            skillArgs: event.target.value,
+                          })
+                        }
+                      />
+                    </label>
+                  ) : null}
+                  {showAdvancedStepOptions ? (
+                    <label>
+                      {`Step ${index + 1} Skill Required Capabilities (optional CSV)`}
+                      <input
+                        data-step-field="skillRequiredCapabilities"
+                        data-step-index={String(index)}
+                        value={step.skillRequiredCapabilities}
+                        placeholder="docker,qdrant,unity"
+                        onChange={(event) =>
+                          updateStep(step.localId, {
+                            skillRequiredCapabilities: event.target.value,
+                          })
+                        }
+                      />
+                    </label>
+                  ) : null}
                 </section>
               );
             })}
@@ -5628,47 +5667,30 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </button>
               <button
                 type="submit"
-                className="queue-submit-primary"
+                className={
+                  showPrimaryCtaArrow
+                    ? "queue-submit-primary queue-submit-primary--with-arrow"
+                    : "queue-submit-primary"
+                }
                 disabled={isTemporalFormBlocked}
                 aria-disabled={isSubmitting || isTemporalFormBlocked}
                 aria-busy={isSubmitting}
                 title={primaryCtaTooltip}
               >
-                {primaryCta}
+                <span>{primaryCta}</span>
+                {showPrimaryCtaArrow ? (
+                  <span
+                    aria-hidden="true"
+                    className="queue-submit-primary-arrow"
+                    data-submit-arrow="right"
+                  >
+                    <ArrowRightIcon />
+                  </span>
+                ) : null}
               </button>
             </div>
           </div>
         </section>
-
-        <details className="card stack" id="queue-advanced-settings">
-          <summary>
-            <strong>Advanced Settings</strong>
-          </summary>
-          <div className="stack queue-advanced-settings-body">
-            <div>
-              <strong>Skill Required Capabilities</strong>
-              <p className="small">
-                Optional worker routing overrides. Runtime, publish mode, skills, and presets already add the common capabilities automatically.
-              </p>
-            </div>
-            {steps.map((step, index) => (
-              <label key={step.localId}>
-                {`Step ${index + 1} skill required capabilities (optional CSV)`}
-                <input
-                  data-step-field="skillRequiredCapabilities"
-                  data-step-index={String(index)}
-                  value={step.skillRequiredCapabilities}
-                  placeholder="docker,qdrant,unity"
-                  onChange={(event) =>
-                    updateStep(step.localId, {
-                      skillRequiredCapabilities: event.target.value,
-                    })
-                  }
-                />
-              </label>
-            ))}
-          </div>
-        </details>
 
         {taskTemplateCatalogEnabled ? (
           <section
@@ -6214,6 +6236,22 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           data-canonical-create-section="Submit"
           aria-label="Submit"
         >
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={showAdvancedStepOptions}
+            aria-label="Show advanced step options"
+            onChange={(event) =>
+              setShowAdvancedStepOptions(event.target.checked)
+            }
+          />
+          Advanced mode
+          <span className="small">
+            Adds skill args and required capabilities to each step. Optional
+            worker routing overrides; runtime, publish mode, skills, and
+            presets already add the common capabilities automatically.
+          </span>
+        </label>
         <p
           id="queue-submit-message"
           className={
