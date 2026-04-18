@@ -5167,6 +5167,34 @@ describe("Task Create Entrypoint", () => {
     expect(JSON.stringify(task)).not.toContain("startingBranch");
   });
 
+  it("keeps branch loading text inside the dropdown only", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/branches")) {
+        return new Promise<Response>(() => {});
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const branchSelect = (await screen.findByLabelText(
+      "Branch",
+    )) as HTMLSelectElement;
+
+    await waitFor(() => {
+      expect(branchSelect.selectedOptions[0]?.textContent).toBe(
+        "Loading branches...",
+      );
+    });
+    expect(
+      Array.from(document.querySelectorAll("p")).some(
+        (element) => element.textContent?.trim() === "Loading branches...",
+      ),
+    ).toBe(false);
+  });
+
   it("loads branches for URL repository values accepted by submission", async () => {
     renderWithClient(
       <TaskCreatePage
