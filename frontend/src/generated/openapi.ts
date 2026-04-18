@@ -3365,6 +3365,8 @@ export interface components {
             title: string;
             /** Summary */
             summary: string;
+            /** Taskinstructions */
+            taskInstructions?: string | null;
             /**
              * Status
              * @enum {string}

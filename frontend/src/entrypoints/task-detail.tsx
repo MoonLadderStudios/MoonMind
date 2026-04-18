@@ -155,6 +155,7 @@ const ExecutionDetailSchema = z
     entry: z.string().optional(),
     title: z.string(),
     summary: z.string(),
+    taskInstructions: z.string().nullable().optional(),
     status: z.string(),
     state: z.string(),
     rawState: z.string().optional(),
@@ -2810,6 +2811,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   });
   const [liveUpdates, setLiveUpdates] = useState(true);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
+  const [instructionsExpanded, setInstructionsExpanded] = useState(false);
 
   const detailQuery = useQuery({
     queryKey: ['task-detail', encodedTaskId, sourceTemporal],
@@ -3074,6 +3076,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
   const hasTaskEditingActions = taskEditingOn && Boolean(actions?.canUpdateInputs || actions?.canRerun);
   const hasTaskActions = Boolean(actions?.canSetTitle || hasTaskEditingActions);
+  const taskInstructions = execution?.taskInstructions?.trim() || '';
+  const hasTaskInstructions = taskInstructions.length > 0;
   const hasInterventionSection = Boolean(
     actions &&
       (
@@ -3139,22 +3143,35 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
         <>
           <div className="td-hero">
             <div>
-              <h3>{execution.title}</h3>
-              <p className="meta-inline">
-                Temporal
-                {execution.workflowType ? (
-                  <>
-                    <span className="dot">·</span>
-                    {execution.workflowType}
-                  </>
-                ) : null}
-                {execution.entry ? (
-                  <>
-                    <span className="dot">·</span>
-                    {execution.entry}
-                  </>
-                ) : null}
-              </p>
+              <button
+                type="button"
+                className="td-title-toggle"
+                aria-expanded={instructionsExpanded}
+                aria-controls="task-instructions-panel"
+                onClick={() => setInstructionsExpanded((current) => !current)}
+              >
+                <span className="td-title-toggle-copy">
+                  <span className="td-title-text">{execution.title}</span>
+                  <span className="meta-inline">
+                    Temporal
+                    {execution.workflowType ? (
+                      <>
+                        <span className="dot">·</span>
+                        {execution.workflowType}
+                      </>
+                    ) : null}
+                    {execution.entry ? (
+                      <>
+                        <span className="dot">·</span>
+                        {execution.entry}
+                      </>
+                    ) : null}
+                  </span>
+                </span>
+                <span className="td-title-toggle-hint">
+                  {instructionsExpanded ? 'Hide instructions' : 'Show instructions'}
+                </span>
+              </button>
             </div>
             <div className="td-hero-right">
               <span className={executionStatusPillClasses(execution.rawState || execution.state || execution.status)}>
@@ -3162,6 +3179,17 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               </span>
             </div>
           </div>
+
+          {instructionsExpanded ? (
+            <div id="task-instructions-panel" className="td-instructions-panel">
+              <h4>Instructions</h4>
+              {hasTaskInstructions ? (
+                <pre>{taskInstructions}</pre>
+              ) : (
+                <p className="small">Full instructions are not available for this task.</p>
+              )}
+            </div>
+          ) : null}
 
           <div className="td-summary-block">
             <h4>Summary</h4>

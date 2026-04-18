@@ -371,6 +371,31 @@ def _ensure_submit_enabled() -> None:
         )
 
 
+def _derive_full_task_instructions(task_payload: Mapping[str, Any]) -> str | None:
+    sections: list[str] = []
+    task_instructions = str(task_payload.get("instructions") or "").strip()
+    if task_instructions:
+        sections.append(task_instructions)
+
+    raw_steps = task_payload.get("steps")
+    if isinstance(raw_steps, list):
+        for index, item in enumerate(raw_steps, start=1):
+            if not isinstance(item, Mapping):
+                continue
+            step_instructions = str(item.get("instructions") or "").strip()
+            if not step_instructions:
+                continue
+            step_title = str(item.get("title") or "").strip()
+            label = f"Step {index}"
+            if step_title:
+                label = f"{label}: {step_title}"
+            sections.append(f"{label}\n{step_instructions}")
+
+    if sections:
+        return "\n\n".join(sections)
+    return None
+
+
 def _serialize_execution(
     record, *, include_artifact_refs: bool = True, user: Optional["User"] = None
 ) -> ExecutionModel:
@@ -651,6 +676,7 @@ def _serialize_execution(
         owner_id=owner_id,
         title=title,
         summary=summary,
+        task_instructions=_derive_full_task_instructions(task_payload),
         status=dashboard_status,
         dashboard_status=dashboard_status,
         state=state_value,

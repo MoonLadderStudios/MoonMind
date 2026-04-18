@@ -879,6 +879,7 @@ class ExecutionModel(BaseModel):
     owner_id: str = Field(..., alias="ownerId")
     title: str = Field(..., alias="title")
     summary: str = Field(..., alias="summary")
+    task_instructions: Optional[str] = Field(None, alias="taskInstructions")
     status: Literal[
         "queued",
         "running",

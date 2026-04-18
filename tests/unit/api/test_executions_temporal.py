@@ -123,6 +123,23 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         assert item["waitingReason"] == "external_completion"
 
 
+def test_task_detail_instructions_include_task_and_step_text() -> None:
+    assert executions_module._derive_full_task_instructions(
+        {
+            "instructions": "Top-level task instructions.",
+            "steps": [
+                {"title": "Plan", "instructions": "Write the plan."},
+                {"instructions": "Apply the change."},
+                {"title": "Empty step", "instructions": "   "},
+            ],
+        }
+    ) == (
+        "Top-level task instructions.\n\n"
+        "Step 1: Plan\nWrite the plan.\n\n"
+        "Step 2\nApply the change."
+    )
+
+
 def test_list_executions_source_temporal_merges_canonical_parameters(
     client,
 ) -> None:
