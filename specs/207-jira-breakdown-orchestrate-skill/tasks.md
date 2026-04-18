@@ -72,7 +72,7 @@
 - [ ] T023 [P] Check that no raw Jira credential access or direct Jira shell mutation was introduced in `moonmind/workflows/temporal/story_output_tools.py` and `api_service/data/task_step_templates/jira-breakdown-orchestrate.yaml`
 - [ ] T024 Run the full unit suite with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and record results in `specs/207-jira-breakdown-orchestrate-skill/quickstart.md`
 - [ ] T025 Run `./tools/test_integration.sh` when Docker is available, or record the Docker/socket blocker in `specs/207-jira-breakdown-orchestrate-skill/quickstart.md`
-- [ ] T026 Run `/speckit.verify` for MM-404 after implementation and tests pass, then record the verification verdict and evidence in `specs/207-jira-breakdown-orchestrate-skill/verification.md`
+- [ ] T026 Run `moonspec-verify` for MM-404 after implementation and tests pass, equivalent to the final `/speckit.verify` gate, then record the verification verdict and evidence in `specs/207-jira-breakdown-orchestrate-skill/verification.md`
 
 ## Dependencies And Execution Order
 

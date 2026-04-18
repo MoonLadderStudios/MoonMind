@@ -41,7 +41,7 @@ Implement MM-404 by adding a reusable Jira Breakdown and Orchestrate workflow su
 **Language/Version**: Python 3.12 with Pydantic v2 and SQLAlchemy async ORM  
 **Primary Dependencies**: Existing task template catalog, Temporal execution service, Jira story output tooling, trusted Jira tool service, MoonMind task dependency contract  
 **Storage**: Existing task template seed data, existing Temporal execution records, and existing execution dependency edge table; no new persistent database tables planned  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_task_step_templates_service.py tests/unit/workflows/temporal/test_story_output_tools.py tests/unit/workflows/temporal/test_temporal_service.py` during iteration; final `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_task_step_templates_service.py tests/unit/workflows/temporal/test_story_output_tools.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_temporal_service.py` during iteration; final `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
 **Integration Testing**: `./tools/test_integration.sh` for required hermetic `integration_ci` coverage when Docker is available; add or extend `tests/integration/test_startup_task_template_seeding.py` for seeded preset persistence  
 **Target Platform**: MoonMind API service and Temporal-backed task creation on Linux containers  
 **Project Type**: Backend workflow orchestration and seeded task template feature  
@@ -104,6 +104,7 @@ moonmind/
 tests/
 ├── unit/api/test_task_step_templates_service.py
 ├── unit/workflows/temporal/test_story_output_tools.py
+├── unit/workflows/temporal/test_temporal_worker_runtime.py
 ├── unit/workflows/temporal/test_temporal_service.py
 └── integration/test_startup_task_template_seeding.py
 ```

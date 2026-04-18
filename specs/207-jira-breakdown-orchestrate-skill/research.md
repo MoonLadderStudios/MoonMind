@@ -100,7 +100,7 @@ Test implications: Static checks and review should confirm no raw Jira credentia
 
 Decision: Use targeted unit tests for seed expansion, downstream task payload construction, dependency wiring, partial results, and existing story-output behavior.
 
-Evidence: Existing relevant coverage lives in `tests/unit/api/test_task_step_templates_service.py`, `tests/unit/workflows/temporal/test_story_output_tools.py`, and `tests/unit/workflows/temporal/test_temporal_service.py`.
+Evidence: Existing relevant coverage lives in `tests/unit/api/test_task_step_templates_service.py`, `tests/unit/workflows/temporal/test_story_output_tools.py`, `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, and `tests/unit/workflows/temporal/test_temporal_service.py`.
 
 Rationale: Most behavior can be tested hermetically without live Jira or Docker.
 

@@ -44,17 +44,18 @@ Required assertions:
 ```bash
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh \
   tests/unit/workflows/temporal/test_story_output_tools.py \
+  tests/unit/workflows/temporal/test_temporal_worker_runtime.py \
   tests/unit/workflows/temporal/test_temporal_service.py
 ```
 
 Required scenarios:
 
-- three valid issue mappings create three downstream Jira Orchestrate tasks,
-- task 2 depends on task 1 and task 3 depends on task 2,
-- one valid issue mapping creates one task and zero dependency edges,
-- zero mappings returns a no-downstream-task outcome,
+- SC-001: three valid issue mappings create three downstream Jira Orchestrate tasks,
+- SC-002: task 2 depends on task 1 and task 3 depends on task 2,
+- SC-003: one valid issue mapping creates one task and zero dependency edges,
+- SC-004: zero mappings returns a no-downstream-task outcome,
 - missing issue keys are reported per story,
-- partial task creation failure reports successes and failures,
+- SC-005: partial task creation failure reports successes and failures,
 - idempotency keys prevent duplicate downstream tasks on retry.
 
 4. Implement the seeded preset and deterministic task creation helper until targeted tests pass.
@@ -73,6 +74,7 @@ Required startup seeding coverage lives in `tests/integration/test_startup_task_
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh \
   tests/unit/api/test_task_step_templates_service.py \
   tests/unit/workflows/temporal/test_story_output_tools.py \
+  tests/unit/workflows/temporal/test_temporal_worker_runtime.py \
   tests/unit/workflows/temporal/test_temporal_service.py
 ```
 
@@ -97,16 +99,17 @@ Use stubbed trusted Jira and execution-creation responses to exercise one compos
 1. The composite surface receives a broad Jira/design input.
 2. Normal Jira Breakdown produces three ordered stories.
 3. Trusted Jira story creation returns three created or reused Jira issue keys.
-4. Downstream task creation creates three Jira Orchestrate tasks.
-5. The second created task has `dependsOn` containing the first workflow ID.
-6. The third created task has `dependsOn` containing the second workflow ID.
-7. The orchestration result reports three created tasks, two dependency edges, and MM-404 traceability.
+4. SC-001: Downstream task creation creates three Jira Orchestrate tasks.
+5. SC-002: The second created task has `dependsOn` containing the first workflow ID.
+6. SC-002: The third created task has `dependsOn` containing the second workflow ID.
+7. SC-006: Downstream story implementation is delegated to created Jira Orchestrate tasks rather than executed inline during breakdown.
+8. SC-007: The orchestration result reports three created tasks, two dependency edges, and MM-404 traceability.
 
 Failure verification:
 
-- zero stories returns `no_downstream_tasks`,
+- SC-004: zero stories returns `no_downstream_tasks`,
 - a missing Jira issue key skips or fails that story without inventing data,
-- downstream task creation failure reports partial results,
+- SC-005: downstream task creation failure reports partial results,
 - dependency validation failure does not claim a complete chain.
 
 Traceability verification:
