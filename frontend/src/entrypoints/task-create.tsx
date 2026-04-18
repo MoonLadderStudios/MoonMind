@@ -620,6 +620,9 @@ function buildEditParametersPatch({
     ...submittedPayload,
     task: mergedTask,
   };
+  if (!("mergeAutomation" in submittedPayload)) {
+    delete parametersPatch.mergeAutomation;
+  }
   delete parametersPatch.startingBranch;
   delete parametersPatch.targetBranch;
   return parametersPatch;
@@ -3012,12 +3015,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   useEffect(() => {
     if (!mergeAutomationAvailable && isMergeAutomationPublishMode(publishMode)) {
-      const primarySkill = String(steps[0]?.skillId || "")
-        .trim()
-        .toLowerCase();
-      setPublishMode(isResolverSkill(primarySkill) ? "none" : "pr");
+      setPublishMode(isResolverSkill(effectiveSkillId) ? "none" : "pr");
     }
-  }, [mergeAutomationAvailable, publishMode, steps[0]?.skillId]);
+  }, [effectiveSkillId, mergeAutomationAvailable, publishMode]);
 
   const availableDependencyOptions = useMemo(
     () =>

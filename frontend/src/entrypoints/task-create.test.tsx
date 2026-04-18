@@ -765,6 +765,40 @@ describe("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Amerge-automation-edit?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:merge-automation-edit",
+              workflowType: "MoonMind.Run",
+              state: "executing",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-default",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              publishMode: "pr",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                mergeAutomation: { enabled: true },
+                task: {
+                  instructions: "Update an existing automated PR task.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-default",
+                  },
+                  publish: { mode: "pr" },
+                },
+              },
+              actions: {
+                canUpdateInputs: true,
+                canRerun: false,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Amulti-step-edit?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -1205,6 +1239,17 @@ describe("Task Create Entrypoint", () => {
               applied: "immediate",
               message: "Inputs updated.",
               execution: { workflowId: "mm:edit-123" },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Amerge-automation-edit/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "immediate",
+              message: "Inputs updated.",
+              execution: { workflowId: "mm:merge-automation-edit" },
             }),
           } as Response);
         }
@@ -3234,6 +3279,40 @@ describe("Task Create Entrypoint", () => {
     window.removeEventListener("moonmind:temporal-task-editing", onTelemetry);
   });
 
+  it("clears persisted merge automation when edit mode deselects the combined publish mode", async () => {
+    renderForEdit("mm:merge-automation-edit");
+
+    const publishSelect = (await screen.findByLabelText(
+      "Publish Mode",
+    )) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(publishSelect.value).toBe("pr_with_merge_automation");
+    });
+    fireEvent.change(publishSelect, { target: { value: "pr" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Amerge-automation-edit/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Amerge-automation-edit/update",
+      )
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request.parametersPatch).not.toHaveProperty("mergeAutomation");
+    expect(request.parametersPatch).toMatchObject({
+      publishMode: "pr",
+      task: {
+        publish: { mode: "pr" },
+      },
+    });
+  });
+
   it("shows continue-as-new success copy and redirects to the returned execution context", async () => {
     renderForEdit("mm:continue-edit");
 
@@ -4963,7 +5042,7 @@ describe("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-      ).toBe("pr");
+      ).toBe("none");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -4977,8 +5056,9 @@ describe("Task Create Entrypoint", () => {
 
     const payload = latestCreateRequest().payload as Record<string, unknown>;
     const task = payload.task as Record<string, unknown>;
-    expect(payload.publishMode).toBe("pr");
+    expect(payload.publishMode).toBe("none");
     expect(payload).not.toHaveProperty("mergeAutomation");
+    expect(task.publish).toMatchObject({ mode: "none" });
     expect(task.skills).toEqual({ include: [{ name: "pr-resolver" }] });
   });
 
