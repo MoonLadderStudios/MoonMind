@@ -362,7 +362,7 @@ async def test_start_auth_runner_resolves_provider_bootstrap_command(
     )
 
     assert result["container_name"] == "moonmind_auth_oas_activityrunner1"
-    assert observed["bootstrap_command"] == ("codex", "login")
+    assert observed["bootstrap_command"] == ("codex", "login", "--device-auth")
     assert observed["volume_ref"] == "codex_auth_volume"
     assert observed["volume_mount_path"] == "/home/app/.codex"
 

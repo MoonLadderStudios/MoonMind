@@ -70,14 +70,16 @@ class TestOAuthProviderRegistry:
             for key in required_keys:
                 assert key in spec, f"Missing key '{key}' in provider '{runtime_id}'"
 
-    def test_all_providers_use_none_transport(self) -> None:
+    def test_non_codex_providers_use_none_transport(self) -> None:
         for runtime_id, spec in OAUTH_PROVIDERS.items():
+            if runtime_id == "codex_cli":
+                continue
             assert spec["session_transport"] == "none", (
                 f"Provider '{runtime_id}' should use none transport until a replacement exists"
             )
 
     def test_session_transport_default_is_exposed_for_runtime_boundaries(self) -> None:
-        assert get_provider_default("codex_cli", "session_transport") == "none"
+        assert get_provider_default("codex_cli", "session_transport") == "moonmind_pty_ws"
 
     def test_all_providers_use_oauth_mode(self) -> None:
         for runtime_id, spec in OAUTH_PROVIDERS.items():
@@ -95,7 +97,11 @@ class TestOAuthProviderRegistry:
             )
 
     def test_codex_bootstrap_command_is_not_placeholder(self) -> None:
-        assert get_provider_bootstrap_command("codex_cli") == ("codex", "login")
+        assert get_provider_bootstrap_command("codex_cli") == (
+            "codex",
+            "login",
+            "--device-auth",
+        )
 
     def test_bootstrap_command_rejects_unknown_runtime(self) -> None:
         with pytest.raises(ValueError, match="Unsupported OAuth runtime"):

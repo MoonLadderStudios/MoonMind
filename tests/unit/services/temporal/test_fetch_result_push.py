@@ -788,6 +788,7 @@ class TestPushWorkspaceBranch:
     ) -> None:
         workspace = tmp_path / "run-1" / "repo"
         monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
 
         with patch(
             "pathlib.Path.mkdir",
