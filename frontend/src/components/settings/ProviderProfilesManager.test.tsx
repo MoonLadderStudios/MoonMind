@@ -295,6 +295,17 @@ describe('ProviderProfilesManager form controls', () => {
     is_default: true,
   };
 
+  const codexOauthProfile: ProviderProfile = {
+    ...profile,
+    profile_id: 'codex-oauth',
+    credential_source: 'oauth_volume',
+    runtime_materialization_mode: 'oauth_home',
+    secret_refs: {},
+    volume_ref: 'codex_auth_volume',
+    volume_mount_path: '/home/app/.codex',
+    account_label: 'Codex account',
+  };
+
   it('labels secret refs and resets create-form values', () => {
     renderProviderProfilesManager();
 
@@ -395,5 +406,98 @@ describe('ProviderProfilesManager form controls', () => {
       });
     });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('starts a Codex OAuth session from the profile Auth action', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        session_id: 'oas_settings_auth',
+        runtime_id: 'codex_cli',
+        profile_id: 'codex-oauth',
+        status: 'pending',
+        session_transport: 'moonmind_pty_ws',
+      }),
+    } as Response);
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
+
+    renderProviderProfilesManager([codexOauthProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auth codex-oauth' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/oauth-sessions',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    const [, requestInit] = fetchSpy.mock.calls[0] ?? [];
+    const payload = JSON.parse(String((requestInit as RequestInit).body));
+    expect(payload).toMatchObject({
+      runtime_id: 'codex_cli',
+      profile_id: 'codex-oauth',
+      volume_ref: 'codex_auth_volume',
+      volume_mount_path: '/home/app/.codex',
+      account_label: 'Codex account',
+    });
+    expect(openSpy).toHaveBeenCalledWith(
+      '/oauth-terminal?session_id=oas_settings_auth',
+      '_blank',
+      'noopener,noreferrer',
+    );
+    expect(await screen.findByText('OAuth: Pending')).toBeTruthy();
+  });
+
+  it('supports OAuth finalize and retry actions from Settings state', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          session_id: 'oas_settings_finalize',
+          runtime_id: 'codex_cli',
+          profile_id: 'codex-oauth',
+          status: 'awaiting_user',
+          session_transport: 'moonmind_pty_ws',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: 'succeeded' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          session_id: 'oas_settings_retry',
+          runtime_id: 'codex_cli',
+          profile_id: 'codex-oauth',
+          status: 'pending',
+          session_transport: 'moonmind_pty_ws',
+        }),
+      } as Response);
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    const { queryClient } = renderProviderProfilesManager([codexOauthProfile]);
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auth codex-oauth' }));
+
+    expect(await screen.findByText('OAuth: Awaiting User')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Finalize codex-oauth' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/oauth-sessions/oas_settings_finalize/finalize',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    expect(await screen.findByText('OAuth: Succeeded')).toBeTruthy();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry codex-oauth' }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/oauth-sessions/oas_settings_finalize/reconnect',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
   });
 });

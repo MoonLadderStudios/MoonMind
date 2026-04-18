@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
 export interface ProviderProfile {
@@ -82,6 +82,33 @@ interface ProviderProfileSavePayload {
   priority: number | null;
   clear_env_keys: string[] | null;
   account_label: string | null;
+}
+
+type OAuthSessionStatus =
+  | 'pending'
+  | 'starting'
+  | 'bridge_ready'
+  | 'awaiting_user'
+  | 'verifying'
+  | 'registering_profile'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'expired';
+
+interface OAuthSessionResponse {
+  session_id: string;
+  runtime_id: string;
+  profile_id: string;
+  status: OAuthSessionStatus;
+  session_transport?: string | null;
+  failure_reason?: string | null;
+}
+
+interface OAuthSessionState {
+  sessionId: string;
+  status: OAuthSessionStatus;
+  failureReason?: string | null | undefined;
 }
 
 export const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
@@ -197,6 +224,29 @@ function summarizeSecretRefs(secretRefs: Record<string, string>): string {
   return entries.map(([key, value]) => `${key}: ${value}`).join(', ');
 }
 
+function isCodexOAuthCapable(profile: ProviderProfile): boolean {
+  return profile.runtime_id === 'codex_cli';
+}
+
+function oauthStatusLabel(status: OAuthSessionStatus): string {
+  return status
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function isActiveOAuthStatus(status: OAuthSessionStatus): boolean {
+  return ['pending', 'starting', 'bridge_ready', 'awaiting_user', 'verifying', 'registering_profile'].includes(status);
+}
+
+function canFinalizeOAuthStatus(status: OAuthSessionStatus): boolean {
+  return status === 'awaiting_user' || status === 'verifying';
+}
+
+function canRetryOAuthStatus(status: OAuthSessionStatus): boolean {
+  return status === 'failed' || status === 'cancelled' || status === 'expired' || status === 'succeeded';
+}
+
 function buildSavePayload(form: ProviderProfileFormState): ProviderProfileSavePayload {
   const payload = {
     profile_id: form.profileId.trim(),
@@ -243,6 +293,7 @@ export function ProviderProfilesManager({
 }: ProviderProfilesManagerProps) {
   const [form, setForm] = useState<ProviderProfileFormState>(() => defaultFormState());
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [oauthSessions, setOauthSessions] = useState<Record<string, OAuthSessionState>>({});
 
   const isEditing = editingProfileId !== null;
   const defaultFormValues = defaultFormState();
@@ -387,6 +438,209 @@ export function ProviderProfilesManager({
     },
   });
 
+  const startOAuthMutation = useMutation({
+    mutationFn: async (profile: ProviderProfile) => {
+      const response = await fetch('/api/v1/oauth-sessions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          runtime_id: profile.runtime_id,
+          profile_id: profile.profile_id,
+          volume_ref: profile.volume_ref ?? undefined,
+          volume_mount_path: profile.volume_mount_path ?? undefined,
+          provider_id: profile.provider_id,
+          provider_label: profile.provider_label ?? undefined,
+          account_label: profile.account_label ?? profile.profile_id,
+          max_parallel_runs: profile.max_parallel_runs,
+          cooldown_after_429_seconds: profile.cooldown_after_429_seconds,
+          rate_limit_policy: profile.rate_limit_policy,
+        }),
+      });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        const detail =
+          typeof errorPayload.detail === 'string'
+            ? errorPayload.detail
+            : 'Failed to start OAuth session.';
+        throw new Error(detail);
+      }
+      return response.json() as Promise<OAuthSessionResponse>;
+    },
+    onSuccess: (session) => {
+      setOauthSessions((current) => ({
+        ...current,
+        [session.profile_id]: {
+          sessionId: session.session_id,
+          status: session.status,
+          failureReason: session.failure_reason,
+        },
+      }));
+      window.open(
+        `/oauth-terminal?session_id=${encodeURIComponent(session.session_id)}`,
+        '_blank',
+        'noopener,noreferrer',
+      );
+      onNotice({
+        level: 'ok',
+        text: `OAuth session "${session.session_id}" started for "${session.profile_id}".`,
+      });
+    },
+    onError: (error: Error) => {
+      onNotice({ level: 'error', text: error.message });
+    },
+  });
+
+  const cancelOAuthMutation = useMutation({
+    mutationFn: async ({ profileId, sessionId }: { profileId: string; sessionId: string }) => {
+      const response = await fetch(
+        `/api/v1/oauth-sessions/${encodeURIComponent(sessionId)}/cancel`,
+        { method: 'POST' },
+      );
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        const detail =
+          typeof errorPayload.detail === 'string'
+            ? errorPayload.detail
+            : 'Failed to cancel OAuth session.';
+        throw new Error(detail);
+      }
+      return { profileId, sessionId };
+    },
+    onSuccess: ({ profileId }) => {
+      setOauthSessions((current) => ({
+        ...current,
+        [profileId]: { ...current[profileId], sessionId: current[profileId]?.sessionId ?? '', status: 'cancelled' },
+      }));
+      onNotice({ level: 'ok', text: `OAuth session for "${profileId}" cancelled.` });
+    },
+    onError: (error: Error) => {
+      onNotice({ level: 'error', text: error.message });
+    },
+  });
+
+  const finalizeOAuthMutation = useMutation({
+    mutationFn: async ({ profileId, sessionId }: { profileId: string; sessionId: string }) => {
+      const response = await fetch(
+        `/api/v1/oauth-sessions/${encodeURIComponent(sessionId)}/finalize`,
+        { method: 'POST' },
+      );
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        const detail =
+          typeof errorPayload.detail === 'string'
+            ? errorPayload.detail
+            : 'Failed to finalize OAuth session.';
+        throw new Error(detail);
+      }
+      return { profileId, sessionId };
+    },
+    onSuccess: ({ profileId, sessionId }) => {
+      setOauthSessions((current) => ({
+        ...current,
+        [profileId]: { sessionId, status: 'succeeded' },
+      }));
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
+    },
+    onError: (error: Error) => {
+      onNotice({ level: 'error', text: error.message });
+    },
+  });
+
+  const retryOAuthMutation = useMutation({
+    mutationFn: async ({ profileId, sessionId }: { profileId: string; sessionId: string }) => {
+      const response = await fetch(
+        `/api/v1/oauth-sessions/${encodeURIComponent(sessionId)}/reconnect`,
+        { method: 'POST' },
+      );
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        const detail =
+          typeof errorPayload.detail === 'string'
+            ? errorPayload.detail
+            : 'Failed to retry OAuth session.';
+        throw new Error(detail);
+      }
+      const session = (await response.json()) as OAuthSessionResponse;
+      return { profileId, session };
+    },
+    onSuccess: ({ profileId, session }) => {
+      setOauthSessions((current) => ({
+        ...current,
+        [profileId]: {
+          sessionId: session.session_id,
+          status: session.status,
+          failureReason: session.failure_reason,
+        },
+      }));
+      window.open(
+        `/oauth-terminal?session_id=${encodeURIComponent(session.session_id)}`,
+        '_blank',
+        'noopener,noreferrer',
+      );
+      onNotice({ level: 'ok', text: `OAuth session for "${profileId}" retried.` });
+    },
+    onError: (error: Error) => {
+      onNotice({ level: 'error', text: error.message });
+    },
+  });
+
+  useEffect(() => {
+    const activeSessions = Object.entries(oauthSessions).filter(([, session]) =>
+      isActiveOAuthStatus(session.status),
+    );
+    if (activeSessions.length === 0) {
+      return undefined;
+    }
+
+    const pollSessionStatuses = async () => {
+      const sessionUpdates = await Promise.all(
+        activeSessions.map(async ([profileId, session]) => {
+          const response = await fetch(
+            `/api/v1/oauth-sessions/${encodeURIComponent(session.sessionId)}`,
+            { headers: { Accept: 'application/json' } },
+          );
+          if (!response.ok) {
+            return null;
+          }
+          const updatedSession = (await response.json()) as OAuthSessionResponse;
+          return { profileId, session: updatedSession };
+        }),
+      );
+
+      const appliedUpdates = sessionUpdates.filter(
+        (update): update is { profileId: string; session: OAuthSessionResponse } => update !== null,
+      );
+      if (appliedUpdates.length === 0) {
+        return;
+      }
+
+      setOauthSessions((current) => {
+        const next = { ...current };
+        for (const { profileId, session } of appliedUpdates) {
+          next[profileId] = {
+            sessionId: session.session_id,
+            status: session.status,
+            failureReason: session.failure_reason,
+          };
+        }
+        return next;
+      });
+
+      if (appliedUpdates.some(({ session }) => session.status === 'succeeded')) {
+        queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void pollSessionStatuses().catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [oauthSessions, queryClient]);
+
   return (
     <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
@@ -419,7 +673,10 @@ export function ProviderProfilesManager({
                 </td>
               </tr>
             ) : (
-              profiles.map((profile) => (
+              profiles.map((profile) => {
+                const oauthSession = oauthSessions[profile.profile_id];
+                const canStartOAuth = isCodexOAuthCapable(profile);
+                return (
                 <tr key={profile.profile_id}>
                   <td className="px-3 py-4">
                     <div className="font-medium text-slate-900 dark:text-white">{profile.profile_id}</div>
@@ -466,9 +723,78 @@ export function ProviderProfilesManager({
                     >
                       {profile.enabled ? 'Enabled' : 'Disabled'}
                     </span>
+                    {oauthSession ? (
+                      <div className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-400">
+                        OAuth: {oauthStatusLabel(oauthSession.status)}
+                      </div>
+                    ) : null}
+                    {oauthSession?.failureReason ? (
+                      <div className="mt-1 text-xs text-rose-600 dark:text-rose-400">
+                        {oauthSession.failureReason}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-3 py-4">
                     <div className="flex flex-wrap gap-2">
+                      {canStartOAuth ? (
+                        <button
+                          type="button"
+                          className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                          onClick={() => startOAuthMutation.mutate(profile)}
+                          disabled={startOAuthMutation.isPending}
+                          aria-label={`Auth ${profile.profile_id}`}
+                        >
+                          Auth
+                        </button>
+                      ) : null}
+                      {oauthSession && isActiveOAuthStatus(oauthSession.status) ? (
+                        <button
+                          type="button"
+                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          onClick={() =>
+                            cancelOAuthMutation.mutate({
+                              profileId: profile.profile_id,
+                              sessionId: oauthSession.sessionId,
+                            })
+                          }
+                          disabled={cancelOAuthMutation.isPending}
+                          aria-label={`Cancel OAuth ${profile.profile_id}`}
+                        >
+                          Cancel OAuth
+                        </button>
+                      ) : null}
+                      {oauthSession && canFinalizeOAuthStatus(oauthSession.status) ? (
+                        <button
+                          type="button"
+                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          onClick={() =>
+                            finalizeOAuthMutation.mutate({
+                              profileId: profile.profile_id,
+                              sessionId: oauthSession.sessionId,
+                            })
+                          }
+                          disabled={finalizeOAuthMutation.isPending}
+                          aria-label={`Finalize ${profile.profile_id}`}
+                        >
+                          Finalize
+                        </button>
+                      ) : null}
+                      {oauthSession && canRetryOAuthStatus(oauthSession.status) ? (
+                        <button
+                          type="button"
+                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          onClick={() =>
+                            retryOAuthMutation.mutate({
+                              profileId: profile.profile_id,
+                              sessionId: oauthSession.sessionId,
+                            })
+                          }
+                          disabled={retryOAuthMutation.isPending}
+                          aria-label={`Retry ${profile.profile_id}`}
+                        >
+                          Retry
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
@@ -510,7 +836,8 @@ export function ProviderProfilesManager({
                     </div>
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>

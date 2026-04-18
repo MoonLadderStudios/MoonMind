@@ -130,6 +130,7 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
     async def _capture_start(session_model):
         captured["volume_ref"] = session_model.volume_ref
         captured["volume_mount_path"] = session_model.volume_mount_path
+        captured["session_transport"] = session_model.session_transport
         captured["metadata_json"] = session_model.metadata_json
 
     monkeypatch.setattr(
@@ -146,8 +147,10 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
         response = await client.post("/api/v1/oauth-sessions", json=payload)
 
     assert response.status_code == 201
+    assert response.json()["session_transport"] == "moonmind_pty_ws"
     assert captured["volume_ref"] == "codex_auth_volume"
     assert captured["volume_mount_path"] == "/home/app/.codex"
+    assert captured["session_transport"] == "moonmind_pty_ws"
     assert captured["metadata_json"]["provider_id"] == "openai"
     assert captured["metadata_json"]["provider_label"] == "OpenAI"
 
