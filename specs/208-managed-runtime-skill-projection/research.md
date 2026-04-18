@@ -53,5 +53,5 @@ Test implications: Existing instruction tests plus focused prompt-index/no-body 
 Decision: Preserve MM-407 in all MoonSpec artifacts and final verification output.
 Evidence: `spec.md` includes the full MM-407 canonical input and traceability.
 Rationale: Downstream PR and verification automation needs Jira traceability.
-Alternatives considered: Reference only the summary; rejected because the original request must remain available to `/speckit.verify`.
+Alternatives considered: Reference only the summary; rejected because the original request must remain available to `/moonspec-verify`.
 Test implications: Final verification traceability check.
