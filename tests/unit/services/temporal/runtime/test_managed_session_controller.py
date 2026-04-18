@@ -739,6 +739,7 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
     )
     git_envs: list[dict[str, str] | None] = []
     docker_commands: list[tuple[str, ...]] = []
+    docker_envs: list[dict[str, str] | None] = []
     container_payloads: list[str | None] = []
 
     class _FakeGitHubAuthBrokers:
@@ -779,6 +780,7 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
             return 1, "", "No such container"
         if command[:2] == ("docker", "run"):
             docker_commands.append(command)
+            docker_envs.append(env)
             return 0, "ctr-1\n", ""
         if "ready" in command:
             return 0, '{"ready": true}\n', ""
@@ -828,11 +830,16 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
     docker_run_text = " ".join(docker_commands[0])
     assert token not in docker_run_text
     assert "GITHUB_TOKEN=" not in docker_run_text
+    assert "GITHUB_TOKEN" in docker_commands[0]
+    assert docker_envs[0] is not None
+    assert docker_envs[0]["GITHUB_TOKEN"] == token
     assert "GIT_CONFIG_GLOBAL=" in docker_run_text
+    assert "GIT_TERMINAL_PROMPT=0" in docker_run_text
     assert ".moonmind/bin" in docker_run_text
     assert container_payloads
     assert token not in str(container_payloads[0])
     assert "githubCredential" in str(container_payloads[0])
+    assert '"environment": {"GITHUB_TOKEN"' not in str(container_payloads[0])
     assert "GIT_CONFIG_GLOBAL" in str(container_payloads[0])
     assert (Path(request.session_workspace_path) / ".moonmind" / "bin" / "gh").exists()
     assert (
@@ -1068,6 +1075,11 @@ async def test_controller_launch_redacts_github_token_from_command_failures(
         if command[:3] == ("docker", "rm", "-f"):
             return 1, "", "No such container"
         if command[:2] == ("docker", "run"):
+            assert "GITHUB_TOKEN=ghp_inline_secret_token_12345678901234567890" not in " ".join(
+                command
+            )
+            assert env is not None
+            assert env["GITHUB_TOKEN"] == "ghp_inline_secret_token_12345678901234567890"
             return (
                 1,
                 "",
