@@ -2028,6 +2028,18 @@ function SaveIcon() {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 7h14" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M6 7l1 13h10l1-13" />
+      <path d="M9 7V4h6v3" />
+    </svg>
+  );
+}
+
 export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const dashboardConfig = readDashboardConfig(payload);
   const pageMode = useMemo(
@@ -2229,6 +2241,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   >({});
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
+  const [isDeletingPreset, setIsDeletingPreset] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
@@ -2917,6 +2930,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
   const selectedPreset =
     templateItems.find((item) => item.key === selectedPresetKey) || null;
+  const deletePresetTooltip = selectedPreset
+    ? "Delete the selected preset"
+    : "Choose a preset to delete";
   const effectiveSkillId = useMemo(
     () =>
       resolveEffectiveSkillId(
@@ -4216,6 +4232,54 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const failure =
         error instanceof Error ? error : new Error("Failed to save preset.");
       setTemplateMessage(`Failed to save preset: ${failure.message}`);
+    }
+  }
+
+  async function handleDeleteSelectedPreset() {
+    if (!selectedPreset || isDeletingPreset) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete preset '${selectedPreset.title}'? This cannot be undone.`,
+    );
+    if (!confirmed) {
+      setTemplateMessage("Preset delete cancelled.");
+      return;
+    }
+
+    setIsDeletingPreset(true);
+    setTemplateMessage("Deleting preset...");
+    try {
+      const response = await fetch(
+        withQueryParams(
+          interpolatePath(taskTemplateDetailEndpoint, {
+            slug: selectedPreset.slug,
+          }),
+          {
+            scope: selectedPreset.scope,
+            scopeRef: selectedPreset.scopeRef || undefined,
+          },
+        ),
+        {
+          method: "DELETE",
+          headers: { Accept: "application/json" },
+        },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await responseErrorMessage(response, "Failed to delete preset."),
+        );
+      }
+      setSelectedPresetKey("");
+      setPresetReapplyNeeded(false);
+      setTemplateMessage(`Deleted preset '${selectedPreset.title}'.`);
+      await templateOptionsQuery.refetch();
+    } catch (error) {
+      const failure =
+        error instanceof Error ? error : new Error("Failed to delete preset.");
+      setTemplateMessage(`Failed to delete preset: ${failure.message}`);
+    } finally {
+      setIsDeletingPreset(false);
     }
   }
 
@@ -6059,6 +6123,19 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   <SaveIcon />
                 </button>
               ) : null}
+              <button
+                type="button"
+                id="queue-template-delete-current"
+                className="queue-step-icon-button destructive"
+                aria-label="Delete preset"
+                aria-disabled={!selectedPreset || isDeletingPreset}
+                aria-busy={isDeletingPreset}
+                title={deletePresetTooltip}
+                disabled={!selectedPreset || isDeletingPreset}
+                onClick={handleDeleteSelectedPreset}
+              >
+                <TrashIcon />
+              </button>
               <button
                 type="button"
                 id="queue-template-apply"
