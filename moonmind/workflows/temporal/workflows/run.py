@@ -1792,9 +1792,16 @@ class MoonMindRunWorkflow:
                             resolved_skillset_ref = (
                                 await self._resolve_agent_node_skillset_ref(
                                     task_skills=task_skills,
+                                    node_skills=node.get("skills"),
                                     node_inputs=node_inputs,
                                     node_id=node_id,
-                                    existing_skillset_ref=registry_snapshot_ref,
+                                    existing_skillset_ref=(
+                                        self._existing_agent_skillset_ref(
+                                            parameters=parameters,
+                                            node=node,
+                                            node_inputs=node_inputs,
+                                        )
+                                    ),
                                 )
                             )
                             request = self._build_agent_execution_request(
@@ -3493,6 +3500,7 @@ class MoonMindRunWorkflow:
         self,
         *,
         task_skills: Mapping[str, Any] | Any | None,
+        node_skills: Mapping[str, Any] | Any | None = None,
         node_inputs: Mapping[str, Any],
         node_id: str,
         existing_skillset_ref: str | None,
@@ -3504,7 +3512,7 @@ class MoonMindRunWorkflow:
 
         effective = build_effective_task_skill_selectors(
             task_skills,
-            node_inputs.get("skills"),
+            node_skills if node_skills is not None else node_inputs.get("skills"),
         )
         if effective is None:
             return None
@@ -3530,6 +3538,22 @@ class MoonMindRunWorkflow:
             return str(manifest_ref)
         snapshot_id = getattr(resolved, "snapshot_id", None)
         return str(snapshot_id) if snapshot_id else None
+
+    @staticmethod
+    def _existing_agent_skillset_ref(
+        *,
+        parameters: Mapping[str, Any],
+        node: Mapping[str, Any],
+        node_inputs: Mapping[str, Any],
+    ) -> str | None:
+        for source in (node_inputs, node, parameters):
+            for key in ("resolvedSkillsetRef", "resolved_skillset_ref"):
+                value = source.get(key)
+                if value is not None:
+                    candidate = str(value).strip()
+                    if candidate:
+                        return candidate
+        return None
 
     def _build_agent_execution_request(
         self,

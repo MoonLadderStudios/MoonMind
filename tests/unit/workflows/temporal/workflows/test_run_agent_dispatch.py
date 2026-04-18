@@ -146,6 +146,44 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(selector.exclude, ["remove-me"])
 
+    async def test_agent_node_reads_canonical_node_skills_before_inputs_skills(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-wf-step-1",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/step-canonical",
+            skills=[],
+        )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+            new=AsyncMock(return_value=resolved),
+        ) as execute_activity:
+            ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills={"include": [{"name": "baseline"}]},
+                node_skills={
+                    "include": [{"name": "canonical-step"}],
+                    "exclude": ["legacy-input-step"],
+                },
+                node_inputs={
+                    "skills": {
+                        "include": [{"name": "legacy-input-step"}],
+                    }
+                },
+                node_id="step-1",
+                existing_skillset_ref=None,
+            )
+
+        self.assertEqual(ref, "artifact://skillsets/step-canonical")
+        args, _kwargs = execute_activity.call_args
+        selector = args[1]
+        self.assertEqual(
+            [(entry.name, entry.version) for entry in selector.include],
+            [("baseline", None), ("canonical-step", None)],
+        )
+        self.assertEqual(selector.exclude, ["legacy-input-step"])
+
     async def test_agent_node_pinned_resolution_failure_happens_before_launch(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._owner_id = "owner-1"
@@ -181,6 +219,51 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ref, "artifact://skillsets/original")
         execute_activity.assert_not_called()
+
+    async def test_agent_node_does_not_reuse_registry_snapshot_as_skillset_ref(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        resolved = ResolvedSkillSet(
+            snapshot_id="skillset-wf-step-1",
+            resolved_at=datetime.now(UTC),
+            manifest_ref="artifact://skillsets/resolved-from-intent",
+            skills=[],
+        )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+            new=AsyncMock(return_value=resolved),
+        ) as execute_activity:
+            existing = wf._existing_agent_skillset_ref(
+                parameters={},
+                node={
+                    "metadata": {
+                        "registry_snapshot": {
+                            "artifact_ref": "artifact://registry/not-a-skillset"
+                        }
+                    }
+                },
+                node_inputs={"skills": {"include": [{"name": "baseline"}]}},
+            )
+            ref = await wf._resolve_agent_node_skillset_ref(
+                task_skills=None,
+                node_inputs={"skills": {"include": [{"name": "baseline"}]}},
+                node_id="step-1",
+                existing_skillset_ref=existing,
+            )
+
+        self.assertIsNone(existing)
+        self.assertEqual(ref, "artifact://skillsets/resolved-from-intent")
+        execute_activity.assert_awaited_once()
+
+    def test_existing_agent_skillset_ref_accepts_explicit_refs_only(self) -> None:
+        ref = MoonMindRunWorkflow._existing_agent_skillset_ref(
+            parameters={"resolvedSkillsetRef": "artifact://skillsets/from-task"},
+            node={"resolvedSkillsetRef": "artifact://skillsets/from-node"},
+            node_inputs={"resolved_skillset_ref": "artifact://skillsets/from-input"},
+        )
+
+        self.assertEqual(ref, "artifact://skillsets/from-input")
 
 
 class TestJiraAgentPublishHelpers(unittest.TestCase):
