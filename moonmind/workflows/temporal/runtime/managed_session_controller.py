@@ -439,7 +439,6 @@ class DockerCodexManagedSessionController:
         )
         touched_paths.append(Path(socket_path))
         self._normalize_container_path_owners(touched_paths)
-        session_environment.setdefault("GIT_TERMINAL_PROMPT", "0")
         # Codex shell tools can invoke nested `bash -lc` commands that bypass
         # the workspace-local gh wrapper. Bind the token through Docker's
         # inherited environment (`-e GITHUB_TOKEN`) so it is not rendered into
