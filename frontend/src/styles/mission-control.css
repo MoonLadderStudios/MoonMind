@@ -867,12 +867,12 @@ button {
   transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease;
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-extension-button):not(.table-sort-button) {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button) {
   border-color: rgb(255 255 255 / 0.52);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-extension-button):not(.table-sort-button):hover {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):hover {
   background: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -889,8 +889,8 @@ button:focus-visible {
   outline-offset: 3px;
 }
 
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-extension-button):not(.table-sort-button):active,
-button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-extension-button):not(.table-sort-button).is-clicked {
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):active,
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button).is-clicked {
   background: linear-gradient(
     160deg,
     rgb(var(--mm-accent) / 1) 0%,
@@ -1552,6 +1552,41 @@ button.secondary:hover {
 .queue-step-attachments {
   display: grid;
   gap: 0.35rem;
+}
+
+.queue-step-attachment-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: fit-content;
+}
+
+.queue-step-attachment-label {
+  color: rgb(var(--mm-muted));
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.queue-step-attachment-add-button {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-text));
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+}
+
+.queue-step-attachment-add-button:hover,
+.queue-step-attachment-add-button:focus-visible {
+  border-color: rgb(var(--mm-accent));
+  background: rgb(var(--mm-accent) / 0.12);
 }
 
 .queue-step-attachments-list {

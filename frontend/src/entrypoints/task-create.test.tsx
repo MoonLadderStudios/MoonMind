@@ -3379,7 +3379,7 @@ describe("Task Create Entrypoint", () => {
       expect(instructions.value).toBe("Preserve the existing attachments.");
     });
 
-    const attachmentInput = await screen.findByLabelText("Step 1 attachments");
+    const attachmentInput = await screen.findByLabelText("Step 1 attachment file picker");
     fireEvent.change(attachmentInput, {
       target: {
         files: [
@@ -3823,7 +3823,7 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
     });
-    const attachmentInput = await screen.findByLabelText("Step 1 attachments");
+    const attachmentInput = await screen.findByLabelText("Step 1 attachment file picker");
     const file = new File(["fake image"], "wireframe.png", {
       type: "image/png",
     });
@@ -3908,7 +3908,7 @@ describe("Task Create Entrypoint", () => {
       target: { value: "Create a text-only task while image inputs are disabled." },
     });
 
-    expect(screen.queryByLabelText("Step 1 attachments")).toBeNull();
+    expect(screen.queryByLabelText("Step 1 attachment file picker")).toBeNull();
     expect(
       screen.queryByLabelText("Feature Request / Initial Instructions attachments"),
     ).toBeNull();
@@ -3947,7 +3947,7 @@ describe("Task Create Entrypoint", () => {
     const file = new File(["not an image"], "notes.txt", {
       type: "text/plain",
     });
-    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+    fireEvent.change(await screen.findByLabelText("Step 1 image file picker"), {
       target: { files: [file] },
     });
 
@@ -3989,7 +3989,7 @@ describe("Task Create Entrypoint", () => {
     const file = new File(["fake image"], "wireframe.png", {
       type: "image/png",
     });
-    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
       target: { files: [file] },
     });
 
@@ -4016,6 +4016,74 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
+  it("renders a compact image add button for step attachments when policy is image-only", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const addButton = await screen.findByRole("button", {
+      name: "Add images to Step 1",
+    });
+    expect(addButton.textContent).toBe("+");
+    const fileInput = screen.getByLabelText(
+      "Step 1 image file picker",
+    ) as HTMLInputElement;
+    expect(fileInput.type).toBe("file");
+    expect(fileInput.accept).toBe("image/png,image/jpeg,image/webp");
+    expect(fileInput.multiple).toBe(true);
+  });
+
+  it("uses generic step attachment add copy when policy permits non-image files", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Add attachments to Step 1",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("appends step attachments selected through repeated add actions", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const fileInput = await screen.findByLabelText("Step 1 image file picker");
+    const firstFile = new File(["first"], "first.png", {
+      type: "image/png",
+      lastModified: 1,
+    });
+    const secondFile = new File(["second"], "second.png", {
+      type: "image/png",
+      lastModified: 2,
+    });
+
+    fireEvent.change(fileInput, { target: { files: [firstFile] } });
+    expect(await screen.findByText("first.png")).toBeTruthy();
+
+    fireEvent.change(fileInput, { target: { files: [secondFile] } });
+    expect(await screen.findByText("first.png")).toBeTruthy();
+    expect(await screen.findByText("second.png")).toBeTruthy();
+  });
+
+  it("dedupes exact duplicate step attachments selected through add actions", async () => {
+    renderWithClient(
+      <TaskCreatePage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const fileInput = await screen.findByLabelText("Step 1 image file picker");
+    const duplicate = new File(["same"], "same.png", {
+      type: "image/png",
+      lastModified: 7,
+    });
+
+    fireEvent.change(fileInput, { target: { files: [duplicate] } });
+    fireEvent.change(fileInput, { target: { files: [duplicate] } });
+
+    await screen.findByText("same.png");
+    expect(screen.getAllByText("same.png")).toHaveLength(1);
+  });
+
   it("preserves attachment metadata and remove action when preview fails", async () => {
     const originalCreateObjectUrl = URL.createObjectURL;
     Object.defineProperty(URL, "createObjectURL", {
@@ -4030,7 +4098,10 @@ describe("Task Create Entrypoint", () => {
       const file = new File(["fake image"], "wireframe.png", {
         type: "image/png",
       });
-      fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Add images to Step 1" }),
+      );
+      fireEvent.change(await screen.findByLabelText("Step 1 image file picker"), {
         target: { files: [file] },
       });
 
@@ -4139,7 +4210,7 @@ describe("Task Create Entrypoint", () => {
     const firstFile = new File(["first image"], "primary.png", {
       type: "image/png",
     });
-    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
       target: { files: [firstFile] },
     });
 
@@ -4155,7 +4226,7 @@ describe("Task Create Entrypoint", () => {
     const secondFile = new File(["second image"], "second.png", {
       type: "image/png",
     });
-    fireEvent.change(await screen.findByLabelText("Step 2 attachments"), {
+    fireEvent.change(await screen.findByLabelText("Step 2 attachment file picker"), {
       target: { files: [secondFile] },
     });
 
@@ -4205,13 +4276,88 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("keeps same-name step attachments scoped to different owning steps", async () => {
+    renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Review the first same-name attachment." },
+    });
+    const firstFile = new File(["first image"], "wireframe.png", {
+      type: "image/png",
+      lastModified: 10,
+    });
+    fireEvent.change(
+      await screen.findByLabelText("Step 1 attachment file picker"),
+      {
+        target: { files: [firstFile] },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const stepTwo = (await screen.findByText("Step 2")).closest("section");
+    expect(stepTwo).not.toBeNull();
+    fireEvent.change(
+      within(stepTwo as HTMLElement).getByLabelText("Instructions"),
+      {
+        target: { value: "Review the second same-name attachment." },
+      },
+    );
+    const secondFile = new File(["second image"], "wireframe.png", {
+      type: "image/png",
+      lastModified: 20,
+    });
+    fireEvent.change(
+      await screen.findByLabelText("Step 2 attachment file picker"),
+      {
+        target: { files: [secondFile] },
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({
+          method: "POST",
+        }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as {
+      task: {
+        steps: Array<Record<string, unknown>>;
+      };
+    };
+    expect(payload.task.steps[0]).toMatchObject({
+      instructions: "Review the first same-name attachment.",
+      inputAttachments: [
+        {
+          filename: "wireframe.png",
+          contentType: "image/png",
+          sizeBytes: firstFile.size,
+        },
+      ],
+    });
+    expect(payload.task.steps[1]).toMatchObject({
+      instructions: "Review the second same-name attachment.",
+      inputAttachments: [
+        {
+          filename: "wireframe.png",
+          contentType: "image/png",
+          sizeBytes: secondFile.size,
+        },
+      ],
+    });
+  });
+
   it("does not upload step attachments when later client validation fails", async () => {
     renderWithClient(<TaskCreatePage payload={withAttachmentPolicy()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
     });
-    const attachmentInput = await screen.findByLabelText("Step 1 attachments");
+    const attachmentInput = await screen.findByLabelText("Step 1 attachment file picker");
     fireEvent.change(attachmentInput, {
       target: {
         files: [
@@ -4266,7 +4412,7 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
     });
-    const attachmentInput = await screen.findByLabelText("Step 1 attachments");
+    const attachmentInput = await screen.findByLabelText("Step 1 attachment file picker");
     fireEvent.change(attachmentInput, {
       target: {
         files: [
@@ -4338,7 +4484,7 @@ describe("Task Create Entrypoint", () => {
           target: { value: "Review the provided screenshot." },
         });
         const attachmentInput =
-          await screen.findByLabelText("Step 1 attachments");
+          await screen.findByLabelText("Step 1 attachment file picker");
         fireEvent.change(attachmentInput, {
           target: {
             files: [
@@ -4996,7 +5142,7 @@ describe("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Review the provided screenshot." },
     });
-    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
       target: {
         files: [
           new File(["fake image"], "wireframe.png", { type: "image/png" }),
@@ -5990,7 +6136,7 @@ describe("Task Create Entrypoint", () => {
     );
 
     const file = new File(["step image"], "step.png", { type: "image/png" });
-    fireEvent.change(await screen.findByLabelText("Step 1 attachments"), {
+    fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
       target: { files: [file] },
     });
 
