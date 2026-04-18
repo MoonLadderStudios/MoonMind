@@ -11,7 +11,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`
 - Integration tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -62,7 +62,7 @@
 
 - [X] T017 Update `docs/UI/CreatePage.md` so merge automation is described as a PR-specific Publish Mode choice rather than a standalone Execution context checkbox (FR-013, SC-007, DESIGN-REQ-010)
 - [X] T018 Run final unit validation `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [X] T019 Run final `/speckit.verify` work and record verification in `specs/208-create-task-publish-controls/verification.md`
+- [X] T019 Run final `/moonspec-verify` work and record verification in `specs/208-create-task-publish-controls/verification.md`
 
 ## Dependencies & Execution Order
 
