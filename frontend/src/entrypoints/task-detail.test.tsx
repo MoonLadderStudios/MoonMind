@@ -1277,6 +1277,7 @@ describe('Task Detail Entrypoint', () => {
       providerLabel: 'Google',
       title: 'Example task',
       summary: 'Did work',
+      taskInstructions: 'Inspect the repository.\n\nThen run the focused UI tests.',
       status: 'completed',
       state: 'succeeded',
       prUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/123',
@@ -1318,6 +1319,12 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText('profile:gemini-default')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
     });
+
+    expect(screen.queryByText('Inspect the repository.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Example task/ }));
+    expect(screen.getByText('Instructions')).toBeTruthy();
+    expect(screen.getByText(/Inspect the repository\./)).toBeTruthy();
+    expect(screen.getByText(/Then run the focused UI tests\./)).toBeTruthy();
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
   });

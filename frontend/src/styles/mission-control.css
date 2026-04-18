@@ -2005,6 +2005,45 @@ button.secondary:hover {
   letter-spacing: 0;
 }
 
+.td-title-toggle {
+  width: 100%;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.td-title-toggle:hover {
+  border-color: rgb(var(--mm-accent));
+}
+
+.td-title-toggle-copy {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.td-title-text {
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.td-title-toggle-hint {
+  color: rgb(var(--mm-muted));
+  font-size: 0.78rem;
+  white-space: nowrap;
+  padding-top: 0.2rem;
+}
+
 .td-hero .meta-inline {
   color: rgb(var(--mm-muted));
   font-size: 0.82rem;
@@ -2021,6 +2060,30 @@ button.secondary:hover {
   display: grid;
   gap: 0.4rem;
   justify-items: end;
+}
+
+.td-instructions-panel {
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  padding: 1rem;
+  margin: -0.75rem 0 1.25rem;
+}
+
+.td-instructions-panel h4 {
+  margin: 0 0 0.75rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0;
+  color: rgb(var(--mm-accent));
+}
+
+.td-instructions-panel pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mm-font-sans);
+  font-size: 0.92rem;
+  line-height: 1.5;
 }
 
 .td-group {
@@ -2115,6 +2178,14 @@ button.secondary:hover {
 
   .td-hero-right {
     justify-items: start;
+  }
+
+  .td-title-toggle {
+    display: grid;
+  }
+
+  .td-title-toggle-hint {
+    white-space: normal;
   }
 
   .td-group dl {
