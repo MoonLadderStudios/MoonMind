@@ -1085,6 +1085,83 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             )
 
 
+async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="jira-breakdown-orchestrate",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.title == "Jira Breakdown and Orchestrate"
+            assert template.latest_version is not None
+            assert template.latest_version.annotations["sourceSkill"] == (
+                "jira-breakdown"
+            )
+            assert template.latest_version.annotations["output"] == (
+                "dependent-jira-orchestrate-tasks"
+            )
+            assert [
+                step["skill"]["id"] for step in template.latest_version.steps
+            ] == [
+                "moonspec-breakdown",
+                "story.create_jira_issues",
+                "story.create_jira_orchestrate_tasks",
+            ]
+
+            expanded = await service.expand_template(
+                slug="jira-breakdown-orchestrate",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_project_key": "MM",
+                    "jira_issue_type": "Story",
+                    "jira_dependency_mode": "linear_blocker_chain",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "orchestration_mode": "runtime",
+                    "runtime_mode": "codex_cli",
+                    "publish_mode": "none",
+                    "source_issue_key": "MM-404",
+                },
+                context={},
+            )
+
+            assert len(expanded["steps"]) == 3
+            assert expanded["steps"][0]["skill"]["id"] == "moonspec-breakdown"
+            assert expanded["steps"][1]["skill"]["id"] == "story.create_jira_issues"
+            assert expanded["steps"][1]["storyOutput"]["jira"] == {
+                "projectKey": "MM",
+                "issueTypeName": "Story",
+                "dependencyMode": "linear_blocker_chain",
+            }
+            downstream = expanded["steps"][2]
+            assert downstream["skill"]["id"] == "story.create_jira_orchestrate_tasks"
+            assert "Create one Jira Orchestrate task" in downstream["instructions"]
+            assert "dependsOn" in downstream["instructions"]
+            assert "MM-404" in downstream["instructions"]
+            assert downstream["jiraOrchestration"]["task"] == {
+                "repository": "MoonLadderStudios/MoonMind",
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "none"},
+                "orchestrationMode": "runtime",
+            }
+            assert downstream["jiraOrchestration"]["traceability"]["sourceIssueKey"] == (
+                "MM-404"
+            )
+
+
 async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
     tmp_path,
 ):

@@ -187,6 +187,9 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert "moonmind-ui-boot" in response.text
         assert 'type="module"' in response.text
         assert "/static/task_dashboard/dist/assets/" in response.text
+        assert 'class="masthead-brand"' in response.text
+        assert 'src="/static/task_dashboard/moonmindlogo.webp"' in response.text
+        assert "MOONMIND OPERATIONS" not in response.text
         assert "task-dashboard-config" not in response.text
         assert "/static/task_dashboard/dashboard.js" not in response.text
         assert 'id="mission-control-root"' in response.text
@@ -210,6 +213,13 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
+
+
+def test_mission_control_logo_asset_exists() -> None:
+    asset_path = Path("api_service/static/task_dashboard/moonmindlogo.webp")
+
+    assert asset_path.read_bytes().startswith(b"RIFF")
+    assert asset_path.stat().st_size < 25_000
 
 
 def test_task_create_route_uses_canonical_boot_payload(client: TestClient) -> None:

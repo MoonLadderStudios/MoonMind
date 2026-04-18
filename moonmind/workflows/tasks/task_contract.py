@@ -422,6 +422,90 @@ class TaskSkillSelectors(BaseModel):
         return lowered
 
 
+def _coerce_task_skill_selectors(
+    value: TaskSkillSelectors | Mapping[str, Any] | None,
+    *,
+    field_name: str,
+) -> TaskSkillSelectors | None:
+    if value is None:
+        return None
+    if isinstance(value, TaskSkillSelectors):
+        return value
+    if isinstance(value, Mapping):
+        return TaskSkillSelectors.model_validate(dict(value))
+    raise TaskContractError(f"{field_name} must be an object")
+
+
+def build_effective_task_skill_selectors(
+    task_skills: TaskSkillSelectors | Mapping[str, Any] | None,
+    step_skills: TaskSkillSelectors | Mapping[str, Any] | None,
+) -> TaskSkillSelectors | None:
+    """Merge task-level and step-level agent skill selectors for one step.
+
+    Step selectors refine inherited task intent. Exclusions are retained in the
+    effective selector and also remove matching includes so downstream
+    resolution receives deterministic input without mutating the task selector.
+    """
+
+    task = _coerce_task_skill_selectors(
+        task_skills, field_name="task.skills"
+    )
+    step = _coerce_task_skill_selectors(
+        step_skills, field_name="task.steps[].skills"
+    )
+    if task is None and step is None:
+        return None
+
+    sets: list[str] = []
+    seen_sets: set[str] = set()
+    for source in (task, step):
+        for item in (source.sets if source is not None else None) or []:
+            if item not in seen_sets:
+                sets.append(item)
+                seen_sets.add(item)
+
+    excludes: list[str] = []
+    seen_excludes: set[str] = set()
+    for source in (task, step):
+        for item in (source.exclude if source is not None else None) or []:
+            if item not in seen_excludes:
+                excludes.append(item)
+                seen_excludes.add(item)
+
+    include_by_name: dict[str, TaskSkillSelectorExact] = {}
+    for source in (task, step):
+        for item in (source.include if source is not None else None) or []:
+            include_by_name[item.name] = TaskSkillSelectorExact(
+                name=item.name,
+                version=item.version,
+            )
+    for item in excludes:
+        include_by_name.pop(item, None)
+
+    materialization_mode = (
+        step.materialization_mode
+        if step is not None and step.materialization_mode is not None
+        else task.materialization_mode if task is not None else None
+    )
+
+    payload: dict[str, Any] = {}
+    if sets:
+        payload["sets"] = sets
+    if include_by_name:
+        payload["include"] = [
+            item.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for item in include_by_name.values()
+        ]
+    if excludes:
+        payload["exclude"] = excludes
+    if materialization_mode is not None:
+        payload["materializationMode"] = materialization_mode
+
+    if not payload:
+        return None
+    return TaskSkillSelectors.model_validate(payload)
+
+
 class TaskSkillSelection(BaseModel):
     """Selected skill and optional skill argument object."""
 

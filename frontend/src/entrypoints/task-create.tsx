@@ -100,6 +100,9 @@ interface DashboardConfig {
       detail?: string;
       list?: string;
     };
+    github?: {
+      branches?: string;
+    };
     jira?: {
       connections?: string;
       projects?: string;
@@ -273,6 +276,21 @@ interface ProviderProfile {
   account_label?: string | null;
   default_model?: string | null;
   is_default?: boolean;
+}
+
+interface BranchOption {
+  value: string;
+  label: string;
+  source: string;
+}
+
+interface BranchListResponse {
+  items?: Array<{
+    value?: string | null;
+    label?: string | null;
+    source?: string | null;
+  }>;
+  error?: string | null;
 }
 
 function resolveDefaultProviderProfileId(
@@ -502,6 +520,13 @@ function configuredTemporalUpdateUrl(
   return interpolatePath(updateTemplate, { workflowId });
 }
 
+function configuredBranchLookupUrl(
+  branchTemplate: string,
+  repository: string,
+): string {
+  return interpolatePath(branchTemplate, { repository });
+}
+
 function configuredArtifactDownloadUrl(
   downloadTemplate: string,
   artifactId: string,
@@ -581,12 +606,23 @@ function buildEditParametersPatch({
       recordValue(editTask.publish),
     ),
   };
+  const mergedGit = recordValue(mergedTask.git);
+  delete mergedGit.startingBranch;
+  delete mergedGit.targetBranch;
+  if (Object.keys(mergedGit).length > 0) {
+    mergedTask.git = mergedGit;
+  } else {
+    delete mergedTask.git;
+  }
 
-  return {
+  const parametersPatch: Record<string, unknown> = {
     ...baseParameters,
     ...submittedPayload,
     task: mergedTask,
   };
+  delete parametersPatch.startingBranch;
+  delete parametersPatch.targetBranch;
+  return parametersPatch;
 }
 
 function readJiraItems<T>(data: unknown): T[] {
@@ -873,7 +909,7 @@ function hasAdvancedStepOptionValues(steps: StepState[]): boolean {
   return steps.some(
     (step) =>
       Boolean(step.skillRequiredCapabilities.trim()) ||
-      (Boolean(step.skillArgs.trim()) && !shouldShowSkillArgs(step)),
+      Boolean(step.skillArgs.trim()),
   );
 }
 
@@ -909,10 +945,6 @@ function resolveEffectiveSkillId(
     return lastTemplate?.slug ?? primarySkillId;
   }
   return primarySkillId;
-}
-
-function shouldShowSkillArgs(step: StepState | null | undefined): boolean {
-  return hasExplicitSkillSelection(String(step?.skillId || ""));
 }
 
 function parseCapabilitiesCsv(value: string): string[] {
@@ -1069,6 +1101,10 @@ function isValidRepositoryInput(value: string): boolean {
     }
   }
   return candidate.startsWith("git@");
+}
+
+function canLookupRepositoryBranches(value: string): boolean {
+  return isValidRepositoryInput(value);
 }
 
 function scopeLabel(scope: TemplateScope): string {
@@ -1436,6 +1472,38 @@ async function responseErrorMessage(
   fallback: string,
 ): Promise<string> {
   return (await responseErrorDetail(response, fallback)).message;
+}
+
+async function readBranchOptions(
+  branchLookupEndpoint: string,
+  repository: string,
+): Promise<BranchOption[]> {
+  const response = await fetch(
+    configuredBranchLookupUrl(branchLookupEndpoint, repository),
+    { headers: { Accept: "application/json" } },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await responseErrorMessage(response, "Failed to load branches."),
+    );
+  }
+  const payload = (await response.json()) as BranchListResponse;
+  if (payload.error) {
+    throw new Error(payload.error);
+  }
+  return (payload.items || [])
+    .map((item) => {
+      const value = String(item.value || "").trim();
+      if (!value) {
+        return null;
+      }
+      return {
+        value,
+        label: String(item.label || value).trim() || value,
+        source: String(item.source || "github").trim() || "github",
+      };
+    })
+    .filter((item): item is BranchOption => item !== null);
 }
 
 function localJiraErrorMessage(error: unknown, fallback: string): string {
@@ -1921,6 +1989,27 @@ function ArrowRightIcon() {
   );
 }
 
+function BranchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M7 5v10a4 4 0 0 0 4 4h6" />
+      <path d="M7 5a2 2 0 1 0-2 2 2 2 0 0 0 2-2z" />
+      <path d="M17 19a2 2 0 1 0 2-2 2 2 0 0 0-2 2z" />
+      <path d="M11 9h2a4 4 0 0 0 4-4" />
+    </svg>
+  );
+}
+
+function PublishIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 18V6" />
+      <path d="M8 10l4-4 4 4" />
+      <path d="M6 18h12" />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -2076,8 +2165,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   );
   const [repository, setRepository] = useState(defaultRepository);
   const [providerProfile, setProviderProfile] = useState("");
-  const [startingBranch, setStartingBranch] = useState("");
-  const [targetBranch, setTargetBranch] = useState("");
+  const [branch, setBranch] = useState("");
   const [publishMode, setPublishMode] = useState(defaultPublishMode);
   const [mergeAutomationEnabled, setMergeAutomationEnabled] = useState(false);
   const [priority, setPriority] = useState(0);
@@ -2413,11 +2501,11 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     if (draft.repository) {
       setRepository(draft.repository);
     }
-    if (draft.startingBranch) {
-      setStartingBranch(draft.startingBranch);
+    if (draft.branch) {
+      setBranch(draft.branch);
     }
-    if (draft.targetBranch) {
-      setTargetBranch(draft.targetBranch);
+    if (draft.legacyBranchWarning) {
+      setSubmitMessage(draft.legacyBranchWarning);
     }
     if (draft.publishMode) {
       setPublishMode(draft.publishMode);
@@ -3585,6 +3673,82 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       });
   }, [dashboardConfig.system?.repositoryOptions?.items]);
 
+  const branchLookupEndpoint = normalizeMoonMindApiPath(
+    dashboardConfig.sources?.github?.branches,
+  );
+  const selectedRepositoryForBranchLookup =
+    repository.trim() || defaultRepository;
+  const branchLookupRepository = canLookupRepositoryBranches(
+    selectedRepositoryForBranchLookup,
+  )
+    ? selectedRepositoryForBranchLookup.trim()
+    : "";
+  const branchOptionsQuery = useQuery({
+    queryKey: ["task-create", "github-branches", branchLookupRepository],
+    enabled: Boolean(branchLookupEndpoint && branchLookupRepository),
+    queryFn: async () =>
+      readBranchOptions(branchLookupEndpoint || "", branchLookupRepository),
+  });
+  const branchOptions = useMemo(() => {
+    const items = branchOptionsQuery.data || [];
+    const seen = new Set<string>();
+    const options = items.filter((item) => {
+      const key = item.value;
+      if (!key || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+    const selected = branch.trim();
+    if (selected && !seen.has(selected)) {
+      return [
+        {
+          value: selected,
+          label: `${selected} (not in latest branch list)`,
+          source: "stale",
+        },
+        ...options,
+      ];
+    }
+    return options;
+  }, [branch, branchOptionsQuery.data]);
+  const selectedBranchIsStale = Boolean(
+    branch.trim() &&
+      branchOptionsQuery.isSuccess &&
+      !(branchOptionsQuery.data || []).some((item) => item.value === branch.trim()),
+  );
+  const branchControlDisabled =
+    !selectedRepositoryForBranchLookup.trim() ||
+    !branchLookupEndpoint ||
+    !branchLookupRepository ||
+    branchOptionsQuery.isLoading;
+  const branchStatusMessage = (() => {
+    if (!selectedRepositoryForBranchLookup.trim()) {
+      return "Select a repository to load branches.";
+    }
+    if (!branchLookupEndpoint) {
+      return "Branch lookup is not configured.";
+    }
+    if (!branchLookupRepository) {
+      return "Branch lookup requires a valid GitHub repository value.";
+    }
+    if (branchOptionsQuery.isLoading || branchOptionsQuery.isFetching) {
+      return "Loading branches...";
+    }
+    if (branchOptionsQuery.isError) {
+      const error = branchOptionsQuery.error;
+      return error instanceof Error ? error.message : "Failed to load branches.";
+    }
+    if (selectedBranchIsStale) {
+      return "Selected branch is not in the latest list for this repository.";
+    }
+    if (branchOptionsQuery.isSuccess && branchOptions.length === 0) {
+      return "No branches returned for this repository.";
+    }
+    return "";
+  })();
+
   const presetStatusText = useMemo(() => {
     if (presetReapplyNeeded) {
       return PRESET_REAPPLY_REQUIRED_MESSAGE;
@@ -3631,8 +3795,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         }
         if (
           Object.prototype.hasOwnProperty.call(updates, "skillId") &&
-          !showAdvancedStepOptions &&
-          !shouldShowSkillArgs(nextStep)
+          !showAdvancedStepOptions
         ) {
           nextStep.skillArgs = "";
         }
@@ -3884,6 +4047,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const expandedSteps = (expanded.steps || []).map((step, index) =>
         mapExpandedStepToState(nextStepNumber + index, step),
       );
+      if (hasAdvancedStepOptionValues(expandedSteps)) {
+        setShowAdvancedStepOptions(true);
+      }
       const replaceEmptyDefault =
         steps.length === 1 && isEmptyStepStateEntry(steps[0]);
 
@@ -3976,9 +4142,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       const caps = showAdvancedStepOptions
         ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
         : [];
-      const skillArgsRaw = showAdvancedStepOptions || shouldShowSkillArgs(step)
-        ? step.skillArgs.trim()
-        : "";
+      const skillArgsRaw = showAdvancedStepOptions ? step.skillArgs.trim() : "";
       if (skillId || skillArgsRaw || caps.length > 0) {
         let skillArgs: Record<string, unknown> = {};
         if (skillArgsRaw) {
@@ -4227,8 +4391,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
 
     const primarySkillId = primaryValidation.value.skillId.trim() || "auto";
-    const primarySkillArgsRaw =
-      showAdvancedStepOptions || shouldShowSkillArgs(primaryStep)
+    const primarySkillArgsRaw = showAdvancedStepOptions
       ? String(primaryStep?.skillArgs || "").trim()
       : "";
     const taskSkillRequiredCapabilities = showAdvancedStepOptions
@@ -4289,8 +4452,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         continue;
       }
       const stepSkillId = step.skillId.trim();
-      const stepSkillArgsRaw =
-        showAdvancedStepOptions || shouldShowSkillArgs(step)
+      const stepSkillArgsRaw = showAdvancedStepOptions
         ? step.skillArgs.trim()
         : "";
       const stepSkillCaps = showAdvancedStepOptions
@@ -4757,15 +4919,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       publish: {
         mode: normalizedPublishMode,
       },
-      ...(startingBranch.trim() || targetBranch.trim()
+      ...(branch.trim()
         ? {
             git: {
-              ...(startingBranch.trim()
-                ? { startingBranch: startingBranch.trim() }
-                : {}),
-              ...(targetBranch.trim()
-                ? { targetBranch: targetBranch.trim() }
-                : {}),
+              branch: branch.trim(),
             },
           }
         : {}),
@@ -5263,8 +5420,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             {steps.map((step, index) => {
               const isPrimaryStep = index === 0;
               const stepLabel = isPrimaryStep ? " (Primary)" : "";
-              const showSkillArgsField =
-                showAdvancedStepOptions || shouldShowSkillArgs(step);
+              const showSkillArgsField = showAdvancedStepOptions;
               return (
                 <section
                   key={step.localId}
@@ -5649,26 +5805,53 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 </span>
               </label>
 
-              <div className="grid-2">
-                <label>
-                  Starting Branch (optional)
-                  <input
-                    name="startingBranch"
-                    value={startingBranch}
-                    placeholder="repo default branch"
-                    onChange={(event) => setStartingBranch(event.target.value)}
-                  />
-                </label>
-                <label>
-                  Target Branch (optional)
-                  <input
-                    name="targetBranch"
-                    value={targetBranch}
-                    placeholder="auto-generated unless starting branch is non-default"
-                    onChange={(event) => setTargetBranch(event.target.value)}
-                  />
-                </label>
+              <div className="queue-inline-selector-row">
+                <div className="queue-inline-selector queue-inline-selector--branch">
+                  <BranchIcon />
+                  <select
+                    name="branch"
+                    aria-label="Branch"
+                    value={branch}
+                    disabled={branchControlDisabled}
+                    onChange={(event) => setBranch(event.target.value)}
+                  >
+                    <option value="">
+                      {branchOptionsQuery.isLoading
+                        ? "Loading branches..."
+                        : "Branch"}
+                    </option>
+                    {branchOptions.map((item) => (
+                      <option key={`${item.source}:${item.value}`} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="queue-inline-selector queue-inline-selector--publish">
+                  <PublishIcon />
+                  <select
+                    name="publishMode"
+                    aria-label="Publish Mode"
+                    value={publishMode}
+                    onChange={(event) => setPublishMode(event.target.value)}
+                  >
+                    <option value="pr">pr</option>
+                    <option value="branch">branch</option>
+                    <option value="none">none</option>
+                  </select>
+                </div>
               </div>
+              {branchStatusMessage ? (
+                <p
+                  className={
+                    branchOptionsQuery.isError || selectedBranchIsStale
+                      ? "notice error"
+                      : "small"
+                  }
+                >
+                  {branchStatusMessage}
+                </p>
+              ) : null}
             </div>
 
             <div className="actions queue-step-add queue-step-actions queue-step-submit-actions">
@@ -6054,19 +6237,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             />
           </label>
         </div>
-
-        <label>
-          Publish Mode
-          <select
-            name="publishMode"
-            value={publishMode}
-            onChange={(event) => setPublishMode(event.target.value)}
-          >
-            <option value="pr">pr</option>
-            <option value="branch">branch</option>
-            <option value="none">none</option>
-          </select>
-        </label>
 
         {mergeAutomationAvailable ? (
           <label className="checkbox">

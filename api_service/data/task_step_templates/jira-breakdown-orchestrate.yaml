@@ -1,0 +1,131 @@
+slug: jira-breakdown-orchestrate
+title: Jira Breakdown and Orchestrate
+description: Break a broad Jira or design input into stories, create Jira Story issues, then create dependent Jira Orchestrate tasks for each generated story.
+scope: global
+version: 1.0.0
+tags:
+  - jira
+  - moonspec
+  - breakdown
+  - orchestration
+requiredCapabilities:
+  - git
+annotations:
+  sourceSkill: jira-breakdown
+  jiraWorkflow: breakdown-to-dependent-orchestrate
+  output: dependent-jira-orchestrate-tasks
+inputs:
+  - name: feature_request
+    label: Declarative Design Path or Text
+    type: markdown
+    required: true
+  - name: jira_project_key
+    label: Jira Project Key
+    type: text
+    required: true
+    default: TOOL
+  - name: jira_issue_type
+    label: Jira Issue Type
+    type: text
+    required: true
+    default: Story
+  - name: jira_dependency_mode
+    label: Jira Dependency Mode
+    type: enum
+    required: true
+    default: linear_blocker_chain
+    options:
+      - linear_blocker_chain
+      - none
+  - name: repository
+    label: Repository
+    type: text
+    required: true
+    default: MoonLadderStudios/MoonMind
+  - name: orchestration_mode
+    label: Orchestration Mode
+    type: enum
+    required: true
+    default: runtime
+    options:
+      - runtime
+      - docs
+  - name: runtime_mode
+    label: Runtime Mode
+    type: enum
+    required: true
+    default: codex_cli
+    options:
+      - codex_cli
+      - gemini_cli
+      - claude_code
+      - codex_cloud
+      - jules
+  - name: publish_mode
+    label: Publish Mode
+    type: enum
+    required: true
+    default: none
+    options:
+      - none
+      - pr
+  - name: source_issue_key
+    label: Source Jira Issue Key
+    type: text
+    required: false
+    default: ""
+steps:
+  - title: Break down declarative design
+    instructions: |-
+      Run moonspec-breakdown for this declarative design:
+
+      {{ inputs.feature_request }}
+
+      If the input is a readable repo path, use that file as the original declarative document and preserve its path in every story's sourceReference.
+      Write the coverage-checked story breakdown to the runtime-provided story breakdown paths.
+    skill:
+      id: moonspec-breakdown
+      args: {}
+      requiredCapabilities:
+        - git
+  - title: Create Jira stories
+    instructions: |-
+      Create one Jira {{ inputs.jira_issue_type }} issue in project {{ inputs.jira_project_key }} for each story from the generated MoonSpec breakdown.
+
+      Use the runtime-provided story breakdown JSON path.
+      Every Jira issue must include the Source Document path from the story breakdown.
+      Dependency mode: {{ inputs.jira_dependency_mode }}.
+      If dependency mode is linear_blocker_chain, create an ordered blocker chain so each later story is blocked by the immediately preceding story.
+      If dependency mode is none, create the Jira issues without dependency links.
+      Return the created Jira issue keys, URLs, dependency mode, and created/reused/failed link results.
+    storyOutput:
+      mode: jira
+      jira:
+        projectKey: "{{ inputs.jira_project_key }}"
+        issueTypeName: "{{ inputs.jira_issue_type }}"
+        dependencyMode: "{{ inputs.jira_dependency_mode }}"
+    skill:
+      id: story.create_jira_issues
+      args: {}
+  - title: Create dependent Jira Orchestrate tasks
+    instructions: |-
+      Create one Jira Orchestrate task for each generated Jira story from the trusted Jira story output.
+
+      Use the ordered issue mappings returned by story.create_jira_issues. Preserve the generated story order when creating downstream tasks.
+      Each downstream task must run Jira Orchestrate on its corresponding Jira story issue and must not run implementation inline inside this breakdown run.
+      Create task dependencies with dependsOn so each later generated task waits for the immediately earlier generated task workflow ID.
+      Preserve source Jira issue {{ inputs.source_issue_key }} and the original source brief in downstream task instructions and result traceability.
+      Report created tasks, skipped stories, dependency edges, partial failures, and no-downstream-task outcomes honestly.
+    jiraOrchestration:
+      task:
+        repository: "{{ inputs.repository }}"
+        runtime:
+          mode: "{{ inputs.runtime_mode }}"
+        publish:
+          mode: "{{ inputs.publish_mode }}"
+        orchestrationMode: "{{ inputs.orchestration_mode }}"
+      traceability:
+        sourceIssueKey: "{{ inputs.source_issue_key }}"
+    skill:
+      id: story.create_jira_orchestrate_tasks
+      args: {}
