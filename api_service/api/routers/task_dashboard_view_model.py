@@ -35,10 +35,14 @@ _SSH_GIT_RE = re.compile(
     r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
 _GITHUB_REPOSITORY_DISCOVERY_URL = "https://api.github.com/user/repos"
+_GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE = "https://api.github.com/repos/{repository}/branches"
 _GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS = 5.0
 _GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS = 60.0
 _GITHUB_REPOSITORY_OPTIONS_CACHE: dict[
     str, tuple[float, tuple["RepositoryOption", ...], str | None]
+] = {}
+_GITHUB_BRANCH_OPTIONS_CACHE: dict[
+    str, tuple[float, tuple["BranchOption", ...], str | None]
 ] = {}
 
 _JIRA_CREATE_PAGE_SOURCES = {
@@ -77,6 +81,22 @@ _validate_jira_source_templates(_JIRA_CREATE_PAGE_SOURCES)
 @dataclass(frozen=True, slots=True)
 class RepositoryOption:
     """Browser-safe repository suggestion for the Create page."""
+
+    value: str
+    label: str
+    source: str
+
+    def to_payload(self) -> dict[str, str]:
+        return {
+            "value": self.value,
+            "label": self.label,
+            "source": self.source,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class BranchOption:
+    """Browser-safe branch suggestion for the Create page."""
 
     value: str
     label: str
@@ -190,8 +210,60 @@ def _fetch_github_repository_options(
     return options, None
 
 
+def _fetch_github_branch_options(
+    token: str,
+    repository: str,
+) -> tuple[list[BranchOption], str | None]:
+    """Fetch credential-visible GitHub branches without exposing secrets."""
+
+    normalized_repository = _normalize_repository_value(repository)
+    if not token or not normalized_repository:
+        return [], None
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        with httpx.Client(
+            timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
+        ) as client:
+            response = client.get(
+                _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE.format(
+                    repository=normalized_repository
+                ),
+                headers=headers,
+                params={"per_page": 100},
+            )
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError):
+        return [], "GitHub branch lookup is unavailable."
+
+    options: list[BranchOption] = []
+    seen: set[str] = set()
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, Mapping):
+                continue
+            branch_name = str(item.get("name") or "").strip()
+            if not branch_name or branch_name in seen:
+                continue
+            seen.add(branch_name)
+            options.append(
+                BranchOption(value=branch_name, label=branch_name, source="github")
+            )
+    return options, None
+
+
 def _github_repository_options_cache_key(token: str) -> str:
     return sha256(token.encode("utf-8")).hexdigest()
+
+
+def _github_branch_options_cache_key(token: str, repository: str) -> str:
+    normalized_repository = _normalize_repository_value(repository) or ""
+    raw_key = f"{token}:{normalized_repository.lower()}"
+    return sha256(raw_key.encode("utf-8")).hexdigest()
 
 
 def _get_cached_github_repository_options(
@@ -207,6 +279,23 @@ def _get_cached_github_repository_options(
 
     options, error = _fetch_github_repository_options(token)
     _GITHUB_REPOSITORY_OPTIONS_CACHE[cache_key] = (now, tuple(options), error)
+    return options, error
+
+
+def _get_cached_github_branch_options(
+    token: str,
+    repository: str,
+) -> tuple[list[BranchOption], str | None]:
+    now = time.monotonic()
+    cache_key = _github_branch_options_cache_key(token, repository)
+    cached = _GITHUB_BRANCH_OPTIONS_CACHE.get(cache_key)
+    if cached:
+        cached_at, cached_options, cached_error = cached
+        if now - cached_at < _GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS:
+            return list(cached_options), cached_error
+
+    options, error = _fetch_github_branch_options(token, repository)
+    _GITHUB_BRANCH_OPTIONS_CACHE[cache_key] = (now, tuple(options), error)
     return options, error
 
 
@@ -254,6 +343,36 @@ def _build_repository_options(
     return {
         "items": [option.to_payload() for option in options],
         "error": discovery_error,
+    }
+
+
+def build_repository_branch_options(repository: str) -> dict[str, Any]:
+    """Build Create-page branch suggestions through MoonMind-owned GitHub lookup."""
+
+    normalized_repository = _normalize_repository_value(repository)
+    if not normalized_repository:
+        return {
+            "items": [],
+            "error": "Repository must be owner/repo before branches can be loaded.",
+        }
+
+    github_enabled = bool(getattr(settings.github, "github_enabled", True))
+    github_token = str(getattr(settings.github, "github_token", "") or "").strip()
+    if not github_enabled or not github_token:
+        return {
+            "items": [],
+            "error": "GitHub branch lookup is unavailable.",
+        }
+
+    options, error = _get_cached_github_branch_options(
+        github_token,
+        normalized_repository,
+    )
+    if error:
+        error = "GitHub branch lookup is unavailable."
+    return {
+        "items": [option.to_payload() for option in options],
+        "error": error,
     }
 
 
@@ -502,6 +621,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifactSessionControl": "/api/task-runs/{taskRunId}/artifact-sessions/{sessionId}/control",
             },
             **jira_sources,
+            "github": {
+                "branches": "/api/github/branches?repository={repository}",
+            },
 
         },
         "features": {
@@ -569,8 +691,10 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
 
 __all__ = [
     "build_live_logs_feature_config",
+    "build_repository_branch_options",
     "build_runtime_config",
     "normalize_status",
+    "BranchOption",
     "RepositoryOption",
     "status_maps",
 ]

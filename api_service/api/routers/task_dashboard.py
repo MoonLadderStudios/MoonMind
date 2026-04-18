@@ -17,7 +17,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.base import get_async_session
-from api_service.api.routers.task_dashboard_view_model import build_runtime_config
+from api_service.api.routers.task_dashboard_view_model import (
+    build_repository_branch_options,
+    build_runtime_config,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.config.settings import settings
@@ -99,6 +102,21 @@ class DashboardSkillListResponse(BaseModel):
     legacy_items: list[DashboardSkillOption] = Field(
         default_factory=list, alias="legacyItems"
     )
+
+
+class DashboardBranchOption(BaseModel):
+    """Serializable Git branch option exposed to dashboard clients."""
+
+    value: str = Field(description="Branch name")
+    label: str = Field(description="Display label")
+    source: str = Field(description="Branch option source")
+
+
+class DashboardBranchListResponse(BaseModel):
+    """Dashboard response containing branch options for one repository."""
+
+    items: list[DashboardBranchOption] = Field(default_factory=list)
+    error: str | None = Field(None)
 
 
 class DashboardTaskSourceResponse(BaseModel):
@@ -482,6 +500,17 @@ async def list_dashboard_skills(
         },
         legacyItems=legacy_items,
     )
+
+
+@router.get("/api/github/branches", response_model=DashboardBranchListResponse)
+async def list_dashboard_github_branches(
+    repository: str = Query(..., min_length=1),
+    _user: User = Depends(get_current_user()),
+) -> DashboardBranchListResponse:
+    """List GitHub branches through MoonMind so browsers never call GitHub directly."""
+
+    payload = build_repository_branch_options(repository)
+    return DashboardBranchListResponse(**payload)
 
 
 @router.post(

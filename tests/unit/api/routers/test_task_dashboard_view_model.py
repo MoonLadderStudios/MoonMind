@@ -95,6 +95,9 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["temporal"]["artifactDownload"]
         == "/api/artifacts/{artifactId}/download"
     )
+    assert config["sources"]["github"]["branches"] == (
+        "/api/github/branches?repository={repository}"
+    )
     assert config["sources"]["taskRuns"]["observabilitySummary"] == "/api/task-runs/{taskRunId}/observability-summary"
     assert config["sources"]["taskRuns"]["observabilityEvents"] == "/api/task-runs/{taskRunId}/observability/events"
     assert config["sources"]["taskRuns"]["logsStream"] == "/api/task-runs/{taskRunId}/logs/stream"
@@ -477,6 +480,63 @@ def test_build_runtime_config_sanitizes_repository_options_and_errors(
         {"value": "Another/Repo", "label": "Another/Repo", "source": "configured"},
     ]
     assert "ghp_secret_token" not in config["system"]["repositoryOptions"]["error"]
+
+
+def test_build_repository_branch_options_uses_github_lookup(monkeypatch) -> None:
+    monkeypatch.setattr(settings.github, "github_token", "ghp_test_token")
+    monkeypatch.setattr(settings.github, "github_enabled", True)
+    monkeypatch.setattr(
+        dashboard_view_model,
+        "_get_cached_github_branch_options",
+        lambda token, repository: (
+            [
+                dashboard_view_model.BranchOption(
+                    value="main",
+                    label="main",
+                    source="github",
+                ),
+                dashboard_view_model.BranchOption(
+                    value="feature/create-page",
+                    label="feature/create-page",
+                    source="github",
+                ),
+            ],
+            None,
+        ),
+    )
+
+    payload = dashboard_view_model.build_repository_branch_options("Octo/Repo")
+
+    assert payload == {
+        "items": [
+            {"value": "main", "label": "main", "source": "github"},
+            {
+                "value": "feature/create-page",
+                "label": "feature/create-page",
+                "source": "github",
+            },
+        ],
+        "error": None,
+    }
+
+
+def test_build_repository_branch_options_sanitizes_errors(monkeypatch) -> None:
+    monkeypatch.setattr(settings.github, "github_token", "ghp_secret_token")
+    monkeypatch.setattr(settings.github, "github_enabled", True)
+    monkeypatch.setattr(
+        dashboard_view_model,
+        "_get_cached_github_branch_options",
+        lambda token, repository: (
+            [],
+            "GitHub failed with ghp_secret_token",
+        ),
+    )
+
+    payload = dashboard_view_model.build_repository_branch_options("Octo/Repo")
+
+    assert payload["items"] == []
+    assert payload["error"] == "GitHub branch lookup is unavailable."
+    assert "ghp_secret_token" not in payload["error"]
 
 
 def test_build_runtime_config_uses_repo_runtime_model_defaults(monkeypatch) -> None:
