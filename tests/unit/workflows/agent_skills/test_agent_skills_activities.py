@@ -9,6 +9,7 @@ from moonmind.schemas.agent_skill_models import (
     AgentSkillSourceKind,
     ResolvedSkillEntry,
     ResolvedSkillSet,
+    RuntimeMaterializationMode,
     SkillSelector,
 )
 from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
@@ -97,7 +98,6 @@ async def test_build_prompt_index_activity_returns_bundle():
 
 
 async def test_materialize_activity_returns_materialization():
-    from moonmind.schemas.agent_skill_models import RuntimeMaterializationMode
     import tempfile
     
     activities = AgentSkillsActivities()
@@ -118,7 +118,39 @@ async def test_materialize_activity_returns_materialization():
             tempdir
         )
         
-        assert result.metadata == {}
         assert result.runtime_id == "test_runtime"
         assert result.materialization_mode == RuntimeMaterializationMode.WORKSPACE_MOUNTED
         assert len(result.workspace_paths) == 1
+
+
+async def test_materialize_activity_returns_canonical_agents_skills_metadata(
+    tmp_path,
+):
+    activities = AgentSkillsActivities()
+    env = ActivityEnvironment()
+    snapshot = ResolvedSkillSet(
+        snapshot_id="snap-canonical",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="read_file",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            )
+        ],
+    )
+
+    result = await env.run(
+        activities.materialize,
+        snapshot,
+        "codex",
+        RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        str(tmp_path),
+    )
+
+    visible_path = tmp_path / ".agents" / "skills"
+    assert result.workspace_paths == [str(visible_path)]
+    assert result.metadata["visiblePath"] == str(visible_path)
+    assert result.metadata["manifestPath"] == str(visible_path / "_manifest.json")
+    assert result.metadata["activeSkills"] == ["read_file"]
