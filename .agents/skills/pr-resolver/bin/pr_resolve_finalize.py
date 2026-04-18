@@ -142,7 +142,10 @@ def _run_snapshot(snapshot_script: Path, pr: str | None, snapshot_path: Path) ->
     cmd.extend(["--snapshot-path", str(snapshot_path)])
     if pr:
         cmd.extend(["--pr", pr])
-    subprocess.run(cmd, check=True)
+    # Capture output so auth-failure markers in stdout/stderr reach
+    # CalledProcessError attributes; _snapshot_failed_reason inspects them
+    # to distinguish publish_unavailable (auth) from pr_not_found.
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
 def _read_snapshot(path: Path) -> dict[str, Any]:

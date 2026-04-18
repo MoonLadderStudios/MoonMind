@@ -1497,6 +1497,150 @@ async def test_fetch_result_forwards_pr_resolver_expected_flag(tmp_path: Path) -
         assert result.failure_class == "user_error"
 
 
+async def test_fetch_result_reverifies_and_clears_pr_not_found_when_merged(
+    tmp_path: Path,
+) -> None:
+    """Regression: when pr-resolver reports pr_not_found but the PR is
+    actually merged on GitHub, the activity must re-verify and clear
+    the failure rather than surfacing execution_error.
+
+    Guards against the managed-session auth gap where gh inside the
+    codex container can't authenticate and misreports pr_not_found.
+    """
+    from unittest.mock import patch
+
+    store = _make_store(tmp_path)
+    _save_record(store, run_id="fr-reverify", status="completed")
+
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+        autospec=True,
+    ) as mock_adapter_cls:
+        adapter = mock_adapter_cls.return_value
+        adapter.fetch_result = AsyncMock(
+            return_value=AgentRunResult(
+                summary=(
+                    "pr-resolver reported status 'failed'; pr_not_found; "
+                    "next_step=manual_review"
+                ),
+                failure_class="execution_error",
+            )
+        )
+
+        with patch.object(
+            activities,
+            "_reverify_pr_merged_state",
+            return_value={
+                "number": 1543,
+                "state": "MERGED",
+                "url": "https://github.com/org/repo/pull/1543",
+                "mergedAt": "2026-04-17T23:48:24Z",
+            },
+        ) as mock_reverify:
+            result = await activities.agent_runtime_fetch_result(
+                {
+                    "run_id": "fr-reverify",
+                    "pr_resolver_expected": True,
+                    "target_branch": "mm-398-e3573b0c",
+                }
+            )
+
+    mock_reverify.assert_called_once_with(
+        run_id="fr-reverify", target_branch="mm-398-e3573b0c"
+    )
+    assert result.failure_class is None, (
+        "PR re-verified as merged: failure_class must be cleared"
+    )
+    assert "#1543" in (result.summary or "")
+    assert result.metadata.get("prResolverReverified") is True
+    assert result.metadata.get("mergeAutomationDisposition") == "already_merged"
+    assert (
+        result.metadata.get("pull_request_url")
+        == "https://github.com/org/repo/pull/1543"
+    )
+    assert "pr_not_found" in (
+        result.metadata.get("prResolverStaleSummary") or ""
+    )
+
+
+async def test_fetch_result_preserves_failure_when_reverify_returns_none(
+    tmp_path: Path,
+) -> None:
+    """When re-verify does not confirm a merged PR (e.g. PR open,
+    lookup failed, or no target_branch), the original failure must
+    be preserved unchanged."""
+    from unittest.mock import patch
+
+    store = _make_store(tmp_path)
+    _save_record(store, run_id="fr-preserve", status="completed")
+
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    original_result = AgentRunResult(
+        summary=(
+            "pr-resolver reported status 'failed'; pr_not_found; "
+            "next_step=manual_review"
+        ),
+        failure_class="execution_error",
+    )
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+        autospec=True,
+    ) as mock_adapter_cls:
+        adapter = mock_adapter_cls.return_value
+        adapter.fetch_result = AsyncMock(return_value=original_result)
+
+        with patch.object(
+            activities, "_reverify_pr_merged_state", return_value=None,
+        ) as mock_reverify:
+            result = await activities.agent_runtime_fetch_result(
+                {
+                    "run_id": "fr-preserve",
+                    "pr_resolver_expected": True,
+                    "target_branch": "mm-398-e3573b0c",
+                }
+            )
+
+    mock_reverify.assert_called_once()
+    assert result.failure_class == "execution_error"
+    assert "pr_not_found" in (result.summary or "")
+    assert result.metadata.get("prResolverReverified") is None
+
+
+async def test_fetch_result_skips_reverify_without_target_branch(
+    tmp_path: Path,
+) -> None:
+    """No target_branch means re-verify has no key to look up — skip
+    the call entirely rather than waste a gh subprocess invocation."""
+    from unittest.mock import patch
+
+    store = _make_store(tmp_path)
+    _save_record(store, run_id="fr-skip", status="completed")
+
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+        autospec=True,
+    ) as mock_adapter_cls:
+        adapter = mock_adapter_cls.return_value
+        adapter.fetch_result = AsyncMock(
+            return_value=AgentRunResult(
+                summary="pr-resolver reported status 'failed'; pr_not_found",
+                failure_class="execution_error",
+            )
+        )
+
+        with patch.object(
+            activities, "_reverify_pr_merged_state",
+        ) as mock_reverify:
+            result = await activities.agent_runtime_fetch_result(
+                {"run_id": "fr-skip", "pr_resolver_expected": True}
+            )
+
+    mock_reverify.assert_not_called()
+    assert result.failure_class == "execution_error"
+
+
 async def test_fetch_result_string_request_defaults_pr_resolver_expected_false(
     tmp_path: Path,
 ) -> None:
