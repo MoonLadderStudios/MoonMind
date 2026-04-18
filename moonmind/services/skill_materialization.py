@@ -106,6 +106,7 @@ class AgentSkillMaterializer:
                 links = ensure_shared_skill_links(
                     run_root=self.workspace_root,
                     skills_active_path=active_dir,
+                    require_gemini_link=False,
                 )
             except (OSError, SkillWorkspaceError) as ex:
                 raise RuntimeError(
@@ -113,15 +114,19 @@ class AgentSkillMaterializer:
                 ) from ex
 
             result.workspace_paths.append(str(links.agents_skills_path))
+            compatibility_paths = {
+                "geminiSkillsAvailable": links.gemini_skills_available,
+                "geminiSkillsPath": str(links.gemini_skills_path),
+            }
+            if links.gemini_skills_error:
+                compatibility_paths["geminiSkillsError"] = links.gemini_skills_error
             result.metadata.update(
                 {
                     "activeSkills": [
                         skill.skill_name for skill in resolved_skillset.skills
                     ],
                     "backingPath": str(active_dir),
-                    "compatibilityPaths": {
-                        "geminiSkillsPath": str(links.gemini_skills_path),
-                    },
+                    "compatibilityPaths": compatibility_paths,
                     "manifestPath": str(links.agents_skills_path / "_manifest.json"),
                     "visiblePath": str(links.agents_skills_path),
                 }

@@ -153,6 +153,38 @@ async def test_materializer_rejects_incompatible_agents_skills_path(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_materializer_does_not_block_on_incompatible_gemini_skills_path(
+    tmp_path: Path,
+):
+    gemini_skill = tmp_path / ".gemini" / "skills"
+    gemini_skill.mkdir(parents=True)
+    (gemini_skill / "SKILL.md").write_text("local gemini skill", encoding="utf-8")
+    materializer = AgentSkillMaterializer(str(tmp_path))
+    skillset = ResolvedSkillSet(
+        snapshot_id="optional_gemini_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[],
+    )
+
+    result = await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="codex",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+
+    visible_dir = tmp_path / ".agents" / "skills"
+    assert visible_dir.is_symlink()
+    assert result.workspace_paths == [str(visible_dir)]
+    compatibility = result.metadata["compatibilityPaths"]
+    assert compatibility["geminiSkillsPath"] == str(gemini_skill)
+    assert compatibility["geminiSkillsAvailable"] is False
+    assert "existing non-symlink path present" in compatibility["geminiSkillsError"]
+    assert (
+        gemini_skill / "SKILL.md"
+    ).read_text(encoding="utf-8") == "local gemini skill"
+
+
+@pytest.mark.asyncio
 async def test_materializer_hybrid_returns_compact_metadata_without_skill_body(
     tmp_path: Path,
 ):

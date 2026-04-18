@@ -44,6 +44,27 @@ def test_ensure_shared_skill_links_rejects_existing_non_symlink(tmp_path):
         ensure_shared_skill_links(run_root=run_root, skills_active_path=skills_active)
 
 
+def test_ensure_shared_skill_links_can_treat_gemini_link_as_optional(tmp_path):
+    run_root = tmp_path / "runs" / "run-optional-gemini"
+    skills_active = run_root / "skills_active"
+    skills_active.mkdir(parents=True)
+    (run_root / ".gemini" / "skills").mkdir(parents=True)
+
+    links = ensure_shared_skill_links(
+        run_root=run_root,
+        skills_active_path=skills_active,
+        require_gemini_link=False,
+    )
+
+    assert links.agents_skills_path.is_symlink()
+    assert links.agents_skills_path.resolve() == skills_active.resolve()
+    assert not links.gemini_skills_path.is_symlink()
+    assert links.gemini_skills_available is False
+    assert links.gemini_skills_error is not None
+    assert "existing non-symlink path present" in links.gemini_skills_error
+    validate_shared_skill_links(links, require_gemini_link=False)
+
+
 def test_validate_shared_skill_links_detects_target_drift(tmp_path):
     run_root = tmp_path / "runs" / "run-3"
     skills_active = run_root / "skills_active"
