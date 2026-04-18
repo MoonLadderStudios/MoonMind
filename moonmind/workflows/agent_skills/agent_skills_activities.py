@@ -32,6 +32,7 @@ class AgentSkillsActivities:
         run_id: str | None = None,
         workspace_root: str | None = None,
         allow_local_skills: bool = False,
+        allow_repo_skills: bool = False,
     ) -> ResolvedSkillSet:
         """Resolve a SkillSelector intent into a canonical ResolvedSkillSet."""
         
@@ -43,6 +44,7 @@ class AgentSkillsActivities:
             snapshot_id=snapshot_id,
             deployment_id=run_id,
             workspace_root=workspace_root,
+            allow_repo_skills=allow_repo_skills,
             allow_local_skills=allow_local_skills,
             async_session_maker=getattr(self, "_async_session_maker", None),
         )
@@ -140,4 +142,3 @@ class AgentSkillsActivities:
             runtime_id=runtime_id,
             mode=mode,
         )
-

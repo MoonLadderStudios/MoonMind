@@ -114,6 +114,41 @@ async def test_create_version_success(tmp_path, mock_artifact_service: AsyncMock
 
 
 @pytest.mark.asyncio
+async def test_create_second_version_preserves_first_version(
+    tmp_path, mock_artifact_service: AsyncMock
+):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as db_session:
+            svc = AgentSkillsService(
+                session=db_session, artifact_service=mock_artifact_service
+            )
+            await svc.create_skill(slug="versioned-skill", title="Versioned")
+
+            first = await svc.create_version(
+                skill_slug="versioned-skill",
+                version_string="1.0.0",
+                content="first markdown content",
+            )
+            second = await svc.create_version(
+                skill_slug="versioned-skill",
+                version_string="1.1.0",
+                content="second markdown content",
+            )
+
+            fetched = await svc.require_skill("versioned-skill")
+
+            assert first.id != second.id
+            assert [version.version_string for version in fetched.versions] == [
+                "1.0.0",
+                "1.1.0",
+            ]
+            assert fetched.versions[0].artifact_ref == first.artifact_ref
+            assert fetched.versions[0].content_digest == first.content_digest
+            assert fetched.versions[1].artifact_ref == second.artifact_ref
+            assert fetched.versions[1].content_digest == second.content_digest
+
+
+@pytest.mark.asyncio
 async def test_create_version_duplicate(tmp_path, mock_artifact_service: AsyncMock):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as db_session:

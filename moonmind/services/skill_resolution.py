@@ -26,12 +26,14 @@ class SkillResolutionContext:
         snapshot_id: str,
         deployment_id: str | None = None,
         workspace_root: str | None = None,
+        allow_repo_skills: bool = False,
         allow_local_skills: bool = False,
         async_session_maker: Callable[[], typing.AsyncContextManager[AsyncSession]] | None = None,
     ) -> None:
         self.snapshot_id = snapshot_id
         self.deployment_id = deployment_id
         self.workspace_root = workspace_root
+        self.allow_repo_skills = allow_repo_skills
         self.allow_local_skills = allow_local_skills
         self.async_session_maker = async_session_maker
 
@@ -148,7 +150,7 @@ class RepoSkillLoader(SkillLoader):
     async def load_skills(
         self, selector: SkillSelector, context: SkillResolutionContext
     ) -> list[ResolvedSkillEntry]:
-        if not context.workspace_root:
+        if not context.allow_repo_skills or not context.workspace_root:
             return []
         skills_dir = Path(context.workspace_root) / ".agents" / "skills"
         return _scan_for_skills(skills_dir, AgentSkillSourceKind.REPO)
@@ -259,6 +261,7 @@ class AgentSkillResolver:
                 mode="json", exclude_none=True
             ),
             policy_summary={
+                "repo_skills_allowed": context.allow_repo_skills,
                 "local_skills_allowed": context.allow_local_skills,
                 "sources_merged": [
                     s.value for s in candidates_by_source.keys()

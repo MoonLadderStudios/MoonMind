@@ -191,6 +191,8 @@ Key diagnostics:
 - No new persistent storage; options are derived from configuration and best-effort GitHub API responses at runtime (203-repository-dropdown)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, existing MoonMind Jira tool service, existing artifact and workflow activity catalogs (205-post-merge-jira-completion)
 - Existing Temporal workflow history, memo/search attributes, and artifact outputs; no new persistent database tables planned (205-post-merge-jira-completion)
+- Python 3.12 with Pydantic v2 models, SQLAlchemy async ORM, Temporal Python SDK activity boundaries + Pydantic v2, SQLAlchemy async session fixtures, Temporal activity wrappers, existing agent-skill resolver/materializer services (206-agent-skill-catalog-source-policy)
+- Existing agent skill tables and artifact-backed version content; no new persistent tables planned (206-agent-skill-catalog-source-policy)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
