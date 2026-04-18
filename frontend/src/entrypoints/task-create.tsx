@@ -5781,13 +5781,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                   placeholder="owner/repo"
                   onChange={(event) => setRepository(event.target.value)}
                 />
-                <span className="small">
-                  {defaultRepository
-                    ? `Leave blank to use default repository: ${defaultRepository}. `
-                    : "Set a repository in this form (no system default repository is configured). "}
-                  Accepted formats: owner/repo, https://&lt;host&gt;/&lt;path&gt;, or
-                  git@&lt;host&gt;:&lt;path&gt; (token-free).
-                </span>
               </label>
 
               <div className="queue-inline-selector-row">
