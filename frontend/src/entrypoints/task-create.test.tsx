@@ -5060,7 +5060,7 @@ describe("Task Create Entrypoint", () => {
     expect(payload).not.toHaveProperty("mergeAutomation");
   });
 
-  it("keeps step authoring and bottom controls inside one shared Steps card", async () => {
+  it("keeps step authoring and extension controls inside one shared Steps card", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const primaryStepLabel = await screen.findByText("Step 1 (Primary)");
@@ -5080,13 +5080,21 @@ describe("Task Create Entrypoint", () => {
     const repoInput = screen.getByLabelText(/GitHub Repo/);
     const branchSelect = screen.getByLabelText("Branch");
     const publishModeSelect = screen.getByLabelText("Publish Mode");
-    const stepActionRow = addStepButton.closest(".queue-step-actions");
+    const stepExtension = addStepButton.closest(".queue-step-extension");
+    const stepActionRow = createButton.closest(".queue-step-actions");
 
+    expect(stepExtension).not.toBeNull();
     expect(stepActionRow).not.toBeNull();
     expect(addStepButton.closest('[data-canonical-create-section="Steps"]')).toBe(
       stepsSection,
     );
+    expect(addStepButton.classList.contains("queue-step-extension-button")).toBe(
+      true,
+    );
     expect(createButton.closest(".queue-step-actions")).toBe(stepActionRow);
+    expect(stepActionRow?.classList.contains("queue-step-submit-actions")).toBe(
+      true,
+    );
     expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBe(
       stepsSection,
     );
@@ -5096,16 +5104,21 @@ describe("Task Create Entrypoint", () => {
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
     ).toBe(stepsSection);
+    expect(Array.from(stepActionRow?.children || [])).toEqual([createButton]);
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Execution context"]'),
     ).toBeNull();
     expect(screen.queryByLabelText("Target Branch (optional)")).toBeNull();
-    expect(Array.from(stepActionRow?.children || [])).toEqual([
-      addStepButton,
-      createButton,
-    ]);
     expect(
       primaryStepLabel.compareDocumentPosition(repoInput) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      primaryStepLabel.compareDocumentPosition(addStepButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      addStepButton.compareDocumentPosition(repoInput) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
@@ -5117,7 +5130,7 @@ describe("Task Create Entrypoint", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      publishModeSelect.compareDocumentPosition(addStepButton) &
+      publishModeSelect.compareDocumentPosition(createButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
