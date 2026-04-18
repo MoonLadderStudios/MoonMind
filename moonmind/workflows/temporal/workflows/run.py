@@ -15,6 +15,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
+    from moonmind.schemas.agent_skill_models import SkillSelector
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
         CodexManagedSessionSnapshot,
@@ -37,6 +38,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.config.settings import settings
     from moonmind.utils.logging import scrub_github_tokens
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
+    from moonmind.workflows.tasks.task_contract import (
+        build_effective_task_skill_selectors,
+    )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
@@ -1667,6 +1671,12 @@ class MoonMindRunWorkflow:
         )
 
         registry_snapshot_ref = plan_definition.metadata.registry_snapshot.artifact_ref
+        task_payload = parameters.get("task")
+        task_skills = (
+            task_payload.get("skills")
+            if isinstance(task_payload, Mapping)
+            else parameters.get("skills")
+        )
         failure_mode = plan_definition.policy.failure_mode
         publish_mode = self._publish_mode(parameters)
         pr_publish_optional = self._pr_publish_optional_for_plan(ordered_nodes)
@@ -1779,11 +1789,26 @@ class MoonMindRunWorkflow:
                     if tool_type == "agent_runtime":
                         # --- Agent dispatch: child workflow ---
                         try:
+                            resolved_skillset_ref = (
+                                await self._resolve_agent_node_skillset_ref(
+                                    task_skills=task_skills,
+                                    node_skills=node.get("skills"),
+                                    node_inputs=node_inputs,
+                                    node_id=node_id,
+                                    existing_skillset_ref=(
+                                        self._existing_agent_skillset_ref(
+                                            parameters=parameters,
+                                            node=node,
+                                            node_inputs=node_inputs,
+                                        )
+                                    ),
+                                )
+                            )
                             request = self._build_agent_execution_request(
                                 node_inputs=node_inputs,
                                 node_id=node_id,
                                 tool_name=tool_name,
-                                resolved_skillset_ref=registry_snapshot_ref,
+                                resolved_skillset_ref=resolved_skillset_ref,
                             )
                             if workflow.patched(RUN_SLOT_CONTINUITY_PATCH):
                                 self._mark_slot_continuity_for_next_step(
@@ -3470,6 +3495,65 @@ class MoonMindRunWorkflow:
             return
         if not self._merge_automation_child_succeeded(child_result):
             raise ValueError(reason or "merge automation failed")
+
+    async def _resolve_agent_node_skillset_ref(
+        self,
+        *,
+        task_skills: Mapping[str, Any] | Any | None,
+        node_skills: Mapping[str, Any] | Any | None = None,
+        node_inputs: Mapping[str, Any],
+        node_id: str,
+        existing_skillset_ref: str | None,
+    ) -> str | None:
+        """Resolve effective task/step skill intent before AgentRun launch."""
+
+        if existing_skillset_ref:
+            return existing_skillset_ref
+
+        effective = build_effective_task_skill_selectors(
+            task_skills,
+            node_skills if node_skills is not None else node_inputs.get("skills"),
+        )
+        if effective is None:
+            return None
+
+        selector = SkillSelector.model_validate(
+            effective.model_dump(mode="json", exclude_none=True)
+        )
+        if not selector.sets and not selector.include and not selector.exclude:
+            return None
+
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("agent_skill.resolve")
+        resolved = await workflow.execute_activity(
+            "agent_skill.resolve",
+            selector,
+            self._principal(),
+            node_inputs.get("workspaceRoot"),
+            False,
+            False,
+            **self._execute_kwargs_for_route(route),
+        )
+        manifest_ref = getattr(resolved, "manifest_ref", None)
+        if manifest_ref:
+            return str(manifest_ref)
+        snapshot_id = getattr(resolved, "snapshot_id", None)
+        return str(snapshot_id) if snapshot_id else None
+
+    @staticmethod
+    def _existing_agent_skillset_ref(
+        *,
+        parameters: Mapping[str, Any],
+        node: Mapping[str, Any],
+        node_inputs: Mapping[str, Any],
+    ) -> str | None:
+        for source in (node_inputs, node, parameters):
+            for key in ("resolvedSkillsetRef", "resolved_skillset_ref"):
+                value = source.get(key)
+                if value is not None:
+                    candidate = str(value).strip()
+                    if candidate:
+                        return candidate
+        return None
 
     def _build_agent_execution_request(
         self,
