@@ -1112,6 +1112,7 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
     workflow._owner_id = "owner-1"
     workflow._repo = "MoonLadderStudios/MoonMind"
     captured_create_payload: dict[str, Any] = {}
+    captured_merge_payload: dict[str, Any] = {}
 
     async def fake_execute_activity(
         activity_type: str,
@@ -1120,7 +1121,11 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
     ) -> object:
         if activity_type == "repo.create_pr":
             captured_create_payload["payload"] = _normalize_payload(payload)
-            return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999", "created": True}
+            return {
+                "url": "https://github.com/MoonLadderStudios/MoonMind/pull/999",
+                "created": True,
+                "headSha": "created-head-sha",
+            }
 
         if activity_type == "artifact.read":
             if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
@@ -1186,6 +1191,13 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
         args: object,
         **_kwargs: object,
     ) -> object:
+        if workflow_type == "MoonMind.MergeAutomation":
+            captured_merge_payload["payload"] = _normalize_payload(args)
+            return {
+                "status": "merged",
+                "prNumber": 999,
+                "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/999",
+            }
         return {
             "summary": "Completed with status completed",
             "metadata": {"branch": "auto-0526d401", "push_status": "pushed"},
@@ -1214,6 +1226,7 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
             "repo": "MoonLadderStudios/MoonMind",
             "publishMode": "pr",
             "task": {
+                "mergeAutomation": {"enabled": True},
                 "publish": {
                     "prTitle": "OAuth redirect cleanup",
                     "prBody": "Adds regression coverage for callback URL selection.",
@@ -1227,6 +1240,9 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
     assert (
         captured_create_payload["payload"]["body"]
         == "Adds regression coverage for callback URL selection."
+    )
+    assert captured_merge_payload["payload"]["pullRequest"]["headSha"] == (
+        "created-head-sha"
     )
 
 

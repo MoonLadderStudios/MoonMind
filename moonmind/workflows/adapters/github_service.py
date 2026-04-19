@@ -31,6 +31,7 @@ class CreatePRResult(BaseModel):
     url: Optional[str] = Field(None, alias="url")
     created: bool = Field(..., alias="created")
     summary: str = Field(..., alias="summary")
+    head_sha: Optional[str] = Field(None, alias="headSha")
 
 
 class MergePRResult(BaseModel):
@@ -182,6 +183,7 @@ class GitHubService:
                     url=data.get("html_url"),
                     created=True,
                     summary=f"PR created successfully: {data.get('html_url')}",
+                    head_sha=(data.get("head") or {}).get("sha"),
                 )
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code

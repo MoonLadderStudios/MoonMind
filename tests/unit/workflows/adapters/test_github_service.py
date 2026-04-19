@@ -50,7 +50,13 @@ async def test_create_pr_success(monkeypatch):
 
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(
-        return_value=_mock_response(201, {"html_url": "https://github.com/o/r/pull/42"})
+        return_value=_mock_response(
+            201,
+            {
+                "html_url": "https://github.com/o/r/pull/42",
+                "head": {"sha": "abc123"},
+            },
+        )
     )
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -64,6 +70,7 @@ async def test_create_pr_success(monkeypatch):
     assert isinstance(result, CreatePRResult)
     assert result.created is True
     assert result.url == "https://github.com/o/r/pull/42"
+    assert result.head_sha == "abc123"
 
 
 @pytest.mark.asyncio
