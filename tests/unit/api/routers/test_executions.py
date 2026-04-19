@@ -2177,13 +2177,84 @@ def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     assert skill_runtime["promptIndexRef"] == "artifact:prompt-index-1"
     assert skill_runtime["activationSummaryRef"] == "artifact:activation-summary-1"
     assert skill_runtime["lifecycleIntent"] == {
-        "source": "run",
+        "source": "proposal",
         "selectors": ["operator-default", "pr-resolver"],
         "resolvedSkillsetRef": "artifact:resolved-skills-1",
         "resolutionMode": "snapshot-reuse",
         "explanation": "Execution reuses the resolved skill snapshot unless explicit re-resolution is requested.",
     }
     assert "FULL SKILL BODY SHOULD NOT LEAK" not in str(dumped["skillRuntime"])
+
+
+def test_serialize_execution_preserves_direct_skill_source_provenance() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "task": {"instructions": "Inspect skill runtime evidence."},
+        "skillsMaterialized": {
+            "selectedSkills": ["pr-resolver", "fix-ci"],
+            "selectedVersions": [
+                {"name": "pr-resolver", "version": "1.2.0"},
+                {
+                    "name": "fix-ci",
+                    "version": "2.0.0",
+                    "source_kind": "deployment",
+                    "source_path": ".agents/skills/fix-ci",
+                },
+            ],
+            "sourceProvenance": [
+                {
+                    "name": "pr-resolver",
+                    "sourceKind": "repo",
+                    "sourcePath": ".agents/skills/pr-resolver",
+                }
+            ],
+        },
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["skillRuntime"]["sourceProvenance"] == [
+        {
+            "name": "pr-resolver",
+            "sourceKind": "repo",
+            "sourcePath": ".agents/skills/pr-resolver",
+        },
+        {
+            "name": "fix-ci",
+            "sourceKind": "deployment",
+            "sourcePath": ".agents/skills/fix-ci",
+        },
+    ]
+
+
+def test_serialize_execution_accepts_snake_case_skill_materialization_metadata() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "task": {
+            "instructions": "Inspect skill runtime evidence.",
+            "skills": {"materialization_mode": "hybrid"},
+        },
+        "skillsMaterialized": {
+            "activeSkills": ["pr-resolver"],
+            "visible_path": ".agents/skills",
+            "backing_path": "../skills_active",
+            "read_only": False,
+            "manifest_ref": "artifact:manifest-1",
+            "prompt_index_ref": "artifact:prompt-index-1",
+            "activation_summary_ref": "artifact:activation-summary-1",
+        },
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+    skill_runtime = payload["skillRuntime"]
+
+    assert skill_runtime["materializationMode"] == "hybrid"
+    assert skill_runtime["visiblePath"] == ".agents/skills"
+    assert skill_runtime["backingPath"] == "../skills_active"
+    assert skill_runtime["readOnly"] is False
+    assert skill_runtime["manifestRef"] == "artifact:manifest-1"
+    assert skill_runtime["promptIndexRef"] == "artifact:prompt-index-1"
+    assert skill_runtime["activationSummaryRef"] == "artifact:activation-summary-1"
 
 
 def test_serialize_execution_surfaces_skill_lifecycle_intent_for_schedule_defaults() -> None:
@@ -2207,6 +2278,23 @@ def test_serialize_execution_surfaces_skill_lifecycle_intent_for_schedule_defaul
     assert lifecycle["selectors"] == ["nightly"]
     assert lifecycle["resolutionMode"] == "selector-based"
     assert lifecycle["explanation"] == "Scheduled run resolves selected skills when it starts."
+
+
+def test_serialize_execution_marks_lifecycle_defaults_as_inherited_defaults() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.SCHEDULED)
+    record.parameters = {
+        "task": {"instructions": "Run this later."},
+        "skillLifecycleIntent": {"source": "schedule"},
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    lifecycle = payload["skillRuntime"]["lifecycleIntent"]
+    assert lifecycle["source"] == "schedule"
+    assert lifecycle["selectors"] == []
+    assert lifecycle["resolvedSkillsetRef"] is None
+    assert lifecycle["resolutionMode"] == "inherited-defaults"
+    assert lifecycle["explanation"] == "Execution inherits deployment skill defaults explicitly."
 
 
 def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run(

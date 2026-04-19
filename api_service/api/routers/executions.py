@@ -300,6 +300,13 @@ def _coerce_skill_bool(value: object | None) -> bool | None:
     return None
 
 
+def _mapping_value(raw: Mapping[str, Any], *keys: str) -> object | None:
+    for key in keys:
+        if key in raw:
+            return raw[key]
+    return None
+
+
 def _selected_skill_versions(raw: object | None) -> list[ExecutionSkillVersionSummaryModel]:
     if not isinstance(raw, list):
         return []
@@ -364,6 +371,57 @@ def _skill_provenance_from_versions(
     return provenance
 
 
+def _skill_source_provenance(
+    raw: object | None,
+    versions: list[ExecutionSkillVersionSummaryModel],
+) -> list[ExecutionSkillProvenanceModel]:
+    provenance: list[ExecutionSkillProvenanceModel] = []
+    seen: set[tuple[str, str | None, str | None]] = set()
+
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, Mapping):
+                continue
+            name = _coerce_temporal_scalar(
+                item.get("name")
+                or item.get("skillName")
+                or item.get("skill_name")
+            )
+            if not name:
+                continue
+            source_kind = (
+                _coerce_temporal_scalar(
+                    item.get("sourceKind") or item.get("source_kind")
+                )
+                or None
+            )
+            source_path = (
+                _coerce_temporal_scalar(
+                    item.get("sourcePath") or item.get("source_path")
+                )
+                or None
+            )
+            key = (name, source_kind, source_path)
+            if key in seen:
+                continue
+            seen.add(key)
+            provenance.append(
+                ExecutionSkillProvenanceModel(
+                    name=name,
+                    sourceKind=source_kind,
+                    sourcePath=source_path,
+                )
+            )
+
+    for entry in _skill_provenance_from_versions(versions):
+        key = (entry.name, entry.source_kind, entry.source_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        provenance.append(entry)
+    return provenance
+
+
 def _projection_diagnostic(raw: object | None) -> ExecutionProjectionDiagnosticModel | None:
     if not isinstance(raw, Mapping):
         return None
@@ -402,7 +460,7 @@ def _skill_lifecycle_intent(
     resolved_skillset_ref: str | None,
 ) -> ExecutionSkillLifecycleIntentModel | None:
     raw = _first_mapping(params.get("skillLifecycleIntent"))
-    source = _coerce_temporal_scalar(raw.get("source")) or "run"
+    source = _coerce_temporal_scalar(raw.get("source")) or "proposal"
     resolution_mode = _coerce_temporal_scalar(raw.get("resolutionMode"))
     explanation = _coerce_temporal_scalar(raw.get("explanation"))
     selectors = _skill_selector_names(raw.get("selectors")) or task_skills or []
@@ -414,7 +472,12 @@ def _skill_lifecycle_intent(
     )
 
     if not resolution_mode:
-        resolution_mode = "snapshot-reuse" if lifecycle_ref else "selector-based"
+        if lifecycle_ref:
+            resolution_mode = "snapshot-reuse"
+        elif selectors:
+            resolution_mode = "selector-based"
+        else:
+            resolution_mode = "inherited-defaults"
     if not explanation:
         if resolution_mode == "snapshot-reuse":
             explanation = (
@@ -458,14 +521,22 @@ def _skill_runtime_evidence(
     versions = _selected_skill_versions(
         materialized.get("selectedVersions") or materialized.get("skills")
     )
-    provenance = _skill_provenance_from_versions(versions)
+    provenance = _skill_source_provenance(
+        materialized.get("sourceProvenance")
+        or materialized.get("source_provenance"),
+        versions,
+    )
+    task_skills_payload = _first_mapping(task_payload.get("skills"))
     materialization_mode = (
         _coerce_temporal_scalar(
             materialized.get("materializationMode")
             or materialized.get("materialization_mode")
         )
         or _coerce_temporal_scalar(
-            _first_mapping(task_payload.get("skills")).get("materializationMode")
+            task_skills_payload.get("materializationMode")
+            or task_skills_payload.get("materialization_mode")
+            or task_payload.get("materializationMode")
+            or task_payload.get("materialization_mode")
         )
         or None
     )
@@ -491,18 +562,43 @@ def _skill_runtime_evidence(
         selectedVersions=versions,
         sourceProvenance=provenance,
         materializationMode=materialization_mode,
-        visiblePath=_coerce_temporal_scalar(materialized.get("visiblePath")) or None,
-        backingPath=_coerce_temporal_scalar(materialized.get("backingPath")) or None,
-        readOnly=_coerce_skill_bool(materialized.get("readOnly")),
-        manifestRef=(
+        visiblePath=(
             _coerce_temporal_scalar(
-                materialized.get("manifestRef") or materialized.get("manifestPath")
+                materialized.get("visiblePath") or materialized.get("visible_path")
             )
             or None
         ),
-        promptIndexRef=_coerce_temporal_scalar(materialized.get("promptIndexRef")) or None,
+        backingPath=(
+            _coerce_temporal_scalar(
+                materialized.get("backingPath") or materialized.get("backing_path")
+            )
+            or None
+        ),
+        readOnly=_coerce_skill_bool(
+            _mapping_value(materialized, "readOnly", "read_only")
+        ),
+        manifestRef=(
+            _coerce_temporal_scalar(
+                materialized.get("manifestRef")
+                or materialized.get("manifest_ref")
+                or materialized.get("manifestPath")
+                or materialized.get("manifest_path")
+            )
+            or None
+        ),
+        promptIndexRef=(
+            _coerce_temporal_scalar(
+                materialized.get("promptIndexRef")
+                or materialized.get("prompt_index_ref")
+            )
+            or None
+        ),
         activationSummaryRef=(
-            _coerce_temporal_scalar(materialized.get("activationSummaryRef")) or None
+            _coerce_temporal_scalar(
+                materialized.get("activationSummaryRef")
+                or materialized.get("activation_summary_ref")
+            )
+            or None
         ),
         diagnostics=_projection_diagnostic(materialized.get("diagnostics")),
         lifecycleIntent=lifecycle_intent,
