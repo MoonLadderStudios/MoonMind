@@ -108,6 +108,18 @@ case "$cmd" in
     exit 0
     ;;
   *"namespace describe"*)
+    if [ -n "${FAKE_TEMPORAL_DESCRIBE_FAILS:-}" ]; then
+      describe_count_file="${state_dir}/describe-count"
+      describe_count=0
+      if [ -f "$describe_count_file" ]; then
+        describe_count="$(cat "$describe_count_file")"
+      fi
+      describe_count=$((describe_count + 1))
+      printf '%s' "$describe_count" > "$describe_count_file"
+      if [ "$describe_count" -le "$FAKE_TEMPORAL_DESCRIBE_FAILS" ]; then
+        exit 1
+      fi
+    fi
     if [ -f "${state_dir}/namespace.exists" ]; then
       exit 0
     fi
@@ -251,11 +263,12 @@ def test_namespace_bootstrap_updates_existing_default_namespace_retention(tmp_pa
     assert "search-attribute create" in calls
 
 
-def test_namespace_bootstrap_skips_create_when_default_namespace_missing(tmp_path: Path):
+def test_namespace_bootstrap_retries_default_namespace_visibility_before_update(tmp_path: Path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     state_dir = tmp_path / "state"
     state_dir.mkdir()
+    (state_dir / "namespace.exists").touch()
 
     _write_executable(fake_bin / "temporal", TEMPORAL_STUB)
 
@@ -265,6 +278,8 @@ def test_namespace_bootstrap_skips_create_when_default_namespace_missing(tmp_pat
     env["TEMPORAL_ADDRESS"] = "temporal:7233"
     env["TEMPORAL_NAMESPACE"] = "default"
     env["TEMPORAL_NAMESPACE_RETENTION_DAYS"] = "90"
+    env["TEMPORAL_NAMESPACE_RETRY_SLEEP_SECONDS"] = "0"
+    env["FAKE_TEMPORAL_DESCRIBE_FAILS"] = "1"
 
     result = subprocess.run(
         ["sh", str(BOOTSTRAP_SCRIPT)],
@@ -275,11 +290,13 @@ def test_namespace_bootstrap_skips_create_when_default_namespace_missing(tmp_pat
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "Built-in default namespace does not exist yet; skipping namespace create/update and retention policy." in result.stdout
+    assert "Built-in default namespace is not visible yet; retrying retention policy." in result.stdout
+    assert "Namespace exists; updating retention to 2160h." in result.stdout
 
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
     assert "namespace create" not in calls
-    assert "namespace update" not in calls
+    assert "namespace update" in calls
+    assert "--retention 2160h" in calls
     assert "search-attribute create" in calls
 
 

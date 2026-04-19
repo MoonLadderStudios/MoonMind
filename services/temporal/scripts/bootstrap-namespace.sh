@@ -101,14 +101,14 @@ done
 log "Temporal is healthy. Ensuring namespace ${TEMPORAL_NAMESPACE}."
 
 MAX_NS_ATTEMPTS=10
+NAMESPACE_RETRY_SLEEP_SECONDS="${TEMPORAL_NAMESPACE_RETRY_SLEEP_SECONDS:-3}"
+retention_hours=$((EFFECTIVE_RETENTION_DAYS * 24))
 ns_attempt=0
 while :; do
   ns_attempt=$((ns_attempt + 1))
   ns_success=0
 
   if [ "$CLI_KIND" = "temporal" ]; then
-    retention_hours=$((EFFECTIVE_RETENTION_DAYS * 24))
-
     if run_temporal_cli operator namespace describe \
       --address "$TEMPORAL_ADDRESS" \
       --namespace "$TEMPORAL_NAMESPACE" >/dev/null 2>&1; then
@@ -120,8 +120,12 @@ while :; do
         ns_success=1
       fi
     elif [ "$TEMPORAL_NAMESPACE" = "default" ]; then
-      log "Built-in default namespace does not exist yet; skipping namespace create/update and retention policy."
-      ns_success=1
+      if [ "$ns_attempt" -ge "$MAX_NS_ATTEMPTS" ]; then
+        log "Built-in default namespace was not visible after ${MAX_NS_ATTEMPTS} attempts; skipping namespace create/update and retention policy."
+        ns_success=1
+      else
+        log "Built-in default namespace is not visible yet; retrying retention policy."
+      fi
     else
       log "Namespace does not exist; creating with retention ${retention_hours}h."
       if run_temporal_cli operator namespace create \
@@ -146,8 +150,12 @@ while :; do
         ns_success=1
       fi
     elif [ "$TEMPORAL_NAMESPACE" = "default" ]; then
-      log "Built-in default namespace does not exist yet; skipping namespace create/update and retention policy."
-      ns_success=1
+      if [ "$ns_attempt" -ge "$MAX_NS_ATTEMPTS" ]; then
+        log "Built-in default namespace was not visible after ${MAX_NS_ATTEMPTS} attempts; skipping namespace create/update and retention policy."
+        ns_success=1
+      else
+        log "Built-in default namespace is not visible yet; retrying retention policy."
+      fi
     else
       log "Namespace does not exist; creating with retention ${EFFECTIVE_RETENTION_DAYS} days."
       if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace register \
@@ -169,8 +177,8 @@ while :; do
     exit 1
   fi
 
-  log "Namespace operation failed, retrying in 3 seconds (attempt $ns_attempt/$MAX_NS_ATTEMPTS)..."
-  sleep 3
+  log "Namespace operation failed, retrying in ${NAMESPACE_RETRY_SLEEP_SECONDS} seconds (attempt $ns_attempt/$MAX_NS_ATTEMPTS)..."
+  sleep "$NAMESPACE_RETRY_SLEEP_SECONDS"
 done
 
 log "Namespace policy applied. Storage cap guardrail is ${TEMPORAL_RETENTION_MAX_STORAGE_GB} GB with retention ${EFFECTIVE_RETENTION_DAYS} day(s)."

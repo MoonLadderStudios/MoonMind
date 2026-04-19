@@ -45,7 +45,7 @@ These docs define the normative contracts that build on this platform foundation
 * **Deployment mode:** **purely self-hosted** (no Temporal Cloud).
 * **Deployment runtime:** **Docker Compose** (required for MoonMind deployments).
 * **Visibility store:** **PostgreSQL** (SQL-based advanced visibility).
-* **Retention intent:** not compliance-driven; keep records indefinitely until Temporal storage usage reaches a configured cap.
+* **Retention intent:** not compliance-driven; keep closed workflow records for 90 days by default, with operator overrides and storage-cap guardrails available for local policy tuning.
 * **Worker routing:** workers poll their configured task queues directly; Temporal Worker Deployment routing is not part of the MoonMind runtime contract.
 * **History shards:** target **1 shard by default** if feasible to keep things simple, with explicit acknowledgment of the immutability tradeoff.
 
