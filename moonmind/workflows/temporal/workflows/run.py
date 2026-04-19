@@ -2330,6 +2330,13 @@ class MoonMindRunWorkflow:
                         pr_url = self._get_from_result(create_result, "url")
                         created = self._get_from_result(create_result, "created")
                         summary = self._get_from_result(create_result, "summary") or ""
+                        created_head_sha = self._coerce_text(
+                            self._get_from_result(create_result, "headSha")
+                            or self._get_from_result(create_result, "head_sha"),
+                            max_chars=80,
+                        )
+                        if created_head_sha:
+                            self._publish_context["headSha"] = created_head_sha
                         if pr_url:
                             pull_request_url = pr_url
                             self._get_logger().info(
