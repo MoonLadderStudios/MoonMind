@@ -2048,6 +2048,16 @@ function BranchIcon() {
   );
 }
 
+function RepoIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 4h11a2 2 0 0 1 2 2v14l-3-2-3 2-3-2-3 2V6a2 2 0 0 1 2-2z" />
+      <path d="M9 8h5" />
+      <path d="M9 12h5" />
+    </svg>
+  );
+}
+
 function PublishIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -5946,103 +5956,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               </button>
             </div>
 
-            <div className="queue-step-bottom-controls stack">
-              <label>
-                GitHub Repo
-                <input
-                  name="repository"
-                  list={REPOSITORY_OPTIONS_DATALIST_ID}
-                  value={repository}
-                  placeholder="owner/repo"
-                  onChange={(event) => setRepository(event.target.value)}
-                />
-              </label>
-
-              <div className="queue-inline-selector-row">
-                <div className="queue-inline-selector queue-inline-selector--branch">
-                  <BranchIcon />
-                  <select
-                    name="branch"
-                    aria-label="Branch"
-                    value={branch}
-                    disabled={branchControlDisabled}
-                    onChange={(event) => setBranch(event.target.value)}
-                  >
-                    <option value="">
-                      {branchOptionsQuery.isLoading
-                        ? "Loading branches..."
-                        : "Branch"}
-                    </option>
-                    {branchOptions.map((item) => (
-                      <option key={`${item.source}:${item.value}`} value={item.value}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="queue-inline-selector queue-inline-selector--publish">
-                  <PublishIcon />
-                  <select
-                    name="publishMode"
-                    aria-label="Publish Mode"
-                    value={publishMode}
-                    onChange={(event) => setPublishMode(event.target.value)}
-                  >
-                    <option value="none">None</option>
-                    <option value="branch">Branch</option>
-                    <option value="pr">PR</option>
-                    {mergeAutomationAvailable ? (
-                      <option value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}>
-                        PR with Merge Automation
-                      </option>
-                    ) : null}
-                  </select>
-                </div>
-              </div>
-              {mergeAutomationAvailable ? (
-                <p className="small">
-                  PR with Merge Automation uses pr-resolver after the PR
-                  readiness gate opens; it does not bypass resolver handling.
-                </p>
-              ) : null}
-              {branchStatusMessage ? (
-                <p
-                  className={
-                    branchOptionsQuery.isError || selectedBranchIsStale
-                      ? "notice error"
-                      : "small"
-                  }
-                >
-                  {branchStatusMessage}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="actions queue-step-add queue-step-actions queue-step-submit-actions">
-              <button
-                type="submit"
-                className={
-                  showPrimaryCtaArrow
-                    ? "queue-submit-primary queue-submit-primary--with-arrow"
-                    : "queue-submit-primary"
-                }
-                disabled={isTemporalFormBlocked}
-                aria-disabled={isSubmitting || isTemporalFormBlocked}
-                aria-busy={isSubmitting}
-                title={primaryCtaTooltip}
-              >
-                <span>{primaryCta}</span>
-                {showPrimaryCtaArrow ? (
-                  <span
-                    aria-hidden="true"
-                    className="queue-submit-primary-arrow"
-                    data-submit-arrow="right"
-                  >
-                    <ArrowRightIcon />
-                  </span>
-                ) : null}
-              </button>
-            </div>
           </div>
         </section>
 
@@ -6602,6 +6515,106 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         >
           {submitMessage || ""}
         </p>
+        <div
+          className="queue-floating-bar queue-step-actions queue-step-submit-actions"
+          role="group"
+          aria-label="Task submission controls"
+        >
+          {branchStatusMessage ? (
+            <p
+              className={
+                branchOptionsQuery.isError || selectedBranchIsStale
+                  ? "queue-floating-bar-status notice error"
+                  : "queue-floating-bar-status small"
+              }
+            >
+              {branchStatusMessage}
+            </p>
+          ) : null}
+          <div className="queue-floating-bar-row">
+            <div className="queue-inline-selector queue-inline-selector--repo">
+              <RepoIcon />
+              <input
+                name="repository"
+                aria-label="GitHub Repo"
+                list={REPOSITORY_OPTIONS_DATALIST_ID}
+                value={repository}
+                placeholder="owner/repo"
+                onChange={(event) => setRepository(event.target.value)}
+              />
+            </div>
+            <div className="queue-inline-selector queue-inline-selector--branch">
+              <BranchIcon />
+              <select
+                name="branch"
+                aria-label="Branch"
+                value={branch}
+                disabled={branchControlDisabled}
+                onChange={(event) => setBranch(event.target.value)}
+              >
+                <option value="">
+                  {branchOptionsQuery.isLoading
+                    ? "Loading branches..."
+                    : "Branch"}
+                </option>
+                {branchOptions.map((item) => (
+                  <option key={`${item.source}:${item.value}`} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="queue-inline-selector queue-inline-selector--publish">
+              <PublishIcon />
+              <select
+                name="publishMode"
+                aria-label="Publish Mode"
+                value={publishMode}
+                onChange={(event) => setPublishMode(event.target.value)}
+              >
+                <option value="none">None</option>
+                <option value="branch">Branch</option>
+                <option value="pr">PR</option>
+                {mergeAutomationAvailable ? (
+                  <option value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}>
+                    PR with Merge Automation
+                  </option>
+                ) : null}
+              </select>
+            </div>
+            <button
+              type="submit"
+              className={
+                showPrimaryCtaArrow
+                  ? "queue-submit-primary queue-submit-primary--icon"
+                  : "queue-submit-primary queue-submit-primary--with-arrow"
+              }
+              disabled={isTemporalFormBlocked}
+              aria-disabled={isSubmitting || isTemporalFormBlocked}
+              aria-busy={isSubmitting}
+              aria-label={primaryCta}
+              title={primaryCtaTooltip}
+            >
+              {showPrimaryCtaArrow ? (
+                <span
+                  aria-hidden="true"
+                  className="queue-submit-primary-arrow"
+                  data-submit-arrow="right"
+                >
+                  <ArrowRightIcon />
+                </span>
+              ) : (
+                <span>{primaryCta}</span>
+              )}
+            </button>
+          </div>
+          {mergeAutomationAvailable ? (
+            <p className="small">
+              PR with Merge Automation uses pr-resolver after the PR readiness
+              gate opens; it does not bypass resolver handling.
+            </p>
+          ) : null}
+        </div>
         </section>
         </fieldset>
       </form>

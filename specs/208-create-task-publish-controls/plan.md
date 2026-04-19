@@ -1,6 +1,6 @@
 # Implementation Plan: Create Task Publish Controls
 
-**Branch**: `208-create-task-publish-controls` | **Date**: 2026-04-18 | **Spec**: `specs/208-create-task-publish-controls/spec.md`  
+**Branch**: `208-create-task-publish-controls` | **Date**: 2026-04-18 | **Spec**: `specs/208-create-task-publish-controls/spec.md`
 **Input**: Single-story feature specification from `specs/208-create-task-publish-controls/spec.md`
 
 ## Summary
@@ -39,15 +39,15 @@ This table records the pre-implementation repository state used to generate `tas
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains present for backend but not expected in this story  
-**Primary Dependencies**: React, TanStack Query, existing Create page entrypoint, existing MoonMind REST execution create/edit/rerun surfaces, Vitest and Testing Library  
-**Storage**: Existing execution payload snapshots only; no new persistent storage  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`  
-**Integration Testing**: Focused Create page request-shape tests in `frontend/src/entrypoints/task-create.test.tsx`; no compose-backed service integration is required for this UI state story  
-**Target Platform**: Mission Control browser UI served by FastAPI  
-**Project Type**: Web UI  
-**Performance Goals**: Publish selection changes remain immediate and do not add network calls or submission latency  
-**Constraints**: Preserve existing backend/runtime publish contract, preserve resolver-style restrictions, keep Jira Orchestrate behavior unchanged, and preserve MM-412 traceability  
+**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains present for backend but not expected in this story
+**Primary Dependencies**: React, TanStack Query, existing Create page entrypoint, existing MoonMind REST execution create/edit/rerun surfaces, Vitest and Testing Library
+**Storage**: Existing execution payload snapshots only; no new persistent storage
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`
+**Integration Testing**: Focused Create page request-shape tests in `frontend/src/entrypoints/task-create.test.tsx`; no compose-backed service integration is required for this UI state story
+**Target Platform**: Mission Control browser UI served by FastAPI
+**Project Type**: Web UI
+**Performance Goals**: Publish selection changes remain immediate and do not add network calls or submission latency
+**Constraints**: Preserve existing backend/runtime publish contract, preserve resolver-style restrictions, keep Jira Orchestrate behavior unchanged, and preserve MM-412 traceability
 **Scale/Scope**: One Create page entrypoint, focused Create page tests, and desired-state Create Page documentation
 
 ## Constitution Check

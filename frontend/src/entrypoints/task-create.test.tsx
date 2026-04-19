@@ -1963,7 +1963,7 @@ describe("Task Create Entrypoint", () => {
     ).toBe(false);
   });
 
-  it("renders the create submit action with a right-pointing arrow and stable label", async () => {
+  it("renders the create submit action as an icon-only right-pointing arrow with a stable label", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const createButton = await screen.findByRole("button", { name: "Create" });
@@ -1978,10 +1978,12 @@ describe("Task Create Entrypoint", () => {
     expect(arrowIcon?.getAttribute("aria-hidden")).toBe("true");
     expect(arrowIcon?.getAttribute("focusable")).toBe("false");
     expect(createButton.classList.contains("queue-submit-primary")).toBe(true);
-    expect(createButton.classList.contains("queue-submit-primary--with-arrow")).toBe(
+    expect(createButton.classList.contains("queue-submit-primary--icon")).toBe(
       true,
     );
-    expect(createButton.textContent).toContain("Create");
+    expect(createButton.getAttribute("aria-label")).toBe("Create");
+    expect(createButton.getAttribute("title")).toBe("Create this task");
+    expect(createButton.textContent?.trim()).toBe("");
   });
 
   it("shows the primary step requirement only after submit validation fails", async () => {
@@ -5472,7 +5474,7 @@ describe("Task Create Entrypoint", () => {
     expect(payload).not.toHaveProperty("mergeAutomation");
   });
 
-  it("keeps step authoring and extension controls inside one shared Steps card", async () => {
+  it("keeps step authoring inside Steps and submission controls in one Submit floating bar", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const primaryStepLabel = await screen.findByText("Step 1 (Primary)");
@@ -5487,36 +5489,57 @@ describe("Task Create Entrypoint", () => {
         .some((element) => element.classList.contains("card")),
     ).toBe(false);
 
+    const submitSection = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Submit"]',
+    );
+    expect(submitSection).not.toBeNull();
+
     const addStepButton = screen.getByRole("button", { name: "Add Step" });
     const createButton = screen.getByRole("button", { name: "Create" });
     const repoInput = screen.getByLabelText(/GitHub Repo/);
     const branchSelect = screen.getByLabelText("Branch");
     const publishModeSelect = screen.getByLabelText("Publish Mode");
     const stepExtension = addStepButton.closest(".queue-step-extension");
-    const stepActionRow = createButton.closest(".queue-step-actions");
+    const floatingBar = createButton.closest(".queue-floating-bar");
+    const floatingBarRow = createButton.closest(".queue-floating-bar-row");
 
     expect(stepExtension).not.toBeNull();
-    expect(stepActionRow).not.toBeNull();
+    expect(floatingBar).not.toBeNull();
+    expect(floatingBarRow).not.toBeNull();
     expect(addStepButton.closest('[data-canonical-create-section="Steps"]')).toBe(
       stepsSection,
     );
     expect(addStepButton.classList.contains("queue-step-extension-button")).toBe(
       true,
     );
-    expect(createButton.closest(".queue-step-actions")).toBe(stepActionRow);
-    expect(stepActionRow?.classList.contains("queue-step-submit-actions")).toBe(
+    expect(floatingBar?.classList.contains("queue-step-submit-actions")).toBe(
       true,
     );
-    expect(repoInput.closest('[data-canonical-create-section="Steps"]')).toBe(
-      stepsSection,
+    expect(repoInput.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
+    expect(branchSelect.closest(".queue-floating-bar-row")).toBe(floatingBarRow);
+    expect(publishModeSelect.closest(".queue-floating-bar-row")).toBe(
+      floatingBarRow,
+    );
+    expect(createButton.closest('[data-canonical-create-section="Submit"]')).toBe(
+      submitSection,
+    );
+    expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBe(
+      submitSection,
+    );
+    expect(branchSelect.closest('[data-canonical-create-section="Submit"]')).toBe(
+      submitSection,
     );
     expect(
-      branchSelect.closest('[data-canonical-create-section="Steps"]'),
-    ).toBe(stepsSection);
+      publishModeSelect.closest('[data-canonical-create-section="Submit"]'),
+    ).toBe(submitSection);
+    expect(createButton.classList.contains("queue-submit-primary--icon")).toBe(
+      true,
+    );
+    expect(createButton.getAttribute("aria-label")).toBe("Create");
+    expect(createButton.getAttribute("title")).toBe("Create this task");
     expect(
-      publishModeSelect.closest('[data-canonical-create-section="Steps"]'),
-    ).toBe(stepsSection);
-    expect(Array.from(stepActionRow?.children || [])).toEqual([createButton]);
+      repoInput.closest('[data-canonical-create-section="Steps"]'),
+    ).toBeNull();
     expect(
       publishModeSelect.closest('[data-canonical-create-section="Execution context"]'),
     ).toBeNull();

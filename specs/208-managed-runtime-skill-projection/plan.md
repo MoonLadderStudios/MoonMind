@@ -35,15 +35,15 @@ MM-407 requires managed runtime preparation to project an immutable resolved ski
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Pydantic v2, Temporal Python SDK activity wrappers, pytest, existing artifact service interfaces  
-**Storage**: Filesystem workspace projection and artifact-backed skill content refs; no new persistent storage  
-**Unit Testing**: pytest via `./tools/test_unit.sh`; focused iteration with `python -m pytest` for affected tests  
-**Integration Testing**: Existing hermetic integration suite via `./tools/test_integration.sh`; no new compose dependency expected for this story  
-**Target Platform**: Linux managed agent worker environments  
-**Project Type**: Python service/runtime orchestration code  
-**Performance Goals**: Materialization remains bounded to selected skill count and writes only selected skill files plus one manifest per snapshot  
-**Constraints**: Do not rewrite checked-in skill folders; fail before runtime launch for unprojectable paths; keep large skill bodies out of workflow history and inline instructions  
+**Language/Version**: Python 3.12
+**Primary Dependencies**: Pydantic v2, Temporal Python SDK activity wrappers, pytest, existing artifact service interfaces
+**Storage**: Filesystem workspace projection and artifact-backed skill content refs; no new persistent storage
+**Unit Testing**: pytest via `./tools/test_unit.sh`; focused iteration with `python -m pytest` for affected tests
+**Integration Testing**: Existing hermetic integration suite via `./tools/test_integration.sh`; no new compose dependency expected for this story
+**Target Platform**: Linux managed agent worker environments
+**Project Type**: Python service/runtime orchestration code
+**Performance Goals**: Materialization remains bounded to selected skill count and writes only selected skill files plus one manifest per snapshot
+**Constraints**: Do not rewrite checked-in skill folders; fail before runtime launch for unprojectable paths; keep large skill bodies out of workflow history and inline instructions
 **Scale/Scope**: One service materializer path, one activity boundary, existing managed runtime instruction coverage
 
 ## Constitution Check

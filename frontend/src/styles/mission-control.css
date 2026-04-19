@@ -776,7 +776,7 @@ form {
 .queue-submit-form {
   width: 100%;
   max-width: 100%;
-  padding-bottom: 0;
+  padding-bottom: 6.5rem;
 }
 
 .queue-submit-form > fieldset {
@@ -1673,17 +1673,6 @@ button.secondary:hover {
   width: 1.35rem;
 }
 
-.queue-step-bottom-controls {
-  margin-top: 0.2rem;
-}
-
-.queue-inline-selector-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(10rem, 0.9fr);
-  gap: 0.7rem;
-  align-items: center;
-}
-
 .queue-inline-selector {
   position: relative;
   min-width: 0;
@@ -1704,10 +1693,80 @@ button.secondary:hover {
   color: rgb(var(--mm-muted));
 }
 
-.queue-inline-selector select {
+.queue-inline-selector select,
+.queue-inline-selector input {
   width: 100%;
   min-height: 2.35rem;
   padding-left: 2.35rem;
+}
+
+.queue-floating-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 1.1rem;
+  transform: translateX(-50%);
+  z-index: 40;
+  width: min(100% - 1.5rem, 64rem);
+  padding: 0.55rem 0.7rem;
+  border-radius: 1.5rem;
+  background: rgb(var(--mm-panel) / 0.48);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    0 20px 60px -24px rgb(0 0 0 / 0.55),
+    0 0 0 1px rgb(0 0 0 / 0.2);
+  backdrop-filter: blur(22px) saturate(1.5);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  display: grid;
+  gap: 0.4rem;
+}
+
+.queue-floating-bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.7fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.queue-floating-bar-status {
+  margin: 0;
+  padding: 0.1rem 0.4rem;
+}
+
+.queue-floating-bar .queue-inline-selector select,
+.queue-floating-bar .queue-inline-selector input {
+  background: rgb(var(--mm-panel) / 0.55);
+  border-color: rgb(255 255 255 / 0.14);
+  border-radius: 0.85rem;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.queue-submit-primary--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.65rem;
+  height: 2.65rem;
+  padding: 0;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.queue-submit-primary--icon .queue-submit-primary-arrow {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
+@media (max-width: 640px) {
+  .queue-floating-bar-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+
+  .queue-floating-bar-row .queue-inline-selector--repo {
+    grid-column: 1 / -1;
+  }
 }
 
 .queue-step-header {
@@ -2076,12 +2135,8 @@ button.secondary:hover {
     grid-template-columns: 1fr;
   }
 
-  .queue-inline-selector-row {
-    grid-template-columns: 1fr;
-  }
-
   .queue-submit-form {
-    padding-bottom: 0;
+    padding-bottom: 8rem;
   }
 
   th,
