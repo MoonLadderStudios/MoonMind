@@ -54,7 +54,6 @@ _STATIC_PATHS = {
     "new",
     "proposals",
     "manifests",
-    "manifests/new",
     "schedules",
     "settings",
     "skills",
@@ -75,7 +74,7 @@ _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     "message": (
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
         "/tasks/new, "
-        "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
+        "/tasks/proposals, /tasks/manifests, "
         "/tasks/schedules, /tasks/skills, or /tasks/settings."
     ),
 }
@@ -347,19 +346,13 @@ async def task_manifests_route(
     return _render_react_page(request, "manifests", "/tasks/manifests")
 
 
-@router.get("/tasks/manifests/new", response_class=HTMLResponse)
+@router.get("/tasks/manifests/new", status_code=307, response_class=RedirectResponse)
 async def task_manifest_submit_route(
     request: Request,
     _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the React-powered manifest submit page."""
-    current_path = "/tasks/manifests/new"
-    return _render_react_page(
-        request,
-        "manifest-submit",
-        current_path,
-        initial_data={"dashboardConfig": build_runtime_config(current_path)},
-    )
+) -> RedirectResponse:
+    """Redirect the legacy manifest submit route into the unified manifests page."""
+    return RedirectResponse(url="/tasks/manifests", status_code=307)
 
 
 @router.get("/tasks/list", response_class=HTMLResponse)
