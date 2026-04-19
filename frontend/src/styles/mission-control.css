@@ -89,11 +89,11 @@ samp {
   container-type: inline-size;
 }
 
-/* Masthead + primary nav stay compact; table-first panels can widen below (see .panel--data-wide). */
+/* Mission Control shell spans full width and left-aligns so content is not trapped in a narrow text column. */
 .dashboard-shell-constrained {
-  max-width: 1100px;
-  margin-left: auto;
-  margin-right: auto;
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
   width: 100%;
 }
 
@@ -101,10 +101,11 @@ samp {
   position: relative;
   isolation: isolate;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1.25rem;
   padding: 0.65rem 1rem 0.62rem;
+  flex-wrap: wrap;
 }
 
 .masthead::before {
@@ -138,18 +139,6 @@ samp {
     left: calc(50% - 50cqw - 1rem);
     right: calc(50% - 50cqw - 1rem);
   }
-}
-
-.masthead-copy {
-  flex: 1 1 auto;
-}
-
-.masthead-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
 }
 
 .masthead-brand {
@@ -280,10 +269,60 @@ h1 {
 }
 
 .route-nav {
-  margin-top: 0.95rem;
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.55rem;
+}
+
+.nav-hamburger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  margin-left: auto;
+  border: 1px solid rgb(var(--mm-border) / 0.7);
+  border-radius: 0.6rem;
+  background: rgb(var(--mm-panel) / 0.7);
+  color: rgb(var(--mm-ink));
+  cursor: pointer;
+  transition: border-color 130ms ease, background 130ms ease, transform 130ms cubic-bezier(.2,.8,.2,1);
+}
+
+.nav-hamburger:hover,
+.nav-hamburger[aria-expanded="true"] {
+  border-color: rgb(var(--mm-accent));
+  background: rgb(var(--mm-accent) / 0.14);
+}
+
+.nav-hamburger-icon {
+  position: relative;
+  display: block;
+  width: 1.15rem;
+  height: 2px;
+  background: currentColor;
+  border-radius: 2px;
+}
+
+.nav-hamburger-icon::before,
+.nav-hamburger-icon::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: currentColor;
+  border-radius: 2px;
+}
+
+.nav-hamburger-icon::before {
+  top: -0.38rem;
+}
+
+.nav-hamburger-icon::after {
+  top: 0.38rem;
 }
 
 .route-nav a {
@@ -316,9 +355,9 @@ h1 {
 
 .panel {
   margin-top: 1rem;
-  margin-left: auto;
-  margin-right: auto;
-  max-width: 1100px;
+  margin-left: 0;
+  margin-right: 0;
+  max-width: none;
   width: 100%;
   border-radius: 1rem;
   border: 1px solid rgb(var(--mm-border) / 0.8);
@@ -2113,22 +2152,52 @@ button.secondary:hover {
 }
 
 @media (max-width: 900px) {
-  .masthead {
-    flex-direction: column;
+  .masthead-brand {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
-  .masthead-title-row {
-    width: 100%;
-    align-items: flex-start;
+  .nav-hamburger {
+    display: inline-flex;
   }
 
   .masthead-title-meta {
     margin-left: 0;
+    flex-basis: 100%;
     justify-content: flex-start;
   }
 
   .version-badge {
     margin-left: 0;
+  }
+
+  .route-nav {
+    position: absolute;
+    right: 1rem;
+    top: calc(100% + 0.4rem);
+    z-index: 30;
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+    padding: 0.55rem;
+    min-width: 14rem;
+    max-width: calc(100vw - 2rem);
+    border: 1px solid rgb(var(--mm-border));
+    border-radius: 0.85rem;
+    background: rgb(var(--mm-panel) / 0.98);
+    box-shadow: var(--mm-shadow);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .route-nav--open {
+    display: flex;
+  }
+
+  .route-nav a {
+    text-align: left;
+    background: transparent;
   }
 
   .grid-2 {
