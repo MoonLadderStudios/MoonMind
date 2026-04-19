@@ -637,7 +637,11 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
             "task": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
-                "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
+                "publish": {
+                    "mode": "pr",
+                    "mergeAutomation": {"enabled": True},
+                    "merge_automation": {"enabled": False},
+                },
                 "orchestrationMode": "runtime",
             },
             "traceability": {
@@ -677,6 +681,7 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
         "mode": "pr",
         "mergeAutomation": {"enabled": True},
     }
+    assert "merge_automation" not in first_parameters["task"]["publish"]
     assert "MM-404" in first_parameters["task"]["instructions"]
 
 

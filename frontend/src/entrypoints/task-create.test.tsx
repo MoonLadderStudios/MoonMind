@@ -4803,7 +4803,7 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
-  it("defaults publish mode to PR with merge automation when selecting the Jira Breakdown and Orchestrate preset", async () => {
+  it("sets parent publish mode to none when selecting the Jira Breakdown and Orchestrate preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -4853,7 +4853,7 @@ describe("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-      ).toBe("pr_with_merge_automation");
+      ).toBe("none");
     });
   });
 
@@ -6245,6 +6245,7 @@ describe("Task Create Entrypoint", () => {
                 id: "tpl:speckit-demo:1.2.3:01",
                 title: "Clarify spec",
                 instructions: "Clarify the {{ inputs.feature_name }} scope.",
+                jiraOrchestration: {},
                 skill: {
                   id: "speckit-clarify",
                   args: { feature: "Task Create" },

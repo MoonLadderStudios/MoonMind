@@ -360,7 +360,7 @@ def _downstream_task_payload(
         "Do not run implementation inline inside the breakdown task."
     )
     runtime = _mapping(task_payload.get("runtime"))
-    publish = dict(_mapping(task_payload.get("publish")))
+    publish = _mapping(task_payload.get("publish"))
     merge_automation = _mapping(
         task_payload.get("mergeAutomation")
         or task_payload.get("merge_automation")
@@ -369,6 +369,7 @@ def _downstream_task_payload(
     )
     if merge_automation and _string(publish.get("mode")).lower() == "pr":
         publish["mergeAutomation"] = merge_automation
+        publish.pop("merge_automation", None)
     else:
         publish.pop("mergeAutomation", None)
         publish.pop("merge_automation", None)

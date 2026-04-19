@@ -561,6 +561,11 @@ function recordValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function nonEmptyRecordValue(value: unknown): Record<string, unknown> | undefined {
+  const record = recordValue(value);
+  return Object.keys(record).length > 0 ? record : undefined;
+}
+
 function mergeRecordValues(
   base: Record<string, unknown>,
   overlay: Record<string, unknown>,
@@ -1428,11 +1433,8 @@ function mapExpandedStepToState(
         ? step.story_output
         : undefined;
   const jiraOrchestration =
-    step.jiraOrchestration && typeof step.jiraOrchestration === "object"
-      ? step.jiraOrchestration
-      : step.jira_orchestration && typeof step.jira_orchestration === "object"
-        ? step.jira_orchestration
-        : undefined;
+    nonEmptyRecordValue(step.jiraOrchestration) ||
+    nonEmptyRecordValue(step.jira_orchestration);
   const templateAttachments = Array.isArray(step.inputAttachments)
     ? step.inputAttachments
     : Array.isArray(step.attachments)
@@ -3032,15 +3034,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     if (
       pageMode.mode === "create" &&
-      selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG
+      (selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG ||
+        selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG)
     ) {
       setPublishMode("none");
-    }
-    if (
-      pageMode.mode === "create" &&
-      selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG
-    ) {
-      setPublishMode(PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE);
     }
   }, [pageMode.mode, selectedPreset?.slug]);
 
@@ -4989,7 +4986,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
               : {}),
-            ...(sourceStep.jiraOrchestration
+            ...(sourceStep.jiraOrchestration &&
+            Object.keys(sourceStep.jiraOrchestration).length > 0
               ? { jiraOrchestration: sourceStep.jiraOrchestration }
               : {}),
             ...entry.payload,
