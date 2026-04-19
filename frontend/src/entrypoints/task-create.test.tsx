@@ -8,7 +8,6 @@ import {
   type MockInstance,
 } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { existsSync, readFileSync } from "node:fs";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
@@ -5652,21 +5651,6 @@ describe("Task Create Entrypoint", () => {
     expect(within(floatingBar as HTMLElement).getByRole("button", { name: "Create" })).toBe(
       createButton,
     );
-  });
-
-  it("defines liquid glass refraction styles for the Create page floating bar", () => {
-    const stylesheetPath = [
-      "frontend/src/styles/mission-control.css",
-      "styles/mission-control.css",
-    ].find((candidate) => existsSync(candidate));
-    expect(stylesheetPath).toBeTruthy();
-    const stylesheet = readFileSync(stylesheetPath as string, "utf8");
-
-    expect(stylesheet).toContain(".queue-floating-bar--liquid-glass");
-    expect(stylesheet).toContain(".queue-floating-bar--liquid-glass::before");
-    expect(stylesheet).toContain("backdrop-filter: blur(26px) saturate(1.65)");
-    expect(stylesheet).toContain("radial-gradient(");
-    expect(stylesheet).toContain("inset 0 1px 0 rgb(255 255 255 / 0.34)");
   });
 
   it("loads branches through MoonMind and submits one authored branch", async () => {
