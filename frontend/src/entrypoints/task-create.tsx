@@ -23,6 +23,7 @@ const REPOSITORY_OPTIONS_DATALIST_ID = "queue-repository-options";
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
+const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
 const SPECKIT_ORCHESTRATE_PRESET_SLUG = "speckit-orchestrate";
@@ -398,6 +399,8 @@ interface ExpandedStepPayload {
   attachments?: StepAttachmentRef[];
   storyOutput?: Record<string, unknown>;
   story_output?: Record<string, unknown>;
+  jiraOrchestration?: Record<string, unknown>;
+  jira_orchestration?: Record<string, unknown>;
 }
 
 interface TaskTemplateExpandResponse {
@@ -449,6 +452,7 @@ interface StepState {
   inputAttachments: StepAttachmentRef[];
   templateAttachments: StepAttachmentRef[];
   storyOutput?: Record<string, unknown>;
+  jiraOrchestration?: Record<string, unknown>;
 }
 
 interface AppliedTemplateState {
@@ -885,6 +889,9 @@ function createStepStateEntriesFromTemporalDraft(
       index === 0 &&
       primarySkill !== "" &&
       !hasExplicitSkillSelection(step.skillId);
+    const hasJiraOrchestration =
+      step.jiraOrchestration &&
+      Object.keys(step.jiraOrchestration).length > 0;
 
     return createStepStateEntry(index + 1, {
       id: step.id,
@@ -903,6 +910,9 @@ function createStepStateEntriesFromTemporalDraft(
         (step.inputAttachments || []).map(stepAttachmentRefFromTemporal),
       ...(step.storyOutput && Object.keys(step.storyOutput).length > 0
         ? { storyOutput: step.storyOutput }
+        : {}),
+      ...(hasJiraOrchestration
+        ? { jiraOrchestration: step.jiraOrchestration }
         : {}),
     });
   });
@@ -1417,6 +1427,12 @@ function mapExpandedStepToState(
       : step.story_output && typeof step.story_output === "object"
         ? step.story_output
         : undefined;
+  const jiraOrchestration =
+    step.jiraOrchestration && typeof step.jiraOrchestration === "object"
+      ? step.jiraOrchestration
+      : step.jira_orchestration && typeof step.jira_orchestration === "object"
+        ? step.jira_orchestration
+        : undefined;
   const templateAttachments = Array.isArray(step.inputAttachments)
     ? step.inputAttachments
     : Array.isArray(step.attachments)
@@ -1433,6 +1449,7 @@ function mapExpandedStepToState(
     templateInstructions: instructions,
     templateAttachments,
     ...(storyOutput ? { storyOutput } : {}),
+    ...(jiraOrchestration ? { jiraOrchestration } : {}),
   });
 }
 
@@ -3018,6 +3035,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG
     ) {
       setPublishMode("none");
+    }
+    if (
+      pageMode.mode === "create" &&
+      selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG
+    ) {
+      setPublishMode(PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE);
     }
   }, [pageMode.mode, selectedPreset?.slug]);
 
@@ -4965,6 +4988,9 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               : {}),
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
+              : {}),
+            ...(sourceStep.jiraOrchestration
+              ? { jiraOrchestration: sourceStep.jiraOrchestration }
               : {}),
             ...entry.payload,
           };

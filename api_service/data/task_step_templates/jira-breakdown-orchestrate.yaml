@@ -65,7 +65,7 @@ inputs:
     label: Publish Mode
     type: enum
     required: true
-    default: none
+    default: pr
     options:
       - none
       - pr
@@ -123,6 +123,8 @@ steps:
           mode: "{{ inputs.runtime_mode }}"
         publish:
           mode: "{{ inputs.publish_mode }}"
+          mergeAutomation:
+            enabled: true
         orchestrationMode: "{{ inputs.orchestration_mode }}"
       traceability:
         sourceIssueKey: "{{ inputs.source_issue_key }}"

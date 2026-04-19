@@ -360,7 +360,18 @@ def _downstream_task_payload(
         "Do not run implementation inline inside the breakdown task."
     )
     runtime = _mapping(task_payload.get("runtime"))
-    publish = _mapping(task_payload.get("publish"))
+    publish = dict(_mapping(task_payload.get("publish")))
+    merge_automation = _mapping(
+        task_payload.get("mergeAutomation")
+        or task_payload.get("merge_automation")
+        or publish.get("mergeAutomation")
+        or publish.get("merge_automation")
+    )
+    if merge_automation and _string(publish.get("mode")).lower() == "pr":
+        publish["mergeAutomation"] = merge_automation
+    else:
+        publish.pop("mergeAutomation", None)
+        publish.pop("merge_automation", None)
     repository = _string(task_payload.get("repository") or task_payload.get("repo"))
     task: dict[str, Any] = {
         "title": f"Run Jira Orchestrate for {issue_key}: {summary}",
