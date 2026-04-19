@@ -1,4 +1,4 @@
-<nav class="route-nav" aria-label="Mission Control navigation">
+<nav class="route-nav" id="mission-control-nav" aria-label="Mission Control navigation">
   <a href="/tasks/list" data-nav {% if current_path == '/tasks/list' or (current_path.startswith('/tasks/') and not current_path.startswith('/tasks/new') and not current_path.startswith('/tasks/manifests') and not current_path.startswith('/tasks/schedules') and not current_path.startswith('/tasks/proposals') and not current_path.startswith('/tasks/skills') and not current_path.startswith('/tasks/settings')) %}class="active" aria-current="page"{% endif %}>🛰️ Tasks</a>
   <a href="/tasks/new" data-nav {% if current_path == '/tasks/new' %}class="active" aria-current="page"{% endif %}>🚀 Create</a>
   <a href="/tasks/manifests" data-nav {% if current_path == '/tasks/manifests' %}class="active" aria-current="page"{% endif %}>💽 Manifests</a>

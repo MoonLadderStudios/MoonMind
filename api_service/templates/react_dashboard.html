@@ -43,34 +43,70 @@
 
     <div class="dashboard-shell-constrained">
       <header class="masthead">
-        <div class="masthead-copy">
-          <div class="masthead-title-row">
-            <div class="masthead-brand">
-              <img
-                class="masthead-logo"
-                src="/static/task_dashboard/moonmindlogo.webp"
-                alt="MoonMind owl and moon logo"
-                width="256"
-                height="199"
-              />
-              <h1>Mission Control</h1>
-            </div>
-            {% if build_id %}
-            <div class="masthead-title-meta">
-              <div class="version-badge" title="MoonMind image version">
-                <span class="version-badge-value">v{{ build_id }}</span>
-              </div>
-            </div>
-            {% endif %}
+        <div class="masthead-brand">
+          <img
+            class="masthead-logo"
+            src="/static/task_dashboard/moonmindlogo.webp"
+            alt="MoonMind owl and moon logo"
+            width="256"
+            height="199"
+          />
+          <h1>Mission Control</h1>
+        </div>
+
+        <button
+          class="nav-hamburger"
+          type="button"
+          aria-expanded="false"
+          aria-controls="mission-control-nav"
+          aria-label="Toggle navigation menu"
+        >
+          <span class="nav-hamburger-icon" aria-hidden="true"></span>
+        </button>
+
+        {% include "_navigation.html" %}
+
+        {% if build_id %}
+        <div class="masthead-title-meta">
+          <div class="version-badge" title="MoonMind image version">
+            <span class="version-badge-value">v{{ build_id }}</span>
           </div>
         </div>
+        {% endif %}
       </header>
-
-      {% include "_navigation.html" %}
     </div>
 
     <div id="mission-control-root"></div>
   </main>
+
+  <script>
+    (() => {
+      const btn = document.querySelector('.nav-hamburger');
+      const nav = document.getElementById('mission-control-nav');
+      if (!btn || !nav) return;
+      const setOpen = (open) => {
+        btn.setAttribute('aria-expanded', String(open));
+        nav.classList.toggle('route-nav--open', open);
+      };
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        setOpen(btn.getAttribute('aria-expanded') !== 'true');
+      });
+      document.addEventListener('click', (event) => {
+        if (btn.getAttribute('aria-expanded') === 'true' && !nav.contains(event.target) && !btn.contains(event.target)) {
+          setOpen(false);
+        }
+      });
+      nav.addEventListener('click', (event) => {
+        if (event.target && event.target.closest && event.target.closest('a')) {
+          setOpen(false);
+        }
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && btn.getAttribute('aria-expanded') === 'true') setOpen(false);
+      });
+    })();
+  </script>
 
   <script id="moonmind-ui-boot" type="application/json">
     {{ boot_payload | safe }}
