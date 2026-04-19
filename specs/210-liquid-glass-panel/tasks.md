@@ -73,7 +73,7 @@ description: "Task list for Liquid Glass Publish Panel"
 
 - [ ] T006 [P] Add failing unit test in `frontend/src/entrypoints/task-create.test.tsx` asserting the task submission controls group exposes the liquid glass panel treatment for FR-001/FR-002/FR-009/SC-001
 - [ ] T007 [P] Add failing unit test in `frontend/src/entrypoints/task-create.test.tsx` asserting GitHub Repo, Branch, Publish Mode, and Create controls remain accessible inside the treated panel for FR-003/SC-002
-- [ ] T008 [P] Add failing unit test in `frontend/src/entrypoints/task-create.test.tsx` asserting branch status or disabled/loading states keep the same panel target and stable control layout for FR-006/FR-007/SC-003
+- [ ] T008 [P] Add failing unit test in `frontend/src/entrypoints/task-create.test.tsx` asserting long repository/branch values, branch status, disabled, and loading states keep the same panel target and stable control layout for FR-006/FR-007/SC-003
 - [ ] T009 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm T006-T008 fail for the expected missing liquid-glass/readability assertions before production changes
 
 ### Integration Tests (write first)
@@ -92,7 +92,7 @@ description: "Task list for Liquid Glass Publish Panel"
 
 ### Story Validation
 
-- [ ] T018 Execute the visual checks in `specs/210-liquid-glass-panel/quickstart.md` for desktop and mobile widths, light and dark appearance, readability, layout fit, and unchanged create behavior for SC-001/SC-002/SC-003/SC-004/SC-005
+- [ ] T018 Execute the visual checks in `specs/210-liquid-glass-panel/quickstart.md` for desktop and mobile widths, light and dark appearance, long repository/branch values, branch unavailable/loading states, publish-mode constraints, readability, layout fit, and unchanged create behavior for SC-001/SC-002/SC-003/SC-004/SC-005
 - [ ] T019 Confirm the supplied Jira issue reference and original preset brief remain present in `specs/210-liquid-glass-panel/spec.md`, `specs/210-liquid-glass-panel/tasks.md`, implementation notes, and final verification evidence for FR-010/SC-006
 
 **Checkpoint**: The single story is implemented, covered by unit and integration-style UI tests, visually checked, and traceable to the original brief.

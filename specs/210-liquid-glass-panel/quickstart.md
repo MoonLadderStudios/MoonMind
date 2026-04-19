@@ -31,6 +31,9 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
 4. Confirm the panel fits without overlap or clipped text at a desktop-width viewport.
 5. Confirm the panel fits without overlap or clipped text at a mobile-width viewport.
 6. Repeat readability checks in light and dark appearance settings.
+7. Enter or load a long repository name and a long branch name, then confirm the panel remains stable and text does not overlap adjacent controls.
+8. Check branch loading, empty, failed, disabled, and stale states when available, then confirm status text remains readable inside or near the panel.
+9. Check a publish-mode-constrained task or skill when available, then confirm the panel remains stable when publish options are limited or reset.
 
 ## Integration Notes
 
