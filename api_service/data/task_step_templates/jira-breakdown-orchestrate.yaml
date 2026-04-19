@@ -100,6 +100,7 @@ steps:
       Return the created Jira issue keys, URLs, dependency mode, and created/reused/failed link results.
     storyOutput:
       mode: jira
+      fallback: fail
       jira:
         projectKey: "{{ inputs.jira_project_key }}"
         issueTypeName: "{{ inputs.jira_issue_type }}"

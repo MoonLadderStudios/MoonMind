@@ -50,6 +50,10 @@ _SUPPORTED_INPUT_TYPES = frozenset(
     {"text", "textarea", "markdown", "enum", "boolean", "user", "team", "repo_path"}
 )
 _JIRA_BREAKDOWN_SLUG = "jira-breakdown"
+_JIRA_BREAKDOWN_ORCHESTRATE_SLUG = "jira-breakdown-orchestrate"
+_JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS = frozenset(
+    {_JIRA_BREAKDOWN_SLUG, _JIRA_BREAKDOWN_ORCHESTRATE_SLUG}
+)
 _JIRA_BREAKDOWN_PROJECT_INPUT = "jira_project_key"
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
@@ -313,7 +317,7 @@ def _effective_inputs_schema(
 ) -> list[dict[str, Any]]:
     """Apply runtime-derived defaults without mutating stored template versions."""
 
-    if slug != _JIRA_BREAKDOWN_SLUG:
+    if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
         return inputs_schema
 
     project_key = _first_allowed_jira_project_key()
