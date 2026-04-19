@@ -53,6 +53,7 @@ class PullRequestReadinessResult(BaseModel):
     head_sha: str = Field(..., alias="headSha")
     ready: bool = Field(False, alias="ready")
     pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
+    pull_request_merged: bool | None = Field(None, alias="pullRequestMerged")
     checks_complete: bool | None = Field(None, alias="checksComplete")
     checks_passing: bool | None = Field(None, alias="checksPassing")
     automated_review_complete: bool | None = Field(
@@ -406,6 +407,7 @@ class GitHubService:
         blockers: list[dict[str, Any]] = []
         observed_head_sha = head_sha
         pr_open: bool | None = None
+        pr_merged: bool | None = None
         checks_complete: bool | None = None
         checks_passing: bool | None = None
         automated_review_complete: bool | None = None
@@ -419,6 +421,7 @@ class GitHubService:
                 pr_response.raise_for_status()
                 pr_data = pr_response.json()
                 pr_open = pr_data.get("state") == "open"
+                pr_merged = bool(pr_data.get("merged"))
                 head = pr_data.get("head") if isinstance(pr_data, dict) else {}
                 if isinstance(head, dict):
                     observed_head_sha = str(head.get("sha") or head_sha)
@@ -447,7 +450,7 @@ class GitHubService:
                     }
                 )
 
-            if pr_open is False:
+            if pr_open is False and pr_merged is not True:
                 blockers.append(
                     {
                         "kind": "pull_request_closed",
@@ -457,7 +460,7 @@ class GitHubService:
                     }
                 )
 
-            if checks_required and not blockers:
+            if checks_required and pr_merged is not True and not blockers:
                 check_evidence = await self._evaluate_github_checks(
                     client=client,
                     repo=repo,
@@ -468,7 +471,7 @@ class GitHubService:
                 checks_passing = check_evidence["passing"]
                 blockers.extend(check_evidence["blockers"])
 
-            if review_required and not blockers:
+            if review_required and pr_merged is not True and not blockers:
                 review_evidence = await self._evaluate_automated_review(
                     client=client,
                     repo=repo,
@@ -480,8 +483,9 @@ class GitHubService:
 
         return PullRequestReadinessResult(
             headSha=observed_head_sha,
-            ready=not blockers,
+            ready=not blockers and pr_merged is not True,
             pullRequestOpen=pr_open,
+            pullRequestMerged=pr_merged,
             checksComplete=checks_complete,
             checksPassing=checks_passing,
             automatedReviewComplete=automated_review_complete,

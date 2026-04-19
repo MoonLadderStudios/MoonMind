@@ -84,6 +84,9 @@ from moonmind.workflows.temporal.workflows.agent_run import (
 from moonmind.workflows.temporal.workflows.oauth_session import (
     MoonMindOAuthSessionWorkflow as MoonMindOAuthSession,
 )
+from moonmind.workflows.temporal.workflows.merge_automation import (
+    MoonMindMergeAutomationWorkflow as MoonMindMergeAutomation,
+)
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
@@ -1299,6 +1302,7 @@ async def main_async() -> None:
             MoonMindManagedSessionReconcile,
             MoonMindAgentRun,
             MoonMindOAuthSession,
+            MoonMindMergeAutomation,
         ]
         activities = [
             resolve_adapter_metadata,
