@@ -415,6 +415,15 @@ class MoonMindMergeAutomationWorkflow:
                     )
             self._blockers = list(evidence.blockers)
             await self._write_gate_snapshot(evidence_ready=evidence.ready)
+            if evidence.pull_request_merged:
+                self._refresh_tracked_head_sha(evaluation)
+                if not await self._complete_post_merge_jira(
+                    resolver_disposition=DISPOSITION_ALREADY_MERGED
+                ):
+                    return await self._finish()
+                self._status = STATE_ALREADY_MERGED
+                self._publish_visibility()
+                return await self._finish()
             if evidence.ready:
                 self._status = STATE_EXECUTING
                 self._publish_visibility()

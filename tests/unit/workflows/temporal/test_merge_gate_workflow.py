@@ -55,6 +55,27 @@ def test_classify_readiness_marks_stale_revision_terminal() -> None:
     assert evidence.blockers[0].retryable is False
 
 
+def test_classify_readiness_treats_merged_pr_as_terminal_success_evidence() -> None:
+    evidence = classify_readiness(
+        {
+            "headSha": "def456",
+            "ready": False,
+            "pullRequestOpen": False,
+            "pullRequestMerged": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+            "policyAllowed": True,
+        },
+        tracked_head_sha="abc123",
+    )
+
+    assert evidence.pull_request_merged is True
+    assert evidence.ready is False
+    assert evidence.blockers == []
+
+
 def test_classify_readiness_sanitizes_secret_like_blocker_summary() -> None:
     evidence = classify_readiness(
         {

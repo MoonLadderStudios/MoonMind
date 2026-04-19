@@ -292,6 +292,63 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
 
 
 @pytest.mark.asyncio
+async def test_merge_automation_finishes_already_merged_without_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    readiness_calls = 0
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        nonlocal readiness_calls
+        assert activity_type == "merge_automation.evaluate_readiness"
+        readiness_calls += 1
+        return {
+            "headSha": "def456",
+            "ready": False,
+            "pullRequestOpen": False,
+            "pullRequestMerged": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("already-merged PRs must not launch pr-resolver")
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert readiness_calls == 1
+    assert result["status"] == "already_merged"
+    assert result["latestHeadSha"] == "def456"
+    assert result["blockers"] == []
+    assert result["resolverChildWorkflowIds"] == []
+
+
+@pytest.mark.asyncio
 async def test_merge_automation_runs_post_merge_jira_before_merged_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

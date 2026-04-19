@@ -307,6 +307,39 @@ async def test_evaluate_pull_request_readiness_opens_after_checks_and_review(mon
 
 
 @pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_reports_merged_closed_pr(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        return_value=_mock_get_response(
+            200,
+            {"state": "closed", "merged": True, "head": {"sha": "def456"}},
+        )
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "required"},
+        )
+
+    assert result.ready is False
+    assert result.pull_request_open is False
+    assert result.pull_request_merged is True
+    assert result.head_sha == "def456"
+    assert result.blockers == []
+    mock_client.get.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_blocks_changes_requested_review(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
 

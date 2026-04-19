@@ -1149,6 +1149,9 @@ async def test_main_async_workflow_fleet(
     )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import MoonMindProviderProfileManagerWorkflow
     from moonmind.workflows.temporal.workflows.oauth_session import MoonMindOAuthSessionWorkflow as MoonMindOAuthSession
+    from moonmind.workflows.temporal.workflows.merge_automation import (
+        MoonMindMergeAutomationWorkflow,
+    )
     from moonmind.workflows.temporal.workflows.managed_session_reconcile import (
         MoonMindManagedSessionReconcileWorkflow,
     )
@@ -1160,6 +1163,7 @@ async def test_main_async_workflow_fleet(
         MoonMindManagedSessionReconcileWorkflow,
         MoonMindAgentRun,
         MoonMindOAuthSession,
+        MoonMindMergeAutomationWorkflow,
     ]
     assert kwargs["activities"] == [
         resolve_adapter_metadata,

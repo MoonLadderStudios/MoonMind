@@ -87,8 +87,12 @@ def classify_readiness(
     """Normalize provider readiness evidence into bounded merge-gate evidence."""
 
     head_sha = str(payload.get("headSha") or payload.get("head_sha") or "").strip()
+    pull_request_merged = (
+        payload.get("pullRequestMerged") is True
+        or payload.get("pull_request_merged") is True
+    )
     blockers: list[ReadinessBlockerModel] = []
-    if head_sha != str(tracked_head_sha).strip():
+    if not pull_request_merged and head_sha != str(tracked_head_sha).strip():
         blockers.append(
             ReadinessBlockerModel(
                 kind="stale_revision",
@@ -102,7 +106,10 @@ def classify_readiness(
         if isinstance(raw, Mapping):
             blockers.append(_blocker_from_mapping(raw))
 
-    if payload.get("pullRequestOpen") is False or payload.get("pull_request_open") is False:
+    if not pull_request_merged and (
+        payload.get("pullRequestOpen") is False
+        or payload.get("pull_request_open") is False
+    ):
         blockers.append(
             ReadinessBlockerModel.model_validate(
                 _default_blocker(
@@ -181,13 +188,14 @@ def classify_readiness(
         seen.add(key)
         deduped.append(blocker)
 
-    explicit_ready = bool(payload.get("ready", False))
+    explicit_ready = bool(payload.get("ready", False)) and not pull_request_merged
     ready = explicit_ready and not deduped
     return ReadinessEvidenceModel.model_validate(
         {
             **dict(payload),
             "headSha": head_sha,
             "ready": ready,
+            "pullRequestMerged": pull_request_merged,
             "blockers": [b.model_dump(by_alias=True) for b in deduped],
         }
     )
