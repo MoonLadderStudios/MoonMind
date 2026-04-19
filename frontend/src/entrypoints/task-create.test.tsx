@@ -5635,6 +5635,30 @@ describe("Task Create Entrypoint", () => {
     ).toBeTruthy();
   });
 
+  it("applies the liquid glass treatment to the bottom submission controls without changing accessible controls", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const createButton = await screen.findByRole("button", { name: "Create" });
+    const floatingBar = createButton.closest<HTMLElement>(".queue-floating-bar");
+
+    expect(floatingBar).not.toBeNull();
+    expect(floatingBar?.classList.contains("queue-floating-bar--liquid-glass")).toBe(
+      true,
+    );
+    expect(within(floatingBar as HTMLElement).getByLabelText("GitHub Repo")).toBe(
+      screen.getByLabelText("GitHub Repo"),
+    );
+    expect(within(floatingBar as HTMLElement).getByLabelText("Branch")).toBe(
+      screen.getByLabelText("Branch"),
+    );
+    expect(within(floatingBar as HTMLElement).getByLabelText("Publish Mode")).toBe(
+      screen.getByLabelText("Publish Mode"),
+    );
+    expect(within(floatingBar as HTMLElement).getByRole("button", { name: "Create" })).toBe(
+      createButton,
+    );
+  });
+
   it("loads branches through MoonMind and submits one authored branch", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
