@@ -100,78 +100,80 @@ done
 
 log "Temporal is healthy. Ensuring namespace ${TEMPORAL_NAMESPACE}."
 
-if [ "$TEMPORAL_NAMESPACE" = "default" ]; then
-  log "Built-in default namespace detected. Skipping namespace create/update and retention policy."
-else
-  MAX_NS_ATTEMPTS=10
-  ns_attempt=0
-  while :; do
-    ns_attempt=$((ns_attempt + 1))
-    ns_success=0
+MAX_NS_ATTEMPTS=10
+ns_attempt=0
+while :; do
+  ns_attempt=$((ns_attempt + 1))
+  ns_success=0
 
-    if [ "$CLI_KIND" = "temporal" ]; then
-      retention_hours=$((EFFECTIVE_RETENTION_DAYS * 24))
+  if [ "$CLI_KIND" = "temporal" ]; then
+    retention_hours=$((EFFECTIVE_RETENTION_DAYS * 24))
 
-      if run_temporal_cli operator namespace describe \
+    if run_temporal_cli operator namespace describe \
+      --address "$TEMPORAL_ADDRESS" \
+      --namespace "$TEMPORAL_NAMESPACE" >/dev/null 2>&1; then
+      log "Namespace exists; updating retention to ${retention_hours}h."
+      if run_temporal_cli operator namespace update \
         --address "$TEMPORAL_ADDRESS" \
-        --namespace "$TEMPORAL_NAMESPACE" >/dev/null 2>&1; then
-        log "Namespace exists; updating retention to ${retention_hours}h."
-        if run_temporal_cli operator namespace update \
-          --address "$TEMPORAL_ADDRESS" \
-          --namespace "$TEMPORAL_NAMESPACE" \
-          --retention "${retention_hours}h"; then
-          ns_success=1
-        fi
-      else
-        log "Namespace does not exist; creating with retention ${retention_hours}h."
-        if run_temporal_cli operator namespace create \
-          --address "$TEMPORAL_ADDRESS" \
-          --namespace "$TEMPORAL_NAMESPACE" \
-          --description "MoonMind runtime workflows" \
-          --retention "${retention_hours}h"; then
-          ns_success=1
-        fi
+        --namespace "$TEMPORAL_NAMESPACE" \
+        --retention "${retention_hours}h"; then
+        ns_success=1
       fi
+    elif [ "$TEMPORAL_NAMESPACE" = "default" ]; then
+      log "Built-in default namespace does not exist yet; skipping namespace create/update and retention policy."
+      ns_success=1
     else
-      if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace describe --namespace "$TEMPORAL_NAMESPACE" >/dev/null 2>&1 \
-        || tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace describe "$TEMPORAL_NAMESPACE" >/dev/null 2>&1; then
-        log "Namespace exists; updating retention to ${EFFECTIVE_RETENTION_DAYS} days."
-        if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace update \
-          --namespace "$TEMPORAL_NAMESPACE" \
-          --rd "${EFFECTIVE_RETENTION_DAYS}" \
-          >/dev/null 2>&1 \
-          || tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace update \
-            --namespace "$TEMPORAL_NAMESPACE" \
-            --retention "${EFFECTIVE_RETENTION_DAYS}"; then
-          ns_success=1
-        fi
-      else
-        log "Namespace does not exist; creating with retention ${EFFECTIVE_RETENTION_DAYS} days."
-        if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace register \
-          --rd "${EFFECTIVE_RETENTION_DAYS}" \
-          --description "MoonMind runtime workflows" \
-          --namespace "$TEMPORAL_NAMESPACE"; then
-          ns_success=1
-        fi
+      log "Namespace does not exist; creating with retention ${retention_hours}h."
+      if run_temporal_cli operator namespace create \
+        --address "$TEMPORAL_ADDRESS" \
+        --namespace "$TEMPORAL_NAMESPACE" \
+        --description "MoonMind runtime workflows" \
+        --retention "${retention_hours}h"; then
+        ns_success=1
       fi
     fi
-
-    if [ "$ns_success" -eq 1 ]; then
-      log "Namespace policy applied successfully."
-      break
+  else
+    if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace describe --namespace "$TEMPORAL_NAMESPACE" >/dev/null 2>&1 \
+      || tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace describe "$TEMPORAL_NAMESPACE" >/dev/null 2>&1; then
+      log "Namespace exists; updating retention to ${EFFECTIVE_RETENTION_DAYS} days."
+      if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace update \
+        --namespace "$TEMPORAL_NAMESPACE" \
+        --rd "${EFFECTIVE_RETENTION_DAYS}" \
+        >/dev/null 2>&1 \
+        || tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace update \
+          --namespace "$TEMPORAL_NAMESPACE" \
+          --retention "${EFFECTIVE_RETENTION_DAYS}"; then
+        ns_success=1
+      fi
+    elif [ "$TEMPORAL_NAMESPACE" = "default" ]; then
+      log "Built-in default namespace does not exist yet; skipping namespace create/update and retention policy."
+      ns_success=1
+    else
+      log "Namespace does not exist; creating with retention ${EFFECTIVE_RETENTION_DAYS} days."
+      if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace register \
+        --rd "${EFFECTIVE_RETENTION_DAYS}" \
+        --description "MoonMind runtime workflows" \
+        --namespace "$TEMPORAL_NAMESPACE"; then
+        ns_success=1
+      fi
     fi
+  fi
 
-    if [ "$ns_attempt" -ge "$MAX_NS_ATTEMPTS" ]; then
-      log "Failed to apply namespace policy after ${MAX_NS_ATTEMPTS} attempts."
-      exit 1
-    fi
+  if [ "$ns_success" -eq 1 ]; then
+    log "Namespace policy applied successfully."
+    break
+  fi
 
-    log "Namespace operation failed, retrying in 3 seconds (attempt $ns_attempt/$MAX_NS_ATTEMPTS)..."
-    sleep 3
-  done
+  if [ "$ns_attempt" -ge "$MAX_NS_ATTEMPTS" ]; then
+    log "Failed to apply namespace policy after ${MAX_NS_ATTEMPTS} attempts."
+    exit 1
+  fi
 
-  log "Namespace policy applied. Storage cap guardrail is ${TEMPORAL_RETENTION_MAX_STORAGE_GB} GB with retention ${EFFECTIVE_RETENTION_DAYS} day(s)."
-fi
+  log "Namespace operation failed, retrying in 3 seconds (attempt $ns_attempt/$MAX_NS_ATTEMPTS)..."
+  sleep 3
+done
+
+log "Namespace policy applied. Storage cap guardrail is ${TEMPORAL_RETENTION_MAX_STORAGE_GB} GB with retention ${EFFECTIVE_RETENTION_DAYS} day(s)."
 
 log "Registering custom search attributes..."
 REQUIRED_SEARCH_ATTRIBUTES=$(cat <<'EOF'

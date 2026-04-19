@@ -125,8 +125,9 @@ We will **not** keep sensitive/large payloads in Temporal history as a strategy;
 
 **Retention contract**
 
-* Retain records indefinitely by default (no time-based operational pruning target).
-* Enforce a cluster storage cap through env var `TEMPORAL_RETENTION_MAX_STORAGE_GB`.
+* Retain closed Workflow Execution history and visibility records for 90 days by default.
+* Allow operators to override the default through `TEMPORAL_NAMESPACE_RETENTION_DAYS`.
+* When no explicit namespace retention is provided, derive retention from the storage cap guardrail configured by `TEMPORAL_RETENTION_MAX_STORAGE_GB` and `TEMPORAL_RETENTION_ESTIMATED_GB_PER_DAY`.
 * Default `TEMPORAL_RETENTION_MAX_STORAGE_GB=100`.
 * When usage reaches the cap, run automated pruning of the oldest closed execution records until usage drops below the cap.
 
@@ -344,7 +345,7 @@ The Temporal Platform Foundation is "done" when:
    * list/filter works with custom Search Attributes (advanced visibility).
 3. Namespace retention management is explicit and automated:
 
-   * custom namespaces (e.g. `moonmind`) are managed with a storage-cap policy (`TEMPORAL_RETENTION_MAX_STORAGE_GB`, default `100`) and idempotent retention automation.
+   * namespaces are managed with a default 90-day policy, operator overrides, a storage-cap fallback (`TEMPORAL_RETENTION_MAX_STORAGE_GB`, default `100`), and idempotent retention automation.
 4. Worker fleets deployed (workflow + activity fleets including `agent_runtime`) with clear task queue routing.
 5. Worker fleets are polling their configured workflow and activity task queues directly.
 6. Shard count decision recorded and signed off; if 1 shard is chosen, the migration implications are acknowledged.
