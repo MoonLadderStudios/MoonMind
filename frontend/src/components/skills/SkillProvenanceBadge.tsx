@@ -1,40 +1,40 @@
 type SkillRuntime = {
-  resolvedSkillsetRef?: string | null;
-  selectedSkills?: string[];
+  resolvedSkillsetRef?: string | null | undefined;
+  selectedSkills?: string[] | undefined;
   selectedVersions?: Array<{
     name: string;
-    version?: string | null;
-    sourceKind?: string | null;
-    sourcePath?: string | null;
-    contentRef?: string | null;
-    contentDigest?: string | null;
-  }>;
+    version?: string | null | undefined;
+    sourceKind?: string | null | undefined;
+    sourcePath?: string | null | undefined;
+    contentRef?: string | null | undefined;
+    contentDigest?: string | null | undefined;
+  }> | undefined;
   sourceProvenance?: Array<{
     name: string;
-    sourceKind?: string | null;
-    sourcePath?: string | null;
-  }>;
-  materializationMode?: string | null;
-  visiblePath?: string | null;
-  backingPath?: string | null;
-  readOnly?: boolean | null;
-  manifestRef?: string | null;
-  promptIndexRef?: string | null;
-  activationSummaryRef?: string | null;
+    sourceKind?: string | null | undefined;
+    sourcePath?: string | null | undefined;
+  }> | undefined;
+  materializationMode?: string | null | undefined;
+  visiblePath?: string | null | undefined;
+  backingPath?: string | null | undefined;
+  readOnly?: boolean | null | undefined;
+  manifestRef?: string | null | undefined;
+  promptIndexRef?: string | null | undefined;
+  activationSummaryRef?: string | null | undefined;
   diagnostics?: {
-    path?: string | null;
-    objectKind?: string | null;
-    attemptedAction?: string | null;
-    remediation?: string | null;
-    cause?: string | null;
-  } | null;
+    path?: string | null | undefined;
+    objectKind?: string | null | undefined;
+    attemptedAction?: string | null | undefined;
+    remediation?: string | null | undefined;
+    cause?: string | null | undefined;
+  } | null | undefined;
   lifecycleIntent?: {
     source: string;
-    selectors?: string[];
-    resolvedSkillsetRef?: string | null;
+    selectors?: string[] | undefined;
+    resolvedSkillsetRef?: string | null | undefined;
     resolutionMode: string;
     explanation: string;
-  } | null;
+  } | null | undefined;
 };
 
 type SkillProvenanceBadgeProps = {
