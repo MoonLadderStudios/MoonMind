@@ -2331,8 +2331,7 @@ class MoonMindRunWorkflow:
                         created = self._get_from_result(create_result, "created")
                         summary = self._get_from_result(create_result, "summary") or ""
                         created_head_sha = self._coerce_text(
-                            self._get_from_result(create_result, "headSha")
-                            or self._get_from_result(create_result, "head_sha"),
+                            self._get_from_result(create_result, "headSha"),
                             max_chars=80,
                         )
                         if created_head_sha:

@@ -183,7 +183,7 @@ class GitHubService:
                     url=data.get("html_url"),
                     created=True,
                     summary=f"PR created successfully: {data.get('html_url')}",
-                    headSha=(data.get("head") or {}).get("sha"),
+                    head_sha=(data.get("head") or {}).get("sha"),
                 )
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
