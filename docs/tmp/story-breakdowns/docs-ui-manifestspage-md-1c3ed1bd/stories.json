@@ -1,0 +1,473 @@
+{
+  "source": {
+    "title": "Manifests Page",
+    "path": "docs/UI/ManifestsPage.md",
+    "referencePath": "docs/UI/ManifestsPage.md",
+    "originalDesignText": "# Manifests Page\n\n## Summary\n\nReplace the separate **Manifests** and **Manifest Submit** tabs with one canonical page at **`/tasks/manifests`**.\n\nThe new page keeps the two parts of the same workflow together:\n\n1. **Run a manifest**\n2. **See recent manifest runs**\n\nThis removes unnecessary tab switching, keeps submit feedback in context, and makes **Manifests** the single destination for launching and monitoring manifest work.\n\n---\n\n## Why this change\n\nToday the manifest flow is split across two tabs:\n\n- **Manifests** = run history\n- **Manifest Submit** = create a new run\n\nThat split creates avoidable friction:\n\n- users have to switch tabs to perform one workflow\n- successful submission can feel disconnected from the resulting run\n- the navigation is heavier than the feature set warrants\n- the dashboard exposes execution history and submit UI, but not a full manifest catalog, so two tabs overstate the amount of surface area\n\nA unified page is simpler: submit from the top, verify the new run immediately below.\n\n---\n\n## Goals\n\n- Make **Manifests** the only top-level page/tab for manifest operations\n- Allow users to launch a manifest run without leaving the run history view\n- Keep the submit UI compact by default\n- Update the page in place after submit instead of bouncing the user elsewhere\n- Preserve support for both:\n  - **registry manifest** execution\n  - **inline YAML** submission\n- Keep the design compatible with a future saved manifest registry section\n\n## Non-goals\n\n- Do not require a full manifest registry UI in phase 1\n- Do not redesign run detail pages\n- Do not change the existing manifest execution model or stages\n- Do not introduce raw secret entry into the UI\n\n---\n\n## Canonical route and navigation\n\n- **Canonical page:** `/tasks/manifests`\n- **Navigation label:** `Manifests`\n- **Remove:** separate `Manifest Submit` tab/nav item\n- **Legacy submit route(s):** redirect to `/tasks/manifests` and optionally open/scroll to the run form\n\nThis should be the only manifest destination in the main dashboard navigation.\n\n---\n\n## Page structure\n\nThe page should have two primary sections in a single vertical flow:\n\n1. **Run Manifest** card\n2. **Recent Runs** table\n\nA future third section can be added without changing the core layout:\n\n3. **Saved Manifests** / registry browser (optional, feature-gated)\n\n### Recommended layout\n\n#### Desktop\n\n```text\n\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502 Manifests                                                           \u2502\n\u2502 Run a manifest and monitor recent executions in one place.          \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502 Run Manifest                                                        \u2502\n\u2502 [ Registry Manifest | Inline YAML ]                                 \u2502\n\u2502                                                                      \u2502\n\u2502 Registry mode:                                                       \u2502\n\u2502 [ Manifest name.................... ] [ Action v ] [ Run Manifest ] \u2502\n\u2502                                                                      \u2502\n\u2502 Inline mode:                                                         \u2502\n\u2502 [ YAML editor / textarea......................................... ] \u2502\n\u2502 [ Action v ]                                      [ Run Manifest ]  \u2502\n\u2502                                                                      \u2502\n\u2502 [ Advanced options \u25b8 ]                                               \u2502\n\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2524\n\u2502 Recent Runs                                                         \u2502\n\u2502 [status] [manifest] [search] [refresh]                              \u2502\n\u2502 \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510 \u2502\n\u2502 \u2502 Run ID \u2502 Manifest \u2502 Action \u2502 Status \u2502 Stage \u2502 Started \u2502 View   \u2502 \u2502\n\u2502 \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518 \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n```\n\n#### Mobile\n\n```text\nManifests\nRun a manifest and monitor recent executions in one place.\n\n[ Run Manifest ]\n  [ Registry | Inline YAML ]\n  fields stack vertically\n  [ Advanced options \u25b8 ]\n  [ Run Manifest ]\n\n[ Recent Runs ]\n  filters in a wrap row\n  runs shown as compact cards or stacked rows\n```\n\n---\n\n## Section details\n\n## 1) Header\n\n**Title:** `Manifests`\n\n**Subtitle:** concise help text, for example:\n\n> Run a manifest and monitor recent executions in one place.\n\nOptional header actions:\n\n- `Refresh`\n- `Open latest run` if there is an active or most recent run worth surfacing\n\nDo **not** put a separate `New Manifest Run` button in the header if the form is already visible on the page.\n\n---\n\n## 2) Run Manifest card\n\nThis is the replacement for the old **Manifest Submit** tab.\n\n### Design principles\n\n- always on the same page as run history\n- compact by default\n- advanced options collapsed by default\n- preserves draft values when switching between source types during the same session\n- clearly distinguishes required inputs from optional runtime controls\n\n### Source type toggle\n\nTop control in the card:\n\n- `Registry Manifest`\n- `Inline YAML`\n\nSwitching modes should preserve entered values for each mode independently.\n\n### Fields\n\n| Field | Shown when | Required | Notes |\n| --- | --- | --- | --- |\n| `manifest name` | Registry Manifest | Yes | Autocomplete from `/api/manifests` if available; free-text fallback otherwise |\n| `inline YAML` | Inline YAML | Yes | Code editor or textarea with YAML formatting assistance |\n| `action` | Both | Yes | Use existing backend-supported action values |\n| `dry run` | Advanced | No | Boolean toggle |\n| `force full sync` | Advanced | No | Boolean toggle |\n| `max docs` | Advanced | No | Positive integer |\n| `priority` | Advanced | No | Existing supported priority values |\n\n### Primary action\n\n- Primary button label: **`Run Manifest`**\n- Button remains in the card footer or aligned to the main fields\n- Disable while submission is in progress\n\n### Secondary actions\n\nOptional:\n\n- `Reset`\n- `Copy payload` or `Preview payload` only if there is existing dashboard precedent for advanced submit forms\n\n### Validation rules\n\n- Registry mode requires a manifest name\n- Inline mode requires non-empty YAML\n- `max docs` must be a valid positive integer if provided\n- `action` must be selected\n- Raw secrets must not be accepted directly in submitted content or helper fields; only env/Vault references should be used\n- YAML validation errors should be shown inline before submit whenever practical\n\n### Submission behavior\n\nOn successful submit:\n\n- stay on **`/tasks/manifests`**\n- show a success toast\n- insert the new run at the top of **Recent Runs**\n- optionally highlight or auto-scroll to the newly created row\n- optionally offer `View run details`\n\nDo **not** navigate to a different tab or legacy queue route as the default success path.\n\n---\n\n## 3) Recent Runs section\n\nThis is the replacement for the old **Manifests** tab content.\n\n### Data source\n\nUse the existing history endpoint:\n\n- **`/api/executions?entry=manifest&limit=200`**\n\n### Table purpose\n\nUsers should be able to answer these questions immediately after running a manifest:\n\n- Did the run start?\n- Is it still running?\n- Which stage is it in?\n- Did it succeed or fail?\n- How do I open details/logs?\n\n### Recommended columns\n\n| Column | Notes |\n| --- | --- |\n| `Run ID` | Link to run detail page |\n| `Manifest` | Manifest name or inline label |\n| `Action` | Submitted action |\n| `Status` | Queued / Running / Succeeded / Failed / Cancelled |\n| `Stage` | For running jobs, show current stage when available |\n| `Started` | Relative + exact timestamp on hover if supported |\n| `Duration` | Elapsed or total |\n| `Triggered By` | Optional if available |\n| `Actions` | View details, cancel if supported |\n\n### Manifest-specific status detail\n\nManifest runs already have a staged workflow. Where available, surface the current stage inline:\n\n- `validate`\n- `plan`\n- `fetch`\n- `transform`\n- `embed`\n- `upsert`\n- `finalize`\n\nFor example:\n\n- `Running \u00b7 fetch`\n- `Failed \u00b7 transform`\n\nThis helps distinguish a generic execution list from a manifest-aware run table.\n\n### Filters\n\nKeep filters lightweight:\n\n- status\n- manifest name\n- free-text search\n- optional action filter if that is already supported in the data model\n\nA heavy filter builder is unnecessary for phase 1.\n\n### Empty state\n\nIf no manifest runs exist:\n\n> No manifest runs yet. Start by running a registry manifest or submitting inline YAML above.\n\nThe empty state should point directly back to the form.\n\n---\n\n## Optional future section: Saved Manifests\n\nThis is **not required** for the first merge, but the page should leave room for it.\n\nPotential future data sources:\n\n- `/api/manifests`\n- `/api/manifests/{name}`\n- `/api/manifests/{name}/runs`\n\nWhen added later, this can appear as:\n\n- a compact sidebar on desktop, or\n- a section below Recent Runs, or\n- a feature-gated panel that powers manifest name autocomplete and quick launch\n\nFor phase 1, it is enough to support autocomplete or lookup if the endpoint exists. A full catalog browser can wait.\n\n---\n\n## Interaction model\n\n### Default load\n\n- Page opens to **Manifests**\n- **Run Manifest** card is visible\n- Advanced options are collapsed\n- Recent runs load immediately below\n\n### Submit from registry mode\n\n1. User enters/selects manifest name\n2. User chooses action\n3. Optional advanced options expanded if needed\n4. User clicks **Run Manifest**\n5. Button enters loading state\n6. Success toast appears\n7. New run row is inserted at the top of the table\n\n### Submit from inline YAML mode\n\n1. User switches source to `Inline YAML`\n2. YAML editor becomes visible\n3. User pastes or writes manifest YAML\n4. User chooses action and optional advanced settings\n5. User clicks **Run Manifest**\n6. Same in-place success behavior as registry mode\n\n### Failure handling\n\nIf submission fails:\n\n- keep the user on the page\n- preserve entered data\n- show inline form error plus toast if appropriate\n- do not clear the form automatically\n\n---\n\n## Responsive behavior\n\n### Desktop\n\n- Run form spans full width above the table, or sits in a visually compact card\n- Keep the primary action visible without requiring expansion of advanced options\n\n### Tablet / mobile\n\n- Stack all form controls vertically\n- Convert the runs table to compact rows/cards if needed\n- Keep submit action pinned to the bottom of the card section if the form becomes long\n- Maintain a clear visual order: form first, history second\n\n---\n\n## Accessibility\n\n- Source type toggle must be keyboard reachable and screen-reader labeled\n- Form validation must be announced and associated with fields\n- YAML editor should have an accessible textarea fallback\n- Toasts should not be the only signal of success or error\n- Table row actions must have clear labels, not icon-only controls without accessible names\n\n---\n\n## API and data notes\n\n### Required now\n\n- **Recent runs:** `/api/executions?entry=manifest&limit=200`\n- **Submit:** reuse the current manifest submission API/handler\n\n### Optional progressive enhancement\n\n- **Manifest lookup/autocomplete:** `/api/manifests`\n- **Manifest metadata/details:** `/api/manifests/{name}`\n- **Manifest-centric history:** `/api/manifests/{name}/runs`\n\n### No required backend redesign\n\nThis UI merge should primarily be a routing and composition change:\n\n- mount the existing submit behavior into the Manifests page\n- keep run history on the same page\n- unify success handling so the page refreshes in place\n\n---\n\n## Routing and cleanup\n\n### Canonical route\n\n- `/tasks/manifests`\n\n### Redirects\n\n- old manifest submit route(s) should redirect to `/tasks/manifests`\n- if helpful, redirect with an anchor or query to focus the run form\n\n### Navigation cleanup\n\n- remove the dedicated `Manifest Submit` tab\n- keep only `Manifests`\n\n### Success path cleanup\n\nIf there are any legacy redirects to older task/queue pages after submit, this merge is a good point to remove them and keep the user anchored in the manifest experience.\n\n---\n\n## Why inline form is preferred over a drawer/modal\n\nAn inline form above the runs table is the recommended default because it:\n\n- keeps submit and monitoring in one visible flow\n- avoids extra click depth\n- works better for advanced fields than a small modal\n- makes the empty state and success state feel connected to the same page\n\nA drawer is still acceptable as a secondary implementation choice, but it should launch from the same **Manifests** page rather than from a separate nav tab.\n\n---\n\n## Acceptance criteria\n\n- There is only one top-level manifest destination in the dashboard: **Manifests**\n- Users can submit either a registry manifest or inline YAML from the **Manifests** page\n- Recent manifest runs are visible on the same page without navigation\n- Successful submit updates the current page in place\n- Advanced options are collapsed by default\n- Legacy `Manifest Submit` navigation is removed or redirected\n- No raw secret entry is introduced into the UI\n- The design leaves room for future `/api/manifests` registry support without requiring another top-level tab\n\n---\n\n## Recommended implementation sequence\n\n### Phase 1\n\n- Build unified **Manifests** page at `/tasks/manifests`\n- Move existing submit form into top card\n- Keep existing recent runs table below\n- Remove extra nav tab\n- Update success handling to stay on page and prepend new run\n\n### Phase 2\n\n- Add manifest autocomplete from `/api/manifests` if available\n- Improve inline YAML validation and payload hints\n- Add better row highlighting / deep-linking to the newly created run\n\n### Phase 3\n\n- Add optional **Saved Manifests** section if registry/catalog support is ready\n\n---\n\n## Final recommendation\n\nShip **one page called `Manifests`**.\n\nMake it a compact command center:\n\n- **top:** run a manifest\n- **bottom:** watch the result\n\nThat is the smallest change that removes the artificial split between **Manifests** and **Manifest Submit** while preserving room for future manifest registry capabilities.\n"
+  },
+  "extractedAt": "2026-04-19T19:55:45Z",
+  "outputMode": "jira",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "designSummary": "docs/UI/ManifestsPage.md defines a desired-state dashboard consolidation: /tasks/manifests becomes the only manifest destination, with a compact Run Manifest form above Recent Runs. The page must preserve registry and inline YAML submission, reuse existing submit and history APIs, keep users anchored on the same page after submit, remove legacy Manifest Submit navigation, stay responsive and accessible, avoid raw secret entry, and leave room for future saved manifest registry support without making it part of phase 1.",
+  "coveragePoints": {
+    "DESIGN-REQ-001": {
+      "title": "Single canonical manifest destination",
+      "type": "requirement",
+      "source_section": "Summary; Goals; Canonical route and navigation",
+      "explanation": "Replace separate Manifests and Manifest Submit tabs with one canonical Manifests page at /tasks/manifests."
+    },
+    "DESIGN-REQ-002": {
+      "title": "Launch and monitor in one flow",
+      "type": "requirement",
+      "source_section": "Summary; Why this change; Goals",
+      "explanation": "Keep manifest submission and recent run history together so users can submit and immediately verify the resulting run without tab switching."
+    },
+    "DESIGN-REQ-003": {
+      "title": "Compact default submit surface",
+      "type": "requirement",
+      "source_section": "Goals; Run Manifest card; Interaction model",
+      "explanation": "Keep the Run Manifest form visible and compact by default, with advanced options collapsed."
+    },
+    "DESIGN-REQ-004": {
+      "title": "Registry and inline YAML support",
+      "type": "requirement",
+      "source_section": "Goals; Source type toggle; Fields; Submit from registry mode; Submit from inline YAML mode",
+      "explanation": "Support both registry manifest execution and inline YAML submission from the unified page."
+    },
+    "DESIGN-REQ-005": {
+      "title": "Mode-specific draft preservation",
+      "type": "state-model",
+      "source_section": "Run Manifest card; Source type toggle",
+      "explanation": "Switching between Registry Manifest and Inline YAML modes should preserve entered values for each mode independently during the same session."
+    },
+    "DESIGN-REQ-006": {
+      "title": "Supported fields and advanced runtime controls",
+      "type": "requirement",
+      "source_section": "Fields; Primary action; Secondary actions",
+      "explanation": "Expose required source/action fields and optional advanced controls for dry run, force full sync, max docs, and priority without making advanced controls prominent by default."
+    },
+    "DESIGN-REQ-007": {
+      "title": "Client-side validation and secret guardrail",
+      "type": "security",
+      "source_section": "Validation rules; Non-goals; Acceptance criteria",
+      "explanation": "Validate required manifest inputs, positive max docs, action selection, and practical YAML errors while preventing raw secret entry in UI content or helper fields."
+    },
+    "DESIGN-REQ-008": {
+      "title": "In-place success behavior",
+      "type": "requirement",
+      "source_section": "Submission behavior; Interaction model; Success path cleanup",
+      "explanation": "After successful submit, stay on /tasks/manifests, show success feedback, prepend or refresh the new run in Recent Runs, and avoid default navigation to legacy tabs or queue routes."
+    },
+    "DESIGN-REQ-009": {
+      "title": "Submission failure preserves context",
+      "type": "requirement",
+      "source_section": "Failure handling",
+      "explanation": "When submission fails, keep the user on the page, preserve entered data, show inline form error feedback, and avoid automatic form clearing."
+    },
+    "DESIGN-REQ-010": {
+      "title": "Recent manifest runs data source",
+      "type": "integration",
+      "source_section": "Recent Runs section; Data source; API and data notes",
+      "explanation": "Load recent manifest run history from /api/executions?entry=manifest&limit=200."
+    },
+    "DESIGN-REQ-011": {
+      "title": "Manifest-aware run table answers operator questions",
+      "type": "requirement",
+      "source_section": "Table purpose; Recommended columns; Manifest-specific status detail",
+      "explanation": "Show enough run metadata for users to know whether a run started, whether it is running, its current stage, result, duration, and how to open details or logs."
+    },
+    "DESIGN-REQ-012": {
+      "title": "Lightweight run filtering and empty state",
+      "type": "requirement",
+      "source_section": "Filters; Empty state",
+      "explanation": "Provide lightweight status, manifest name, free-text, and optional action filters, plus an empty state that points directly back to the run form."
+    },
+    "DESIGN-REQ-013": {
+      "title": "Responsive single-column workflow",
+      "type": "requirement",
+      "source_section": "Page structure; Recommended layout; Responsive behavior",
+      "explanation": "Keep a clear form-first, history-second vertical flow on desktop and mobile, stacking controls and converting run history to compact cards or rows where needed."
+    },
+    "DESIGN-REQ-014": {
+      "title": "Accessible form, feedback, and table actions",
+      "type": "requirement",
+      "source_section": "Accessibility",
+      "explanation": "Make the source toggle keyboard reachable and labeled, associate validation with fields, provide textarea fallback for YAML, ensure toasts are not the only signal, and label row actions clearly."
+    },
+    "DESIGN-REQ-015": {
+      "title": "Legacy route and navigation cleanup",
+      "type": "migration",
+      "source_section": "Canonical route and navigation; Routing and cleanup; Acceptance criteria",
+      "explanation": "Remove the dedicated Manifest Submit navigation item and redirect old submit routes to /tasks/manifests, optionally focusing the run form."
+    },
+    "DESIGN-REQ-016": {
+      "title": "Future saved manifest registry compatibility",
+      "type": "constraint",
+      "source_section": "Goals; Optional future section: Saved Manifests; API and data notes",
+      "explanation": "Leave room for future saved manifest registry support and autocomplete from /api/manifests without requiring a full registry UI or another top-level tab in phase 1."
+    },
+    "DESIGN-REQ-017": {
+      "title": "No backend execution redesign",
+      "type": "non-goal",
+      "source_section": "Non-goals; API and data notes",
+      "explanation": "Do not change manifest execution model, stages, or run detail pages; reuse the current manifest submission API/handler and recent execution history endpoint."
+    },
+    "DESIGN-REQ-018": {
+      "title": "Inline form preferred over drawer or modal",
+      "type": "constraint",
+      "source_section": "Why inline form is preferred over a drawer/modal",
+      "explanation": "Prefer an inline form above the runs table to keep submit and monitoring visible in one flow; drawer is acceptable only as a secondary choice launched from the same page."
+    }
+  },
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Unify manifest route and navigation",
+      "shortName": "manifest-route-nav",
+      "description": "As a dashboard user, I want Manifests to be the only top-level destination for manifest work so I can launch and monitor manifest runs without choosing between overlapping tabs.",
+      "sourceReference": {
+        "path": "docs/UI/ManifestsPage.md",
+        "title": "Manifests Page",
+        "sections": [
+          "Summary",
+          "Why this change",
+          "Goals",
+          "Canonical route and navigation",
+          "Routing and cleanup",
+          "Acceptance criteria"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "scope": [
+        "Make /tasks/manifests the canonical manifest page route.",
+        "Keep only the Manifests nav/tab entry in the main dashboard navigation.",
+        "Redirect legacy manifest submit route(s) to /tasks/manifests, optionally with focus state for the run form.",
+        "Preserve room in the page model for future saved manifest registry support without adding a second top-level destination."
+      ],
+      "outOfScope": [
+        "A full saved manifest registry/catalog browser.",
+        "Run detail page redesign.",
+        "Manifest execution model or stage changes."
+      ],
+      "independentTest": "Render dashboard navigation and route handling in isolation, then verify only Manifests appears for manifest work and legacy submit URLs redirect to /tasks/manifests without creating any new spec or backend execution behavior.",
+      "acceptanceCriteria": [
+        "Given the dashboard navigation loads, when manifest destinations are listed, then only Manifests appears as a top-level manifest nav item.",
+        "Given a user opens /tasks/manifests, then the unified Manifests page is rendered.",
+        "Given a user opens an old Manifest Submit route, then they are redirected to /tasks/manifests and the route can focus or scroll to the run form when supported.",
+        "Given phase 1 ships, then no full saved manifest registry UI or additional manifest tab is required.",
+        "Given existing run details are opened from manifest history, then this story does not redesign those detail pages or alter manifest execution stages."
+      ],
+      "requirements": [
+        "The dashboard must expose /tasks/manifests as the canonical manifest destination.",
+        "The dedicated Manifest Submit navigation entry must be removed or converted into a redirect path.",
+        "Legacy submit routes must not remain as separate user-facing destinations.",
+        "The route/page structure must allow future registry support without requiring another top-level tab."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the one-page canonical destination and nav consolidation.",
+        "DESIGN-REQ-002": "Establishes the single destination where launch and monitoring will be composed.",
+        "DESIGN-REQ-015": "Owns redirect and navigation cleanup for legacy Manifest Submit entry points.",
+        "DESIGN-REQ-016": "Owns the route-level decision that future registry features extend the page instead of adding another tab.",
+        "DESIGN-REQ-017": "Owns the route cleanup while explicitly excluding backend execution and run-detail redesign."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "At least one legacy manifest submit route or nav identifier can be located through the existing dashboard route configuration."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Run registry or inline manifests from the Manifests page",
+      "shortName": "manifest-run-form",
+      "description": "As a dashboard user, I want a compact Run Manifest form on the Manifests page that supports registry names and inline YAML so I can start either kind of manifest run from the same context.",
+      "sourceReference": {
+        "path": "docs/UI/ManifestsPage.md",
+        "title": "Manifests Page",
+        "sections": [
+          "Page structure",
+          "Run Manifest card",
+          "Source type toggle",
+          "Fields",
+          "Validation rules",
+          "Responsive behavior",
+          "Accessibility",
+          "Why inline form is preferred over a drawer/modal"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "scope": [
+        "Embed the existing manifest submit behavior as a Run Manifest card on /tasks/manifests.",
+        "Support Registry Manifest and Inline YAML modes with independently preserved draft values.",
+        "Expose required manifest source and action inputs plus collapsed advanced runtime controls.",
+        "Validate required fields, positive max docs, action selection, YAML errors where practical, and raw-secret guardrails.",
+        "Keep the form responsive and accessible with keyboard-reachable mode controls and textarea fallback for YAML."
+      ],
+      "outOfScope": [
+        "Changing backend-supported action values.",
+        "Adding a full saved manifest catalog browser.",
+        "Submitting raw secret values through new helper fields."
+      ],
+      "independentTest": "Mount the Manifests page with the run history service mocked, exercise Registry Manifest and Inline YAML modes, and verify draft preservation, validation errors, advanced option defaults, responsive markup hooks, and accessible labels before any submit call succeeds.",
+      "acceptanceCriteria": [
+        "Given /tasks/manifests loads, then a Run Manifest card is visible above Recent Runs and advanced options are collapsed by default.",
+        "Given Registry Manifest mode is active, then manifest name and action are required and inline YAML is not required.",
+        "Given Inline YAML mode is active, then non-empty YAML and action are required and registry manifest name is not required.",
+        "Given a user switches between source modes, then values entered in each mode are preserved independently for the current session.",
+        "Given max docs is provided, then non-positive or non-integer values are rejected before submit.",
+        "Given submitted content or helper fields contain raw secret-style entries, then the UI rejects them or requires env/Vault references instead.",
+        "Given the page is used with keyboard or assistive technology, then the source toggle, validation messages, YAML fallback, and primary action have accessible labels and field associations.",
+        "Given the viewport narrows, then form controls stack in a clear form-first flow without hiding the primary Run Manifest action behind advanced options."
+      ],
+      "requirements": [
+        "The Run Manifest card must be available directly on /tasks/manifests.",
+        "Registry Manifest mode must accept a required manifest name and existing supported action values.",
+        "Inline YAML mode must accept required YAML content and existing supported action values.",
+        "Advanced options must include supported dry run, force full sync, max docs, and priority controls where those controls already exist or are backend-supported.",
+        "The primary action label must be Run Manifest and must disable while submission is in progress.",
+        "The implementation must not introduce raw secret entry into the UI.",
+        "Autocomplete from /api/manifests may be added only as progressive enhancement with free-text fallback."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Owns the compact default form and collapsed advanced options.",
+        "DESIGN-REQ-004": "Owns registry and inline YAML source mode support.",
+        "DESIGN-REQ-005": "Owns mode-specific draft preservation.",
+        "DESIGN-REQ-006": "Owns the field set, primary action, optional secondary actions, and advanced controls.",
+        "DESIGN-REQ-007": "Owns form validation and no-raw-secret guardrails before submit.",
+        "DESIGN-REQ-013": "Owns responsive behavior for the run form portion of the page.",
+        "DESIGN-REQ-014": "Owns form accessibility and feedback accessibility requirements.",
+        "DESIGN-REQ-016": "Owns optional /api/manifests autocomplete as enhancement without full catalog scope.",
+        "DESIGN-REQ-018": "Owns the inline form as the default implementation choice."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Existing submit components or handlers can be reused without changing backend action semantics."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Keep manifest submission feedback in place",
+      "shortName": "manifest-submit-feedback",
+      "description": "As a dashboard user, I want manifest submit success or failure to update the current Manifests page in place so I can see what happened without losing form context or being sent to another route.",
+      "sourceReference": {
+        "path": "docs/UI/ManifestsPage.md",
+        "title": "Manifests Page",
+        "sections": [
+          "Submission behavior",
+          "Interaction model",
+          "Failure handling",
+          "Success path cleanup",
+          "Accessibility",
+          "Acceptance criteria"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "scope": [
+        "Reuse the current manifest submission API/handler from the Manifests page.",
+        "Keep successful submissions on /tasks/manifests with a success toast and a non-toast page-level signal such as the new row, highlight, or details link.",
+        "Insert or refresh the submitted run at the top of Recent Runs and optionally highlight or scroll to it.",
+        "Preserve entered data and show inline errors when submission fails.",
+        "Remove legacy success redirects to separate tabs or queue pages for the default submit path."
+      ],
+      "outOfScope": [
+        "Backend redesign of manifest submission.",
+        "Guaranteed deep-linking or row highlighting if the returned submit response does not identify the run.",
+        "Run detail page changes beyond offering an existing details link."
+      ],
+      "independentTest": "Mock successful and failed submit responses from the existing manifest submit handler, then assert the route stays /tasks/manifests, loading state toggles correctly, success updates Recent Runs, failure preserves inputs, and no legacy redirect occurs.",
+      "acceptanceCriteria": [
+        "Given a valid registry manifest submission succeeds, then the user remains on /tasks/manifests and receives success feedback.",
+        "Given a valid inline YAML submission succeeds, then the user remains on /tasks/manifests and receives the same in-place success behavior.",
+        "Given the submit response includes a run identifier or execution record, then the new run appears at the top of Recent Runs or the list refreshes to show it.",
+        "Given submission is in progress, then the Run Manifest button is disabled and communicates loading state.",
+        "Given submission fails, then the form data remains intact and an inline error is shown, with toast feedback allowed only as an additional signal.",
+        "Given legacy code previously redirected after submit, then the default success path no longer sends users to a separate tab or queue route."
+      ],
+      "requirements": [
+        "The page must use the existing manifest submission API/handler.",
+        "Successful submission must update the current page in place.",
+        "Failure handling must preserve form state and keep the user on /tasks/manifests.",
+        "Success and error feedback must not rely on toast messages as the only user-visible signal."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-002": "Owns the connected launch-to-monitor experience after submit.",
+        "DESIGN-REQ-008": "Owns in-place success feedback, row prepend/refresh, and no default redirect.",
+        "DESIGN-REQ-009": "Owns failed submission behavior and form preservation.",
+        "DESIGN-REQ-014": "Owns accessible feedback beyond toast-only signals.",
+        "DESIGN-REQ-017": "Owns reuse of existing submit API without changing execution model."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [
+        "The existing submit handler returns enough information to refresh history; if it does not return a concrete row, a history refetch is acceptable."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Show recent manifest runs below the run form",
+      "shortName": "manifest-recent-runs",
+      "description": "As a dashboard user, I want recent manifest runs visible below the Run Manifest card so I can immediately check start state, current stage, result, timing, and details for manifest executions.",
+      "sourceReference": {
+        "path": "docs/UI/ManifestsPage.md",
+        "title": "Manifests Page",
+        "sections": [
+          "Recent Runs section",
+          "Data source",
+          "Table purpose",
+          "Recommended columns",
+          "Manifest-specific status detail",
+          "Filters",
+          "Empty state",
+          "Responsive behavior",
+          "Accessibility"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "scope": [
+        "Load recent manifest execution history from /api/executions?entry=manifest&limit=200.",
+        "Render a Recent Runs table or responsive compact rows/cards below the Run Manifest form.",
+        "Show manifest-aware run metadata including run ID/details link, manifest label, action, status, stage, started time, duration, triggered by where available, and actions supported by existing data.",
+        "Surface staged workflow status such as Running \u00b7 fetch when stage data is available.",
+        "Provide lightweight status, manifest name, free-text, and optional action filtering where supported.",
+        "Show an empty state that directs the user back to the form."
+      ],
+      "outOfScope": [
+        "A heavy filter builder.",
+        "New backend history APIs required for phase 1.",
+        "Changing existing manifest workflow stages or run detail pages."
+      ],
+      "independentTest": "Mock /api/executions?entry=manifest&limit=200 with empty, running, succeeded, failed, and staged manifest runs, then verify table/card rendering, filters, details links, stage labels, empty state, and responsive accessibility behavior.",
+      "acceptanceCriteria": [
+        "Given /tasks/manifests loads, then Recent Runs requests /api/executions?entry=manifest&limit=200.",
+        "Given manifest runs exist, then the history surface shows run ID/details link, manifest label, action, status, current stage when available, started time, duration when available, and supported row actions.",
+        "Given a run is active and stage data is available, then the status display includes manifest-specific stage detail such as Running \u00b7 fetch.",
+        "Given status, manifest name, or free-text filters are used, then the visible run list updates without a heavy filter-builder flow.",
+        "Given no manifest runs exist, then the empty state says no manifest runs exist and points users to run a registry manifest or submit inline YAML above.",
+        "Given the viewport is narrow, then recent runs remain readable as compact cards or stacked rows with clear action labels.",
+        "Given row actions are icon-based in implementation, then they include accessible names."
+      ],
+      "requirements": [
+        "Recent Runs must appear below the Run Manifest card on the same page.",
+        "The history request must use the existing manifest execution endpoint for phase 1.",
+        "The history view must help answer whether the run started, whether it is still running, what stage it is in, whether it succeeded or failed, and how to open details/logs.",
+        "Filters must remain lightweight and bounded to status, manifest name, search, and optional action support.",
+        "The implementation must not require a backend redesign or new manifest-centric history API for phase 1."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-002": "Owns the monitoring half of the unified workflow.",
+        "DESIGN-REQ-010": "Owns the required recent runs data source.",
+        "DESIGN-REQ-011": "Owns manifest-aware table/card columns, stage detail, and operator questions.",
+        "DESIGN-REQ-012": "Owns lightweight filters and the no-runs empty state.",
+        "DESIGN-REQ-013": "Owns responsive behavior for recent runs.",
+        "DESIGN-REQ-014": "Owns accessible row action labels and readable feedback in the history surface.",
+        "DESIGN-REQ-017": "Owns reuse of existing history endpoint and no run-detail redesign."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Existing execution history records contain enough manifest metadata to render at least a manifest label, action, status, and details link; unavailable optional columns may be omitted or displayed as unavailable."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-002"
+    ]
+  }
+}
