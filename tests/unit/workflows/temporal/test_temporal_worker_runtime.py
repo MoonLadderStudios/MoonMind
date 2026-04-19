@@ -1001,6 +1001,32 @@ def test_runtime_planner_publish_pr_uses_task_title_for_target_branch_prefix():
     assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", target)
 
 
+def test_runtime_planner_publish_pr_treats_authored_branch_as_base():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "title": "Fix create branch publish",
+                "git": {"branch": "main"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][-1]["inputs"]
+    assert node_inputs["branch"] == "main"
+    assert node_inputs["startingBranch"] == "main"
+    assert node_inputs["targetBranch"] != "main"
+    assert node_inputs["targetBranch"].startswith("fix-create-branch-publish-")
+    assert re.fullmatch(r"[a-z0-9-]+-[0-9a-f]{8}", node_inputs["targetBranch"])
+
+
 def test_runtime_planner_publish_pr_uses_step_title_for_target_branch_prefix():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()

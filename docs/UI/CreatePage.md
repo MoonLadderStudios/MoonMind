@@ -99,7 +99,7 @@ The page is a single composition form with these canonical sections, in this ord
 | 2 | Steps | Author the execution plan directly, including step-scoped image inputs, repository selection, GitHub-backed branch selection, inline publish mode, and the primary create/add-step actions |
 | 3 | Task Presets | Apply reusable step blueprints and define preset objective text and objective-scoped image inputs |
 | 4 | Dependencies | Block the new run on existing `MoonMind.Run` executions |
-| 5 | Execution context | Runtime, provider, model, effort, and merge automation eligibility |
+| 5 | Execution context | Runtime, provider, model, and effort |
 | 6 | Execution controls | Priority, max attempts, propose tasks |
 | 7 | Schedule | Immediate, once, deferred minutes, recurring |
 | 8 | Submit | Display submission status and error messages |
@@ -451,7 +451,6 @@ The Create page preserves these execution-context controls:
 - `Provider profile` when profiles exist for the selected runtime
 - `Model`
 - `Effort`
-- `Enable merge automation` when publish mode is `pr` for an ordinary task
 
 Rules:
 
@@ -462,7 +461,10 @@ Rules:
 - repository branch lookup uses MoonMind API surfaces and is unaffected by attachments or Jira
 - publish mode is authored in the Steps card and must not be duplicated here
 - resolver-style skills may still force publish mode to `none`
-- merge automation is available only for ordinary PR-publishing tasks
+- merge automation is authored as a PR-specific `Publish Mode` choice in the
+  Steps card, not as a standalone Execution context checkbox
+- the PR-specific merge automation choice is available only for ordinary
+  PR-publishing tasks
 - when merge automation is selected, the submitted task creation payload must
   preserve `publishMode=pr`, preserve `task.publish.mode=pr`, and include
   `mergeAutomation.enabled=true`
@@ -817,6 +819,8 @@ The Create page test suite should cover:
 24. the submit payload maps the single browser-authored branch into canonical `startingBranch` and `targetBranch` fields without exposing a `Target Branch` control
 25. `Publish Mode` renders adjacent to `Branch` in the Steps card control group and does not render a visible label above the compact dropdown
 26. edit/rerun correctly normalize legacy starting/target branch data into the single authored `branch` field, including the explicit migration warning for legacy cross-branch publish snapshots
+27. `Publish Mode` exposes the PR-specific merge automation choice for eligible ordinary PR-publishing tasks and the page does not render a standalone `Enable merge automation` checkbox
+28. create/edit/rerun correctly normalize stored PR publishing plus merge automation into the combined Publish Mode choice where allowed
 
 ---
 

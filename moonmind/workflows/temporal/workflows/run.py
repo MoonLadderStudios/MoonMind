@@ -172,6 +172,8 @@ RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
+NATIVE_PR_BRANCH_DEFAULTS_PATCH = "native-pr-branch-defaults-v1"
+NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
@@ -2265,35 +2267,17 @@ class MoonMindRunWorkflow:
                 last_node_inputs = (
                     ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
                 )
-                head_branch = (
-                    agent_outputs.get("push_branch")
-                    or agent_outputs.get("branch")
-                    or agent_outputs.get("targetBranch")
-                    or ws.get("targetBranch")
-                    or ws.get("branch")
-                    or parameters.get("targetBranch")
-                    or last_node_inputs.get("targetBranch")
-                    or last_node_inputs.get("branch")
-                    or ""
-                )
                 publish_payload = self._resolve_publish_payload(parameters)
-                base_branch = self._resolve_publish_base_branch(publish_payload) or (
-                    ws.get("startingBranch")
-                    or last_node_inputs.get("startingBranch")
-                    or "main"
+                head_branch, base_branch = self._resolve_native_pr_branches(
+                    parameters=parameters,
+                    agent_outputs=agent_outputs,
+                    workspace_spec=ws,
+                    last_node_inputs=last_node_inputs,
+                    publish_payload=publish_payload,
                 )
                 pr_title = self._title or "Automated changes by MoonMind"
                 pr_body = self._summary or "Automated changes by MoonMind."
                 if workflow.patched(NATIVE_PR_CREATE_PAYLOAD_PATCH):
-                    publish_payload = self._resolve_publish_payload(parameters)
-                    base_branch = (
-                        self._resolve_publish_base_branch(publish_payload)
-                        or (
-                            ws.get("startingBranch")
-                            or last_node_inputs.get("startingBranch")
-                            or "main"
-                        )
-                    )
                     task_payload = self._mapping_value(parameters, "task")
                     pr_title = self._resolve_native_pr_title(
                         publish_payload=publish_payload,
@@ -2310,6 +2294,12 @@ class MoonMindRunWorkflow:
                         "Skipping native PR creation: agent made no commits "
                         "on branch '%s'.",
                         agent_outputs.get("push_branch") or head_branch,
+                    )
+                elif self._native_pr_push_status_blocks_creation(push_status):
+                    self._get_logger().info(
+                        "Skipping native PR creation: publish push already "
+                        "failed with status '%s'.",
+                        push_status,
                     )
                 elif not self._repo or not head_branch:
                     raise ValueError(
@@ -2758,6 +2748,83 @@ class MoonMindRunWorkflow:
             raw_base = publish_payload.get("baseBranch")
         return self._coerce_text(raw_base)
 
+    def _resolve_native_pr_branches(
+        self,
+        *,
+        parameters: Mapping[str, Any],
+        agent_outputs: Mapping[str, Any],
+        workspace_spec: Mapping[str, Any],
+        last_node_inputs: Mapping[str, Any],
+        publish_payload: Mapping[str, Any],
+    ) -> tuple[str, str]:
+        if workflow.patched(NATIVE_PR_BRANCH_DEFAULTS_PATCH):
+            head_candidates = (
+                agent_outputs.get("push_branch"),
+                agent_outputs.get("branch"),
+                agent_outputs.get("targetBranch"),
+                workspace_spec.get("targetBranch"),
+                parameters.get("targetBranch"),
+                last_node_inputs.get("targetBranch"),
+            )
+            base_candidates = (
+                self._resolve_publish_base_branch(publish_payload),
+                agent_outputs.get("push_base_branch"),
+                agent_outputs.get("baseBranch"),
+                agent_outputs.get("base_branch"),
+                workspace_spec.get("startingBranch"),
+                last_node_inputs.get("startingBranch"),
+                "main",
+            )
+        else:
+            head_candidates = (
+                agent_outputs.get("push_branch"),
+                agent_outputs.get("branch"),
+                agent_outputs.get("targetBranch"),
+                workspace_spec.get("targetBranch"),
+                parameters.get("targetBranch"),
+                last_node_inputs.get("targetBranch"),
+                workspace_spec.get("branch"),
+                last_node_inputs.get("branch"),
+            )
+            base_candidates = (
+                agent_outputs.get("baseBranch"),
+                agent_outputs.get("base_branch"),
+                workspace_spec.get("startingBranch"),
+                workspace_spec.get("branch"),
+                last_node_inputs.get("startingBranch"),
+                last_node_inputs.get("branch"),
+                "main",
+            )
+        head_branch = next(
+            (
+                candidate
+                for candidate in (
+                    self._coerce_text(value) for value in head_candidates
+                )
+                if candidate
+            ),
+            "",
+        )
+        base_branch = next(
+            (
+                candidate
+                for candidate in (
+                    self._coerce_text(value) for value in base_candidates
+                )
+                if candidate
+            ),
+            "main",
+        )
+        return head_branch, base_branch
+
+    def _native_pr_push_status_blocks_creation(self, push_status: Any) -> bool:
+        status = self._coerce_text(push_status)
+        if status in {"failed", "skipped"}:
+            return True
+        if status == "protected_branch":
+            return workflow.patched(NATIVE_PR_PUSH_STATUS_GATE_PATCH)
+        return False
+
     def _extract_pull_request_url(self, result: Any) -> str | None:
         outputs = self._get_from_result(result, "outputs")
         if not isinstance(outputs, Mapping):
@@ -2823,6 +2890,8 @@ class MoonMindRunWorkflow:
             return
 
         if push_status == "protected_branch":
+            if not workflow.patched(NATIVE_PR_PUSH_STATUS_GATE_PATCH):
+                return
             push_branch = self._coerce_text(outputs.get("push_branch"), max_chars=120)
             self._publish_status = "failed"
             if push_branch:
