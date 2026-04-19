@@ -108,6 +108,18 @@ case "$cmd" in
     exit 0
     ;;
   *"namespace describe"*)
+    if [ -n "${FAKE_TEMPORAL_DESCRIBE_FAILS:-}" ]; then
+      describe_count_file="${state_dir}/describe-count"
+      describe_count=0
+      if [ -f "$describe_count_file" ]; then
+        describe_count="$(cat "$describe_count_file")"
+      fi
+      describe_count=$((describe_count + 1))
+      printf '%s' "$describe_count" > "$describe_count_file"
+      if [ "$describe_count" -le "$FAKE_TEMPORAL_DESCRIBE_FAILS" ]; then
+        exit 1
+      fi
+    fi
     if [ -f "${state_dir}/namespace.exists" ]; then
       exit 0
     fi
@@ -215,11 +227,12 @@ def test_namespace_bootstrap_is_idempotent_and_storage_cap_aware(tmp_path: Path)
     assert calls.count("search-attribute create") == len(REQUIRED_SEARCH_ATTRIBUTES)
 
 
-def test_namespace_bootstrap_skips_create_for_default_namespace(tmp_path: Path):
+def test_namespace_bootstrap_updates_existing_default_namespace_retention(tmp_path: Path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     state_dir = tmp_path / "state"
     state_dir.mkdir()
+    (state_dir / "namespace.exists").touch()
 
     _write_executable(fake_bin / "temporal", TEMPORAL_STUB)
 
@@ -228,7 +241,7 @@ def test_namespace_bootstrap_skips_create_for_default_namespace(tmp_path: Path):
     env["FAKE_TEMPORAL_STATE_DIR"] = str(state_dir)
     env["TEMPORAL_ADDRESS"] = "temporal:7233"
     env["TEMPORAL_NAMESPACE"] = "default"
-    env.pop("TEMPORAL_NAMESPACE_RETENTION_DAYS", None)
+    env["TEMPORAL_NAMESPACE_RETENTION_DAYS"] = "90"
 
     first_run = subprocess.run(
         ["sh", str(BOOTSTRAP_SCRIPT)],
@@ -239,12 +252,51 @@ def test_namespace_bootstrap_skips_create_for_default_namespace(tmp_path: Path):
         check=False,
     )
     assert first_run.returncode == 0, first_run.stderr
-    assert "Built-in default namespace detected. Skipping namespace create/update and retention policy." in first_run.stdout
+    assert "Namespace exists; updating retention to 2160h." in first_run.stdout
+    assert "Namespace policy applied. Storage cap guardrail is 100 GB with retention 90 day(s)." in first_run.stdout
     assert "Namespace does not exist; creating" not in first_run.stdout
 
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
     assert "namespace create" not in calls
-    assert "namespace update" not in calls
+    assert "namespace update" in calls
+    assert "--retention 2160h" in calls
+    assert "search-attribute create" in calls
+
+
+def test_namespace_bootstrap_retries_default_namespace_visibility_before_update(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "namespace.exists").touch()
+
+    _write_executable(fake_bin / "temporal", TEMPORAL_STUB)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["FAKE_TEMPORAL_STATE_DIR"] = str(state_dir)
+    env["TEMPORAL_ADDRESS"] = "temporal:7233"
+    env["TEMPORAL_NAMESPACE"] = "default"
+    env["TEMPORAL_NAMESPACE_RETENTION_DAYS"] = "90"
+    env["TEMPORAL_NAMESPACE_RETRY_SLEEP_SECONDS"] = "0"
+    env["FAKE_TEMPORAL_DESCRIBE_FAILS"] = "1"
+
+    result = subprocess.run(
+        ["sh", str(BOOTSTRAP_SCRIPT)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Built-in default namespace is not visible yet; retrying retention policy." in result.stdout
+    assert "Namespace exists; updating retention to 2160h." in result.stdout
+
+    calls = (state_dir / "calls.log").read_text(encoding="utf-8")
+    assert "namespace create" not in calls
+    assert "namespace update" in calls
+    assert "--retention 2160h" in calls
     assert "search-attribute create" in calls
 
 
