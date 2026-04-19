@@ -346,7 +346,7 @@ async def task_manifests_route(
     return _render_react_page(request, "manifests", "/tasks/manifests")
 
 
-@router.get("/tasks/manifests/new")
+@router.get("/tasks/manifests/new", status_code=307, response_class=RedirectResponse)
 async def task_manifest_submit_route(
     request: Request,
     _user: User = Depends(get_current_user()),

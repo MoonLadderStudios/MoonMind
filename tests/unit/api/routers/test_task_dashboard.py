@@ -258,6 +258,18 @@ def test_legacy_manifest_submit_route_redirects_to_unified_manifests_page(
     assert response.headers["location"] == "/tasks/manifests"
 
 
+def test_legacy_manifest_submit_route_openapi_documents_redirect(
+    client: TestClient,
+) -> None:
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    route = response.json()["paths"]["/tasks/manifests/new"]["get"]
+    assert "307" in route["responses"]
+    assert "200" not in route["responses"]
+    assert "application/json" not in route["responses"]["307"].get("content", {})
+
+
 def test_navigation_exposes_single_manifest_destination(client: TestClient) -> None:
     response = client.get("/tasks/manifests")
 

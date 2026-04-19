@@ -12,6 +12,11 @@ const ManifestRunSchema = z.object({
 });
 type ManifestRun = z.infer<typeof ManifestRunSchema>;
 type SourceKind = 'inline' | 'registry';
+type Notice = {
+  level: 'ok' | 'error';
+  text: string;
+  href?: string;
+};
 
 const ManifestsResponseSchema = z.object({
   items: z.array(ManifestRunSchema),
@@ -26,7 +31,7 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
   const [dryRun, setDryRun] = useState(false);
   const [forceFull, setForceFull] = useState(false);
   const [maxDocs, setMaxDocs] = useState('');
-  const [message, setMessage] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const { data, isLoading, isError, error, refetch } = useQuery({
@@ -51,18 +56,19 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
     const manifestKey = sourceKind === 'registry' ? trimmedRegistryName : trimmedManifestName;
 
     if (!manifestKey) {
-      setMessage(
-        sourceKind === 'registry' ? 'Registry manifest name is required.' : 'Manifest name is required.',
-      );
+      setNotice({
+        level: 'error',
+        text: sourceKind === 'registry' ? 'Registry manifest name is required.' : 'Manifest name is required.',
+      });
       return;
     }
     if (sourceKind === 'inline' && !manifestContent.trim()) {
-      setMessage('Manifest YAML is required.');
+      setNotice({ level: 'error', text: 'Manifest YAML is required.' });
       return;
     }
 
     setIsSubmitting(true);
-    setMessage(null);
+    setNotice(null);
     const options: Record<string, boolean | number> = {};
     if (dryRun) {
       options.dryRun = true;
@@ -105,7 +111,7 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
           },
           body: JSON.stringify({
             action,
-            title: trimmedManifestName || manifestKey,
+            title: sourceKind === 'registry' ? manifestKey : trimmedManifestName,
             ...(Object.keys(options).length > 0 ? { options } : {}),
           }),
         },
@@ -116,13 +122,27 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
       const created = (await response.json()) as {
         execution?: {
           workflowId?: string;
+          link?: string;
         };
       };
       const runId = String(created.execution?.workflowId || '').trim();
-      setMessage(runId ? `Manifest run started: ${runId}` : 'Manifest run started.');
+      const runLink = String(created.execution?.link || '').trim();
+      const successNotice: Notice = {
+        level: 'ok',
+        text: runId ? `Manifest run started: ${runId}` : 'Manifest run started.',
+      };
+      if (runLink || runId) {
+        successNotice.href = runLink || `/tasks/${encodeURIComponent(runId)}`;
+      }
+      setNotice({
+        ...successNotice,
+      });
       await refetch();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Failed to create manifest run.');
+      setNotice({
+        level: 'error',
+        text: error instanceof Error ? error.message : 'Failed to create manifest run.',
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -221,8 +241,19 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
             </button>
           </div>
 
-          <p className={`queue-submit-message${message ? ' notice' : ''}`}>
-            {message || ''}
+          <p className={`queue-submit-message${notice ? ` notice ${notice.level}` : ''}`}>
+            {notice ? (
+              notice.href ? (
+                <>
+                  {notice.text}{' '}
+                  <a href={notice.href}>Open run</a>
+                </>
+              ) : (
+                notice.text
+              )
+            ) : (
+              ''
+            )}
           </p>
         </form>
       </div>
