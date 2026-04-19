@@ -7,6 +7,8 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
@@ -80,6 +82,11 @@ const mockPayload: BootPayload = {
     },
   },
 };
+
+const missionControlCss = readFileSync(
+  resolve(process.cwd(), "frontend/src/styles/mission-control.css"),
+  "utf8",
+);
 
 function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
   const initialData = payload.initialData as {
@@ -5656,6 +5663,12 @@ describe("Task Create Entrypoint", () => {
     );
     expect(within(floatingBar as HTMLElement).getByRole("button", { name: "Create" })).toBe(
       createButton,
+    );
+  });
+
+  it("centers the constrained create page panel with equal side margins", () => {
+    expect(missionControlCss).toMatch(
+      /\.panel:has\(\.task-create-page\)\s*\{[^}]*max-width:\s*min\(72rem,\s*calc\(100vw - 2rem\)\);[^}]*margin-left:\s*auto;[^}]*margin-right:\s*auto;/s,
     );
   });
 
