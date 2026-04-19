@@ -1272,6 +1272,33 @@ describe('Task Detail Entrypoint', () => {
       targetRuntime: 'gemini_cli',
       targetSkill: 'jira-pr-verify',
       taskSkills: ['jira-pr-verify', 'fix-comments'],
+      skillRuntime: {
+        resolvedSkillsetRef: 'artifact:resolved-skills-1',
+        selectedSkills: ['jira-pr-verify'],
+        selectedVersions: [
+          {
+            name: 'jira-pr-verify',
+            version: '1.2.0',
+            sourceKind: 'deployment',
+            contentRef: 'artifact:skill-body-1',
+            contentDigest: 'sha256:abc',
+          },
+        ],
+        sourceProvenance: [{ name: 'jira-pr-verify', sourceKind: 'deployment' }],
+        materializationMode: 'hybrid',
+        visiblePath: '.agents/skills',
+        backingPath: '../skills_active',
+        readOnly: true,
+        manifestRef: 'artifact:manifest-1',
+        promptIndexRef: 'artifact:prompt-index-1',
+        activationSummaryRef: 'artifact:activation-summary-1',
+        lifecycleIntent: {
+          source: 'run',
+          resolutionMode: 'snapshot-reuse',
+          explanation:
+            'Execution reuses the resolved skill snapshot unless explicit re-resolution is requested.',
+        },
+      },
       profileId: 'profile:gemini-default',
       providerId: 'google',
       providerLabel: 'Google',
@@ -1315,6 +1342,21 @@ describe('Task Detail Entrypoint', () => {
         'jira-pr-verify, fix-comments',
       );
       expect(screen.getByText('Delegated Skill').closest('div')?.textContent).toContain('jira-pr-verify');
+      expect(screen.getByText('Selected Versions').closest('div')?.textContent).toContain(
+        'jira-pr-verify@1.2.0',
+      );
+      expect(screen.getByText('Source Provenance').closest('div')?.textContent).toContain(
+        'deployment',
+      );
+      expect(screen.getByText('Materialization').closest('div')?.textContent).toContain('hybrid');
+      expect(screen.getByText('Visible Path').closest('div')?.textContent).toContain('.agents/skills');
+      expect(screen.getByText('Backing Path').closest('div')?.textContent).toContain('../skills_active');
+      expect(screen.getByText('Manifest Ref').closest('div')?.textContent).toContain('artifact:manifest-1');
+      expect(screen.getByText('Prompt Index Ref').closest('div')?.textContent).toContain(
+        'artifact:prompt-index-1',
+      );
+      expect(screen.getByText('Lifecycle Intent').closest('div')?.textContent).toContain('snapshot-reuse');
+      expect(screen.queryByText('FULL SKILL BODY SHOULD NOT LEAK')).toBeNull();
       expect(screen.getByText('Google')).toBeTruthy();
       expect(screen.getByText('profile:gemini-default')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();

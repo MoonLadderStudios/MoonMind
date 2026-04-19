@@ -3454,6 +3454,7 @@ export interface components {
             resolvedSkillsetRef?: string | null;
             /** Taskskills */
             taskSkills?: string[] | null;
+            skillRuntime?: components["schemas"]["ExecutionSkillRuntimeModel"] | null;
             /** Artifactrefs */
             artifactRefs?: string[];
             actions?: components["schemas"]["ExecutionActionCapabilityModel"];
@@ -3617,6 +3618,22 @@ export interface components {
             updatedAt: string;
         };
         /**
+         * ExecutionProjectionDiagnosticModel
+         * @description Sanitized projection diagnostic for operator-visible skill failures.
+         */
+        ExecutionProjectionDiagnosticModel: {
+            /** Path */
+            path?: string | null;
+            /** Objectkind */
+            objectKind?: string | null;
+            /** Attemptedaction */
+            attemptedAction?: string | null;
+            /** Remediation */
+            remediation?: string | null;
+            /** Cause */
+            cause?: string | null;
+        };
+        /**
          * ExecutionRefreshEnvelope
          * @description Compatibility metadata for patching one acted-on row and refetching lists.
          */
@@ -3638,6 +3655,82 @@ export interface components {
              * Format: date-time
              */
             refreshedAt: string;
+        };
+        /**
+         * ExecutionSkillLifecycleIntentModel
+         * @description How skill intent or snapshot reuse is preserved across lifecycle paths.
+         */
+        ExecutionSkillLifecycleIntentModel: {
+            /** Source */
+            source: string;
+            /** Selectors */
+            selectors?: string[];
+            /** Resolvedskillsetref */
+            resolvedSkillsetRef?: string | null;
+            /** Resolutionmode */
+            resolutionMode: string;
+            /** Explanation */
+            explanation: string;
+        };
+        /**
+         * ExecutionSkillProvenanceModel
+         * @description Compact source provenance for one selected skill.
+         */
+        ExecutionSkillProvenanceModel: {
+            /** Name */
+            name: string;
+            /** Sourcekind */
+            sourceKind?: string | null;
+            /** Sourcepath */
+            sourcePath?: string | null;
+        };
+        /**
+         * ExecutionSkillRuntimeModel
+         * @description Compact skill runtime evidence exposed by execution detail APIs.
+         */
+        ExecutionSkillRuntimeModel: {
+            /** Resolvedskillsetref */
+            resolvedSkillsetRef?: string | null;
+            /** Selectedskills */
+            selectedSkills?: string[];
+            /** Selectedversions */
+            selectedVersions?: components["schemas"]["ExecutionSkillVersionSummaryModel"][];
+            /** Sourceprovenance */
+            sourceProvenance?: components["schemas"]["ExecutionSkillProvenanceModel"][];
+            /** Materializationmode */
+            materializationMode?: string | null;
+            /** Visiblepath */
+            visiblePath?: string | null;
+            /** Backingpath */
+            backingPath?: string | null;
+            /** Readonly */
+            readOnly?: boolean | null;
+            /** Manifestref */
+            manifestRef?: string | null;
+            /** Promptindexref */
+            promptIndexRef?: string | null;
+            /** Activationsummaryref */
+            activationSummaryRef?: string | null;
+            diagnostics?: components["schemas"]["ExecutionProjectionDiagnosticModel"] | null;
+            lifecycleIntent?: components["schemas"]["ExecutionSkillLifecycleIntentModel"] | null;
+        };
+        /**
+         * ExecutionSkillVersionSummaryModel
+         * @description Compact operator-safe summary of one selected skill version.
+         */
+        ExecutionSkillVersionSummaryModel: {
+            /** Name */
+            name: string;
+            /** Version */
+            version?: string | null;
+            /** Sourcekind */
+            sourceKind?: string | null;
+            /** Sourcepath */
+            sourcePath?: string | null;
+            /** Contentref */
+            contentRef?: string | null;
+            /** Contentdigest */
+            contentDigest?: string | null;
         };
         /**
          * GitHubCredentialStatus
