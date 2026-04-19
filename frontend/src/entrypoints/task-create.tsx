@@ -6587,7 +6587,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               className={
                 showPrimaryCtaArrow
                   ? "queue-submit-primary queue-submit-primary--icon"
-                  : "queue-submit-primary queue-submit-primary--with-arrow"
+                  : "queue-submit-primary"
               }
               disabled={isTemporalFormBlocked}
               aria-disabled={isSubmitting || isTemporalFormBlocked}

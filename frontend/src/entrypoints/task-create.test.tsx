@@ -1981,6 +1981,9 @@ describe("Task Create Entrypoint", () => {
     expect(createButton.classList.contains("queue-submit-primary--icon")).toBe(
       true,
     );
+    expect(createButton.classList.contains("queue-submit-primary--with-arrow")).toBe(
+      false,
+    );
     expect(createButton.getAttribute("aria-label")).toBe("Create");
     expect(createButton.getAttribute("title")).toBe("Create this task");
     expect(createButton.textContent?.trim()).toBe("");
@@ -2721,7 +2724,14 @@ describe("Task Create Entrypoint", () => {
       ).toBe("speckit-implement");
     });
     expect(screen.queryByText("Schedule (optional)")).toBeNull();
-    expect(screen.getByRole("button", { name: "Save Changes" })).toBeTruthy();
+    const saveButton = screen.getByRole("button", { name: "Save Changes" });
+    expect(saveButton).toBeTruthy();
+    expect(saveButton.classList.contains("queue-submit-primary--icon")).toBe(
+      false,
+    );
+    expect(saveButton.classList.contains("queue-submit-primary--with-arrow")).toBe(
+      false,
+    );
   });
 
   it("loads every step when editing a multi-step Temporal execution", async () => {
@@ -2831,7 +2841,14 @@ describe("Task Create Entrypoint", () => {
       }),
     );
     expect(screen.queryByText("Schedule (optional)")).toBeNull();
-    expect(screen.getByRole("button", { name: "Rerun Task" })).toBeTruthy();
+    const rerunButton = screen.getByRole("button", { name: "Rerun Task" });
+    expect(rerunButton).toBeTruthy();
+    expect(rerunButton.classList.contains("queue-submit-primary--icon")).toBe(
+      false,
+    );
+    expect(rerunButton.classList.contains("queue-submit-primary--with-arrow")).toBe(
+      false,
+    );
   });
 
   it("submits terminal rerun mode through RequestRerun and opens the created rerun detail view", async () => {
