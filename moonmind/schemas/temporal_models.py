@@ -704,6 +704,81 @@ class ExecutionDependencySummaryModel(BaseModel):
     workflow_type: Optional[str] = Field(None, alias="workflowType")
 
 
+class ExecutionSkillVersionSummaryModel(BaseModel):
+    """Compact operator-safe summary of one selected skill version."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(..., alias="name")
+    version: Optional[str] = Field(None, alias="version")
+    source_kind: Optional[str] = Field(None, alias="sourceKind")
+    source_path: Optional[str] = Field(None, alias="sourcePath")
+    content_ref: Optional[str] = Field(None, alias="contentRef")
+    content_digest: Optional[str] = Field(None, alias="contentDigest")
+
+
+class ExecutionSkillProvenanceModel(BaseModel):
+    """Compact source provenance for one selected skill."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(..., alias="name")
+    source_kind: Optional[str] = Field(None, alias="sourceKind")
+    source_path: Optional[str] = Field(None, alias="sourcePath")
+
+
+class ExecutionProjectionDiagnosticModel(BaseModel):
+    """Sanitized projection diagnostic for operator-visible skill failures."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    path: Optional[str] = Field(None, alias="path")
+    object_kind: Optional[str] = Field(None, alias="objectKind")
+    attempted_action: Optional[str] = Field(None, alias="attemptedAction")
+    remediation: Optional[str] = Field(None, alias="remediation")
+    cause: Optional[str] = Field(None, alias="cause")
+
+
+class ExecutionSkillLifecycleIntentModel(BaseModel):
+    """How skill intent or snapshot reuse is preserved across lifecycle paths."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source: str = Field(..., alias="source")
+    selectors: list[str] = Field(default_factory=list, alias="selectors")
+    resolved_skillset_ref: Optional[str] = Field(None, alias="resolvedSkillsetRef")
+    resolution_mode: str = Field(..., alias="resolutionMode")
+    explanation: str = Field(..., alias="explanation")
+
+
+class ExecutionSkillRuntimeModel(BaseModel):
+    """Compact skill runtime evidence exposed by execution detail APIs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    resolved_skillset_ref: Optional[str] = Field(None, alias="resolvedSkillsetRef")
+    selected_skills: list[str] = Field(default_factory=list, alias="selectedSkills")
+    selected_versions: list[ExecutionSkillVersionSummaryModel] = Field(
+        default_factory=list, alias="selectedVersions"
+    )
+    source_provenance: list[ExecutionSkillProvenanceModel] = Field(
+        default_factory=list, alias="sourceProvenance"
+    )
+    materialization_mode: Optional[str] = Field(None, alias="materializationMode")
+    visible_path: Optional[str] = Field(None, alias="visiblePath")
+    backing_path: Optional[str] = Field(None, alias="backingPath")
+    read_only: Optional[bool] = Field(None, alias="readOnly")
+    manifest_ref: Optional[str] = Field(None, alias="manifestRef")
+    prompt_index_ref: Optional[str] = Field(None, alias="promptIndexRef")
+    activation_summary_ref: Optional[str] = Field(None, alias="activationSummaryRef")
+    diagnostics: Optional[ExecutionProjectionDiagnosticModel] = Field(
+        None, alias="diagnostics"
+    )
+    lifecycle_intent: Optional[ExecutionSkillLifecycleIntentModel] = Field(
+        None, alias="lifecycleIntent"
+    )
+
+
 class ExecutionProgressModel(BaseModel):
     """Bounded latest-run progress summary derived from workflow-owned step state."""
 
@@ -943,6 +1018,9 @@ class ExecutionModel(BaseModel):
     merge_automation_selected: bool = Field(False, alias="mergeAutomationSelected")
     resolved_skillset_ref: Optional[str] = Field(None, alias="resolvedSkillsetRef")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
+    skill_runtime: Optional[ExecutionSkillRuntimeModel] = Field(
+        None, alias="skillRuntime"
+    )
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
     actions: ExecutionActionCapabilityModel = Field(
         default_factory=ExecutionActionCapabilityModel, alias="actions"

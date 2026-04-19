@@ -52,10 +52,15 @@ from moonmind.schemas.temporal_models import (
     ExecutionActionCapabilityModel,
     ExecutionDependencySummaryModel,
     ExecutionDebugFieldsModel,
+    ExecutionProjectionDiagnosticModel,
     ExecutionListResponse,
     ExecutionModel,
     ExecutionProgressModel,
     ExecutionRefreshEnvelope,
+    ExecutionSkillLifecycleIntentModel,
+    ExecutionSkillProvenanceModel,
+    ExecutionSkillRuntimeModel,
+    ExecutionSkillVersionSummaryModel,
     TaskInputSnapshotDescriptorModel,
     PollIntegrationRequest,
     RescheduleExecutionRequest,
@@ -248,6 +253,260 @@ def _coerce_temporal_scalar(value: object | None) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _dedupe_non_blank(items: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        normalized = str(item or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _skill_selector_names(raw: object | None) -> list[str] | None:
+    if isinstance(raw, list):
+        return _dedupe_non_blank([_coerce_temporal_scalar(item) for item in raw]) or None
+    if not isinstance(raw, Mapping):
+        return None
+
+    names: list[str] = []
+    sets = raw.get("sets")
+    if isinstance(sets, list):
+        names.extend(_coerce_temporal_scalar(item) for item in sets)
+    include = raw.get("include")
+    if isinstance(include, list):
+        for item in include:
+            if isinstance(item, Mapping):
+                names.append(_coerce_temporal_scalar(item.get("name")))
+            else:
+                names.append(_coerce_temporal_scalar(item))
+    return _dedupe_non_blank(names) or None
+
+
+def _first_mapping(*candidates: object | None) -> Mapping[str, Any]:
+    for candidate in candidates:
+        if isinstance(candidate, Mapping):
+            return candidate
+    return {}
+
+
+def _coerce_skill_bool(value: object | None) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _selected_skill_versions(raw: object | None) -> list[ExecutionSkillVersionSummaryModel]:
+    if not isinstance(raw, list):
+        return []
+    versions: list[ExecutionSkillVersionSummaryModel] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        name = _coerce_temporal_scalar(
+            item.get("name")
+            or item.get("skillName")
+            or item.get("skill_name")
+        )
+        if not name:
+            continue
+        versions.append(
+            ExecutionSkillVersionSummaryModel(
+                name=name,
+                version=_coerce_temporal_scalar(item.get("version")) or None,
+                sourceKind=(
+                    _coerce_temporal_scalar(
+                        item.get("sourceKind") or item.get("source_kind")
+                    )
+                    or None
+                ),
+                sourcePath=(
+                    _coerce_temporal_scalar(
+                        item.get("sourcePath") or item.get("source_path")
+                    )
+                    or None
+                ),
+                contentRef=(
+                    _coerce_temporal_scalar(
+                        item.get("contentRef") or item.get("content_ref")
+                    )
+                    or None
+                ),
+                contentDigest=(
+                    _coerce_temporal_scalar(
+                        item.get("contentDigest") or item.get("content_digest")
+                    )
+                    or None
+                ),
+            )
+        )
+    return versions
+
+
+def _skill_provenance_from_versions(
+    versions: list[ExecutionSkillVersionSummaryModel],
+) -> list[ExecutionSkillProvenanceModel]:
+    provenance: list[ExecutionSkillProvenanceModel] = []
+    for entry in versions:
+        if not entry.source_kind and not entry.source_path:
+            continue
+        provenance.append(
+            ExecutionSkillProvenanceModel(
+                name=entry.name,
+                sourceKind=entry.source_kind,
+                sourcePath=entry.source_path,
+            )
+        )
+    return provenance
+
+
+def _projection_diagnostic(raw: object | None) -> ExecutionProjectionDiagnosticModel | None:
+    if not isinstance(raw, Mapping):
+        return None
+    diagnostic = ExecutionProjectionDiagnosticModel(
+        path=_coerce_temporal_scalar(raw.get("path")) or None,
+        objectKind=(
+            _coerce_temporal_scalar(raw.get("objectKind") or raw.get("object_kind"))
+            or None
+        ),
+        attemptedAction=(
+            _coerce_temporal_scalar(
+                raw.get("attemptedAction") or raw.get("attempted_action")
+            )
+            or None
+        ),
+        remediation=_coerce_temporal_scalar(raw.get("remediation")) or None,
+        cause=_coerce_temporal_scalar(raw.get("cause")) or None,
+    )
+    if any(
+        [
+            diagnostic.path,
+            diagnostic.object_kind,
+            diagnostic.attempted_action,
+            diagnostic.remediation,
+            diagnostic.cause,
+        ]
+    ):
+        return diagnostic
+    return None
+
+
+def _skill_lifecycle_intent(
+    *,
+    params: Mapping[str, Any],
+    task_skills: list[str] | None,
+    resolved_skillset_ref: str | None,
+) -> ExecutionSkillLifecycleIntentModel | None:
+    raw = _first_mapping(params.get("skillLifecycleIntent"))
+    source = _coerce_temporal_scalar(raw.get("source")) or "run"
+    resolution_mode = _coerce_temporal_scalar(raw.get("resolutionMode"))
+    explanation = _coerce_temporal_scalar(raw.get("explanation"))
+    selectors = _skill_selector_names(raw.get("selectors")) or task_skills or []
+    lifecycle_ref = (
+        _coerce_temporal_scalar(
+            raw.get("resolvedSkillsetRef") or raw.get("resolved_skillset_ref")
+        )
+        or resolved_skillset_ref
+    )
+
+    if not resolution_mode:
+        resolution_mode = "snapshot-reuse" if lifecycle_ref else "selector-based"
+    if not explanation:
+        if resolution_mode == "snapshot-reuse":
+            explanation = (
+                "Execution reuses the resolved skill snapshot unless explicit "
+                "re-resolution is requested."
+            )
+        elif selectors:
+            explanation = "Execution resolves the selected skills when the run starts."
+        else:
+            explanation = "Execution inherits deployment skill defaults explicitly."
+
+    if not (selectors or lifecycle_ref or raw):
+        return None
+    return ExecutionSkillLifecycleIntentModel(
+        source=source,
+        selectors=selectors,
+        resolvedSkillsetRef=lifecycle_ref,
+        resolutionMode=resolution_mode,
+        explanation=explanation,
+    )
+
+
+def _skill_runtime_evidence(
+    *,
+    params: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+    task_skills: list[str] | None,
+    resolved_skillset_ref: str | None,
+) -> ExecutionSkillRuntimeModel | None:
+    materialized = _first_mapping(
+        params.get("skillRuntime"),
+        params.get("skillsMaterialized"),
+        task_payload.get("skillRuntime"),
+    )
+    selected_skills = _skill_selector_names(materialized.get("selectedSkills"))
+    if selected_skills is None:
+        selected_skills = _skill_selector_names(materialized.get("activeSkills"))
+    if selected_skills is None:
+        selected_skills = task_skills or []
+
+    versions = _selected_skill_versions(
+        materialized.get("selectedVersions") or materialized.get("skills")
+    )
+    provenance = _skill_provenance_from_versions(versions)
+    materialization_mode = (
+        _coerce_temporal_scalar(
+            materialized.get("materializationMode")
+            or materialized.get("materialization_mode")
+        )
+        or _coerce_temporal_scalar(
+            _first_mapping(task_payload.get("skills")).get("materializationMode")
+        )
+        or None
+    )
+    lifecycle_intent = _skill_lifecycle_intent(
+        params=params,
+        task_skills=task_skills,
+        resolved_skillset_ref=resolved_skillset_ref,
+    )
+    runtime_ref = (
+        _coerce_temporal_scalar(
+            materialized.get("resolvedSkillsetRef")
+            or materialized.get("resolved_skillset_ref")
+        )
+        or resolved_skillset_ref
+    )
+
+    if not any([runtime_ref, selected_skills, versions, materialized, lifecycle_intent]):
+        return None
+
+    return ExecutionSkillRuntimeModel(
+        resolvedSkillsetRef=runtime_ref,
+        selectedSkills=selected_skills,
+        selectedVersions=versions,
+        sourceProvenance=provenance,
+        materializationMode=materialization_mode,
+        visiblePath=_coerce_temporal_scalar(materialized.get("visiblePath")) or None,
+        backingPath=_coerce_temporal_scalar(materialized.get("backingPath")) or None,
+        readOnly=_coerce_skill_bool(materialized.get("readOnly")),
+        manifestRef=(
+            _coerce_temporal_scalar(
+                materialized.get("manifestRef") or materialized.get("manifestPath")
+            )
+            or None
+        ),
+        promptIndexRef=_coerce_temporal_scalar(materialized.get("promptIndexRef")) or None,
+        activationSummaryRef=(
+            _coerce_temporal_scalar(materialized.get("activationSummaryRef")) or None
+        ),
+        diagnostics=_projection_diagnostic(materialized.get("diagnostics")),
+        lifecycleIntent=lifecycle_intent,
+    )
 
 
 def _normalize_entry_value(value: object | None) -> str | None:
@@ -585,9 +844,13 @@ def _serialize_execution(
 
     resolved_skillset_ref = str(params.get("resolvedSkillsetRef") or params.get("resolved_skillset_ref") or "").strip() or None
     
-    # task_skills can be passed explicitly via task payload
-    raw_task_skills = task_payload.get("skills")
-    task_skills = raw_task_skills if isinstance(raw_task_skills, list) else None
+    task_skills = _skill_selector_names(task_payload.get("skills"))
+    skill_runtime = _skill_runtime_evidence(
+        params=params,
+        task_payload=task_payload,
+        task_skills=task_skills,
+        resolved_skillset_ref=resolved_skillset_ref,
+    )
 
     git_payload = task_payload.get("git")
     if not isinstance(git_payload, dict):
@@ -707,6 +970,7 @@ def _serialize_execution(
         merge_automation_selected=merge_automation_selected,
         resolved_skillset_ref=resolved_skillset_ref,
         task_skills=task_skills,
+        skill_runtime=skill_runtime,
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []
         ),

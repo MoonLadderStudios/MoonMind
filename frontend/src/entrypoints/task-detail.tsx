@@ -143,6 +143,69 @@ const DependencySummarySchema = z
   })
   .passthrough();
 
+const SkillRuntimeSchema = z
+  .object({
+    resolvedSkillsetRef: z.string().nullable().optional(),
+    selectedSkills: z.array(z.string()).optional().default([]),
+    selectedVersions: z
+      .array(
+        z
+          .object({
+            name: z.string(),
+            version: z.string().nullable().optional(),
+            sourceKind: z.string().nullable().optional(),
+            sourcePath: z.string().nullable().optional(),
+            contentRef: z.string().nullable().optional(),
+            contentDigest: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .optional()
+      .default([]),
+    sourceProvenance: z
+      .array(
+        z
+          .object({
+            name: z.string(),
+            sourceKind: z.string().nullable().optional(),
+            sourcePath: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .optional()
+      .default([]),
+    materializationMode: z.string().nullable().optional(),
+    visiblePath: z.string().nullable().optional(),
+    backingPath: z.string().nullable().optional(),
+    readOnly: z.boolean().nullable().optional(),
+    manifestRef: z.string().nullable().optional(),
+    promptIndexRef: z.string().nullable().optional(),
+    activationSummaryRef: z.string().nullable().optional(),
+    diagnostics: z
+      .object({
+        path: z.string().nullable().optional(),
+        objectKind: z.string().nullable().optional(),
+        attemptedAction: z.string().nullable().optional(),
+        remediation: z.string().nullable().optional(),
+        cause: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+    lifecycleIntent: z
+      .object({
+        source: z.string(),
+        selectors: z.array(z.string()).optional().default([]),
+        resolvedSkillsetRef: z.string().nullable().optional(),
+        resolutionMode: z.string(),
+        explanation: z.string(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+
 const ExecutionDetailSchema = z
   .object({
     taskId: z.string(),
@@ -186,6 +249,7 @@ const ExecutionDetailSchema = z
     prUrl: z.string().nullable().optional(),
     resolvedSkillsetRef: z.string().nullable().optional(),
     taskSkills: z.array(z.string()).nullable().optional(),
+    skillRuntime: SkillRuntimeSchema.nullable().optional(),
     publishMode: z.string().nullable().optional(),
     mergeAutomationSelected: z.boolean().optional().default(false),
     summaryArtifactRef: z.string().nullable().optional(),
@@ -3205,6 +3269,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             resolvedSkillsetRef={execution.resolvedSkillsetRef}
             taskSkills={execution.taskSkills}
             targetSkill={execution.targetSkill}
+            skillRuntime={execution.skillRuntime}
           />
 
           <FactGroup title="Runtime">
