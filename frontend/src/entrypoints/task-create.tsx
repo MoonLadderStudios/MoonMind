@@ -3784,7 +3784,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const branchOptions = useMemo(() => {
     const items = branchOptionsQuery.data || [];
     const seen = new Set<string>();
-    const options = items.filter((item) => {
+    return items.filter((item) => {
       const key = item.value;
       if (!key || seen.has(key)) {
         return false;
@@ -3792,19 +3792,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       seen.add(key);
       return true;
     });
-    const selected = branch.trim();
-    if (selected && !seen.has(selected)) {
-      return [
-        {
-          value: selected,
-          label: `${selected} (not in latest branch list)`,
-          source: "stale",
-        },
-        ...options,
-      ];
-    }
-    return options;
-  }, [branch, branchOptionsQuery.data]);
+  }, [branchOptionsQuery.data]);
   const selectedBranchIsStale = Boolean(
     branch.trim() &&
       branchOptionsQuery.isSuccess &&

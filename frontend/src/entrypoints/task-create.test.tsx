@@ -5584,8 +5584,9 @@ describe("Task Create Entrypoint", () => {
       const datalist = document.querySelector<HTMLDataListElement>(
         "#queue-branch-options",
       );
+      expect(datalist).not.toBeNull();
       expect(
-        Array.from(datalist?.querySelectorAll("option") || []).some(
+        Array.from(datalist?.querySelectorAll("option") ?? []).some(
           (option) => option.value === "feature/create-page",
         ),
       ).toBe(true);
@@ -5669,8 +5670,9 @@ describe("Task Create Entrypoint", () => {
       const datalist = document.querySelector<HTMLDataListElement>(
         "#queue-branch-options",
       );
+      expect(datalist).not.toBeNull();
       expect(
-        Array.from(datalist?.querySelectorAll("option") || []).some(
+        Array.from(datalist?.querySelectorAll("option") ?? []).some(
           (option) => option.value === "feature/create-page",
         ),
       ).toBe(true);
@@ -5707,8 +5709,9 @@ describe("Task Create Entrypoint", () => {
       const datalist = document.querySelector<HTMLDataListElement>(
         "#queue-branch-options",
       );
+      expect(datalist).not.toBeNull();
       expect(
-        Array.from(datalist?.querySelectorAll("option") || []).some(
+        Array.from(datalist?.querySelectorAll("option") ?? []).some(
           (option) => option.value === "feature/create-page",
         ),
       ).toBe(true);
