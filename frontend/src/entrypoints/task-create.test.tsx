@@ -3670,6 +3670,12 @@ describe("Task Create Entrypoint", () => {
   it("submits the Temporal task payload and redirects on success", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
+    expect(
+      (await screen.findByRole("heading", { name: "Create Task" })).closest(
+        ".task-create-page",
+      ),
+    ).not.toBeNull();
+
     const primaryStep = (await screen.findByText("Step 1 (Primary)")).closest(
       "section",
     );

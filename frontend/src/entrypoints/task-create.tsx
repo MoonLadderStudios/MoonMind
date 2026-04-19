@@ -5289,7 +5289,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     (temporalDraftQuery.isLoading || Boolean(modeLoadError));
 
   return (
-    <div className="stack">
+    <div className="stack task-create-page">
       <section data-canonical-create-section="Header" aria-label="Header">
         <h2 className="page-title">{pageTitle}</h2>
       </section>
