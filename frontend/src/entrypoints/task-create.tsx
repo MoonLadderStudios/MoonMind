@@ -20,6 +20,7 @@ const SKILL_OPTIONS_DATALIST_ID = "queue-skill-options";
 const MODEL_OPTIONS_DATALIST_ID = "queue-model-options";
 const EFFORT_OPTIONS_DATALIST_ID = "queue-effort-options";
 const REPOSITORY_OPTIONS_DATALIST_ID = "queue-repository-options";
+const BRANCH_OPTIONS_DATALIST_ID = "queue-branch-options";
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
@@ -3783,7 +3784,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   const branchOptions = useMemo(() => {
     const items = branchOptionsQuery.data || [];
     const seen = new Set<string>();
-    const options = items.filter((item) => {
+    return items.filter((item) => {
       const key = item.value;
       if (!key || seen.has(key)) {
         return false;
@@ -3791,19 +3792,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       seen.add(key);
       return true;
     });
-    const selected = branch.trim();
-    if (selected && !seen.has(selected)) {
-      return [
-        {
-          value: selected,
-          label: `${selected} (not in latest branch list)`,
-          source: "stale",
-        },
-        ...options,
-      ];
-    }
-    return options;
-  }, [branch, branchOptionsQuery.data]);
+  }, [branchOptionsQuery.data]);
   const selectedBranchIsStale = Boolean(
     branch.trim() &&
       branchOptionsQuery.isSuccess &&
@@ -5557,6 +5546,13 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 </option>
               ))}
             </datalist>
+            <datalist id={BRANCH_OPTIONS_DATALIST_ID}>
+              {branchOptions.map((item) => (
+                <option key={`${item.source}:${item.value}`} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </datalist>
 
             {steps.map((step, index) => {
               const isPrimaryStep = index === 0;
@@ -6545,24 +6541,17 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </div>
             <div className="queue-inline-selector queue-inline-selector--branch">
               <BranchIcon />
-              <select
+              <input
                 name="branch"
                 aria-label="Branch"
+                list={BRANCH_OPTIONS_DATALIST_ID}
                 value={branch}
+                placeholder={
+                  branchOptionsQuery.isLoading ? "Loading branches..." : "Branch"
+                }
                 disabled={branchControlDisabled}
                 onChange={(event) => setBranch(event.target.value)}
-              >
-                <option value="">
-                  {branchOptionsQuery.isLoading
-                    ? "Loading branches..."
-                    : "Branch"}
-                </option>
-                {branchOptions.map((item) => (
-                  <option key={`${item.source}:${item.value}`} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
             <div className="queue-inline-selector queue-inline-selector--publish">
               <PublishIcon />
@@ -6608,12 +6597,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               )}
             </button>
           </div>
-          {mergeAutomationAvailable ? (
-            <p className="small">
-              PR with Merge Automation uses pr-resolver after the PR readiness
-              gate opens; it does not bypass resolver handling.
-            </p>
-          ) : null}
         </div>
         </section>
         </fieldset>

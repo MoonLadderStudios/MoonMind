@@ -2711,7 +2711,7 @@ describe("Task Create Entrypoint", () => {
         (screen.getByLabelText(/GitHub Repo/) as HTMLInputElement).value,
       ).toBe("MoonLadderStudios/MoonMind");
       expect(
-        (screen.getByLabelText("Branch") as HTMLSelectElement).value,
+        (screen.getByLabelText("Branch") as HTMLInputElement).value,
       ).toBe("main");
       expect(
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
@@ -4895,7 +4895,7 @@ describe("Task Create Entrypoint", () => {
       ),
     ).toBe(true);
     expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
-    expect(screen.getByText(/uses pr-resolver/i)).toBeTruthy();
+    expect(screen.queryByText(/uses pr-resolver/i)).toBeNull();
     expect(screen.queryByText(/direct auto-merge/i)).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Publish Mode"), {
@@ -5578,10 +5578,15 @@ describe("Task Create Entrypoint", () => {
   it("loads branches through MoonMind and submits one authored branch", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const branchSelect = await screen.findByLabelText("Branch");
+    const branchInput = await screen.findByLabelText("Branch");
+    expect(branchInput.getAttribute("list")).toBe("queue-branch-options");
     await waitFor(() => {
+      const datalist = document.querySelector<HTMLDataListElement>(
+        "#queue-branch-options",
+      );
+      expect(datalist).not.toBeNull();
       expect(
-        Array.from((branchSelect as HTMLSelectElement).options).some(
+        Array.from(datalist?.querySelectorAll("option") ?? []).some(
           (option) => option.value === "feature/create-page",
         ),
       ).toBe(true);
@@ -5594,7 +5599,7 @@ describe("Task Create Entrypoint", () => {
       ),
     ).toBe(true);
 
-    fireEvent.change(branchSelect, {
+    fireEvent.change(branchInput, {
       target: { value: "feature/create-page" },
     });
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -5628,14 +5633,12 @@ describe("Task Create Entrypoint", () => {
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const branchSelect = (await screen.findByLabelText(
+    const branchInput = (await screen.findByLabelText(
       "Branch",
-    )) as HTMLSelectElement;
+    )) as HTMLInputElement;
 
     await waitFor(() => {
-      expect(branchSelect.selectedOptions[0]?.textContent).toBe(
-        "Loading branches...",
-      );
+      expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
     });
     expect(
       Array.from(document.querySelectorAll("p")).some(
@@ -5660,18 +5663,22 @@ describe("Task Create Entrypoint", () => {
 
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
-    const branchSelect = (await screen.findByLabelText(
+    const branchInput = (await screen.findByLabelText(
       "Branch",
-    )) as HTMLSelectElement;
+    )) as HTMLInputElement;
     await waitFor(() => {
+      const datalist = document.querySelector<HTMLDataListElement>(
+        "#queue-branch-options",
+      );
+      expect(datalist).not.toBeNull();
       expect(
-        Array.from(branchSelect.options).some(
+        Array.from(datalist?.querySelectorAll("option") ?? []).some(
           (option) => option.value === "feature/create-page",
         ),
       ).toBe(true);
     });
 
-    fireEvent.change(branchSelect, {
+    fireEvent.change(branchInput, {
       target: { value: "feature/create-page" },
     });
     fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
@@ -5696,10 +5703,15 @@ describe("Task Create Entrypoint", () => {
       />,
     );
 
-    const branchSelect = await screen.findByLabelText("Branch");
+    const branchInput = await screen.findByLabelText("Branch");
+    expect(branchInput.getAttribute("list")).toBe("queue-branch-options");
     await waitFor(() => {
+      const datalist = document.querySelector<HTMLDataListElement>(
+        "#queue-branch-options",
+      );
+      expect(datalist).not.toBeNull();
       expect(
-        Array.from((branchSelect as HTMLSelectElement).options).some(
+        Array.from(datalist?.querySelectorAll("option") ?? []).some(
           (option) => option.value === "feature/create-page",
         ),
       ).toBe(true);
