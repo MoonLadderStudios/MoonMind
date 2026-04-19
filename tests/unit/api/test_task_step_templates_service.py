@@ -990,6 +990,69 @@ async def test_jira_breakdown_uses_first_allowed_project_as_runtime_default(
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
 
 
+async def test_jira_breakdown_orchestrate_uses_first_allowed_project_as_runtime_default(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "MM,OPS")
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "task_step_templates"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service.get_template(
+                slug="jira-breakdown-orchestrate",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+            )
+            project_input = next(
+                item
+                for item in template["inputs"]
+                if item["name"] == "jira_project_key"
+            )
+            assert project_input["default"] == "MM"
+
+            expanded = await service.expand_template(
+                slug="jira-breakdown-orchestrate",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_issue_type": "Story",
+                    "jira_dependency_mode": "linear_blocker_chain",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "orchestration_mode": "runtime",
+                    "runtime_mode": "codex_cli",
+                    "publish_mode": "pr",
+                    "source_issue_key": "MM-404",
+                },
+                context={},
+            )
+
+            assert "Jira Story issue in project MM" in expanded["steps"][1][
+                "instructions"
+            ]
+            assert expanded["steps"][1]["storyOutput"] == {
+                "mode": "jira",
+                "fallback": "fail",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeName": "Story",
+                    "dependencyMode": "linear_blocker_chain",
+                },
+            }
+            assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
+
+
 async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
     seed_dir = (
         Path(__file__).resolve().parents[3]
