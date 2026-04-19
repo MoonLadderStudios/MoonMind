@@ -82,6 +82,7 @@ export type TemporalSubmissionDraft = {
       sizeBytes: number;
     }>;
     storyOutput?: Record<string, unknown>;
+    jiraOrchestration?: Record<string, unknown>;
   }>;
   appliedTemplates: Array<{
     slug: string;
@@ -387,6 +388,10 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     id.startsWith('tpl:') ? id : '',
   );
   const storyOutput = firstObjectValue(step.storyOutput, step.story_output);
+  const jiraOrchestration = firstObjectValue(
+    step.jiraOrchestration,
+    step.jira_orchestration,
+  );
   const inputAttachments = normalizeAttachmentRefs(step.inputAttachments);
   const templateAttachments = attachmentRefsValue(
     step.templateAttachments,
@@ -414,6 +419,7 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     ...(inputAttachments.length > 0 ? { inputAttachments } : {}),
     ...(templateAttachments.length > 0 ? { templateAttachments } : {}),
     ...(Object.keys(storyOutput).length > 0 ? { storyOutput } : {}),
+    ...(Object.keys(jiraOrchestration).length > 0 ? { jiraOrchestration } : {}),
   };
 
   const hasContent =
@@ -427,7 +433,8 @@ function draftStepFrom(value: unknown): TemporalSubmissionDraft['steps'][number]
     result.templateInstructions ||
     inputAttachments.length > 0 ||
     templateAttachments.length > 0 ||
-    Object.keys(storyOutput).length > 0;
+    Object.keys(storyOutput).length > 0 ||
+    Object.keys(jiraOrchestration).length > 0;
   return hasContent ? result : null;
 }
 

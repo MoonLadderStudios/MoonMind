@@ -165,3 +165,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert downstream_step["jiraOrchestration"]["task"]["orchestrationMode"] == (
             "{{ inputs.orchestration_mode }}"
         )
+        assert downstream_step["jiraOrchestration"]["task"]["publish"] == {
+            "mode": "{{ inputs.publish_mode }}",
+            "mergeAutomation": {"enabled": True},
+        }

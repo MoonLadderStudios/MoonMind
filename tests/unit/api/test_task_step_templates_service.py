@@ -1132,7 +1132,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                     "repository": "MoonLadderStudios/MoonMind",
                     "orchestration_mode": "runtime",
                     "runtime_mode": "codex_cli",
-                    "publish_mode": "none",
+                    "publish_mode": "pr",
                     "source_issue_key": "MM-404",
                 },
                 context={},
@@ -1154,7 +1154,7 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
             assert downstream["jiraOrchestration"]["task"] == {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
-                "publish": {"mode": "none"},
+                "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
                 "orchestrationMode": "runtime",
             }
             assert downstream["jiraOrchestration"]["traceability"]["sourceIssueKey"] == (

@@ -637,7 +637,11 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
             "task": {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
-                "publish": {"mode": "none"},
+                "publish": {
+                    "mode": "pr",
+                    "mergeAutomation": {"enabled": True},
+                    "merge_automation": {"enabled": False},
+                },
                 "orchestrationMode": "runtime",
             },
             "traceability": {
@@ -671,7 +675,14 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
         "jira-orchestrate:MM-404:STORY-001:MM-501"
     )
     assert "Run Jira Orchestrate for MM-501" in creator.requests[0]["title"]
-    assert "MM-404" in creator.requests[0]["initial_parameters"]["task"]["instructions"]
+    first_parameters = creator.requests[0]["initial_parameters"]
+    assert first_parameters["publishMode"] == "pr"
+    assert first_parameters["task"]["publish"] == {
+        "mode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
+    assert "merge_automation" not in first_parameters["task"]["publish"]
+    assert "MM-404" in first_parameters["task"]["instructions"]
 
 
 @pytest.mark.asyncio

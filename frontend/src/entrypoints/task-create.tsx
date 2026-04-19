@@ -24,6 +24,7 @@ const BRANCH_OPTIONS_DATALIST_ID = "queue-branch-options";
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_RESOLVER_SKILLS = new Set(["pr-resolver", "batch-pr-resolver"]);
 const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
+const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
 const SPECKIT_ORCHESTRATE_PRESET_SLUG = "speckit-orchestrate";
@@ -399,6 +400,8 @@ interface ExpandedStepPayload {
   attachments?: StepAttachmentRef[];
   storyOutput?: Record<string, unknown>;
   story_output?: Record<string, unknown>;
+  jiraOrchestration?: Record<string, unknown>;
+  jira_orchestration?: Record<string, unknown>;
 }
 
 interface TaskTemplateExpandResponse {
@@ -450,6 +453,7 @@ interface StepState {
   inputAttachments: StepAttachmentRef[];
   templateAttachments: StepAttachmentRef[];
   storyOutput?: Record<string, unknown>;
+  jiraOrchestration?: Record<string, unknown>;
 }
 
 interface AppliedTemplateState {
@@ -556,6 +560,11 @@ function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function nonEmptyRecordValue(value: unknown): Record<string, unknown> | undefined {
+  const record = recordValue(value);
+  return Object.keys(record).length > 0 ? record : undefined;
 }
 
 function mergeRecordValues(
@@ -886,6 +895,9 @@ function createStepStateEntriesFromTemporalDraft(
       index === 0 &&
       primarySkill !== "" &&
       !hasExplicitSkillSelection(step.skillId);
+    const hasJiraOrchestration =
+      step.jiraOrchestration &&
+      Object.keys(step.jiraOrchestration).length > 0;
 
     return createStepStateEntry(index + 1, {
       id: step.id,
@@ -904,6 +916,9 @@ function createStepStateEntriesFromTemporalDraft(
         (step.inputAttachments || []).map(stepAttachmentRefFromTemporal),
       ...(step.storyOutput && Object.keys(step.storyOutput).length > 0
         ? { storyOutput: step.storyOutput }
+        : {}),
+      ...(hasJiraOrchestration
+        ? { jiraOrchestration: step.jiraOrchestration }
         : {}),
     });
   });
@@ -1418,6 +1433,9 @@ function mapExpandedStepToState(
       : step.story_output && typeof step.story_output === "object"
         ? step.story_output
         : undefined;
+  const jiraOrchestration =
+    nonEmptyRecordValue(step.jiraOrchestration) ||
+    nonEmptyRecordValue(step.jira_orchestration);
   const templateAttachments = Array.isArray(step.inputAttachments)
     ? step.inputAttachments
     : Array.isArray(step.attachments)
@@ -1434,6 +1452,7 @@ function mapExpandedStepToState(
     templateInstructions: instructions,
     templateAttachments,
     ...(storyOutput ? { storyOutput } : {}),
+    ...(jiraOrchestration ? { jiraOrchestration } : {}),
   });
 }
 
@@ -3016,7 +3035,8 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     if (
       pageMode.mode === "create" &&
-      selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG
+      (selectedPreset?.slug === JIRA_BREAKDOWN_PRESET_SLUG ||
+        selectedPreset?.slug === JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG)
     ) {
       setPublishMode("none");
     }
@@ -4954,6 +4974,10 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
               : {}),
             ...(sourceStep.storyOutput
               ? { storyOutput: sourceStep.storyOutput }
+              : {}),
+            ...(sourceStep.jiraOrchestration &&
+            Object.keys(sourceStep.jiraOrchestration).length > 0
+              ? { jiraOrchestration: sourceStep.jiraOrchestration }
               : {}),
             ...entry.payload,
           };

@@ -4803,6 +4803,60 @@ describe("Task Create Entrypoint", () => {
     });
   });
 
+  it("sets parent publish mode to none when selecting the Jira Breakdown and Orchestrate preset", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/task-step-templates?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "jira-breakdown-orchestrate",
+                scope: "global",
+                title: "Jira Breakdown and Orchestrate",
+                description: "Create dependent Jira Orchestrate tasks.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+              {
+                slug: "moonspec-orchestrate",
+                scope: "global",
+                title: "MoonSpec Orchestrate",
+                description: "Default preset.",
+                latestVersion: "1.0.0",
+                version: "1.0.0",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const presetSelect = await screen.findByLabelText("Preset");
+    await waitFor(() => {
+      expect(
+        Array.from((presetSelect as HTMLSelectElement).options).some(
+          (option) => option.text === "Jira Breakdown and Orchestrate (Global)",
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-breakdown-orchestrate" },
+    });
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
+      ).toBe("none");
+    });
+  });
+
   it("preserves draft publish mode in edit mode when Jira Breakdown is the selected preset", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -6203,6 +6257,7 @@ describe("Task Create Entrypoint", () => {
                 id: "tpl:speckit-demo:1.2.3:01",
                 title: "Clarify spec",
                 instructions: "Clarify the {{ inputs.feature_name }} scope.",
+                jiraOrchestration: {},
                 skill: {
                   id: "speckit-clarify",
                   args: { feature: "Task Create" },
@@ -6219,6 +6274,18 @@ describe("Task Create Entrypoint", () => {
                     issueTypeName: "Story",
                     dependencyMode: "linear_blocker_chain",
                   },
+                },
+                jiraOrchestration: {
+                  task: {
+                    repository: "MoonLadderStudios/MoonMind",
+                    runtime: { mode: "codex_cli" },
+                    publish: {
+                      mode: "pr",
+                      mergeAutomation: { enabled: true },
+                    },
+                    orchestrationMode: "runtime",
+                  },
+                  traceability: { sourceIssueKey: "MM-404" },
                 },
               },
             ],
@@ -6316,6 +6383,18 @@ describe("Task Create Entrypoint", () => {
             issueTypeName: "Story",
             dependencyMode: "linear_blocker_chain",
           },
+        },
+        jiraOrchestration: {
+          task: {
+            repository: "MoonLadderStudios/MoonMind",
+            runtime: { mode: "codex_cli" },
+            publish: {
+              mode: "pr",
+              mergeAutomation: { enabled: true },
+            },
+            orchestrationMode: "runtime",
+          },
+          traceability: { sourceIssueKey: "MM-404" },
         },
       },
     ]);
