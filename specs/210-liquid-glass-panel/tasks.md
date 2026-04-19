@@ -29,9 +29,9 @@ description: "Task list for Liquid Glass Publish Panel"
 
 **Purpose**: Confirm the active feature context and existing UI/test surfaces before story work.
 
-- [ ] T001 Confirm active feature artifacts exist for FR-010/SC-006 in `specs/210-liquid-glass-panel/spec.md`, `specs/210-liquid-glass-panel/plan.md`, `specs/210-liquid-glass-panel/research.md`, `specs/210-liquid-glass-panel/contracts/liquid-glass-panel.md`, and `specs/210-liquid-glass-panel/quickstart.md`
-- [ ] T002 Inspect the current bottom task submission controls in `frontend/src/entrypoints/task-create.tsx` and record the stable selectors/accessible names to use in tests for FR-002/FR-003
-- [ ] T003 Inspect the current `.queue-floating-bar` and `.queue-floating-bar-row` styling in `frontend/src/styles/mission-control.css` to identify the minimum liquid glass changes for FR-001/FR-006/FR-007/FR-008
+- [X] T001 Confirm active feature artifacts exist for FR-010/SC-006 in `specs/210-liquid-glass-panel/spec.md`, `specs/210-liquid-glass-panel/plan.md`, `specs/210-liquid-glass-panel/research.md`, `specs/210-liquid-glass-panel/contracts/liquid-glass-panel.md`, and `specs/210-liquid-glass-panel/quickstart.md`
+- [X] T002 Inspect the current bottom task submission controls in `frontend/src/entrypoints/task-create.tsx` and record the stable selectors/accessible names to use in tests for FR-002/FR-003
+- [X] T003 Inspect the current `.queue-floating-bar` and `.queue-floating-bar-row` styling in `frontend/src/styles/mission-control.css` to identify the minimum liquid glass changes for FR-001/FR-006/FR-007/FR-008
 
 ---
 
@@ -41,8 +41,8 @@ description: "Task list for Liquid Glass Publish Panel"
 
 **CRITICAL**: No production styling changes until the red-first test tasks and confirmation tasks are complete.
 
-- [ ] T004 Identify or add stable test access paths in `frontend/src/entrypoints/task-create.test.tsx` for the task submission controls group without changing production code behavior, covering FR-002 and the UI contract surface
-- [ ] T005 Confirm existing Create page submission request-shape tests in `frontend/src/entrypoints/task-create.test.tsx` cover repository, branch, publish mode, and create behavior for FR-004/FR-005/SC-004/SC-005
+- [X] T004 Identify or add stable test access paths in `frontend/src/entrypoints/task-create.test.tsx` for the task submission controls group without changing production code behavior, covering FR-002 and the UI contract surface
+- [X] T005 Confirm existing Create page submission request-shape tests in `frontend/src/entrypoints/task-create.test.tsx` cover repository, branch, publish mode, and create behavior for FR-004/FR-005/SC-004/SC-005
 
 **Checkpoint**: Test targets and contract boundaries are ready.
 
@@ -71,29 +71,29 @@ description: "Task list for Liquid Glass Publish Panel"
 
 ### Unit Tests (write first)
 
-- [ ] T006 [P] Add failing unit test in `frontend/src/entrypoints/task-create.test.tsx` asserting the task submission controls group exposes the liquid glass panel treatment for FR-001/FR-002/FR-009/SC-001
-- [ ] T007 [P] Add failing unit test in `frontend/src/entrypoints/task-create.test.tsx` asserting GitHub Repo, Branch, Publish Mode, and Create controls remain accessible inside the treated panel for FR-003/SC-002
-- [ ] T008 [P] Add failing unit test in `frontend/src/entrypoints/task-create.test.tsx` asserting long repository/branch values, branch status, disabled, and loading states keep the same panel target and stable control layout for FR-006/FR-007/SC-003
-- [ ] T009 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm T006-T008 fail for the expected missing liquid-glass/readability assertions before production changes
+- [X] T006 [P] Add failing unit test in `frontend/src/entrypoints/task-create.test.tsx` asserting the task submission controls group exposes the liquid glass panel treatment for FR-001/FR-002/FR-009/SC-001
+- [X] T007 [P] Add failing unit test in `frontend/src/entrypoints/task-create.test.tsx` asserting GitHub Repo, Branch, Publish Mode, and Create controls remain accessible inside the treated panel for FR-003/SC-002
+- [X] T008 [P] Add failing unit test in `frontend/src/entrypoints/task-create.test.tsx` asserting long repository/branch values, branch status, disabled, and loading states keep the same panel target and stable control layout for FR-006/FR-007/SC-003
+- [X] T009 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm T006-T008 fail for the expected missing liquid-glass/readability assertions before production changes
 
 ### Integration Tests (write first)
 
-- [ ] T010 [P] Add or extend integration-style UI test in `frontend/src/entrypoints/task-create.test.tsx` proving a valid draft submission still includes existing repository, branch, publish mode, and create semantics for FR-004/FR-005/SC-004/SC-005
-- [ ] T011 [P] Add or extend integration-style UI test in `frontend/src/entrypoints/task-create.test.tsx` proving the treated panel still contains the same controls after repository, branch, and publish mode interactions for acceptance scenarios 2, 3, and 4
-- [ ] T012 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm T010-T011 fail only where new verification expects unimplemented panel treatment, not because existing create behavior is broken
+- [X] T010 [P] Add or extend integration-style UI test in `frontend/src/entrypoints/task-create.test.tsx` proving a valid draft submission still includes existing repository, branch, publish mode, and create semantics for FR-004/FR-005/SC-004/SC-005
+- [X] T011 [P] Add or extend integration-style UI test in `frontend/src/entrypoints/task-create.test.tsx` proving the treated panel still contains the same controls after repository, branch, and publish mode interactions for acceptance scenarios 2, 3, and 4
+- [X] T012 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and confirm T010-T011 fail only where new verification expects unimplemented panel treatment, not because existing create behavior is broken
 
 ### Implementation
 
-- [ ] T013 Implement the liquid glass blur/refraction panel treatment in `frontend/src/styles/mission-control.css` for FR-001/FR-008/SC-001/SC-002 while preserving fallback readability
-- [ ] T014 Refine `.queue-floating-bar-row` responsive and stable sizing rules in `frontend/src/styles/mission-control.css` only if red-first tests or quickstart checks expose overlap, clipping, or layout shift for FR-006/FR-007/SC-003
-- [ ] T015 Update `frontend/src/entrypoints/task-create.tsx` only if tests need a stable semantic hook for the contracted task submission controls group, preserving existing control labels and submit behavior for FR-002/FR-003/FR-004/FR-005
-- [ ] T016 Update `docs/UI/CreatePage.md` only if the desired-state documentation lacks the liquid glass panel treatment requirement for FR-009/SC-006, keeping implementation notes out of canonical docs
-- [ ] T017 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and fix failures until the story-specific unit and integration-style UI tests pass for FR-001 through FR-009
+- [X] T013 Implement the liquid glass blur/refraction panel treatment in `frontend/src/styles/mission-control.css` for FR-001/FR-008/SC-001/SC-002 while preserving fallback readability
+- [X] T014 Refine `.queue-floating-bar-row` responsive and stable sizing rules in `frontend/src/styles/mission-control.css` only if red-first tests or quickstart checks expose overlap, clipping, or layout shift for FR-006/FR-007/SC-003
+- [X] T015 Update `frontend/src/entrypoints/task-create.tsx` only if tests need a stable semantic hook for the contracted task submission controls group, preserving existing control labels and submit behavior for FR-002/FR-003/FR-004/FR-005
+- [X] T016 Update `docs/UI/CreatePage.md` only if the desired-state documentation lacks the liquid glass panel treatment requirement for FR-009/SC-006, keeping implementation notes out of canonical docs
+- [X] T017 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` and fix failures until the story-specific unit and integration-style UI tests pass for FR-001 through FR-009
 
 ### Story Validation
 
 - [ ] T018 Execute the visual checks in `specs/210-liquid-glass-panel/quickstart.md` for desktop and mobile widths, light and dark appearance, long repository/branch values, branch unavailable/loading states, publish-mode constraints, readability, layout fit, and unchanged create behavior for SC-001/SC-002/SC-003/SC-004/SC-005
-- [ ] T019 Confirm the supplied Jira issue reference and original preset brief remain present in `specs/210-liquid-glass-panel/spec.md`, `specs/210-liquid-glass-panel/tasks.md`, implementation notes, and final verification evidence for FR-010/SC-006
+- [X] T019 Confirm the supplied Jira issue reference and original preset brief remain present in `specs/210-liquid-glass-panel/spec.md`, `specs/210-liquid-glass-panel/tasks.md`, implementation notes, and final verification evidence for FR-010/SC-006
 
 **Checkpoint**: The single story is implemented, covered by unit and integration-style UI tests, visually checked, and traceable to the original brief.
 
@@ -103,10 +103,10 @@ description: "Task list for Liquid Glass Publish Panel"
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [ ] T020 [P] Review `frontend/src/styles/mission-control.css` for unrelated palette drift, excessive one-off styling, and fallback readability after the liquid glass changes for FR-008
-- [ ] T021 [P] Review `frontend/src/entrypoints/task-create.test.tsx` for focused assertions that do not over-constrain implementation details beyond the UI contract in `specs/210-liquid-glass-panel/contracts/liquid-glass-panel.md`
-- [ ] T022 Run full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [ ] T023 Run `/speckit.verify` for `specs/210-liquid-glass-panel/spec.md` after implementation and tests pass
+- [X] T020 [P] Review `frontend/src/styles/mission-control.css` for unrelated palette drift, excessive one-off styling, and fallback readability after the liquid glass changes for FR-008
+- [X] T021 [P] Review `frontend/src/entrypoints/task-create.test.tsx` for focused assertions that do not over-constrain implementation details beyond the UI contract in `specs/210-liquid-glass-panel/contracts/liquid-glass-panel.md`
+- [X] T022 Run full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
+- [X] T023 Run `/speckit.verify` for `specs/210-liquid-glass-panel/spec.md` after implementation and tests pass
 
 ---
 

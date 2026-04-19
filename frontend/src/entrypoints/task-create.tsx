@@ -6536,7 +6536,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           {submitMessage || ""}
         </p>
         <div
-          className="queue-floating-bar queue-step-actions queue-step-submit-actions"
+          className="queue-floating-bar queue-floating-bar--liquid-glass queue-step-actions queue-step-submit-actions"
           role="group"
           aria-label="Task submission controls"
         >

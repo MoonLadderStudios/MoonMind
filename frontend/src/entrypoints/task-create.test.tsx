@@ -8,6 +8,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { existsSync, readFileSync } from "node:fs";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { navigateTo } from "../lib/navigation";
@@ -5627,6 +5628,45 @@ describe("Task Create Entrypoint", () => {
       addStepButton.compareDocumentPosition(createButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("applies the liquid glass treatment to the bottom submission controls without changing accessible controls", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const createButton = await screen.findByRole("button", { name: "Create" });
+    const floatingBar = createButton.closest<HTMLElement>(".queue-floating-bar");
+
+    expect(floatingBar).not.toBeNull();
+    expect(floatingBar?.classList.contains("queue-floating-bar--liquid-glass")).toBe(
+      true,
+    );
+    expect(within(floatingBar as HTMLElement).getByLabelText("GitHub Repo")).toBe(
+      screen.getByLabelText("GitHub Repo"),
+    );
+    expect(within(floatingBar as HTMLElement).getByLabelText("Branch")).toBe(
+      screen.getByLabelText("Branch"),
+    );
+    expect(within(floatingBar as HTMLElement).getByLabelText("Publish Mode")).toBe(
+      screen.getByLabelText("Publish Mode"),
+    );
+    expect(within(floatingBar as HTMLElement).getByRole("button", { name: "Create" })).toBe(
+      createButton,
+    );
+  });
+
+  it("defines liquid glass refraction styles for the Create page floating bar", () => {
+    const stylesheetPath = [
+      "frontend/src/styles/mission-control.css",
+      "styles/mission-control.css",
+    ].find((candidate) => existsSync(candidate));
+    expect(stylesheetPath).toBeTruthy();
+    const stylesheet = readFileSync(stylesheetPath as string, "utf8");
+
+    expect(stylesheet).toContain(".queue-floating-bar--liquid-glass");
+    expect(stylesheet).toContain(".queue-floating-bar--liquid-glass::before");
+    expect(stylesheet).toContain("backdrop-filter: blur(26px) saturate(1.65)");
+    expect(stylesheet).toContain("radial-gradient(");
+    expect(stylesheet).toContain("inset 0 1px 0 rgb(255 255 255 / 0.34)");
   });
 
   it("loads branches through MoonMind and submits one authored branch", async () => {

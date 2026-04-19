@@ -346,6 +346,7 @@ Rules:
   - `Publish Mode`
 - `Branch` replaces the previous `Starting Branch` label in Create-page authoring
 - the Create page exposes no `Target Branch` control
+- the Steps footer presents the repository, branch, publish mode, and submit controls as one liquid glass surface with visible blur and refractive depth while preserving readability and control boundaries
 - the branch control is a dropdown, not a free-text field
 - the branch dropdown retrieves real branch options from GitHub for the selected repository through a MoonMind API
 - the browser must never call GitHub directly; MoonMind remains the integration boundary
