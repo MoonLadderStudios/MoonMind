@@ -8,19 +8,19 @@
 ```text
 For a single-story Jira preset brief, run moonspec-specify unless an active spec.md already passes the specify gate.
 For a broad technical or declarative design, run moonspec-breakdown first, then select the recommended first generated spec unless the issue brief explicitly requires processing all specs.
-Preserve Jira issue Use liquid-glass-studio to add a liquid glass blur and refraction to the panel that holds the github repo, branch, publish mode, and create task buttons at the bottom of the create page and the original preset brief in spec.md so final verification can compare against them.
+Preserve Jira issue Use liquidGL to add a liquid glass blur and refraction to the panel that holds the github repo, branch, publish mode, and create task buttons at the bottom of the create page and the original preset brief in spec.md so final verification can compare against them.
 
 Original preset brief:
-Use liquid-glass-studio to add a liquid glass blur and refraction to the panel that holds the github repo, branch, publish mode, and create task buttons at the bottom of the create page
+Use liquidGL to add a liquid glass blur and refraction to the panel that holds the github repo, branch, publish mode, and create task buttons at the bottom of the create page
 ```
 
 ## Original Jira Preset Brief
 
-Jira issue: Use liquid-glass-studio to add a liquid glass blur and refraction to the panel that holds the github repo, branch, publish mode, and create task buttons at the bottom of the create page
+Jira issue: Use liquidGL to add a liquid glass blur and refraction to the panel that holds the github repo, branch, publish mode, and create task buttons at the bottom of the create page
 
 Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve this Jira issue reference in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
 
-Use liquid-glass-studio to add a liquid glass blur and refraction to the panel that holds the github repo, branch, publish mode, and create task buttons at the bottom of the create page
+Use liquidGL to add a liquid glass blur and refraction to the panel that holds the github repo, branch, publish mode, and create task buttons at the bottom of the create page
 
 ## Classification
 
@@ -54,7 +54,7 @@ Single-story runtime feature request. The brief contains one independently testa
 
 ## Assumptions
 
-- The requested "liquid-glass-studio" wording refers to the visual treatment already associated with MoonMind's Mission Control style direction, not a new workflow or provider integration.
+- The requested "liquidGL" wording refers to the visual treatment already associated with MoonMind's Mission Control style direction, not a new workflow or provider integration.
 - The scope is limited to the bottom Create Page panel that groups GitHub repository, branch, publish mode, and create task controls.
 - Existing Create Page validation, task submission, publish mode, branch selection, Jira import, preset, attachment, and runtime behavior remain authoritative.
 - The Jira issue reference is preserved exactly as supplied because the trusted Jira issue fetch did not provide a canonical issue key for this run.

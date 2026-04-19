@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
+import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
 import {
   buildTemporalArtifactEditUpdatePayload,
@@ -2118,7 +2119,22 @@ function TrashIcon() {
   );
 }
 
+const LIQUID_GL_OPTIONS = {
+  target: ".queue-floating-bar--liquid-glass",
+  snapshot: "body",
+  resolution: 2,
+  refraction: 0.018,
+  bevelDepth: 0.12,
+  bevelWidth: 0.16,
+  frost: 6,
+  shadow: true,
+  specular: true,
+  tilt: false,
+  magnify: 1,
+} as const;
+
 export function TaskCreatePage({ payload }: { payload: BootPayload }) {
+  useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
   const pageMode = useMemo(
     () => resolveTaskSubmitPageMode(window.location.search),
