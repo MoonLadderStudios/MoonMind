@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ import posixpath
 import re
 import shlex
 import shutil
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -425,7 +427,10 @@ class DockerCodexManagedSessionController:
             return {}
 
         support_root = Path(request.session_workspace_path) / ".moonmind"
-        socket_path = str(support_root / "github-auth.sock")
+        socket_path = self._build_github_socket_path(
+            run_id=request.session_id,
+            support_root=str(support_root),
+        )
         await self._github_auth_brokers.start(
             run_id=request.session_id,
             token=token,
@@ -444,6 +449,19 @@ class DockerCodexManagedSessionController:
         # inherited environment (`-e GITHUB_TOKEN`) so it is not rendered into
         # the docker command line or the launch payload.
         return {"GITHUB_TOKEN": token}
+
+    @staticmethod
+    def _build_github_socket_path(*, run_id: str, support_root: str | None) -> str:
+        """Keep broker sockets on a short path to avoid AF_UNIX length limits."""
+        socket_root = Path("/tmp")
+        if not socket_root.is_dir():
+            socket_root = Path(tempfile.gettempdir())
+        socket_root = socket_root / "mm-gh"
+        material = run_id
+        if support_root:
+            material = f"{Path(support_root).resolve()}::{run_id}"
+        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+        return str(socket_root / f"{digest}.sock")
 
     @staticmethod
     def _record_status_from_handle_status(status: str) -> ManagedSessionRecordStatus:

@@ -133,6 +133,19 @@ class MoonMindMergeAutomationWorkflow:
             return "merge-automation"
         return self._input.principal or self._input.parent_workflow_id
 
+    def _resolver_owner_type(self) -> str:
+        return "system" if self._principal() == "system" else "user"
+
+    def _resolver_search_attributes(self) -> dict[str, list[str]]:
+        attributes = {
+            "mm_owner_type": [self._resolver_owner_type()],
+            "mm_owner_id": [self._principal()],
+            "mm_entry": ["run"],
+        }
+        if self._input is not None:
+            attributes["mm_repo"] = [self._input.pull_request.repo]
+        return attributes
+
     async def _write_json_artifact(self, *, name: str, payload: dict[str, Any]) -> str | None:
         try:
             artifact_ref, _upload_desc = await workflow.execute_activity(
@@ -449,6 +462,7 @@ class MoonMindMergeAutomationWorkflow:
                         resolver_request,
                         id=resolver_workflow_id,
                         task_queue=WORKFLOW_TASK_QUEUE,
+                        search_attributes=self._resolver_search_attributes(),
                         cancellation_type=ChildWorkflowCancellationType.TRY_CANCEL,
                         static_summary="Resolving pull request for merge automation",
                         static_details=f"Resolve {self._input.pull_request.url}",

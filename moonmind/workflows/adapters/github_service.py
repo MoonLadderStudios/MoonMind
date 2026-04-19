@@ -510,6 +510,7 @@ class GitHubService:
             status_response.raise_for_status()
             status_data = status_response.json()
             status_state = str(status_data.get("state") or "").lower()
+            commit_statuses = status_data.get("statuses") or []
 
             checks_response = await client.get(
                 f"https://api.github.com/repos/{repo}/commits/{head_sha}/check-runs",
@@ -562,7 +563,13 @@ class GitHubService:
             if str(run.get("conclusion") or "").lower()
             not in {"", "success", "neutral", "skipped"}
         ]
-        if status_state in {"pending", "expected"} or pending_runs:
+        has_commit_statuses = bool(commit_statuses)
+        has_check_runs = bool(check_runs)
+        status_pending = status_state in {"pending", "expected"} and (
+            has_commit_statuses or not has_check_runs
+        )
+        status_failed = status_state in {"failure", "error"} and has_commit_statuses
+        if status_pending or pending_runs:
             blockers.append(
                 {
                     "kind": "checks_running",
@@ -571,7 +578,7 @@ class GitHubService:
                     "source": "github",
                 }
             )
-        elif status_state in {"failure", "error"} or failed_runs:
+        elif status_failed or failed_runs:
             blockers.append(
                 {
                     "kind": "checks_failed",
@@ -644,11 +651,14 @@ class GitHubService:
             reviewer = str(user.get("login") or review.get("user") or index)
             latest_review_states[reviewer] = str(review.get("state") or "").upper()
 
-        approved = any(state == "APPROVED" for state in latest_review_states.values())
+        review_completed = any(
+            state in {"APPROVED", "COMMENTED"}
+            for state in latest_review_states.values()
+        )
         changes_requested = any(
             state == "CHANGES_REQUESTED" for state in latest_review_states.values()
         )
-        if approved and not changes_requested:
+        if review_completed and not changes_requested:
             return {"complete": True, "blockers": []}
         if changes_requested:
             return {

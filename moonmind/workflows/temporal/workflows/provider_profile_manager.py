@@ -35,6 +35,7 @@ WORKFLOW_ID_PREFIX = "provider-profile-manager"
 VERIFY_LEASE_HOLDERS_PATCH = "auth-profile-manager-verify-leases-v1"
 DB_LEASE_PERSISTENCE_PATCH = "provider-profile-manager-db-lease-persistence-v1"
 SLOT_HANDOFF_RESERVATION_PATCH = "provider-profile-manager-slot-handoff-v1"
+REFRESH_RESTORED_PROFILES_PATCH = "provider-profile-manager-refresh-restored-profiles-v1"
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -435,6 +436,13 @@ class MoonMindProviderProfileManagerWorkflow:
                 # This looks like a fresh start after a crash - try to restore leases from DB
                 await self._load_leases_from_db()
 
+        # Refresh restored state from the authoritative DB snapshot. This keeps
+        # continued-as-new managers from routing to profiles deleted or changed
+        # since the prior history payload was created. This patch is evaluated
+        # after older startup patch markers to preserve replay order.
+        if self._profiles and workflow.patched(REFRESH_RESTORED_PROFILES_PATCH):
+            await self._load_profiles_from_db()
+
         # Main event loop: process signals, drain queue, clear cooldowns.
         while not self._shutdown_requested:
             # Drain pending requests against available profiles.
@@ -597,6 +605,7 @@ class MoonMindProviderProfileManagerWorkflow:
         for pid in list(self._profiles.keys()):
             if pid not in seen:
                 self._profiles[pid].enabled = False
+                self._profiles[pid].is_default = False
 
     @staticmethod
     def _normalize_optional_string(value: object) -> str | None:

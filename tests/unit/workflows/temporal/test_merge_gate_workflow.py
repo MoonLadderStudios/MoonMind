@@ -147,13 +147,14 @@ def test_build_resolver_run_request_uses_pr_resolver_and_publish_none() -> None:
         merge_method="squash",
     )
 
-    assert request["initialParameters"]["task"]["skill"]["id"] == "pr-resolver"
-    assert request["initialParameters"]["task"]["publish"]["mode"] == "none"
-    assert request["initialParameters"]["task"]["tool"]["name"] == "pr-resolver"
-    assert request["initialParameters"]["task"]["tool"]["type"] == "skill"
-    assert request["initialParameters"]["task"]["tool"]["version"] == "1.0"
-    assert request["initialParameters"]["publishMode"] == "none"
-    assert request["initialParameters"]["task"]["skill"]["args"]["pr"] == "341"
+    assert request["workflow_type"] == "MoonMind.Run"
+    assert request["initial_parameters"]["task"]["skill"]["id"] == "pr-resolver"
+    assert request["initial_parameters"]["task"]["publish"]["mode"] == "none"
+    assert request["initial_parameters"]["task"]["tool"]["name"] == "pr-resolver"
+    assert request["initial_parameters"]["task"]["tool"]["type"] == "skill"
+    assert request["initial_parameters"]["task"]["tool"]["version"] == "1.0"
+    assert request["initial_parameters"]["publishMode"] == "none"
+    assert request["initial_parameters"]["task"]["skill"]["args"]["pr"] == "341"
 
 
 def test_build_continue_as_new_input_preserves_compact_wait_state() -> None:

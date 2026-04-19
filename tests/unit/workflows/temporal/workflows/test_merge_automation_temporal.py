@@ -224,10 +224,11 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         "resolver:wf-parent:MoonLadderStudios/MoonMind:350:abc123:1",
         "resolver:wf-parent:MoonLadderStudios/MoonMind:350:def456:2",
     ]
-    assert child_payloads[0]["initialParameters"]["publishMode"] == "none"
-    assert child_payloads[0]["initialParameters"]["task"]["publish"]["mode"] == "none"
-    assert child_payloads[0]["initialParameters"]["task"]["skill"]["id"] == "pr-resolver"
-    assert child_payloads[0]["initialParameters"]["task"]["tool"] == {
+    assert child_payloads[0]["workflow_type"] == "MoonMind.Run"
+    assert child_payloads[0]["initial_parameters"]["publishMode"] == "none"
+    assert child_payloads[0]["initial_parameters"]["task"]["publish"]["mode"] == "none"
+    assert child_payloads[0]["initial_parameters"]["task"]["skill"]["id"] == "pr-resolver"
+    assert child_payloads[0]["initial_parameters"]["task"]["tool"] == {
         "type": "skill",
         "name": "pr-resolver",
         "version": "1.0",
@@ -289,6 +290,10 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
 
     assert result["status"] == "merged"
     assert child_kwargs["cancellation_type"] == ChildWorkflowCancellationType.TRY_CANCEL
+    search_attributes = child_kwargs["search_attributes"]
+    assert search_attributes["mm_owner_type"] == ["user"]
+    assert search_attributes["mm_owner_id"] == ["wf-parent"]
+    assert search_attributes["mm_repo"] == ["MoonLadderStudios/MoonMind"]
 
 
 @pytest.mark.asyncio

@@ -233,11 +233,13 @@ class TestProviderProfileManagerHelpers:
             cooldown_after_429_seconds=300,
             rate_limit_policy="backoff",
             enabled=True,
+            is_default=True,
         )
         # Sync with empty list — p1 should be disabled but not deleted.
         wf._apply_profile_sync([])
         assert "p1" in wf._profiles
         assert not wf._profiles["p1"].enabled
+        assert not wf._profiles["p1"].is_default
 
     def test_find_available_profile_picks_most_free(self):
         wf = self._make_workflow()
