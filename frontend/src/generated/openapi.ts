@@ -1605,7 +1605,7 @@ export interface paths {
         };
         /**
          * Task Manifest Submit Route
-         * @description Serve the React-powered manifest submit page.
+         * @description Redirect the legacy manifest submit route into the unified manifests page.
          */
         get: operations["task_manifest_submit_route_tasks_manifests_new_get"];
         put?: never;
@@ -9636,7 +9636,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/html": string;
+                    "application/json": unknown;
                 };
             };
         };

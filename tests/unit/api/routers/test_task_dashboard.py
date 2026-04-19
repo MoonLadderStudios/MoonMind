@@ -154,7 +154,7 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB")
     assert _is_allowed_path("new")
     assert _is_allowed_path("manifests")
-    assert _is_allowed_path("manifests/new")
+    assert not _is_allowed_path("manifests/new")
     assert _is_allowed_path("schedules")
     assert _is_allowed_path("settings")
     assert not _is_allowed_path("workers")
@@ -179,7 +179,6 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
 def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
     for path in (
         "/tasks/new",
-        "/tasks/manifests/new",
         "/tasks/skills",
     ):
         response = client.get(path)
@@ -248,6 +247,24 @@ def test_alias_routes_redirect_to_canonical_paths(client: TestClient) -> None:
     tasks_list_resp = client.get("/tasks/tasks-list", follow_redirects=False)
     assert tasks_list_resp.status_code == 307
     assert tasks_list_resp.headers["location"] == "/tasks/list"
+
+
+def test_legacy_manifest_submit_route_redirects_to_unified_manifests_page(
+    client: TestClient,
+) -> None:
+    response = client.get("/tasks/manifests/new", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/tasks/manifests"
+
+
+def test_navigation_exposes_single_manifest_destination(client: TestClient) -> None:
+    response = client.get("/tasks/manifests")
+
+    assert response.status_code == 200
+    assert 'href="/tasks/manifests"' in response.text
+    assert "Manifest Submit" not in response.text
+    assert 'href="/tasks/manifests/new"' not in response.text
 
 
 def test_trailing_slash_alias_routes_return_404_not_detail_page(client: TestClient) -> None:
@@ -414,7 +431,7 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     assert detail["message"] == (
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
         "/tasks/new, "
-        "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
+        "/tasks/proposals, /tasks/manifests, "
         "/tasks/schedules, /tasks/skills, or /tasks/settings."
     )
 

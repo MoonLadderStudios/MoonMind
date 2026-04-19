@@ -2,27 +2,36 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
-import { navigateTo } from '../lib/navigation';
 import { renderWithClient } from '../utils/test-utils';
-import { ManifestSubmitPage } from './manifest-submit';
+import { ManifestsPage } from './manifests';
 
-vi.mock('../lib/navigation', () => ({
-  navigateTo: vi.fn(),
-}));
-
-describe('Manifest Submit Entrypoint', () => {
+describe('Manifests Entrypoint', () => {
   const mockPayload: BootPayload = {
-    page: 'manifest-submit',
+    page: 'manifests',
     apiBase: '/api',
   };
 
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    window.history.pushState({}, 'Manifest Submit', '/tasks/manifests/new');
-    vi.mocked(navigateTo).mockReset();
+    window.history.pushState({}, 'Manifests', '/tasks/manifests');
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url === '/api/executions?entry=manifest&limit=200') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                taskId: 'mm:existing-manifest',
+                source: 'temporal',
+                sourceLabel: 'Temporal',
+                status: 'completed',
+              },
+            ],
+          }),
+        } as Response);
+      }
       if (url === '/api/manifests/nightly-docs') {
         return Promise.resolve({
           ok: true,
@@ -55,20 +64,41 @@ describe('Manifest Submit Entrypoint', () => {
     fetchSpy.mockRestore();
   });
 
-  it('upserts inline manifests through the supported manifest API and redirects to the created run', async () => {
-    renderWithClient(<ManifestSubmitPage payload={mockPayload} />);
+  it('renders manifest submission and recent runs on the same page', async () => {
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    expect(screen.getByRole('heading', { name: 'Manifests' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Run Manifest' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Recent Runs' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Run Manifest' })).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText('mm:existing-manifest')).toBeTruthy();
+    });
+  });
+
+  it('upserts inline manifests through the supported manifest API and refreshes recent runs in place', async () => {
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('mm:existing-manifest')).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText('Source Kind'), {
+      target: { value: 'inline' },
+    });
 
     fireEvent.change(screen.getByLabelText('Manifest Name'), {
       target: { value: 'nightly-docs' },
     });
-    fireEvent.change(screen.getByLabelText('Manifest Content'), {
+    fireEvent.change(screen.getByLabelText('Inline YAML'), {
       target: { value: 'kind: docs\nversion: v1\n' },
     });
     fireEvent.change(screen.getByLabelText('Action'), {
       target: { value: 'plan' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Submit Manifest' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run Manifest' }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -85,13 +115,13 @@ describe('Manifest Submit Entrypoint', () => {
       );
     });
 
-    const upsertCall = fetchSpy.mock.calls[0];
+    const upsertCall = fetchSpy.mock.calls.find(([url]) => url === '/api/manifests/nightly-docs');
     const upsertRequest = JSON.parse(String(upsertCall?.[1]?.body));
     expect(upsertRequest).toEqual({
       content: 'kind: docs\nversion: v1\n',
     });
 
-    const runCall = fetchSpy.mock.calls[1];
+    const runCall = fetchSpy.mock.calls.find(([url]) => url === '/api/manifests/nightly-docs/runs');
     const request = JSON.parse(String(runCall?.[1]?.body));
     expect(request).toMatchObject({
       action: 'plan',
@@ -99,13 +129,20 @@ describe('Manifest Submit Entrypoint', () => {
     });
 
     await waitFor(() => {
-      expect(navigateTo).toHaveBeenCalledWith('/tasks/mm:manifest-123?source=temporal');
+      expect(screen.getByText('Manifest run started: mm:manifest-123')).toBeTruthy();
     });
+    expect(fetchSpy.mock.calls.filter(([url]) => url === '/api/executions?entry=manifest&limit=200').length).toBeGreaterThanOrEqual(2);
   });
 
   it('runs registry manifests without re-uploading the manifest body', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url === '/api/executions?entry=manifest&limit=200') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      }
       if (url === '/api/manifests/docs-registry/runs') {
         return Promise.resolve({
           ok: true,
@@ -125,22 +162,15 @@ describe('Manifest Submit Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<ManifestSubmitPage payload={mockPayload} />);
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
 
-    fireEvent.change(screen.getByLabelText('Manifest Name'), {
-      target: { value: 'nightly-docs' },
-    });
-    fireEvent.change(screen.getByLabelText('Source Kind'), {
-      target: { value: 'registry' },
-    });
-    fireEvent.change(screen.getByLabelText('Registry Name'), {
+    fireEvent.change(screen.getByLabelText('Registry Manifest Name'), {
       target: { value: 'docs-registry' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Submit Manifest' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run Manifest' }));
 
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/manifests/docs-registry/runs',
         expect.objectContaining({
@@ -148,5 +178,9 @@ describe('Manifest Submit Entrypoint', () => {
         }),
       );
     });
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      '/api/manifests/docs-registry',
+      expect.objectContaining({ method: 'PUT' }),
+    );
   });
 });
