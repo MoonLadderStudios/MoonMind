@@ -376,8 +376,6 @@ h1 {
 
 .panel:has(.task-create-page) {
   max-width: min(72rem, calc(100vw - 2rem));
-  margin-left: auto;
-  margin-right: auto;
 }
 
 .panel.panel--data-wide {
