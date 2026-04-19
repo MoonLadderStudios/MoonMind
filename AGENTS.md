@@ -193,6 +193,8 @@ Key diagnostics:
 - Existing Temporal workflow history, memo/search attributes, and artifact outputs; no new persistent database tables planned (205-post-merge-jira-completion)
 - Python 3.12 with Pydantic v2 models, SQLAlchemy async ORM, Temporal Python SDK activity boundaries + Pydantic v2, SQLAlchemy async session fixtures, Temporal activity wrappers, existing agent-skill resolver/materializer services (206-agent-skill-catalog-source-policy)
 - Existing agent skill tables and artifact-backed version content; no new persistent tables planned (206-agent-skill-catalog-source-policy)
+- TypeScript/React for Mission Control UI; CSS for shared Mission Control styling; Python 3.12 remains present but is not expected in this story + React, TanStack Query, existing Create page entrypoint, existing Mission Control stylesheet, Vitest and Testing Library (210-liquid-glass-panel)
+- No new persistent storage; existing task draft and submission payload state only (210-liquid-glass-panel)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
