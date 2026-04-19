@@ -215,7 +215,7 @@
           if (!meta) return;
           this._dynJobs.delete(id);
 
-          const { x, y, w, h } = meta;
+          const { x, y } = meta;
           const gl = this.gl;
           gl.bindTexture(gl.TEXTURE_2D, this.texture);
           gl.texSubImage2D(
@@ -805,24 +805,18 @@
         const drawX = Math.round(texX);
         const drawY = Math.round(texY);
 
-        if (drawW <= 0 || drawH <= 0) return;
-
         const maxW = this.textureWidth;
         const maxH = this.textureHeight;
         let dstX = drawX;
         let dstY = drawY;
-        let srcX = 0,
-          srcY = 0,
-          updW = drawW,
+        let updW = drawW,
           updH = drawH;
 
         if (dstX < 0) {
-          srcX = -dstX;
           updW += dstX;
           dstX = 0;
         }
         if (dstY < 0) {
-          srcY = -dstY;
           updH += dstY;
           dstY = 0;
         }
@@ -991,18 +985,14 @@
           const maxH = this.textureHeight;
           let dstX = drawX;
           let dstY = drawY;
-          let srcX = 0,
-            srcY = 0,
-            updW = drawW,
+          let updW = drawW,
             updH = drawH;
 
           if (dstX < 0) {
-            srcX = -dstX;
             updW += dstX;
             dstX = 0;
           }
           if (dstY < 0) {
-            srcY = -dstY;
             updH += dstY;
             dstY = 0;
           }
@@ -1370,7 +1360,22 @@
       this._revealProgress = this.revealTypeIndex === 0 ? 1 : 0;
       this.tiltX = 0;
       this.tiltY = 0;
+      this._destroyed = false;
 
+      this._originalStyles = {
+        background: this.el.style.background,
+        backgroundColor: this.el.style.backgroundColor,
+        backgroundImage: this.el.style.backgroundImage,
+        backdropFilter: this.el.style.backdropFilter,
+        opacity: this.el.style.opacity,
+        pointerEvents: this.el.style.pointerEvents,
+        position: this.el.style.position,
+        transform: this.el.style.transform,
+        transformOrigin: this.el.style.transformOrigin,
+        transformStyle: this.el.style.transformStyle,
+        transition: this.el.style.transition,
+        webkitBackdropFilter: this.el.style.webkitBackdropFilter,
+      };
       this.originalShadow = this.el.style.boxShadow;
       this.originalOpacity = this.el.style.opacity;
       this.originalTransition = this.el.style.transition;
@@ -1801,19 +1806,19 @@
         this._smoothReset();
       };
 
-      this.el.addEventListener("mouseenter", this._onMouseEnter.bind(this), {
+      this.el.addEventListener("mouseenter", this._onMouseEnter, {
         passive: true,
       });
-      this.el.addEventListener("mousemove", this._onMouseMove.bind(this), {
+      this.el.addEventListener("mousemove", this._onMouseMove, {
         passive: true,
       });
-      this.el.addEventListener("touchstart", this._onTouchStart.bind(this), {
+      this.el.addEventListener("touchstart", this._onTouchStart, {
         passive: true,
       });
-      this.el.addEventListener("touchmove", this._onTouchMove.bind(this), {
+      this.el.addEventListener("touchmove", this._onTouchMove, {
         passive: true,
       });
-      this.el.addEventListener("touchend", this._onTouchEnd.bind(this), {
+      this.el.addEventListener("touchend", this._onTouchEnd, {
         passive: true,
       });
 
@@ -1851,12 +1856,12 @@
 
     _unbindTiltHandlers() {
       if (!this._tiltHandlersBound) return;
-      this.el.removeEventListener("mouseenter", this._onMouseEnter.bind(this));
-      this.el.removeEventListener("mousemove", this._onMouseMove.bind(this));
+      this.el.removeEventListener("mouseenter", this._onMouseEnter);
+      this.el.removeEventListener("mousemove", this._onMouseMove);
       document.removeEventListener("mousemove", this._boundCheckLeave);
-      this.el.removeEventListener("touchstart", this._onTouchStart.bind(this));
-      this.el.removeEventListener("touchmove", this._onTouchMove.bind(this));
-      this.el.removeEventListener("touchend", this._onTouchEnd.bind(this));
+      this.el.removeEventListener("touchstart", this._onTouchStart);
+      this.el.removeEventListener("touchmove", this._onTouchMove);
+      this.el.removeEventListener("touchend", this._onTouchEnd);
 
       if (this._docPointerMove) {
         document.removeEventListener("pointermove", this._docPointerMove);
@@ -1868,6 +1873,52 @@
       this.el.style.transformStyle = this._savedTransformStyle || "";
 
       this.renderer.render();
+    }
+
+    destroy() {
+      if (this._destroyed) return;
+      this._destroyed = true;
+
+      if (this._resetCleanupTimer) {
+        clearTimeout(this._resetCleanupTimer);
+        this._resetCleanupTimer = null;
+      }
+
+      this._unbindTiltHandlers();
+      this._destroyMirrorCanvas();
+      this.setShadow(false);
+
+      if (this._sizeObs) {
+        this._sizeObs.disconnect();
+        this._sizeObs = null;
+      }
+
+      if (this.renderer && Array.isArray(this.renderer.lenses)) {
+        this.renderer.lenses = this.renderer.lenses.filter((lens) => lens !== this);
+      }
+      if (this.renderer && Array.isArray(this.renderer._pendingReveal)) {
+        this.renderer._pendingReveal = this.renderer._pendingReveal.filter(
+          (lens) => lens !== this
+        );
+      }
+
+      Object.assign(this.el.style, this._originalStyles);
+      this.el.style.boxShadow = this.originalShadow;
+      this.rectPx = null;
+
+      if (
+        this.renderer &&
+        this.renderer.lenses &&
+        this.renderer.lenses.length === 0 &&
+        this.renderer._rafId
+      ) {
+        cancelAnimationFrame(this.renderer._rafId);
+        this.renderer._rafId = null;
+      }
+
+      if (this.renderer) {
+        this.renderer.render();
+      }
     }
 
     _createMirrorCanvas() {

@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { getLiquidGL, type LiquidGLOptions } from "./index";
 
 const INITIALIZED_ATTR = "data-liquid-gl-initialized";
+type LiquidGLInstance = { destroy?: () => void };
 
 type UseLiquidGLArgs = {
   enabled?: boolean;
@@ -21,6 +22,9 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       return;
     }
 
+    let initializedElement: HTMLElement | null = null;
+    let liquidGLInstances: LiquidGLInstance[] = [];
+
     const frame = window.requestAnimationFrame(() => {
       const element = document.querySelector<HTMLElement>(options.target as string);
       if (!element) {
@@ -36,9 +40,11 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       }
 
       try {
-        liquidGL(options);
+        const result = liquidGL(options);
+        liquidGLInstances = Array.isArray(result) ? result : result ? [result] : [];
         element.style.pointerEvents = "auto";
         element.setAttribute(INITIALIZED_ATTR, "true");
+        initializedElement = element;
       } catch (error) {
         console.warn("liquidGL initialization failed", error);
       }
@@ -46,6 +52,10 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
 
     return () => {
       window.cancelAnimationFrame(frame);
+      liquidGLInstances.forEach((instance) => {
+        instance.destroy?.();
+      });
+      initializedElement?.removeAttribute(INITIALIZED_ATTR);
     };
   }, [enabled, options]);
 }
