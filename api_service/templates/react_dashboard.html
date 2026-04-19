@@ -93,7 +93,7 @@
         setOpen(btn.getAttribute('aria-expanded') !== 'true');
       });
       document.addEventListener('click', (event) => {
-        if (!nav.contains(event.target) && !btn.contains(event.target)) {
+        if (btn.getAttribute('aria-expanded') === 'true' && !nav.contains(event.target) && !btn.contains(event.target)) {
           setOpen(false);
         }
       });
@@ -103,7 +103,7 @@
         }
       });
       document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') setOpen(false);
+        if (event.key === 'Escape' && btn.getAttribute('aria-expanded') === 'true') setOpen(false);
       });
     })();
   </script>

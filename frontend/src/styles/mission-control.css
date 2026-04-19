@@ -91,7 +91,7 @@ samp {
 
 /* Mission Control shell spans full width and left-aligns so content is not trapped in a narrow text column. */
 .dashboard-shell-constrained {
-  max-width: none;
+  max-width: 1800px;
   margin-left: 0;
   margin-right: 0;
   width: 100%;
