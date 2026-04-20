@@ -159,6 +159,20 @@ describe('Tasks List Entrypoint', () => {
     expect(detailsLink.closest('.queue-card-actions')).toBeTruthy();
   });
 
+  it('keeps mobile task cards constrained to the viewport width', async () => {
+    const { readFileSync } = await import('node:fs');
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      'utf8',
+    );
+
+    expect(missionControlCss).toMatch(/\.queue-card\s*\{[^}]*min-width:\s*0/s);
+    expect(missionControlCss).toMatch(/\.queue-card\s*\{[^}]*width:\s*100%/s);
+    expect(missionControlCss).toMatch(/\.queue-card-fields\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
+    expect(missionControlCss).toMatch(/@media\s*\(max-width:\s*767px\)\s*\{[\s\S]*\.queue-card-header\s*\{[^}]*flex-direction:\s*column/s);
+    expect(missionControlCss).toMatch(/\.queue-card code,\s*\.queue-card \.status\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+  });
+
   it('keeps the previous-page button enabled on empty pages after pagination', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
