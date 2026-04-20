@@ -5659,6 +5659,18 @@ describe("Task Create Entrypoint", () => {
     );
   });
 
+  it("centers the constrained create page panel with equal side margins", async () => {
+    const { readFileSync } = await import("node:fs");
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      "utf8",
+    );
+
+    expect(missionControlCss).toMatch(
+      /\.panel:has\(\.task-create-page\)\s*\{[^}]*margin-inline:\s*auto/s,
+    );
+  });
+
   it("loads branches through MoonMind and submits one authored branch", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
