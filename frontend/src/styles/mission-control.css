@@ -575,6 +575,69 @@ tbody tr:hover {
 
 .queue-table-wrapper {
   display: block;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.queue-table-wrapper table {
+  table-layout: fixed;
+  max-width: 100%;
+}
+
+.queue-table-wrapper th,
+.queue-table-wrapper td {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.queue-table-wrapper code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.queue-table-column-id {
+  width: 13%;
+}
+
+.queue-table-column-runtime {
+  width: 8%;
+}
+
+.queue-table-column-skill {
+  width: 9%;
+}
+
+.queue-table-column-repository {
+  width: 10%;
+}
+
+.queue-table-column-status {
+  width: 10%;
+}
+
+.queue-table-column-title {
+  width: 18%;
+}
+
+.queue-table-column-date {
+  width: 8%;
+}
+
+.queue-table-cell-id,
+.queue-table-cell-compact,
+.queue-table-cell-date {
+  font-size: 0.82rem;
+}
+
+.queue-table-cell-status .status {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.queue-table-cell-title {
+  font-weight: 500;
 }
 
 .queue-card-list {

@@ -462,6 +462,18 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             <>
               <div className="queue-table-wrapper" data-layout="table">
                 <table>
+                  <colgroup>
+                    <col className="queue-table-column-id" />
+                    <col className="queue-table-column-runtime" />
+                    <col className="queue-table-column-skill" />
+                    <col className="queue-table-column-repository" />
+                    <col className="queue-table-column-status" />
+                    <col className="queue-table-column-title" />
+                    <col className="queue-table-column-date" />
+                    <col className="queue-table-column-date" />
+                    <col className="queue-table-column-date" />
+                    <col className="queue-table-column-date" />
+                  </colgroup>
                   <thead>
                     <tr>
                       {TABLE_COLUMNS.map(([field, label]) => {
@@ -487,31 +499,33 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     {sortedItems.map((row) => {
                       const depsSummary = dependencyListSummary(row);
                       return (
-                      <tr key={row.taskId}>
-                        <td>
-                          <a href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}>
-                            <code>{row.taskId}</code>
-                          </a>
-                        </td>
-                        <td>{formatRuntimeLabel(row.targetRuntime)}</td>
-                        <td>{formatTaskSkills(row.taskSkills, row.targetSkill)}</td>
-                        <td>{row.repository || '—'}</td>
-                        <td>
-                          <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
-                            {row.rawState || row.state || row.status || '—'}
-                          </span>
-                        </td>
-                        <td>
-                          <div>{row.title}</div>
-                          {depsSummary ? (
-                            <div className="small">{depsSummary}</div>
-                          ) : null}
-                        </td>
-                        <td>{formatWhen(row.scheduledFor)}</td>
-                        <td>{formatWhen(row.createdAt)}</td>
-                        <td>{formatWhen(row.startedAt)}</td>
-                        <td>{formatWhen(row.closedAt)}</td>
-                      </tr>
+                        <tr key={row.taskId}>
+                          <td className="queue-table-cell-id">
+                            <a href={`/tasks/${encodeURIComponent(row.taskId)}?source=temporal`}>
+                              <code>{row.taskId}</code>
+                            </a>
+                          </td>
+                          <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
+                          <td className="queue-table-cell-compact">
+                            {formatTaskSkills(row.taskSkills, row.targetSkill)}
+                          </td>
+                          <td className="queue-table-cell-compact">{row.repository || '—'}</td>
+                          <td className="queue-table-cell-status">
+                            <span className={executionStatusPillClasses(row.rawState || row.state || row.status)}>
+                              {row.rawState || row.state || row.status || '—'}
+                            </span>
+                          </td>
+                          <td className="queue-table-cell-title">
+                            <div>{row.title}</div>
+                            {depsSummary ? (
+                              <div className="small">{depsSummary}</div>
+                            ) : null}
+                          </td>
+                          <td className="queue-table-cell-date">{formatWhen(row.scheduledFor)}</td>
+                          <td className="queue-table-cell-date">{formatWhen(row.createdAt)}</td>
+                          <td className="queue-table-cell-date">{formatWhen(row.startedAt)}</td>
+                          <td className="queue-table-cell-date">{formatWhen(row.closedAt)}</td>
+                        </tr>
                       );
                     })}
                   </tbody>
