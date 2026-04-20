@@ -116,13 +116,16 @@ describe('Mission Control shared entry', () => {
     );
   });
 
-  it('lets masthead chrome span the viewport while content stays constrained', async () => {
+  it('lets masthead content and chrome span the page while panels stay constrained', async () => {
     const { readFileSync } = await import('node:fs');
     const missionControlCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/mission-control.css`,
       'utf8',
     );
 
+    expect(missionControlCss).toMatch(
+      /\.dashboard-shell-full\s*\{[^}]*width:\s*100%/s,
+    );
     expect(missionControlCss).toMatch(
       /\.masthead::before\s*\{[^}]*left:\s*calc\(50% - 50cqw - 1rem\);[^}]*right:\s*calc\(50% - 50cqw - 1rem\);/s,
     );
