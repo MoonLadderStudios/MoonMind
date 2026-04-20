@@ -64,6 +64,7 @@ When a prerequisite fails, the dependent run records a structured `DependencyFai
 | Action | Effect |
 |---|---|
 | **Cancel** dependent run | Cancels only the dependent run. Prerequisites are untouched. |
+| **Skip dependency wait** | Manually clears the dependency gate and lets the dependent run continue even if one or more prerequisites are still unresolved. Prerequisites are untouched. |
 | **Pause** dependent run | Pauses progression through the dependency gate. Signals continue to be received and recorded; if a prerequisite failure is recorded while paused, the dependent run fails immediately. |
 | **Resume** dependent run | If all prerequisites resolved successfully while paused, proceeds normally. Any prerequisite failure recorded during pause would already have failed the dependent run before resume. |
 | Cancel/prerequisite run | **Never** affected by dependent run's state. |
@@ -74,6 +75,7 @@ When a prerequisite fails, the dependent run records a structured `DependencyFai
 - While paused, dependency outcomes continue to be recorded in local state.
 - Pausing does **not** defer dependency-failure propagation; a prerequisite failure recorded while paused fails the dependent run immediately.
 - While paused, the workflow does **not** leave the dependency gate and enter planning or execution unless it is failed by dependency resolution.
+- Skipping the dependency wait is an explicit operator override for cases where the remaining prerequisites are no longer required for reasons MoonMind cannot infer automatically. The run summary records dependency resolution as `manual_override`.
 
 ---
 
@@ -85,6 +87,7 @@ The following structured log events are emitted during dependency lifecycle:
 |---|---|---|---|
 | `dependency_gate_entered` | INFO | Workflow | `dependency_count`, `dependency_ids` |
 | `dependency_gate_satisfied` | INFO | Workflow | `dependency_count`, `wait_duration_ms` |
+| `dependency_gate_manual_override` | INFO | Workflow | `dependency_count`, `unresolved_dependency_count`, `wait_duration_ms` |
 | `dependency_gate_failed` | ERROR | Workflow | `failed_dependency_id`, `terminal_state`, `close_status`, `failure_category`, `wait_duration_ms` |
 | `dependency_signal_received` | INFO | Workflow | `prerequisite_workflow_id`, `terminal_state`, `close_status` |
 | `dependency_signal_failure` | WARNING | Workflow | `prerequisite_workflow_id`, `terminal_state`, `close_status`, `failure_category` |

@@ -3198,6 +3198,11 @@ export interface components {
              * @default false
              */
             canSendMessage: boolean;
+            /**
+             * Canskipdependencywait
+             * @default false
+             */
+            canSkipDependencyWait: boolean;
             /** Disabledreasons */
             disabledReasons?: {
                 [key: string]: string;
@@ -5159,7 +5164,7 @@ export interface components {
              * Signalname
              * @enum {string}
              */
-            signalName: "ExternalEvent" | "Pause" | "Resume" | "Approve" | "SendMessage" | "DependencyResolved";
+            signalName: "ExternalEvent" | "Pause" | "Resume" | "Approve" | "SkipDependencyWait" | "SendMessage" | "DependencyResolved";
             /** Payload */
             payload?: {
                 [key: string]: unknown;

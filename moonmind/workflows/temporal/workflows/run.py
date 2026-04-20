@@ -138,6 +138,7 @@ CLOSE_STATUS_FAILED = "failed"
 DEPENDENCY_RESOLUTION_NOT_APPLICABLE = "not_applicable"
 DEPENDENCY_RESOLUTION_SATISFIED = "satisfied"
 DEPENDENCY_RESOLUTION_FAILED = "dependency_failed"
+DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE = "manual_override"
 MERGE_AUTOMATION_SUCCESS_STATUSES = frozenset({"merged", "already_merged"})
 MERGE_AUTOMATION_FAILURE_STATUSES = frozenset({"blocked", "failed", "expired"})
 MERGE_AUTOMATION_CANCELED_STATUS = "canceled"
@@ -265,6 +266,7 @@ class MoonMindRunWorkflow:
         self._unresolved_dependency_ids: set[str] = set()
         self._dependency_wait_started_at: datetime | None = None
         self._dependency_failure: dict[str, Any] | None = None
+        self._dependency_manual_override_unresolved_count: int = 0
 
         # Artifact refs
         self._input_ref: Optional[str] = None
@@ -1279,11 +1281,23 @@ class MoonMindRunWorkflow:
                 self._dependency_failure is None
                 and self._close_status != CLOSE_STATUS_CANCELED
             ):
+                event = (
+                    "dependency_gate_manual_override"
+                    if self._dependency_resolution == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+                    else "dependency_gate_satisfied"
+                )
                 self._get_logger().info(
-                    "Dependency gate satisfied",
+                    "Dependency gate manually overridden"
+                    if event == "dependency_gate_manual_override"
+                    else "Dependency gate satisfied",
                     extra={
-                        "event": "dependency_gate_satisfied",
+                        "event": event,
                         "dependency_count": len(dependency_ids),
+                        "unresolved_dependency_count": (
+                            self._dependency_manual_override_unresolved_count
+                            if event == "dependency_gate_manual_override"
+                            else len(self._unresolved_dependency_ids)
+                        ),
                         "wait_duration_ms": self._dependency_wait_duration_ms,
                     },
                 )
@@ -4993,6 +5007,32 @@ class MoonMindRunWorkflow:
     def validate_approve(self, payload: dict[str, Any] | None = None) -> None:
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
             raise ValueError("Cannot approve a completed workflow.")
+
+    @workflow.update(name="SkipDependencyWait")
+    def skip_dependency_wait(self) -> None:
+        self._update_dependency_wait_duration()
+        self._dependency_manual_override_unresolved_count = len(
+            self._unresolved_dependency_ids
+        )
+        self._unresolved_dependency_ids.clear()
+        self._paused = False
+        self._dependency_failure = None
+        self._failed_dependency_id = None
+        self._dependency_resolution = DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+        self._summary = "Dependency wait skipped by operator."
+        self._update_search_attributes()
+        self._update_memo()
+
+    @skip_dependency_wait.validator
+    def validate_skip_dependency_wait(self) -> None:
+        if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
+            raise ValueError("Cannot skip dependency wait for a completed workflow.")
+        if self._state != STATE_WAITING_ON_DEPENDENCIES:
+            raise ValueError("Workflow is not waiting on dependencies.")
+        if self._dependency_failure is not None:
+            raise ValueError("Cannot skip dependency wait after dependency failure.")
+        if not self._unresolved_dependency_ids:
+            raise ValueError("Workflow has no unresolved dependencies.")
 
     @workflow.update(name="SendMessage")
     async def send_message(self, payload: dict[str, Any] | None = None) -> None:
