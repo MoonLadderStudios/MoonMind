@@ -1906,7 +1906,7 @@ button.secondary:hover {
 .queue-floating-bar .queue-inline-selector select,
 .queue-floating-bar .queue-inline-selector input {
   background: var(--mm-input-well);
-  border-color: rgb(255 255 255 / 0.14);
+  border-color: var(--mm-glass-edge);
   border-radius: 0.85rem;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
