@@ -1495,6 +1495,52 @@ async def test_signal_send_message_rejects_noncanonical_payload(
 
 
 @pytest.mark.asyncio
+async def test_signal_bypass_dependencies_records_operator_audit(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"task": {"dependsOn": []}},
+            idempotency_key=None,
+        )
+        service._set_state(created, MoonMindWorkflowState.WAITING_ON_DEPENDENCIES)
+        await session.commit()
+
+        await service.signal_execution(
+            workflow_id=created.workflow_id,
+            signal_name="BypassDependencies",
+            payload={"reason": "No longer needs the upstream task."},
+            payload_artifact_ref=None,
+        )
+
+        mock_client_adapter.signal_workflow.assert_awaited_once_with(
+            created.workflow_id,
+            "BypassDependencies",
+            {
+                "payload": {"reason": "No longer needs the upstream task."},
+                "payload_artifact_ref": None,
+            },
+        )
+        refreshed = await service.describe_execution(created.workflow_id)
+        assert refreshed.state is MoonMindWorkflowState.INITIALIZING
+        assert refreshed.memo["intervention_audit"][-1]["action"] == "bypass_dependencies"
+        assert (
+            refreshed.memo["intervention_audit"][-1]["detail"]
+            == "No longer needs the upstream task."
+        )
+
+
+@pytest.mark.asyncio
 async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)

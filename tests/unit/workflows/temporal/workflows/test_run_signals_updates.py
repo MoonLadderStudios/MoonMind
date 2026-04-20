@@ -494,6 +494,68 @@ async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._owner_id = "owner-1"
+    workflow_instance._owner_type = "user"
+    memo_updates: list[dict[str, object]] = []
+
+    async def fake_reconcile(dependency_ids):
+        return None
+
+    async def fake_wait_condition(predicate, timeout=None):
+        workflow_instance._bypass_dependencies(
+            {"payload": {"reason": "No longer needed."}}
+        )
+        assert predicate()
+
+    monkeypatch.setattr(workflow_instance, "_reconcile_dependencies", fake_reconcile)
+    monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
+    monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(
+        workflow,
+        "logger",
+        type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
+    )
+
+    await workflow_instance._wait_for_dependencies(["dep-1", "dep-2"])
+
+    assert workflow_instance._dependency_resolution == "bypassed"
+    assert workflow_instance._unresolved_dependency_ids == set()
+    assert workflow_instance._failed_dependency_id is None
+    assert workflow_instance._dependency_outcomes() == [
+        {
+            "workflowId": "dep-1",
+            "terminalState": "bypassed",
+            "closeStatus": None,
+            "resolvedAt": workflow_instance._dependency_outcomes_by_id["dep-1"]["resolvedAt"],
+            "failureCategory": None,
+            "message": "No longer needed.",
+        },
+        {
+            "workflowId": "dep-2",
+            "terminalState": "bypassed",
+            "closeStatus": None,
+            "resolvedAt": workflow_instance._dependency_outcomes_by_id["dep-2"]["resolvedAt"],
+            "failureCategory": None,
+            "message": "No longer needed.",
+        },
+    ]
+    assert any(
+        (memo.get("dependencies") or {}).get("resolution") == "bypassed"
+        for memo in memo_updates
+    )
+
+
+@pytest.mark.asyncio
 async def test_wait_for_dependencies_reconciles_again_after_timeout(monkeypatch):
     workflow_instance = MoonMindRunWorkflow()
     workflow_instance._owner_id = "owner-1"
