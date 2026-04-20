@@ -116,6 +116,52 @@ describe('Mission Control shared entry', () => {
     );
   });
 
+  it('defines shared visual atmosphere and glass tokens for light and dark themes', async () => {
+    const { readFileSync } = await import('node:fs');
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      'utf8',
+    );
+    const requiredTokens = [
+      '--mm-atmosphere-violet',
+      '--mm-atmosphere-cyan',
+      '--mm-atmosphere-warm',
+      '--mm-atmosphere-base',
+      '--mm-glass-fill',
+      '--mm-glass-border',
+      '--mm-glass-edge',
+      '--mm-input-well',
+      '--mm-elevation-panel',
+      '--mm-elevation-floating',
+    ];
+
+    for (const token of requiredTokens) {
+      expect(missionControlCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
+      expect(missionControlCss).toMatch(new RegExp(`\\.dark\\s*\\{[^}]*${token}:`, 's'));
+    }
+  });
+
+  it('renders Mission Control atmosphere and shared chrome from visual tokens', async () => {
+    const { readFileSync } = await import('node:fs');
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      'utf8',
+    );
+
+    expect(missionControlCss).toMatch(
+      /body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.dark body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.masthead::before\s*\{[^}]*background:\s*var\(--mm-glass-fill\);[^}]*box-shadow:\s*var\(--mm-elevation-panel\);/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.panel\s*\{[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-panel\);/s,
+    );
+  });
+
   it('lets masthead content and chrome span the page while panels stay constrained', async () => {
     const { readFileSync } = await import('node:fs');
     const missionControlCss = readFileSync(

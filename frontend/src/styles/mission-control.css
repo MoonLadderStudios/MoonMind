@@ -17,6 +17,20 @@
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
+  --mm-atmosphere-violet: radial-gradient(circle at 8% 0%, rgb(var(--mm-accent) / 0.18), transparent 44%);
+  --mm-atmosphere-cyan: radial-gradient(circle at 98% 0%, rgb(var(--mm-accent-2) / 0.14), transparent 42%);
+  --mm-atmosphere-warm: radial-gradient(circle at 50% 100%, rgb(var(--mm-accent-warm) / 0.10), transparent 52%);
+  --mm-atmosphere-base: rgb(var(--mm-bg));
+  --mm-glass-fill: rgb(var(--mm-panel) / 0.74);
+  --mm-glass-border: rgb(var(--mm-border) / 0.8);
+  --mm-glass-edge: rgb(255 255 255 / 0.34);
+  --mm-input-well: rgb(var(--mm-panel) / 0.68);
+  --mm-elevation-panel: var(--mm-shadow);
+  --mm-elevation-floating:
+    inset 0 1px 0 var(--mm-glass-edge),
+    inset 0 -1px 0 rgb(255 255 255 / 0.08),
+    0 24px 70px -28px rgb(0 0 0 / 0.58),
+    0 0 0 1px rgb(0 0 0 / 0.18);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
@@ -37,6 +51,20 @@
   --mm-danger: 251 113 133;
   --mm-action-primary: 26 153 123;
   --mm-shadow: 0 24px 52px -34px rgb(0 0 0 / 0.88);
+  --mm-atmosphere-violet: radial-gradient(circle at 12% -6%, rgb(var(--mm-accent) / 0.36), transparent 46%);
+  --mm-atmosphere-cyan: radial-gradient(circle at 95% -8%, rgb(var(--mm-accent-2) / 0.22), transparent 44%);
+  --mm-atmosphere-warm: radial-gradient(circle at 50% 112%, rgb(var(--mm-warn) / 0.18), transparent 56%);
+  --mm-atmosphere-base: rgb(var(--mm-bg));
+  --mm-glass-fill: rgb(var(--mm-panel) / 0.78);
+  --mm-glass-border: rgb(var(--mm-border) / 0.74);
+  --mm-glass-edge: rgb(255 255 255 / 0.16);
+  --mm-input-well: rgb(10 9 22 / 0.62);
+  --mm-elevation-panel: var(--mm-shadow);
+  --mm-elevation-floating:
+    inset 0 1px 0 var(--mm-glass-edge),
+    inset 0 -1px 0 rgb(255 255 255 / 0.06),
+    0 28px 76px -30px rgb(0 0 0 / 0.72),
+    0 0 0 1px rgb(255 255 255 / 0.08);
 }
 
 * {
@@ -52,11 +80,7 @@ body {
   min-height: 100vh;
   color: rgb(var(--mm-ink));
   /* Keep atmosphere consistent across routes regardless of content height. */
-  background:
-    radial-gradient(circle at 8% 0%, rgb(var(--mm-accent) / 0.18), transparent 44%),
-    radial-gradient(circle at 98% 0%, rgb(var(--mm-accent-2) / 0.14), transparent 42%),
-    radial-gradient(circle at 50% 100%, rgb(var(--mm-accent-warm) / 0.10), transparent 52%),
-    rgb(var(--mm-bg));
+  background: var(--mm-atmosphere-violet), var(--mm-atmosphere-cyan), var(--mm-atmosphere-warm), var(--mm-atmosphere-base);
   background-attachment: fixed;
   background-repeat: no-repeat;
 }
@@ -69,11 +93,7 @@ samp {
 }
 
 .dark body {
-  background:
-    radial-gradient(circle at 12% -6%, rgb(var(--mm-accent) / 0.36), transparent 46%),
-    radial-gradient(circle at 95% -8%, rgb(var(--mm-accent-2) / 0.22), transparent 44%),
-    radial-gradient(circle at 50% 112%, rgb(var(--mm-warn) / 0.18), transparent 56%),
-    rgb(var(--mm-bg));
+  background: var(--mm-atmosphere-violet), var(--mm-atmosphere-cyan), var(--mm-atmosphere-warm), var(--mm-atmosphere-base);
   background-attachment: fixed;
   background-repeat: no-repeat;
 }
@@ -124,8 +144,8 @@ samp {
   left: calc(50% - 50cqw - 1rem);
   right: calc(50% - 50cqw - 1rem);
   bottom: 0;
-  background: rgb(var(--mm-panel) / 0.74);
-  box-shadow: 0 14px 28px -24px rgb(var(--mm-ink) / 0.35);
+  background: var(--mm-glass-fill);
+  box-shadow: var(--mm-elevation-panel);
 }
 
 .masthead::after {
@@ -356,9 +376,9 @@ h1 {
   max-width: min(72rem, calc(100vw - 2rem));
   width: 100%;
   border-radius: 1rem;
-  border: 1px solid rgb(var(--mm-border) / 0.8);
-  background: rgb(var(--mm-panel) / 0.74);
-  box-shadow: var(--mm-shadow);
+  background: var(--mm-glass-fill);
+  border: 1px solid var(--mm-glass-border);
+  box-shadow: var(--mm-elevation-panel);
   padding: 1rem;
   min-height: 320px;
   animation: panel-enter 220ms cubic-bezier(.2,.8,.2,1);
@@ -1853,13 +1873,9 @@ button.secondary:hover {
   width: min(100% - 1.5rem, 64rem);
   padding: 0.55rem 0.7rem;
   border-radius: 1.5rem;
-  background: rgb(var(--mm-panel) / 0.58);
-  border: 1px solid rgb(255 255 255 / 0.2);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.34),
-    inset 0 -1px 0 rgb(255 255 255 / 0.08),
-    0 24px 70px -28px rgb(0 0 0 / 0.58),
-    0 0 0 1px rgb(0 0 0 / 0.18);
+  background: var(--mm-glass-fill);
+  border: 1px solid var(--mm-glass-border);
+  box-shadow: var(--mm-elevation-floating);
   backdrop-filter: blur(26px) saturate(1.65);
   -webkit-backdrop-filter: blur(26px) saturate(1.65);
   display: grid;
@@ -1889,7 +1905,7 @@ button.secondary:hover {
 
 .queue-floating-bar .queue-inline-selector select,
 .queue-floating-bar .queue-inline-selector input {
-  background: rgb(var(--mm-panel) / 0.55);
+  background: var(--mm-input-well);
   border-color: rgb(255 255 255 / 0.14);
   border-radius: 0.85rem;
   backdrop-filter: blur(8px);
