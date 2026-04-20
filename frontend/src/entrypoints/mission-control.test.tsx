@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from 'vitest';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient, screen, waitFor } from '../utils/test-utils';
@@ -40,7 +49,16 @@ vi.mock('@xterm/addon-fit', () => ({
 
 describe('Mission Control shared entry', () => {
   let fetchSpy: MockInstance;
+  let missionControlCss: string;
   const originalWebSocket = window.WebSocket;
+
+  beforeAll(async () => {
+    const { readFileSync } = await import('node:fs');
+    missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      'utf8',
+    );
+  });
 
   beforeEach(() => {
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
@@ -102,12 +120,6 @@ describe('Mission Control shared entry', () => {
   });
 
   it('keeps the default panel constrained and centered while data routes opt wider', async () => {
-    const { readFileSync } = await import('node:fs');
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
-      'utf8',
-    );
-
     expect(missionControlCss).toMatch(
       /\.panel\s*\{[^}]*margin-left:\s*auto;[^}]*margin-right:\s*auto;[^}]*max-width:\s*min\(72rem,\s*calc\(100vw - 2rem\)\)/s,
     );
@@ -116,13 +128,48 @@ describe('Mission Control shared entry', () => {
     );
   });
 
-  it('lets masthead content and chrome span the page while panels stay constrained', async () => {
-    const { readFileSync } = await import('node:fs');
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
-      'utf8',
-    );
+  it('defines shared visual atmosphere and glass tokens for light and dark themes', async () => {
+    const requiredTokens = [
+      '--mm-atmosphere-violet',
+      '--mm-atmosphere-cyan',
+      '--mm-atmosphere-warm',
+      '--mm-atmosphere-base',
+      '--mm-glass-fill',
+      '--mm-glass-border',
+      '--mm-glass-edge',
+      '--mm-input-well',
+      '--mm-elevation-panel',
+      '--mm-elevation-floating',
+    ];
 
+    for (const token of requiredTokens) {
+      expect(missionControlCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
+      expect(missionControlCss).toMatch(new RegExp(`\\.dark\\s*\\{[^}]*${token}:`, 's'));
+    }
+  });
+
+  it('renders Mission Control atmosphere and shared chrome from visual tokens', async () => {
+    expect(missionControlCss).toMatch(
+      /^body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/ms,
+    );
+    expect(missionControlCss).toMatch(
+      /\.dark body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.masthead::before\s*\{[^}]*background:\s*var\(--mm-glass-fill\);[^}]*box-shadow:\s*var\(--mm-elevation-panel\);/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.panel\s*\{[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-panel\);/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.queue-floating-bar\s*\{[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-floating\);/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.queue-floating-bar \.queue-inline-selector select,\s*\.queue-floating-bar \.queue-inline-selector input\s*\{[^}]*background:\s*var\(--mm-input-well\);[^}]*border-color:\s*var\(--mm-glass-edge\);/s,
+    );
+  });
+
+  it('lets masthead content and chrome span the page while panels stay constrained', async () => {
     expect(missionControlCss).toMatch(
       /\.dashboard-shell-full\s*\{[^}]*width:\s*100%/s,
     );
