@@ -275,4 +275,39 @@ describe('Tasks List Entrypoint', () => {
     expect((await screen.findAllByText('Readable runtime task'))[0]).toBeTruthy();
     expect((await screen.findAllByText('Codex CLI'))[0]).toBeTruthy();
   });
+
+  it('renders the desktop table with constrained columns for long workflow IDs', async () => {
+    const longWorkflowId =
+      'mm:run:child-workflow:01HTESTVERYVERYLONGCHILDWORKFLOWIDENTIFIERWITHOUTBREAKS';
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: longWorkflowId,
+            source: 'temporal',
+            targetRuntime: 'codex_cli',
+            targetSkill: 'pr-resolver',
+            repository: 'MoonLadderStudios/MoonMind',
+            title: 'Long child workflow id task',
+            status: 'running',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    const titleMatches = await screen.findAllByText('Long child workflow id task');
+    const table = titleMatches
+      .map((element) => element.closest('table'))
+      .find((candidate): candidate is HTMLTableElement => Boolean(candidate));
+    expect(table?.querySelectorAll('col.queue-table-column-id')).toHaveLength(1);
+    expect(table?.querySelectorAll('col.queue-table-column-date')).toHaveLength(4);
+    const idCell = table?.querySelector('td.queue-table-cell-id');
+    expect(idCell?.textContent).toBe(longWorkflowId);
+  });
 });
