@@ -208,7 +208,9 @@ def deterministic_resolver_idempotency_key(
     pr_number: int,
     head_sha: str,
 ) -> str:
-    return f"resolver:{parent_workflow_id}:{repo}:{pr_number}:{head_sha}"
+    # Keep repository identity in payload/search attributes, not workflow ids.
+    # Raw repo names contain "/" and make API/UI routing fragile.
+    return f"resolver:{parent_workflow_id}:pr:{pr_number}:head:{head_sha}"
 
 
 def build_resolver_run_request(

@@ -55,9 +55,17 @@ class _ExecuteResult:
 
 
 class _QueryHandle:
-    def __init__(self, *, progress=None, ledger=None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        progress=None,
+        ledger=None,
+        summary=None,
+        error: Exception | None = None,
+    ) -> None:
         self._progress = progress
         self._ledger = ledger
+        self._summary = summary
         self._error = error
 
     async def query(self, name: str):
@@ -67,6 +75,8 @@ class _QueryHandle:
             return self._progress
         if name == "get_step_ledger":
             return self._ledger
+        if name == "summary":
+            return self._summary
         raise AssertionError(f"Unexpected query name: {name}")
 
 
@@ -75,10 +85,22 @@ def _override_query_client(
     *,
     progress=None,
     ledger=None,
+    summary=None,
     error: Exception | None = None,
 ) -> SimpleNamespace:
-    handle = _QueryHandle(progress=progress, ledger=ledger, error=error)
-    client = SimpleNamespace(get_workflow_handle=Mock(return_value=handle))
+    handles: dict[str, _QueryHandle] = {}
+
+    def get_workflow_handle(workflow_id: str) -> _QueryHandle:
+        if workflow_id not in handles:
+            handles[workflow_id] = _QueryHandle(
+                progress=progress,
+                ledger=ledger,
+                summary=summary,
+                error=error,
+            )
+        return handles[workflow_id]
+
+    client = SimpleNamespace(get_workflow_handle=Mock(side_effect=get_workflow_handle))
     app.dependency_overrides[get_temporal_client] = lambda: client
     return client
 
@@ -2491,6 +2513,108 @@ def test_describe_execution_includes_latest_run_progress() -> None:
         "currentStepTitle": "Run tests",
         "updatedAt": "2026-04-08T12:00:00Z",
     }
+
+
+def test_describe_execution_includes_live_merge_automation_summary() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record()
+    record.parameters = {
+        "publishMode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
+    record.memo = {
+        **record.memo,
+        "merge_automation": {
+            "enabled": True,
+            "status": "awaiting_child",
+            "childWorkflowId": "merge-automation:mm:wf-1:pr:1614:head:abc123",
+        },
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        progress={
+            "total": 1,
+            "pending": 0,
+            "ready": 0,
+            "running": 0,
+            "awaitingExternal": 1,
+            "reviewing": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": None,
+            "updatedAt": "2026-04-08T12:00:00Z",
+        },
+        summary={
+            "status": "waiting",
+            "prNumber": 1614,
+            "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/1614",
+            "latestHeadSha": "abc123",
+            "blockers": [
+                {
+                    "kind": "checks_failed",
+                    "summary": "Required checks are failing.",
+                    "source": "github",
+                    "retryable": True,
+                }
+            ],
+            "resolverChildWorkflowIds": [
+                "resolver:mm:wf-1:pr:1614:head:abc123:1"
+            ],
+            "artifactRefs": {
+                "gateSnapshots": ["gate-artifact"],
+                "resolverAttempts": None,
+            },
+        },
+        ledger={
+            "workflowId": "resolver:mm:wf-1:pr:1614:head:abc123:1",
+            "runId": "resolver-run",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "node-1",
+                    "order": 1,
+                    "title": "codex_cli",
+                    "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                    "dependsOn": [],
+                    "status": "running",
+                    "attempt": 1,
+                    "updatedAt": "2026-04-08T12:00:00Z",
+                    "refs": {"taskRunId": "resolver-task-run"},
+                    "artifacts": {},
+                    "checks": [],
+                }
+            ],
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    merge_automation = response.json()["mergeAutomation"]
+    assert merge_automation["workflowId"] == "merge-automation:mm:wf-1:pr:1614:head:abc123"
+    assert merge_automation["status"] == "waiting"
+    assert merge_automation["blockers"][0]["summary"] == "Required checks are failing."
+    assert merge_automation["artifactRefs"]["gateSnapshots"] == ["gate-artifact"]
+    assert merge_automation["artifactRefs"]["resolverAttempts"] == []
+    assert merge_automation["resolverChildren"] == [
+        {
+            "workflowId": "resolver:mm:wf-1:pr:1614:head:abc123:1",
+            "taskRunId": "resolver-task-run",
+            "status": "running",
+            "detailHref": (
+                "/tasks/resolver%3Amm%3Awf-1%3Apr%3A1614%3Ahead%3Aabc123%3A1"
+                "?source=temporal"
+            ),
+        }
+    ]
 
 
 def test_describe_execution_prefers_progress_query_run_id_when_newer_latest_run() -> None:

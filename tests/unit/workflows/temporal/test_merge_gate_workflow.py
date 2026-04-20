@@ -136,7 +136,8 @@ def test_deterministic_resolver_idempotency_key_is_revision_scoped() -> None:
     )
 
     assert first != second
-    assert first == "resolver:mm:parent:MoonLadderStudios/MoonMind:341:abc123"
+    assert first == "resolver:mm:parent:pr:341:head:abc123"
+    assert "/" not in first
 
 
 def test_build_resolver_run_request_uses_pr_resolver_and_publish_none() -> None:

@@ -221,8 +221,8 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
     assert result["status"] == "merged"
     assert result["cycles"] == 2
     assert child_workflow_ids == [
-        "resolver:wf-parent:MoonLadderStudios/MoonMind:350:abc123:1",
-        "resolver:wf-parent:MoonLadderStudios/MoonMind:350:def456:2",
+        "resolver:wf-parent:pr:350:head:abc123:1",
+        "resolver:wf-parent:pr:350:head:def456:2",
     ]
     assert child_payloads[0]["workflow_type"] == "MoonMind.Run"
     assert child_payloads[0]["initial_parameters"]["publishMode"] == "none"

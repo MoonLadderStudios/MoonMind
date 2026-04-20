@@ -3516,8 +3516,12 @@ class MoonMindRunWorkflow:
         self._awaiting_external = True
         self._publish_context["mergeAutomationWorkflowId"] = workflow_id
         self._publish_context["mergeAutomationStatus"] = "awaiting_child"
-        self._update_search_attributes()
-        self._update_memo()
+        self._waiting_reason = "Waiting for PR merge automation."
+        self._attention_required = False
+        self._set_state(
+            STATE_AWAITING_EXTERNAL,
+            summary="Waiting for PR merge automation.",
+        )
         try:
             child_result = await workflow.execute_child_workflow(
                 "MoonMind.MergeAutomation",
@@ -3530,6 +3534,7 @@ class MoonMindRunWorkflow:
             )
         except CancelledError:
             self._awaiting_external = False
+            self._waiting_reason = None
             self._publish_context["mergeAutomationStatus"] = MERGE_AUTOMATION_CANCELED_STATUS
             self._publish_context["mergeAutomationSummary"] = (
                 "Merge automation canceled while parent was awaiting child workflow."
@@ -3539,11 +3544,13 @@ class MoonMindRunWorkflow:
             raise
         except Exception:
             self._awaiting_external = False
+            self._waiting_reason = None
             self._publish_context["mergeAutomationStatus"] = "failed"
             self._update_memo()
             self._update_search_attributes()
             raise
         self._awaiting_external = False
+        self._waiting_reason = None
         self._publish_context["mergeAutomationResult"] = (
             dict(child_result) if isinstance(child_result, Mapping) else child_result
         )
@@ -4811,6 +4818,9 @@ class MoonMindRunWorkflow:
             memo_dict["summary_artifact_ref"] = self._summary_ref
         if self._pull_request_url:
             memo_dict["pull_request_url"] = self._pull_request_url
+        merge_automation_summary = self._merge_automation_summary_from_context()
+        if merge_automation_summary:
+            memo_dict["merge_automation"] = merge_automation_summary
         memo_dict.update(self._dependency_metadata())
 
         try:
