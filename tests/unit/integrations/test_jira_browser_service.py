@@ -550,9 +550,44 @@ async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
     ]
     assert service.calls[2]["params"] == {
         "fields": "summary,issuetype,status,assignee,updated,project",
+        "jql": "(statusCategory != Done OR updated >= -30d)",
         "maxResults": 50,
         "startAt": 0,
     }
+
+
+async def test_board_issues_can_exclude_done_statuses_entirely() -> None:
+    service = _StubJiraBrowserService(
+        atlassian_settings=_settings(allowed_projects="ENG"),
+        feature_flags=FeatureFlagsSettings(
+            jira_create_page_enabled=True,
+            jira_create_page_recent_done_days=0,
+        ),
+        responses=[
+            {
+                "id": 42,
+                "name": "Delivery",
+                "type": "kanban",
+                "location": {"projectKey": "ENG"},
+            },
+            {
+                "columnConfig": {
+                    "columns": [
+                        {"name": "To Do", "statuses": [{"id": "1", "name": "Open"}]},
+                        {"name": "Done", "statuses": [{"id": "3", "name": "Done"}]},
+                    ]
+                }
+            },
+            {"issues": [], "total": 0},
+        ],
+    )
+
+    await service.list_issues("42")
+
+    issue_calls = [
+        call for call in service.calls if call["path"] == "agile:/board/42/issue"
+    ]
+    assert issue_calls[0]["params"]["jql"] == "statusCategory != Done"
 
 
 async def test_board_issues_filter_to_selected_project_scope() -> None:
