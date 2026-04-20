@@ -401,6 +401,69 @@ class TestProviderProfileManagerHelpers:
             "resolver-run:agent:node-1"
         ]
 
+    @pytest.mark.asyncio
+    async def test_profile_refresh_preserves_signal_that_arrives_during_activity(
+        self,
+    ):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profile_refresh_requested = True
+
+        async def fake_execute_activity(*_: object, **__: object) -> dict:
+            wf._profile_refresh_requested = True
+            return {
+                "profiles": [
+                    {
+                        "profile_id": "codex_default",
+                        "max_parallel_runs": 1,
+                        "cooldown_after_429_seconds": 900,
+                        "rate_limit_policy": "backoff",
+                        "enabled": True,
+                        "is_default": True,
+                    }
+                ]
+            }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+
+            assert await wf._load_profiles_from_db() is True
+
+        assert wf._has_db_profile_snapshot is True
+        assert wf._profile_refresh_requested is True
+
+    @pytest.mark.asyncio
+    async def test_failed_profile_refresh_keeps_known_good_snapshot_available(
+        self,
+    ):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._has_db_profile_snapshot = True
+        wf._profiles["codex_default"] = ProfileSlotState(
+            profile_id="codex_default",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=900,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+
+        async def fake_execute_activity(*_: object, **__: object) -> dict:
+            raise RuntimeError("temporary DB outage")
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+
+            assert await wf._load_profiles_from_db() is False
+
+        assert wf._has_db_profile_snapshot is True
+        assert wf._profile_refresh_requested is True
+        assert wf._profiles["codex_default"].enabled is True
+
     def test_find_available_profile_picks_most_free(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(

@@ -283,6 +283,7 @@ class MoonMindProviderProfileManagerWorkflow:
         self._shutdown_requested: bool = False
         self._has_new_events: bool = False
         self._profile_refresh_requested: bool = False
+        self._has_db_profile_snapshot: bool = False
 
     # -- Signals ---------------------------------------------------------------
 
@@ -468,7 +469,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     refresh_succeeded = await self._load_profiles_from_db(
                         prune_removed_profiles=True
                     )
-                    if not refresh_succeeded:
+                    if not refresh_succeeded and not self._has_db_profile_snapshot:
                         self._has_new_events = False
                         try:
                             await workflow.wait_condition(
@@ -477,6 +478,7 @@ class MoonMindProviderProfileManagerWorkflow:
                                 timeout=timedelta(seconds=60),
                             )
                         except TimeoutError:
+                            # Expected: retry the authoritative profile refresh on the next loop.
                             pass
                         continue
 
@@ -1029,6 +1031,7 @@ class MoonMindProviderProfileManagerWorkflow:
         self, *, prune_removed_profiles: bool = False
     ) -> bool:
         """Load provider profiles for this runtime from the database via activity."""
+        self._profile_refresh_requested = False
         try:
             result = await workflow.execute_activity(
                 "provider_profile.list",
@@ -1046,7 +1049,7 @@ class MoonMindProviderProfileManagerWorkflow:
             self._apply_profile_sync(profiles_data)
             if prune_removed_profiles:
                 self._prune_disabled_profiles_without_leases()
-            self._profile_refresh_requested = False
+            self._has_db_profile_snapshot = True
             return True
         except Exception:
             self._profile_refresh_requested = True
