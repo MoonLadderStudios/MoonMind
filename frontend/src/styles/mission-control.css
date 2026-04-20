@@ -89,11 +89,19 @@ samp {
   container-type: inline-size;
 }
 
-/* Mission Control shell spans full width and left-aligns so content is not trapped in a narrow text column. */
+/* Most pages read best in a centered working container; data-table routes opt into wide. */
 .dashboard-shell-constrained {
-  max-width: 1800px;
-  margin-left: 0;
-  margin-right: 0;
+  max-width: min(72rem, calc(100vw - 2rem));
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+
+.dashboard-shell-constrained--data-wide {
+  max-width: min(112rem, calc(100vw - 2rem));
+}
+
+.dashboard-shell-full {
   width: 100%;
 }
 
@@ -113,8 +121,8 @@ samp {
   position: absolute;
   z-index: -1;
   top: calc(-1 * var(--dashboard-pt, 0.9rem));
-  left: 0;
-  right: 0;
+  left: calc(50% - 50cqw - 1rem);
+  right: calc(50% - 50cqw - 1rem);
   bottom: 0;
   background: rgb(var(--mm-panel) / 0.74);
   box-shadow: 0 14px 28px -24px rgb(var(--mm-ink) / 0.35);
@@ -123,22 +131,10 @@ samp {
 .masthead::after {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
+  left: calc(50% - 50cqw - 1rem);
+  right: calc(50% - 50cqw - 1rem);
   bottom: 0;
   border-bottom: 1px solid rgb(var(--mm-border) / 0.7);
-}
-
-@supports (width: 1cqw) {
-  .masthead::before {
-    left: calc(50% - 50cqw - 1rem);
-    right: calc(50% - 50cqw - 1rem);
-  }
-
-  .masthead::after {
-    left: calc(50% - 50cqw - 1rem);
-    right: calc(50% - 50cqw - 1rem);
-  }
 }
 
 .masthead-brand {
@@ -355,9 +351,9 @@ h1 {
 
 .panel {
   margin-top: 1rem;
-  margin-left: 0;
-  margin-right: 0;
-  max-width: none;
+  margin-left: auto;
+  margin-right: auto;
+  max-width: min(72rem, calc(100vw - 2rem));
   width: 100%;
   border-radius: 1rem;
   border: 1px solid rgb(var(--mm-border) / 0.8);
@@ -548,6 +544,8 @@ tbody tr:hover {
 .queue-layouts {
   display: grid;
   gap: 1rem;
+  min-width: 0;
+  width: 100%;
 }
 
 .queue-results-toolbar {
@@ -575,6 +573,69 @@ tbody tr:hover {
 
 .queue-table-wrapper {
   display: block;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.queue-table-wrapper table {
+  table-layout: fixed;
+  max-width: 100%;
+}
+
+.queue-table-wrapper th,
+.queue-table-wrapper td {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.queue-table-wrapper code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.queue-table-column-id {
+  width: 13%;
+}
+
+.queue-table-column-runtime {
+  width: 8%;
+}
+
+.queue-table-column-skill {
+  width: 9%;
+}
+
+.queue-table-column-repository {
+  width: 10%;
+}
+
+.queue-table-column-status {
+  width: 10%;
+}
+
+.queue-table-column-title {
+  width: 18%;
+}
+
+.queue-table-column-date {
+  width: 8%;
+}
+
+.queue-table-cell-id,
+.queue-table-cell-compact,
+.queue-table-cell-date {
+  font-size: 0.82rem;
+}
+
+.queue-table-cell-status .status {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.queue-table-cell-title {
+  font-weight: 500;
 }
 
 .queue-card-list {
@@ -583,6 +644,8 @@ tbody tr:hover {
   padding: 0;
   display: grid;
   gap: 0.75rem;
+  min-width: 0;
+  width: 100%;
 }
 
 .queue-card {
@@ -593,6 +656,10 @@ tbody tr:hover {
   box-shadow: var(--mm-shadow);
   display: grid;
   gap: 0.85rem;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
 }
 
 @keyframes proposal-consume-flash {
@@ -627,6 +694,7 @@ tr[data-proposal-id].proposal-consuming td {
   justify-content: space-between;
   gap: 0.75rem;
   align-items: flex-start;
+  min-width: 0;
 }
 
 .queue-card-header > div:first-child {
@@ -635,6 +703,7 @@ tr[data-proposal-id].proposal-consuming td {
 
 .queue-card-header > .queue-card-status {
   flex-shrink: 0;
+  max-width: 100%;
 }
 
 .queue-card-title {
@@ -642,7 +711,7 @@ tr[data-proposal-id].proposal-consuming td {
   text-decoration: none;
   color: inherit;
   display: block;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .queue-card-title:hover {
@@ -653,7 +722,7 @@ tr[data-proposal-id].proposal-consuming td {
   margin: 0.2rem 0 0;
   color: rgb(var(--mm-muted));
   font-size: 0.85rem;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .queue-card-fields {
@@ -666,6 +735,7 @@ tr[data-proposal-id].proposal-consuming td {
 .queue-card-fields > div {
   display: grid;
   gap: 0.25rem;
+  min-width: 0;
 }
 
 .queue-card-fields dt {
@@ -679,6 +749,15 @@ tr[data-proposal-id].proposal-consuming td {
   margin: 0;
   font-size: 0.92rem;
   font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.queue-card code,
+.queue-card .status {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .queue-card-status-field {
@@ -711,6 +790,17 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @media (max-width: 767px) {
+  .queue-results-toolbar,
+  .queue-pagination {
+    align-items: stretch;
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .queue-pagination {
+    justify-content: space-between;
+  }
+
   .queue-table-wrapper {
     display: none;
   }
@@ -720,7 +810,17 @@ tr[data-proposal-id].proposal-consuming td {
   }
 
   .queue-card-fields {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .queue-card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .queue-card-header > .queue-card-status {
+    align-self: flex-start;
+    flex-shrink: 1;
   }
 }
 

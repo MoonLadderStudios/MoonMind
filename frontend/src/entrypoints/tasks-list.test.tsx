@@ -4,6 +4,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { TasksListPage } from './tasks-list';
+import '../styles/mission-control.css';
 
 describe('Tasks List Entrypoint', () => {
   const mockPayload: BootPayload = {
@@ -123,6 +124,41 @@ describe('Tasks List Entrypoint', () => {
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
   });
 
+  it('labels the lifecycle filter as status and exposes canonical status options', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    const statusFilter = screen.getByLabelText('Status') as HTMLSelectElement;
+    const options = Array.from(statusFilter.options).map((option) => option.value);
+
+    expect(options).toEqual([
+      '',
+      'scheduled',
+      'initializing',
+      'waiting_on_dependencies',
+      'planning',
+      'awaiting_slot',
+      'executing',
+      'proposals',
+      'awaiting_external',
+      'finalizing',
+      'completed',
+      'failed',
+      'canceled',
+    ]);
+    expect(options).toContain('completed');
+    expect(options).not.toContain('succeeded');
+
+    const baselineCalls = fetchSpy.mock.calls.length;
+    fireEvent.change(statusFilter, { target: { value: 'completed' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe('/api/executions?source=temporal&pageSize=50&state=completed');
+  });
+
   it('renders pagination as arrow buttons beside the table summary', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
@@ -157,6 +193,28 @@ describe('Tasks List Entrypoint', () => {
 
     expect(detailsLink.classList.contains('queue-card-details-action')).toBe(true);
     expect(detailsLink.closest('.queue-card-actions')).toBeTruthy();
+  });
+
+  it('keeps mobile task cards constrained to the viewport width', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    const detailsLink = await screen.findByRole('button', { name: 'View details' });
+    const card = detailsLink.closest<HTMLElement>('.queue-card');
+    const fields = card?.querySelector<HTMLElement>('.queue-card-fields');
+    const fieldValue = fields?.querySelector<HTMLElement>('dd');
+    const taskId = card?.querySelector<HTMLElement>('code');
+
+    expect(card).not.toBeNull();
+    expect(fields).not.toBeNull();
+    expect(fieldValue).not.toBeNull();
+    expect(taskId).not.toBeNull();
+
+    expect(getComputedStyle(card as HTMLElement).minWidth).toMatch(/^0(px)?$/);
+    expect(getComputedStyle(card as HTMLElement).width).toBe('100%');
+    expect(getComputedStyle(fields as HTMLElement).display).toBe('grid');
+    expect(getComputedStyle(fieldValue as HTMLElement).minWidth).toMatch(/^0(px)?$/);
+    expect(getComputedStyle(fieldValue as HTMLElement).overflowWrap).toBe('anywhere');
+    expect(getComputedStyle(taskId as HTMLElement).overflowWrap).toBe('anywhere');
   });
 
   it('keeps the previous-page button enabled on empty pages after pagination', async () => {
@@ -251,5 +309,40 @@ describe('Tasks List Entrypoint', () => {
 
     expect((await screen.findAllByText('Readable runtime task'))[0]).toBeTruthy();
     expect((await screen.findAllByText('Codex CLI'))[0]).toBeTruthy();
+  });
+
+  it('renders the desktop table with constrained columns for long workflow IDs', async () => {
+    const longWorkflowId =
+      'mm:run:child-workflow:01HTESTVERYVERYLONGCHILDWORKFLOWIDENTIFIERWITHOUTBREAKS';
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: longWorkflowId,
+            source: 'temporal',
+            targetRuntime: 'codex_cli',
+            targetSkill: 'pr-resolver',
+            repository: 'MoonLadderStudios/MoonMind',
+            title: 'Long child workflow id task',
+            status: 'running',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    const titleMatches = await screen.findAllByText('Long child workflow id task');
+    const table = titleMatches
+      .map((element) => element.closest('table'))
+      .find((candidate): candidate is HTMLTableElement => Boolean(candidate));
+    expect(table?.querySelectorAll('col.queue-table-column-id')).toHaveLength(1);
+    expect(table?.querySelectorAll('col.queue-table-column-date')).toHaveLength(4);
+    const idCell = table?.querySelector('td.queue-table-cell-id');
+    expect(idCell?.textContent).toBe(longWorkflowId);
   });
 });

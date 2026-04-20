@@ -88,7 +88,50 @@ describe('Mission Control shared entry', () => {
     expect(await screen.findByText(/First-Run Setup:/i)).toBeTruthy();
     await waitFor(() => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
+      expect(document.querySelector('.dashboard-shell-constrained--data-wide')).toBeTruthy();
     });
+  });
+
+  it('uses the constrained shell by default for non-table pages', async () => {
+    renderWithClient(<MissionControlApp payload={{ page: 'tasks-home', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Hello from Tasks Home!')).toBeTruthy();
+    expect(document.querySelector('.panel--data-wide')).toBeNull();
+    expect(document.querySelector('.dashboard-shell-constrained--data-wide')).toBeNull();
+    expect(document.querySelector('.dashboard-shell-constrained')).toBeTruthy();
+  });
+
+  it('keeps the default panel constrained and centered while data routes opt wider', async () => {
+    const { readFileSync } = await import('node:fs');
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      'utf8',
+    );
+
+    expect(missionControlCss).toMatch(
+      /\.panel\s*\{[^}]*margin-left:\s*auto;[^}]*margin-right:\s*auto;[^}]*max-width:\s*min\(72rem,\s*calc\(100vw - 2rem\)\)/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.panel\.panel--data-wide\s*\{[^}]*max-width:\s*min\(112rem,\s*calc\(100vw - 2rem\)\)/s,
+    );
+  });
+
+  it('lets masthead content and chrome span the page while panels stay constrained', async () => {
+    const { readFileSync } = await import('node:fs');
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      'utf8',
+    );
+
+    expect(missionControlCss).toMatch(
+      /\.dashboard-shell-full\s*\{[^}]*width:\s*100%/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.masthead::before\s*\{[^}]*left:\s*calc\(50% - 50cqw - 1rem\);[^}]*right:\s*calc\(50% - 50cqw - 1rem\);/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.masthead::after\s*\{[^}]*left:\s*calc\(50% - 50cqw - 1rem\);[^}]*right:\s*calc\(50% - 50cqw - 1rem\);/s,
+    );
   });
 
   it('renders an explicit error state for unknown pages', async () => {

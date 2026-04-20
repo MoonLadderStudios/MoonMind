@@ -20,5 +20,8 @@ export default defineConfig(({ command }) => ({
   test: {
     environment: 'jsdom',
     globals: true,
+    css: {
+      include: /mission-control\.css$/,
+    },
   },
 }));

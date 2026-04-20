@@ -66,6 +66,8 @@
     return p;
   }
 
+  const FROST_SATURATION = 6.0;
+
   /* --------------------------------------------------
    *  Shared renderer (one per page)
    * ------------------------------------------------*/
@@ -94,6 +96,12 @@
       this.scaleFactor = 1;
       this.startTime = Date.now();
       this._scrollUpdateCounter = 0;
+
+      this.blurTex = [null, null];
+      this.blurFbo = [null, null];
+      this.blurW = 0;
+      this.blurH = 0;
+      this._blurDirty = true;
 
       this._initGL();
 
@@ -227,6 +235,7 @@
             gl.UNSIGNED_BYTE,
             bmp
           );
+          this._blurDirty = true;
         };
       }
     }
@@ -245,6 +254,7 @@
         precision mediump float;
         varying vec2 v_uv;
         uniform sampler2D u_tex;
+        uniform sampler2D u_blurTex;
         uniform vec2  u_resolution;
         uniform vec2  u_textureResolution;
         uniform vec4  u_bounds;
@@ -260,6 +270,7 @@
         uniform float u_tiltX;
         uniform float u_tiltY;
         uniform float u_magnify;
+        const float FROST_SATURATION = ${FROST_SATURATION.toFixed(1)};
 
         float udRoundBox( vec2 p, vec2 b, float r ) {
           return length(max(abs(p)-b+r,0.0))-r;
@@ -303,25 +314,19 @@
           vec2 texel = 1.0 / u_textureResolution;
           vec4 refrCol;
 
-          if (u_frost > 0.0) {
-              float radius = u_frost * 4.0;
-              vec4 sum = vec4(0.0);
-              const int SAMPLES = 16;
+          vec4 sharpCol = texture2D(u_tex, sampleUV);
+          sharpCol += texture2D(u_tex, sampleUV + vec2( texel.x, 0.0));
+          sharpCol += texture2D(u_tex, sampleUV + vec2(-texel.x, 0.0));
+          sharpCol += texture2D(u_tex, sampleUV + vec2(0.0,  texel.y));
+          sharpCol += texture2D(u_tex, sampleUV + vec2(0.0, -texel.y));
+          sharpCol /= 5.0;
 
-              for (int i = 0; i < SAMPLES; i++) {
-                  float angle = random(v_uv + float(i)) * 6.283185;
-                  float dist = sqrt(random(v_uv - float(i))) * radius;
-                  vec2 offset = vec2(cos(angle), sin(angle)) * texel * dist;
-                  sum += texture2D(u_tex, sampleUV + offset);
-              }
-              refrCol = sum / float(SAMPLES);
+          if (u_frost > 0.0) {
+              vec4 blurCol = texture2D(u_blurTex, sampleUV);
+              float frostMix = clamp(u_frost / FROST_SATURATION, 0.0, 1.0);
+              refrCol = mix(sharpCol, blurCol, frostMix);
           } else {
-              refrCol = texture2D(u_tex, sampleUV);
-              refrCol += texture2D(u_tex, sampleUV + vec2( texel.x, 0.0));
-              refrCol += texture2D(u_tex, sampleUV + vec2(-texel.x, 0.0));
-              refrCol += texture2D(u_tex, sampleUV + vec2(0.0,  texel.y));
-              refrCol += texture2D(u_tex, sampleUV + vec2(0.0, -texel.y));
-              refrCol /= 5.0;
+              refrCol = sharpCol;
           }
 
           if (refrCol.a < 0.1) {
@@ -370,13 +375,15 @@
         new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
         gl.STATIC_DRAW
       );
+      this.posBuf = posBuf;
 
-      const posLoc = gl.getAttribLocation(this.program, "a_position");
-      gl.enableVertexAttribArray(posLoc);
-      gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+      this.posLoc = gl.getAttribLocation(this.program, "a_position");
+      gl.enableVertexAttribArray(this.posLoc);
+      gl.vertexAttribPointer(this.posLoc, 2, gl.FLOAT, false, 0, 0);
 
       this.u = {
         tex: gl.getUniformLocation(this.program, "u_tex"),
+        blurTex: gl.getUniformLocation(this.program, "u_blurTex"),
         res: gl.getUniformLocation(this.program, "u_resolution"),
         textureResolution: gl.getUniformLocation(
           this.program,
@@ -396,6 +403,196 @@
         tiltY: gl.getUniformLocation(this.program, "u_tiltY"),
         magnify: gl.getUniformLocation(this.program, "u_magnify"),
       };
+
+      this._initBlurProgram();
+    }
+
+    /* -----------------------------
+     *  Separable Gaussian blur program
+     *  Runs a 9-tap linear-sampled Gaussian (effective 17-tap Jimenez kernel)
+     *  into a half-resolution ping-pong pair, producing a noise-free
+     *  pre-blurred snapshot shared by every lens.
+     * ----------------------------- */
+    _initBlurProgram() {
+      const gl = this.gl;
+
+      const blurVs = `
+        attribute vec2 a_position;
+        varying vec2 v_uv;
+        void main(){
+          v_uv = (a_position + 1.0) * 0.5;
+          gl_Position = vec4(a_position, 0.0, 1.0);
+        }`;
+
+      const blurFs = `
+        precision mediump float;
+        varying vec2 v_uv;
+        uniform sampler2D u_src;
+        uniform vec2 u_texel;
+        uniform vec2 u_direction;
+        void main(){
+          vec2 off1 = u_direction * u_texel * 1.3846153846;
+          vec2 off2 = u_direction * u_texel * 3.2307692308;
+          vec4 col = texture2D(u_src, v_uv) * 0.2270270270;
+          col += texture2D(u_src, v_uv + off1) * 0.3162162162;
+          col += texture2D(u_src, v_uv - off1) * 0.3162162162;
+          col += texture2D(u_src, v_uv + off2) * 0.0702702703;
+          col += texture2D(u_src, v_uv - off2) * 0.0702702703;
+          gl_FragColor = col;
+        }`;
+
+      this.blurProgram = createProgram(gl, blurVs, blurFs);
+      if (!this.blurProgram) {
+        console.warn("liquidGL: blur program failed to compile");
+        return;
+      }
+
+      this.blurPosLoc = gl.getAttribLocation(this.blurProgram, "a_position");
+      this.blurU = {
+        src: gl.getUniformLocation(this.blurProgram, "u_src"),
+        texel: gl.getUniformLocation(this.blurProgram, "u_texel"),
+        direction: gl.getUniformLocation(this.blurProgram, "u_direction"),
+      };
+    }
+
+    /* -----------------------------
+     *  Allocate or resize the half-res ping-pong targets used by _runBlur.
+     * ----------------------------- */
+    _ensureBlurTargets(srcW, srcH) {
+      const gl = this.gl;
+      const w = Math.max(1, Math.floor(srcW / 2));
+      const h = Math.max(1, Math.floor(srcH / 2));
+      if (this.blurW === w && this.blurH === h && this.blurTex[0]) return;
+
+      this.blurW = w;
+      this.blurH = h;
+
+      for (let i = 0; i < 2; i++) {
+        if (!this.blurTex[i]) this.blurTex[i] = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this.blurTex[i]);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA,
+          w,
+          h,
+          0,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          null
+        );
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        if (!this.blurFbo[i]) this.blurFbo[i] = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurFbo[i]);
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER,
+          gl.COLOR_ATTACHMENT0,
+          gl.TEXTURE_2D,
+          this.blurTex[i],
+          0
+        );
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
+    _deleteBlurTargets() {
+      const gl = this.gl;
+      this.blurFbo.forEach((fbo) => {
+        if (fbo) gl.deleteFramebuffer(fbo);
+      });
+      this.blurTex.forEach((tex) => {
+        if (tex) gl.deleteTexture(tex);
+      });
+      this.blurFbo = [null, null];
+      this.blurTex = [null, null];
+      this.blurW = 0;
+      this.blurH = 0;
+      this._blurDirty = true;
+    }
+
+    _hasFrostLens() {
+      return this.lenses.some(
+        (lens) => ((lens.options && lens.options.frost) || 0) > 0
+      );
+    }
+
+    /* -----------------------------
+     *  Run two separable Gaussian passes at half-res.
+     *  First H pass downsamples + blurs in X from this.texture into blurTex[0];
+     *  V pass blurs blurTex[0] into blurTex[1] (the final source for lenses).
+     *  A second H+V pair widens the effective sigma for a richer frost.
+     * ----------------------------- */
+    _runBlur() {
+      const gl = this.gl;
+      if (!this.blurProgram) return;
+      if (!this.texture || !this.textureWidth || !this.textureHeight) return;
+
+      this._ensureBlurTargets(this.textureWidth, this.textureHeight);
+      if (!this.blurFbo[0] || !this.blurFbo[1]) return;
+
+      gl.useProgram(this.blurProgram);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf);
+      gl.enableVertexAttribArray(this.blurPosLoc);
+      gl.vertexAttribPointer(this.blurPosLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(this.blurU.src, 0);
+      gl.clearColor(0, 0, 0, 0);
+
+      const blurScale = 2.0;
+
+      // Pass A: horizontal, full-res source -> half-res target
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurFbo[0]);
+      gl.viewport(0, 0, this.blurW, this.blurH);
+      gl.bindTexture(gl.TEXTURE_2D, this.texture);
+      gl.uniform2f(
+        this.blurU.texel,
+        1.0 / this.textureWidth,
+        1.0 / this.textureHeight
+      );
+      gl.uniform2f(this.blurU.direction, blurScale, 0.0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      // Pass B: vertical at half-res
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurFbo[1]);
+      gl.viewport(0, 0, this.blurW, this.blurH);
+      gl.bindTexture(gl.TEXTURE_2D, this.blurTex[0]);
+      gl.uniform2f(this.blurU.texel, 1.0 / this.blurW, 1.0 / this.blurH);
+      gl.uniform2f(this.blurU.direction, 0.0, blurScale);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      // Pass C: second horizontal at half-res (widens sigma)
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurFbo[0]);
+      gl.bindTexture(gl.TEXTURE_2D, this.blurTex[1]);
+      gl.uniform2f(this.blurU.direction, blurScale, 0.0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      // Pass D: second vertical, final result lives in blurTex[1]
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurFbo[1]);
+      gl.bindTexture(gl.TEXTURE_2D, this.blurTex[0]);
+      gl.uniform2f(this.blurU.direction, 0.0, blurScale);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      // Restore state for the main program
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      if (this.blurPosLoc !== this.posLoc) {
+        gl.disableVertexAttribArray(this.blurPosLoc);
+      }
+      gl.useProgram(this.program);
+      gl.enableVertexAttribArray(this.posLoc);
+      gl.vertexAttribPointer(this.posLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.texture);
+      gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+
+      this._blurDirty = false;
     }
 
     /* ----------------------------- */
@@ -542,6 +739,7 @@
 
       this.textureWidth = srcCanvas.width;
       this.textureHeight = srcCanvas.height;
+      this._blurDirty = true;
 
       this.render();
 
@@ -591,6 +789,17 @@
       this._updateDynamicVideos();
 
       this._updateDynamicNodes();
+
+      const needsBlur = this._hasFrostLens();
+      if (needsBlur && this._blurDirty) {
+        this._runBlur();
+      }
+      if (needsBlur && this.blurTex[1]) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, this.blurTex[1]);
+        gl.uniform1i(this.u.blurTex, 1);
+        gl.activeTexture(gl.TEXTURE0);
+      }
 
       this.lenses.forEach((lens) => {
         lens.updateMetrics();
@@ -841,6 +1050,7 @@
           gl.UNSIGNED_BYTE,
           this._tmpCanvas
         );
+        this._blurDirty = true;
       });
     }
 
@@ -953,6 +1163,7 @@
                 gl.UNSIGNED_BYTE,
                 eraseCanvas
               );
+              this._blurDirty = true;
             }
           }
 
@@ -1052,6 +1263,7 @@
             gl.UNSIGNED_BYTE,
             compositeCanvas
           );
+          this._blurDirty = true;
 
           if (this._workerEnabled && meta._heavyAnim) {
             const jobId = `${Date.now()}_${Math.random()}`;
@@ -1909,11 +2121,13 @@
       if (
         this.renderer &&
         this.renderer.lenses &&
-        this.renderer.lenses.length === 0 &&
-        this.renderer._rafId
+        this.renderer.lenses.length === 0
       ) {
-        cancelAnimationFrame(this.renderer._rafId);
-        this.renderer._rafId = null;
+        if (this.renderer._rafId) {
+          cancelAnimationFrame(this.renderer._rafId);
+          this.renderer._rafId = null;
+        }
+        this.renderer._deleteBlurTargets();
       }
 
       if (this.renderer) {
