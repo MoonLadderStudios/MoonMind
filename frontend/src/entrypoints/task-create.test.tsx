@@ -7,8 +7,6 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
@@ -5661,9 +5659,10 @@ describe("Task Create Entrypoint", () => {
     );
   });
 
-  it("centers the constrained create page panel with equal side margins", () => {
+  it("centers the constrained create page panel with equal side margins", async () => {
+    const { readFileSync } = await import("node:fs");
     const missionControlCss = readFileSync(
-      resolve(process.cwd(), "frontend/src/styles/mission-control.css"),
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
       "utf8",
     );
 
