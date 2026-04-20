@@ -3322,6 +3322,84 @@ export interface components {
             refreshedAt?: string | null;
         };
         /**
+         * ExecutionMergeAutomationArtifactRefsModel
+         * @description Artifact refs produced by merge automation.
+         */
+        ExecutionMergeAutomationArtifactRefsModel: {
+            /** Summary */
+            summary?: string | null;
+            /** Gatesnapshots */
+            gateSnapshots?: string[];
+            /** Resolverattempts */
+            resolverAttempts?: string[];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ExecutionMergeAutomationBlockerModel
+         * @description Operator-visible merge automation blocker.
+         */
+        ExecutionMergeAutomationBlockerModel: {
+            /** Kind */
+            kind?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Retryable */
+            retryable?: boolean | null;
+            /** Source */
+            source?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ExecutionMergeAutomationModel
+         * @description Live or terminal merge automation visibility for an execution.
+         */
+        ExecutionMergeAutomationModel: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Workflowid */
+            workflowId?: string | null;
+            /** Childworkflowid */
+            childWorkflowId?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Prnumber */
+            prNumber?: number | string | null;
+            /** Prurl */
+            prUrl?: string | null;
+            /** Latestheadsha */
+            latestHeadSha?: string | null;
+            /** Cycles */
+            cycles?: number | string | null;
+            /** Blockers */
+            blockers?: components["schemas"]["ExecutionMergeAutomationBlockerModel"][];
+            artifactRefs?: components["schemas"]["ExecutionMergeAutomationArtifactRefsModel"] | null;
+            /** Resolverchildworkflowids */
+            resolverChildWorkflowIds?: string[];
+            /** Resolverchildren */
+            resolverChildren?: components["schemas"]["ExecutionMergeAutomationResolverChildModel"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ExecutionMergeAutomationResolverChildModel
+         * @description Resolver child workflow reference plus observability binding when known.
+         */
+        ExecutionMergeAutomationResolverChildModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Taskrunid */
+            taskRunId?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Detailhref */
+            detailHref?: string | null;
+        };
+        /**
          * ExecutionModel
          * @description Materialized execution view returned by lifecycle APIs.
          */
@@ -3450,6 +3528,7 @@ export interface components {
              * @default false
              */
             mergeAutomationSelected: boolean;
+            mergeAutomation?: components["schemas"]["ExecutionMergeAutomationModel"] | null;
             /** Resolvedskillsetref */
             resolvedSkillsetRef?: string | null;
             /** Taskskills */
