@@ -65,7 +65,6 @@ const ExecutionRowSchema = z
     rawState: z.string().optional(),
     temporalStatus: z.string().optional(),
     scheduledFor: z.string().nullable().optional(),
-    startedAt: z.string().nullable().optional(),
     closedAt: z.string().nullable().optional(),
     createdAt: z.string(),
     entry: z.string().optional(),
