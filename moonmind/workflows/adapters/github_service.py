@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -510,6 +510,7 @@ class GitHubService:
             status_response.raise_for_status()
             status_data = status_response.json()
             status_state = str(status_data.get("state") or "").lower()
+            commit_statuses = status_data.get("statuses") or []
 
             checks_response = await client.get(
                 f"https://api.github.com/repos/{repo}/commits/{head_sha}/check-runs",
@@ -562,7 +563,15 @@ class GitHubService:
             if str(run.get("conclusion") or "").lower()
             not in {"", "success", "neutral", "skipped"}
         ]
-        if status_state in {"pending", "expected"} or pending_runs:
+        has_commit_statuses = bool(commit_statuses)
+        has_check_runs = bool(check_runs)
+        status_pending = status_state in {"pending", "expected"} and (
+            has_commit_statuses or not has_check_runs
+        )
+        status_failed = status_state in {"failure", "error"} and (
+            has_commit_statuses or not has_check_runs
+        )
+        if status_pending or pending_runs:
             blockers.append(
                 {
                     "kind": "checks_running",
@@ -571,7 +580,7 @@ class GitHubService:
                     "source": "github",
                 }
             )
-        elif status_state in {"failure", "error"} or failed_runs:
+        elif status_failed or failed_runs:
             blockers.append(
                 {
                     "kind": "checks_failed",
@@ -633,7 +642,7 @@ class GitHubService:
                 ],
             }
 
-        latest_review_states: dict[str, str] = {}
+        latest_review_states: dict[str, tuple[str, bool]] = {}
         review_items = [
             (str(review.get("submitted_at") or ""), index, review)
             for index, review in enumerate(reviews)
@@ -642,13 +651,20 @@ class GitHubService:
         for _submitted_at, index, review in sorted(review_items):
             user = review.get("user") if isinstance(review.get("user"), dict) else {}
             reviewer = str(user.get("login") or review.get("user") or index)
-            latest_review_states[reviewer] = str(review.get("state") or "").upper()
+            latest_review_states[reviewer] = (
+                str(review.get("state") or "").upper(),
+                self._is_trusted_automation_reviewer(reviewer, user),
+            )
 
-        approved = any(state == "APPROVED" for state in latest_review_states.values())
-        changes_requested = any(
-            state == "CHANGES_REQUESTED" for state in latest_review_states.values()
+        review_completed = any(
+            state == "APPROVED" or (state == "COMMENTED" and trusted_automation)
+            for state, trusted_automation in latest_review_states.values()
         )
-        if approved and not changes_requested:
+        changes_requested = any(
+            state == "CHANGES_REQUESTED"
+            for state, _trusted_automation in latest_review_states.values()
+        )
+        if review_completed and not changes_requested:
             return {"complete": True, "blockers": []}
         if changes_requested:
             return {
@@ -673,6 +689,24 @@ class GitHubService:
                 }
             ],
         }
+
+    @staticmethod
+    def _is_trusted_automation_reviewer(
+        reviewer: str,
+        user: Mapping[str, Any],
+    ) -> bool:
+        login = reviewer.strip().lower()
+        user_type = str(user.get("type") or "").strip().lower()
+        return (
+            user_type == "bot"
+            or login.endswith("[bot]")
+            or login
+            in {
+                "chatgpt-codex-connector",
+                "gemini-code-assist",
+                "github-actions",
+            }
+        )
 
 
 __all__ = [

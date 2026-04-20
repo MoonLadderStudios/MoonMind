@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ import posixpath
 import re
 import shlex
 import shutil
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -425,7 +427,13 @@ class DockerCodexManagedSessionController:
             return {}
 
         support_root = Path(request.session_workspace_path) / ".moonmind"
-        socket_path = str(support_root / "github-auth.sock")
+        socket_path = self._build_github_socket_path(
+            run_id=request.session_id,
+            support_root=str(support_root),
+            socket_root=str(Path(self._workspace_root) / ".mm-gh"),
+        )
+        socket_dir = Path(socket_path).parent
+        socket_dir.mkdir(parents=True, exist_ok=True)
         await self._github_auth_brokers.start(
             run_id=request.session_id,
             token=token,
@@ -437,6 +445,7 @@ class DockerCodexManagedSessionController:
             support_root=support_root,
             github_socket_path=socket_path,
         )
+        touched_paths.append(socket_dir)
         touched_paths.append(Path(socket_path))
         self._normalize_container_path_owners(touched_paths)
         # Codex shell tools can invoke nested `bash -lc` commands that bypass
@@ -444,6 +453,28 @@ class DockerCodexManagedSessionController:
         # inherited environment (`-e GITHUB_TOKEN`) so it is not rendered into
         # the docker command line or the launch payload.
         return {"GITHUB_TOKEN": token}
+
+    @staticmethod
+    def _build_github_socket_path(
+        *,
+        run_id: str,
+        support_root: str | None,
+        socket_root: str | None = None,
+    ) -> str:
+        """Keep broker sockets on a short path to avoid AF_UNIX length limits."""
+        resolved_socket_root = Path(socket_root) if socket_root else Path("/tmp")
+        if not resolved_socket_root.is_dir() and socket_root is None:
+            resolved_socket_root = Path(tempfile.gettempdir())
+        resolved_socket_root = (
+            resolved_socket_root / "mm-gh"
+            if socket_root is None
+            else resolved_socket_root
+        )
+        material = run_id
+        if support_root:
+            material = f"{Path(support_root).resolve()}::{run_id}"
+        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+        return str(resolved_socket_root / f"{digest}.sock")
 
     @staticmethod
     def _record_status_from_handle_status(status: str) -> ManagedSessionRecordStatus:

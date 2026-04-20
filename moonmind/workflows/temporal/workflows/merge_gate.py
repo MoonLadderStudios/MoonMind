@@ -234,9 +234,9 @@ def build_resolver_run_request(
         args["jiraIssueKey"] = jira_issue_key
     title = f"Resolve PR #{pr.number}"
     return {
-        "workflowType": "MoonMind.Run",
+        "workflow_type": "MoonMind.Run",
         "title": title,
-        "initialParameters": {
+        "initial_parameters": {
             "repo": pr.repo,
             "repository": pr.repo,
             "publishMode": "none",
