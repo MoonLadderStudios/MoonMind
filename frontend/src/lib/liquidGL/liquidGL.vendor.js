@@ -66,6 +66,8 @@
     return p;
   }
 
+  const FROST_SATURATION = 6.0;
+
   /* --------------------------------------------------
    *  Shared renderer (one per page)
    * ------------------------------------------------*/
@@ -268,6 +270,7 @@
         uniform float u_tiltX;
         uniform float u_tiltY;
         uniform float u_magnify;
+        const float FROST_SATURATION = ${FROST_SATURATION.toFixed(1)};
 
         float udRoundBox( vec2 p, vec2 b, float r ) {
           return length(max(abs(p)-b+r,0.0))-r;
@@ -320,7 +323,7 @@
 
           if (u_frost > 0.0) {
               vec4 blurCol = texture2D(u_blurTex, sampleUV);
-              float frostMix = clamp(u_frost / 6.0, 0.0, 1.0);
+              float frostMix = clamp(u_frost / FROST_SATURATION, 0.0, 1.0);
               refrCol = mix(sharpCol, blurCol, frostMix);
           } else {
               refrCol = sharpCol;
@@ -494,6 +497,27 @@
         );
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
+    _deleteBlurTargets() {
+      const gl = this.gl;
+      this.blurFbo.forEach((fbo) => {
+        if (fbo) gl.deleteFramebuffer(fbo);
+      });
+      this.blurTex.forEach((tex) => {
+        if (tex) gl.deleteTexture(tex);
+      });
+      this.blurFbo = [null, null];
+      this.blurTex = [null, null];
+      this.blurW = 0;
+      this.blurH = 0;
+      this._blurDirty = true;
+    }
+
+    _hasFrostLens() {
+      return this.lenses.some(
+        (lens) => ((lens.options && lens.options.frost) || 0) > 0
+      );
     }
 
     /* -----------------------------
@@ -766,8 +790,15 @@
 
       this._updateDynamicNodes();
 
-      if (this._blurDirty) {
+      const needsBlur = this._hasFrostLens();
+      if (needsBlur && this._blurDirty) {
         this._runBlur();
+      }
+      if (needsBlur && this.blurTex[1]) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, this.blurTex[1]);
+        gl.uniform1i(this.u.blurTex, 1);
+        gl.activeTexture(gl.TEXTURE0);
       }
 
       this.lenses.forEach((lens) => {
@@ -845,13 +876,6 @@
 
       gl.viewport(x, y, w, h);
       gl.uniform2f(this.u.res, w, h);
-
-      if (this.blurTex[1]) {
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, this.blurTex[1]);
-        gl.uniform1i(this.u.blurTex, 1);
-        gl.activeTexture(gl.TEXTURE0);
-      }
 
       const docX = rect.left - this.snapshotTarget.getBoundingClientRect().left;
       const docY = rect.top - this.snapshotTarget.getBoundingClientRect().top;
@@ -2097,11 +2121,13 @@
       if (
         this.renderer &&
         this.renderer.lenses &&
-        this.renderer.lenses.length === 0 &&
-        this.renderer._rafId
+        this.renderer.lenses.length === 0
       ) {
-        cancelAnimationFrame(this.renderer._rafId);
-        this.renderer._rafId = null;
+        if (this.renderer._rafId) {
+          cancelAnimationFrame(this.renderer._rafId);
+          this.renderer._rafId = null;
+        }
+        this.renderer._deleteBlurTargets();
       }
 
       if (this.renderer) {
