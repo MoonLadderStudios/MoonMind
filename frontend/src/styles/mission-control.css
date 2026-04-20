@@ -652,7 +652,7 @@ tr[data-proposal-id].proposal-consuming td {
   text-decoration: none;
   color: inherit;
   display: block;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .queue-card-title:hover {
@@ -664,7 +664,6 @@ tr[data-proposal-id].proposal-consuming td {
   color: rgb(var(--mm-muted));
   font-size: 0.85rem;
   overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 .queue-card-fields {
@@ -693,7 +692,6 @@ tr[data-proposal-id].proposal-consuming td {
   font-weight: 500;
   min-width: 0;
   overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 .queue-card code,

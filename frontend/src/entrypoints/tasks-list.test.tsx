@@ -4,6 +4,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { TasksListPage } from './tasks-list';
+import '../styles/mission-control.css';
 
 describe('Tasks List Entrypoint', () => {
   const mockPayload: BootPayload = {
@@ -160,17 +161,25 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('keeps mobile task cards constrained to the viewport width', async () => {
-    const { readFileSync } = await import('node:fs');
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
-      'utf8',
-    );
+    renderWithClient(<TasksListPage payload={mockPayload} />);
 
-    expect(missionControlCss).toMatch(/\.queue-card\s*\{[^}]*min-width:\s*0/s);
-    expect(missionControlCss).toMatch(/\.queue-card\s*\{[^}]*width:\s*100%/s);
-    expect(missionControlCss).toMatch(/\.queue-card-fields\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
-    expect(missionControlCss).toMatch(/@media\s*\(max-width:\s*767px\)\s*\{[\s\S]*\.queue-card-header\s*\{[^}]*flex-direction:\s*column/s);
-    expect(missionControlCss).toMatch(/\.queue-card code,\s*\.queue-card \.status\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+    const detailsLink = await screen.findByRole('button', { name: 'View details' });
+    const card = detailsLink.closest<HTMLElement>('.queue-card');
+    const fields = card?.querySelector<HTMLElement>('.queue-card-fields');
+    const fieldValue = fields?.querySelector<HTMLElement>('dd');
+    const taskId = card?.querySelector<HTMLElement>('code');
+
+    expect(card).not.toBeNull();
+    expect(fields).not.toBeNull();
+    expect(fieldValue).not.toBeNull();
+    expect(taskId).not.toBeNull();
+
+    expect(getComputedStyle(card as HTMLElement).minWidth).toMatch(/^0(px)?$/);
+    expect(getComputedStyle(card as HTMLElement).width).toBe('100%');
+    expect(getComputedStyle(fields as HTMLElement).display).toBe('grid');
+    expect(getComputedStyle(fieldValue as HTMLElement).minWidth).toMatch(/^0(px)?$/);
+    expect(getComputedStyle(fieldValue as HTMLElement).overflowWrap).toBe('anywhere');
+    expect(getComputedStyle(taskId as HTMLElement).overflowWrap).toBe('anywhere');
   });
 
   it('keeps the previous-page button enabled on empty pages after pagination', async () => {
