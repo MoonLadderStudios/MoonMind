@@ -3212,13 +3212,13 @@ describe("Task Create Entrypoint", () => {
           proposeTasks: true,
           tool: {
             type: "skill",
-            name: "speckit-implement",
+            name: "speckit-demo",
           },
           skill: {
-            id: "speckit-implement",
+            id: "speckit-demo",
           },
           skills: {
-            include: [{ name: "speckit-implement" }],
+            include: [{ name: "speckit-demo" }],
           },
           runtime: {
             mode: "gemini_cli",
@@ -6402,14 +6402,14 @@ describe("Task Create Entrypoint", () => {
     const request = JSON.parse(String(executionCall?.[1]?.body));
     expect(request.payload.task.instructions).toBe('Task Create');
     // Address: Copilot r3034495957 — assert skills and derived title in preset-submit.
-    // The first template step has an explicit skill (speckit-clarify), so effectiveSkillId
-    // stays as that explicit skill rather than the template slug.
+    // The applied preset slug is the workflow-level primary skill even when
+    // the first preset step has its own explicit execution skill.
     expect(request.payload.task.skills).toEqual({
-      include: [{ name: "speckit-clarify" }],
+      include: [{ name: "speckit-demo" }],
     });
     expect(request.payload.task.title).toBe('Task Create');
-    expect(request.payload.task.tool.name).toBe('speckit-clarify');
-    expect(request.payload.task.skill.id).toBe('speckit-clarify');
+    expect(request.payload.task.tool.name).toBe('speckit-demo');
+    expect(request.payload.task.skill.id).toBe('speckit-demo');
     expect(request.payload.task.steps).toEqual([
       {
         id: "tpl:speckit-demo:1.2.3:01",

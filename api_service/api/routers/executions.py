@@ -287,6 +287,35 @@ def _skill_selector_names(raw: object | None) -> list[str] | None:
     return _dedupe_non_blank(names) or None
 
 
+def _task_template_primary_skill_name(task_payload: Mapping[str, Any]) -> str | None:
+    task_template = task_payload.get("taskTemplate") or task_payload.get(
+        "task_template"
+    )
+    if isinstance(task_template, Mapping):
+        candidate = _coerce_temporal_scalar(
+            task_template.get("slug")
+            or task_template.get("name")
+            or task_template.get("id")
+        )
+        if candidate:
+            return candidate
+
+    applied_templates = task_payload.get("appliedStepTemplates") or task_payload.get(
+        "applied_step_templates"
+    )
+    if isinstance(applied_templates, list):
+        for item in reversed(applied_templates):
+            if not isinstance(item, Mapping):
+                continue
+            candidate = _coerce_temporal_scalar(
+                item.get("slug") or item.get("name") or item.get("id")
+            )
+            if candidate:
+                return candidate
+
+    return None
+
+
 def _first_mapping(*candidates: object | None) -> Mapping[str, Any]:
     for candidate in candidates:
         if isinstance(candidate, Mapping):
@@ -852,14 +881,33 @@ def _serialize_execution(
         ) or None
 
     task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
-    tool_params = task_params.get("tool") if isinstance(task_params.get("tool"), dict) else {}
-    skill_params = task_params.get("skill") if isinstance(task_params.get("skill"), dict) else {}
+    tool_params = (
+        task_params.get("tool") if isinstance(task_params.get("tool"), dict) else {}
+    )
+    skill_params = (
+        task_params.get("skill") if isinstance(task_params.get("skill"), dict) else {}
+    )
     target_skill = (
-        str(tool_params.get("name") or skill_params.get("name") or "").strip() or None
+        str(
+            tool_params.get("name")
+            or tool_params.get("id")
+            or skill_params.get("name")
+            or skill_params.get("id")
+            or ""
+        ).strip()
+        or None
     )
     if not target_skill:
+        target_skill = _task_template_primary_skill_name(task_params)
+    if not target_skill:
         target_skill = (
-            _coerce_temporal_scalar(search_attributes.get("mm_target_skill"))
+            _coerce_temporal_scalar(params.get("targetSkill"))
+            or _coerce_temporal_scalar(params.get("target_skill"))
+            or _coerce_temporal_scalar(params.get("skillId"))
+            or _coerce_temporal_scalar(params.get("skill"))
+            or _coerce_temporal_scalar(params.get("selectedSkill"))
+            or _coerce_temporal_scalar(params.get("selected_skill"))
+            or _coerce_temporal_scalar(search_attributes.get("mm_target_skill"))
             or _coerce_temporal_scalar(search_attributes.get("mm_skill_id"))
             or _coerce_temporal_scalar(search_attributes.get("mm_skill"))
             or _coerce_temporal_scalar(search_attributes.get("skillId"))
@@ -938,9 +986,20 @@ def _serialize_execution(
         else []
     )
 
-    resolved_skillset_ref = str(params.get("resolvedSkillsetRef") or params.get("resolved_skillset_ref") or "").strip() or None
-    
+    resolved_skillset_ref = (
+        str(
+            params.get("resolvedSkillsetRef")
+            or params.get("resolved_skillset_ref")
+            or ""
+        ).strip()
+        or None
+    )
+
     task_skills = _skill_selector_names(task_payload.get("skills"))
+    if task_skills is None:
+        template_primary_skill = _task_template_primary_skill_name(task_payload)
+        if template_primary_skill:
+            task_skills = [template_primary_skill]
     skill_runtime = _skill_runtime_evidence(
         params=params,
         task_payload=task_payload,
