@@ -1,0 +1,770 @@
+{
+  "source": {
+    "title": "Mission Control Design System",
+    "path": "docs/UI/MissionControlDesignSystem.md",
+    "referencePath": "docs/UI/MissionControlDesignSystem.md",
+    "originalDesignText": "# Mission Control Design System\nStatus: Active  \nOwners: MoonMind Engineering  \nLast updated: 2026-04-20\n\n## 1. Purpose\n\nDefine the desired-state design system for the MoonMind Mission Control UI: visual language, design tokens, surface hierarchy, layout rules, motion, component behavior, and page composition. This document is declarative. It describes what Mission Control should look and feel like when it is correct.\n\nFor route ownership, runtime config, API boundaries, and task-oriented architecture, see `docs/UI/MissionControlArchitecture.md`.\n\n---\n\n## 2. Product expression\n\nMission Control should feel like **mission control with nightlife lighting**:\n\n- **Space-program structure** provides the backbone: disciplined layout, telemetry-like metadata, modular panels, strong hierarchy, and operational readability.\n- **Liquid glass** provides the elevated control language: floating rails, sticky utilities, overlays, nav emphasis, and premium interaction surfaces.\n- **Synthwave lighting** provides the atmosphere: purple-forward identity, magenta/violet/cyan bloom, horizon gradients, and restrained energy.\n- **Cyberpunk details** provide edge in small doses: segmented corners, bracketed labels, scanner hovers, warning accents, and high-priority telemetry.\n\nMission Control is **not** a novelty sci-fi HUD. It is a professional operator console. Readability, hierarchy, and scan speed take priority over spectacle.\n\n---\n\n## 3. Design principles\n\n### 3.1 Functional first\n\nDense data, forms, logs, and tables must stay clear and readable. Decorative effects are only correct when they improve hierarchy and perceived quality without reducing comprehension.\n\n### 3.2 Matte for content, glass for controls\n\nMission Control should not make every surface translucent. Dense reading and editing regions stay grounded. Floating, sticky, or elevated controls may use glass.\n\n### 3.3 One hero effect per page\n\nEach page should have a single primary spectacle or premium-effect surface. Examples:\n\n- `/tasks/list`: control deck or sticky table/header treatment\n- `/tasks/new`: floating launch rail at the bottom\n- detail pages: a single elevated observability or action shell\n\nThe rest of the page should support that focal effect rather than compete with it.\n\n### 3.4 Brighten on hover, do not darken\n\nInteractive elements should feel more alive on hover. Hover states should generally increase brightness, border light, or glow rather than collapsing into darker states.\n\n### 3.5 Motion should be restrained and intentional\n\nUse short, premium transitions and small scale changes. Avoid bouncy motion, large translations, or constant shimmer.\n\n---\n\n## 4. Surface hierarchy\n\nMission Control uses a strict surface hierarchy.\n\n| Surface type | Use | Visual posture |\n| --- | --- | --- |\n| **Atmosphere** | Page background, horizon lines, ambient color fields | Low-contrast gradients, subtle glow, optional star/noise texture |\n| **Matte data slab** | Tables, dense cards, long-form content, logs, form bodies | Opaque or near-opaque, crisp borders, low reflection |\n| **Satin form surface** | Standard inputs, textareas, selects, secondary cards | Slight sheen, inset depth, stronger inner contrast |\n| **Glass control surface** | Nav rails, sticky toolbars, utility bars, elevated panels | Translucent fill, blur, border light, soft shadow |\n| **liquidGL hero surface** | Small number of premium elevated controls | Real-time refraction, specular highlight, obvious separation from content |\n| **Accent/live surface** | Active states, executing badges, selected pills, critical actions | Controlled neon energy, never used as a page-wide base |\n\n### 4.1 Matte data slabs\n\nUse matte slabs for:\n\n- data tables\n- log viewers\n- long text entry\n- main form bodies\n- detail evidence panels\n- dense task metadata regions\n\nThese surfaces should privilege crispness over translucency.\n\n### 4.2 Glass control surfaces\n\nUse glass for:\n\n- mastheads\n- floating action rails\n- sticky control decks\n- modals and drawers\n- popovers and menus\n- compact utility chips\n- selected navigation shells\n\nGlass surfaces should feel elevated above content, not interchangeable with it.\n\n### 4.3 liquidGL hero surfaces\n\nMission Control now uses **liquidGL** for premium liquid-glass treatment on select elevated surfaces. liquidGL is an enhancement layer, not the baseline styling system.\n\nRules:\n\n1. Use liquidGL only on **bounded, elevated, fixed or sticky surfaces** where refraction materially improves the experience.\n2. The element must remain fully legible and correctly styled **without** liquidGL.\n3. The CSS shell defines the component\u2019s layout, border radius, padding, border, shadow, and fallback appearance. liquidGL enhances that shell rather than replacing it.\n4. Do not use liquidGL on dense tables, large cards, long forms, or large scrolling containers.\n5. Do not use liquidGL on large textareas or any surface where refraction would reduce editing comfort.\n6. Prefer one liquidGL hero surface per page; two is the maximum when the hierarchy is unmistakable.\n7. When performance, browser support, or user settings require it, fall back to the standard CSS glass treatment.\n\nRecommended liquidGL targets:\n\n- the Create Task floating launch rail\n- compact sticky utility rails\n- modals and drawers with bounded dimensions\n- selected high-value popovers or command surfaces\n- optional focused nav emphasis when it does not compete with the page hero surface\n\n---\n\n## 5. Color system and token contract\n\nTokens must be defined as RGB triplets so alpha composition stays flexible.\n\n### 5.1 Core tokens\n\n| Role | Token | Light | Dark | Guidance |\n| --- | --- | --- | --- | --- |\n| App background | `--mm-bg` | `248 247 255` | `8 8 16` | Slight violet bias even in neutrals |\n| Primary surface | `--mm-panel` | `255 255 255` | `20 18 34` | Base shell and card surface |\n| Primary text | `--mm-ink` | `18 20 32` | `237 236 255` | Must remain highly legible |\n| Muted text | `--mm-muted` | `95 102 122` | `174 170 204` | Use for metadata only |\n| Border | `--mm-border` | `214 220 235` | `92 84 136` | Slightly luminous in dark mode |\n| Brand accent | `--mm-accent` | `130 72 246` | `130 72 246` | Default active/selected brand color |\n| Live accent | `--mm-accent-2` | `34 211 238` | `125 249 255` | Live activity, streaming, executing energy |\n| Warm accent | `--mm-accent-warm` | `244 114 182` | `249 115 22` | Callouts and stylized emphasis |\n| Success | `--mm-ok` | `34 197 94` | `74 222 128` | Completed / healthy states |\n| Warning | `--mm-warn` | `245 158 11` | `251 191 36` | Queue, caution, attention |\n| Danger | `--mm-danger` | `244 63 94` | `251 113 133` | Failure, destructive actions |\n| Commit action | `--mm-action-primary` | `21 147 118` | `26 153 123` | Real-action create/apply/launch pathways |\n| Shadow | `--mm-shadow` | `0 18px 32px -26px rgb(10 8 30 / 0.55)` | `0 24px 52px -34px rgb(0 0 0 / 0.88)` | Base elevation shadow |\n\n### 5.2 Accent balance\n\nAccent usage should follow a clear hierarchy:\n\n- **Purple / violet** is the primary identity color and should account for most accent usage.\n- **Cyan** is reserved for live, executing, streaming, or high-energy system states.\n- **Amber / orange** is reserved for warning, queueing, caution, or high-attention utility signals.\n- **Red / rose** is reserved for failure and destructive actions.\n- **Green / teal** is reserved for create, commit, promote, apply, or complete states.\n\n### 5.3 Background atmosphere\n\nThe application background should never be flat black. Use layered radial gradients with restrained bloom so large dark regions feel intentional and alive.\n\nThe preferred posture is:\n\n- violet energy near the upper-left or brand side\n- cyan energy near the opposite edge\n- warm/orange energy near the lower horizon\n- all gradients soft enough that content remains dominant\n\nOptional subtle star/noise texture is allowed in large empty background fields when it stays nearly invisible.\n\n---\n\n## 6. Typography and iconography\n\n### 6.1 Type system\n\nMission Control uses:\n\n- **IBM Plex Sans** for body copy, headings, labels, buttons, and UI text\n- **IBM Plex Mono** for IDs, timestamps, runtime values, telemetry, logs, versions, and exact technical metadata\n\n### 6.2 Hierarchy\n\n- Headings should be bold enough to remain stable on dark/glass surfaces.\n- Overline labels may use small uppercase styling with mild tracking.\n- Avoid very thin weights, especially over gradients or glass.\n- Favor strong contrast over stylistic subtlety.\n\n### 6.3 Mono numerics and telemetry\n\nThe following should prefer mono styling or tabular numerics:\n\n- task IDs\n- timestamps\n- runtime names and versions\n- counts and durations\n- pagination metrics\n- technical labels and compact telemetry\n\nThis is a core part of the space-program feel.\n\n### 6.4 Icon posture\n\nIcons should be compact, crisp, and utility-first. Use icons to improve scanability, not to decorate every label.\n\nBest candidates for icons:\n\n- navigation pills\n- filter controls\n- telemetry chips\n- action buttons with strong verbs\n- drawer/modal utilities\n\n---\n\n## 7. Layout system\n\n### 7.1 Shell widths\n\nMission Control uses two desktop width modes:\n\n- **Constrained shell** for mastheads, forms, compact controls, and narrative content: roughly `1100-1280px`\n- **Data-wide shell** for task tables, evidence-heavy detail regions, and comparison views: roughly `1500-1800px` or fluid width with generous side gutters\n\nThe page shell may transition between these two modes within the same route.\n\n### 7.2 Header architecture\n\nThe Mission Control masthead uses a **three-zone layout**:\n\n- **Left:** brand block\n- **Center:** primary navigation pills, visually centered against the viewport\n- **Right:** utilities such as version badge, environment state, future user/system controls\n\nThe navigation must be centered as a layout decision, not merely centered inside the leftover space beside the logo.\n\n### 7.3 Control deck + data slab pattern\n\nFor list and console-heavy pages, use a two-part structure:\n\n1. **Control deck** above the content for filters, utility controls, result counts, live toggles, chips, and page-level tools\n2. **Data slab** below for the table, rows, or evidence surface\n\nDo not merge filters and dense data into one giant undifferentiated card when separation improves hierarchy.\n\n### 7.4 Utility cluster placement\n\nEmpty top-right desktop space should normally be used for compact utilities rather than left blank. Good uses include:\n\n- live updates toggle\n- result counts\n- executing / queued / failed counts\n- page size selector\n- pagination controls\n- active filter summary\n\n### 7.5 Spacing posture\n\nSpacing should feel disciplined rather than sparse. Prefer a tight but breathable rhythm. Large empty regions must look intentional, not unfinished.\n\nGuidance:\n\n- compact utility groups: `8-12px` gaps\n- input/control spacing: `12-16px`\n- card internal spacing: `16-24px`\n- major section separation: `24-40px`\n\n---\n\n## 8. Glass system\n\n### 8.1 CSS glass foundation\n\nThe default glass system is token-driven CSS and must exist even when liquidGL is disabled or unsupported.\n\nCore requirements:\n\n- translucent fill\n- luminous 1px border\n- controlled shadow separation\n- `backdrop-filter` blur and saturation where supported\n- near-opaque fallback where unsupported\n\nRecommended ranges:\n\n- fill alpha: `0.55-0.78`\n- border alpha: `0.35-0.75`\n- blur radius: `14-20px`\n- glow alpha: `<= 0.45`\n\n### 8.2 Glass layering rule\n\nOuter shells may be glassy. Inner editing surfaces should usually be more grounded.\n\nExample:\n\n- floating dock shell: glass or liquidGL\n- inputs inside dock: darker inset wells with crisp text and lower blur\n\nThis layered contrast is what makes the outer shell feel convincingly premium.\n\n### 8.3 Edge light and shadow\n\nPrefer edge highlights, shadow separation, and a small amount of specular light over broad glow floods. Broad neon fog weakens hierarchy and legibility.\n\n### 8.4 liquidGL implementation stance\n\nliquidGL should be treated as a **premium enhancement** for a small number of elevated surfaces.\n\nRequirements:\n\n- the component must still ship a full CSS appearance without JavaScript enhancement\n- the liquidGL layer must not be the only source of edge definition or text contrast\n- any target surface must be stable in shape and bounded in size\n- overflow, z-index, and stacking behavior must be explicit so helper layers do not clip unexpectedly\n- liquidGL should not become the default for all `.panel` or `.card` surfaces\n\n### 8.5 Fallback posture\n\nWhen liquidGL or `backdrop-filter` is unavailable, the UI must gracefully fall back to token-based CSS glass or matte surfaces. Mission Control must remain coherent and premium-looking without advanced rendering.\n\n---\n\n## 9. Interaction and motion\n\n### 9.1 Timing\n\nPreferred transition ranges:\n\n- hover/focus transitions: `120-180ms`\n- small state changes: `140-200ms`\n- no long lingering animations for routine controls\n\n### 9.2 Motion model\n\nUse small scale changes and glow changes. Prefer:\n\n- hover: `scale(1.02-1.03)`\n- active press: `scale(0.98-0.99)`\n\nAvoid `translateY` lift behavior on core buttons and nav pills. Mission Control should feel precise, not floaty.\n\n### 9.3 Live-state motion\n\nExecuting/live surfaces may use very subtle pulse or telemetry motion. Examples:\n\n- a restrained pulse on executing status chips\n- a soft scanner pass on row hover\n- a faint live indicator flicker near real-time controls\n\nThese effects must remain low-amplitude.\n\n### 9.4 Reduced motion\n\nA reduced-motion path is required. Pulses, shimmer, scanner effects, and highlight drift should be removed or significantly softened when the user requests reduced motion.\n\n---\n\n## 10. Component system\n\n### 10.1 Masthead and navigation\n\nNavigation pills should feel like compact control chips rather than generic tabs.\n\nRules:\n\n- active pills must be unmistakable\n- hover and active states should brighten, not darken\n- spacing between icon and label must be deliberate\n- active pills may use soft bloom and a slightly stronger shell\n- the masthead should include a refined horizon separator below it\n\nVersion badges and utility chips on the right should read like telemetry, not leftover labels.\n\n### 10.2 Buttons\n\nMission Control uses one consistent **glow + grow** interaction system.\n\nRules:\n\n- buttons are slightly translucent, never fully dead/flat by default\n- hover gets brighter and slightly larger\n- press state uses subtle scale-down, not translate\n- focus-visible must remain crisp and high contrast\n- disabled buttons lose glow and motion emphasis\n\nVariants:\n\n- **Default / brand**: purple\n- **Secondary / safe**: glass or satin surface\n- **Commit / create / apply**: `--mm-action-primary`\n- **Danger**: `--mm-danger`\n\nA thin outline and faint edge-light are required so buttons do not disappear into glass backgrounds.\n\n### 10.3 Inputs, selects, and comboboxes\n\nInputs must feel designed, not browser-default.\n\nRules:\n\n- give controls a distinct outer shell and a darker or more grounded inner well\n- maintain generous vertical height and click target clarity\n- labels should read clearly above controls\n- focus uses a visible ring and stronger border light\n- chevrons and affordance icons must be intentional, not tiny afterthoughts\n- searchable repository or entity fields should read like **combobox/search controls**, not generic selects\n\nGood candidates for leading icons:\n\n- workflow\n- state\n- entry\n- repository\n- branch\n- runtime\n\n### 10.4 Control decks and filter clusters\n\nControl decks should feel like operator consoles.\n\nRules:\n\n- primary filters remain compact and high-signal\n- utilities live in a separate cluster rather than cluttering the main filter row\n- active filter chips should be visible and removable\n- a reset/clear affordance should be intentionally placed, not hidden\n- on wide screens, filters may use a single row or a 2x2 block with a utility column\n\n### 10.5 Tables and dense list surfaces\n\nThe task list and similar operational surfaces remain **table-first on desktop**.\n\nRules:\n\n- use a matte or near-opaque data slab for the table body\n- use sticky table headers for long-scroll scanning\n- treat the table toolbar, header, and pagination as a connected system\n- use row hover feedback that feels like a subtle scanner pass, not a heavy color flood\n- preserve horizontal space for comparison instead of collapsing into stacked cards on desktop\n- use cards only for narrow/mobile layouts\n\n### 10.6 Column economics\n\nDesktop tables should prioritize comparison.\n\nPrimary list columns should center on:\n\n- title\n- normalized status\n- workflow\n- runtime\n- started time\n- duration or updated time\n- compact ID\n\nLower-value metadata should move to detail, expansion, or secondary views when it hurts first-pass scanability.\n\n### 10.7 Status chips\n\nStatus chips must be translucent, bordered, compact, and semantically consistent.\n\nPreferred mapping:\n\n- `queued` -> amber / yellow\n- `running` / `executing` -> cyan\n- `awaiting_action` -> purple\n- `succeeded` / `completed` -> green\n- `failed` / `cancelled` -> rose / red\n\nExecuting states may receive the lightest motion treatment. Finished states should be stable.\n\n### 10.8 Floating rails and sticky utility bars\n\nFloating rails are the best place to emphasize the liquid-glass system.\n\nRules:\n\n- the rail must read as a truly elevated surface\n- its shell may be glass or liquidGL\n- internal controls should be more grounded than the shell\n- the rail should have clear separation from underlying content via shadow, edge light, and offset\n- the rail should be slightly narrower than the content column when that improves intentionality\n\n### 10.9 Cards, panels, and sections\n\nCards should not all use the same styling weight.\n\nPreferred distinction:\n\n- page shell or section shell: light glass or satin\n- control deck: glass\n- data slab: matte\n- nested cards inside dense regions: slightly darker, more opaque, quieter borders\n\n### 10.10 Modals, drawers, popovers, and toasts\n\nTransient/elevated UI is the right place for glass.\n\nRules:\n\n- shell may use glass or liquidGL depending on size and importance\n- text and fields inside should remain grounded and readable\n- shadows and layering must make elevation obvious\n- do not stack multiple competing glass effects inside one overlay\n\n### 10.11 Background separators and horizon lines\n\nUse subtle atmospheric separators instead of hard utilitarian dividers everywhere.\n\nExamples:\n\n- horizon line beneath the masthead\n- soft orbital gradient behind section transitions\n- restrained border glows on major surface edges\n\n---\n\n## 11. Page-specific composition rules\n\n### 11.1 `/tasks/list`\n\nThe task list page should use a **control deck + data slab** structure.\n\nDesired composition:\n\n- a compact filter/control deck above the table\n- a utility cluster on the right side of that deck\n- a distinct table slab below\n- pagination and page-size controls visually attached to the table system\n\nSpecific guidance:\n\n- the region above the table should not be one giant undifferentiated card\n- the upper-right area should be used for utilities and telemetry rather than left empty\n- page size belongs with pagination or compact display utilities, not as a primary filter\n- primary filters should stay high-signal and compact\n- advanced filters may move into a secondary drawer or popover when needed\n- active filters should be visible as chips\n- the table header should remain sticky during scroll\n\n### 11.2 `/tasks/new`\n\nThe create page should feel like a guided launch flow.\n\nDesired composition:\n\n- matte/satin step cards for the primary workflow body\n- clear hierarchy across instructions, images, skill selection, presets, and action areas\n- a floating launch rail at the bottom as the page\u2019s hero premium surface\n\nSpecific guidance:\n\n- the floating launch rail is the strongest candidate for liquidGL treatment in the product\n- the rail shell may be premium glass; controls inside remain grounded and crisp\n- the primary CTA should feel like a clear launch/commit action\n- large textareas should remain matte and comfortable for sustained reading/editing\n- small utility buttons inside step cards should align with the same button language as the rest of the system\n\n### 11.3 Task detail and evidence-heavy pages\n\nDetail pages should keep evidence readable and structured.\n\nDesired composition:\n\n- concise summary header\n- compact facts rail\n- steps/evidence slabs\n- observability/log slab\n- actions in a distinct elevated or sticky control surface when needed\n\nDo not allow glass effects to compete with evidence density.\n\n---\n\n## 12. Accessibility and performance\n\n### 12.1 Contrast\n\nAll decorative styling must maintain clear contrast for:\n\n- labels\n- table text\n- placeholder text\n- chips\n- buttons\n- focus states\n- glass-over-gradient surfaces\n\n### 12.2 Keyboard and focus\n\nEvery interactive surface must provide a visible, high-contrast `:focus-visible` state. Focus is a first-class design element, not an implementation afterthought.\n\n### 12.3 Blur and WebGL fallbacks\n\nThe system must degrade gracefully when:\n\n- `backdrop-filter` is unavailable\n- liquidGL is unavailable or disabled\n- device performance is insufficient\n- user motion or power-saving preferences suggest a quieter mode\n\n### 12.4 Performance posture\n\nBackdrop blur, glow layers, sticky glass surfaces, and liquidGL targets should be used strategically. Performance is part of the design system.\n\nHeavy premium effects belong on a small number of surfaces with clear value.\n\n---\n\n## 13. Implementation invariants\n\n### 13.1 Semantic class stability\n\nContinue to prefer stable semantic class names for shared Mission Control surfaces, including existing classes such as:\n\n- `dashboard-root`\n- `masthead`\n- `route-nav`\n- `panel`\n- `card`\n- `toolbar`\n- `status-*`\n- `queue-*` where compatibility naming still exists\n\nModifier classes may extend the system, but the semantic shell should remain stable.\n\nRecommended additions include patterns such as:\n\n- `panel--controls`\n- `panel--data`\n- `panel--floating`\n- `panel--utility`\n- `table-wrap--wide`\n\n### 13.2 Token-first theming\n\nMission Control theming is token-first.\n\nRules:\n\n- semantic classes and Tailwind utilities must consume `--mm-*` tokens\n- avoid hardcoded opaque colors when token-based values will do\n- avoid scattering many `dark:*` overrides when a token-based surface will adapt automatically\n- light and dark themes should remain behaviorally identical, with tokens swapping the atmosphere and surface values\n\n### 13.3 Tailwind and source scanning\n\nTailwind must scan all Mission Control sources that can contain utility classes, including:\n\n- `api_service/templates/react_dashboard.html`\n- `api_service/templates/_navigation.html`\n- `frontend/src/**/*.{js,jsx,ts,tsx}`\n\nThis remains necessary because Mission Control CSS is built from source before Vite output exists.\n\n### 13.4 Canonical styling source\n\nThe source of truth for Mission Control styling remains:\n\n- `frontend/src/styles/mission-control.css`\n\nGenerated assets under `api_service/static/task_dashboard/dist/` are build artifacts and should not be hand-edited.\n\n### 13.5 liquidGL enhancement contract\n\nAny liquidGL-enabled surface must satisfy all of the following:\n\n- the component is laid out and styled correctly without WebGL enhancement\n- the enhancement is bounded to a specific target surface\n- the foreground text and controls remain readable independent of refraction\n- browser/performance fallback resolves to the standard CSS glass system without breaking the component\n- the effect is used because the surface is elevated and interactive, not merely because the page has room for more shine\n\n---\n\n## 14. Summary\n\nMission Control\u2019s design system is built on a simple hierarchy:\n\n- **Space-program structure** for layout and discipline\n- **Matte slabs** for dense information and editing\n- **Glass and liquidGL** for elevated controls and premium floating surfaces\n- **Synthwave lighting** for atmosphere and brand energy\n- **Cyberpunk micro-details** for edge, never for noise\n\nThe result should feel unmistakably MoonMind: operational, futuristic, stylish, and still highly functional.\n"
+  },
+  "extractedAt": "2026-04-20T21:52:42Z",
+  "outputMode": "jira",
+  "designSummary": "MissionControlDesignSystem.md defines the desired-state visual and interaction system for the Mission Control UI: a professional operator console with space-program structure, liquid-glass control surfaces, synthwave atmosphere, and cyberpunk micro-details used sparingly. The document sets token, typography, layout, surface, component, page, accessibility, performance, and implementation-source invariants while explicitly prioritizing readability, hierarchy, scan speed, graceful fallbacks, and token-first maintainability over spectacle.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Design-system purpose and ownership",
+      "type": "requirement",
+      "source_section": "1. Purpose",
+      "explanation": "Mission Control must have a desired-state design system covering visual language, tokens, surfaces, layout, motion, components, and page composition, with route/API architecture handled elsewhere."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Professional product expression",
+      "type": "requirement",
+      "source_section": "2. Product expression",
+      "explanation": "The UI should combine mission-control structure, liquid glass controls, synthwave lighting, and restrained cyberpunk details while remaining a professional operator console."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Readability and functional priority",
+      "type": "constraint",
+      "source_section": "2, 3.1",
+      "explanation": "Dense data, forms, logs, and tables must remain readable; decorative effects are correct only when they improve hierarchy and perceived quality."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Matte content and glass controls",
+      "type": "constraint",
+      "source_section": "3.2, 4",
+      "explanation": "Dense content and editing regions use matte or satin grounded surfaces, while floating, sticky, elevated, and transient controls may use glass."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Single hero effect hierarchy",
+      "type": "constraint",
+      "source_section": "3.3, 4.3",
+      "explanation": "Each page should prefer one premium hero effect, with at most two liquidGL surfaces only when the hierarchy remains unmistakable."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Bright hover and restrained motion",
+      "type": "interaction",
+      "source_section": "3.4, 3.5, 9",
+      "explanation": "Interactive states brighten and use short restrained transitions, small scale changes, and low-amplitude live-state motion rather than darkening or large movement."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Strict surface hierarchy",
+      "type": "state-model",
+      "source_section": "4, 4.1, 4.2",
+      "explanation": "Atmosphere, matte slabs, satin forms, glass controls, liquidGL hero surfaces, and accent/live surfaces each have distinct usage rules and visual posture."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "liquidGL enhancement rules",
+      "type": "integration",
+      "source_section": "4.3, 8.4, 13.5",
+      "explanation": "liquidGL is a bounded premium enhancement for selected elevated surfaces; the CSS shell must remain fully styled, legible, and functional without WebGL."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Tokenized color contract",
+      "type": "contract",
+      "source_section": "5, 5.1, 5.2",
+      "explanation": "Mission Control colors are defined as RGB-triplet --mm-* tokens with semantic accent roles for brand, live, warning, danger, success, and commit actions."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Atmospheric background treatment",
+      "type": "requirement",
+      "source_section": "5.3, 10.11",
+      "explanation": "Application backgrounds avoid flat black and use restrained layered violet, cyan, and warm horizon gradients plus subtle separators that preserve content dominance."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Typography and telemetry style",
+      "type": "requirement",
+      "source_section": "6",
+      "explanation": "IBM Plex Sans is used for UI text and IBM Plex Mono/tabular numerics for IDs, timestamps, runtime values, logs, and technical telemetry."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Shell width and spacing system",
+      "type": "requirement",
+      "source_section": "7.1, 7.5",
+      "explanation": "Routes use constrained and data-wide shell modes with disciplined spacing that is compact, breathable, and intentional."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Masthead architecture",
+      "type": "requirement",
+      "source_section": "7.2, 10.1",
+      "explanation": "The masthead has left brand, viewport-centered navigation pills, right utilities, telemetry-like badges, and a refined horizon separator."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Control deck and data slab layout",
+      "type": "requirement",
+      "source_section": "7.3, 7.4, 10.4, 10.5, 11.1",
+      "explanation": "List and console pages separate compact filter/control decks from matte data slabs, reserve utility clusters for high-value controls, and preserve desktop table comparison."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "CSS glass foundation and fallback",
+      "type": "contract",
+      "source_section": "8.1, 8.2, 8.3, 8.5",
+      "explanation": "Default glass uses token-driven CSS fill, border, blur, edge light, and shadows with near-opaque fallbacks when advanced rendering is unavailable."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Component interaction language",
+      "type": "requirement",
+      "source_section": "10.1, 10.2, 10.3, 10.4, 10.7, 10.10",
+      "explanation": "Navigation, buttons, inputs, comboboxes, filters, status chips, overlays, and utilities follow consistent shell, glow, focus, semantic color, and affordance rules."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Floating rails and sticky utility bars",
+      "type": "requirement",
+      "source_section": "10.8, 11.2",
+      "explanation": "Floating rails are elevated premium surfaces with glass or liquidGL shells, grounded internal controls, clear separation, and strong suitability for the Create Task launch rail."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Cards, panels, and nested surface weights",
+      "type": "requirement",
+      "source_section": "10.9",
+      "explanation": "Cards and panels must vary styling weight by role, with control decks glassy, data slabs matte, and nested dense cards quieter and more opaque."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Task list composition",
+      "type": "requirement",
+      "source_section": "11.1",
+      "explanation": "The task list uses a compact control deck, right utility cluster, distinct table slab, attached pagination/page-size controls, active filter chips, and sticky headers."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Create page launch flow",
+      "type": "requirement",
+      "source_section": "11.2",
+      "explanation": "The create page uses matte/satin step cards, clear hierarchy across input areas, and a floating launch rail as the strongest liquidGL candidate."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Task detail evidence composition",
+      "type": "requirement",
+      "source_section": "11.3",
+      "explanation": "Detail and evidence-heavy pages keep summary, facts, steps, evidence, logs, and actions structured without glass effects competing with evidence density."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Accessibility and focus guarantees",
+      "type": "security",
+      "source_section": "12.1, 12.2",
+      "explanation": "Decorative styling must maintain contrast for UI text and states, and every interactive surface must provide visible high-contrast focus-visible styling."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Performance and reduced-motion posture",
+      "type": "performance",
+      "source_section": "9.4, 12.3, 12.4",
+      "explanation": "The UI must support reduced motion, power/performance constraints, absent backdrop-filter, and unavailable liquidGL while remaining coherent."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Semantic class stability",
+      "type": "contract",
+      "source_section": "13.1",
+      "explanation": "Shared Mission Control surfaces keep stable semantic classes and use additive modifiers for controls, data, floating panels, utilities, and wide tables."
+    },
+    {
+      "id": "DESIGN-REQ-025",
+      "title": "Token-first theming implementation",
+      "type": "contract",
+      "source_section": "13.2",
+      "explanation": "Semantic classes and utilities consume --mm-* tokens, avoid hardcoded opaque colors and scattered dark overrides, and keep light/dark behavior identical."
+    },
+    {
+      "id": "DESIGN-REQ-026",
+      "title": "Tailwind source scanning and canonical CSS source",
+      "type": "artifact",
+      "source_section": "13.3, 13.4",
+      "explanation": "Tailwind scans all Mission Control source templates and React files, and frontend/src/styles/mission-control.css remains the canonical styling source; built dist assets are not hand-edited."
+    },
+    {
+      "id": "DESIGN-REQ-027",
+      "title": "Explicit non-goals",
+      "type": "non-goal",
+      "source_section": "2, 3, 4.3, 8.4",
+      "explanation": "Mission Control must not become a novelty HUD, page-wide glass system, liquidGL-by-default implementation, or spectacle-first interface."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Establish Mission Control visual tokens and atmosphere",
+      "shortName": "visual-token-atmosphere",
+      "description": "As a Mission Control operator, I want the UI foundation to use the documented tokenized color, typography, atmosphere, and product-expression rules so every route feels coherent, readable, and unmistakably MoonMind.",
+      "why": "The color, typography, and atmosphere contract is the base that every surface, component, and page-level treatment depends on.",
+      "scope": [
+        "Define or align the RGB-triplet --mm-* token set for light and dark themes.",
+        "Apply the documented accent hierarchy for brand, live, warning, danger, success, and commit/action states.",
+        "Use the documented atmospheric background posture and subtle horizon/separator treatments without flattening dark mode.",
+        "Apply IBM Plex Sans and IBM Plex Mono/tabular-numeric usage for UI text, IDs, timestamps, logs, runtime values, and compact telemetry.",
+        "Preserve the professional operator-console expression and avoid novelty HUD treatment."
+      ],
+      "outOfScope": [
+        "liquidGL rendering behavior beyond token and fallback inputs.",
+        "Route-specific control deck, table, or launch rail composition."
+      ],
+      "sourceReference": {
+        "path": "docs/UI/MissionControlDesignSystem.md",
+        "title": "Mission Control Design System",
+        "sections": [
+          "1. Purpose",
+          "2. Product expression",
+          "5. Color system and token contract",
+          "6. Typography and iconography",
+          "10.11 Background separators and horizon lines",
+          "14. Summary"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-027"
+        ]
+      },
+      "independentTest": "Run the Mission Control frontend style/unit tests and visual assertions for light and dark roots; verify --mm-* RGB triplet tokens exist, core surfaces consume tokens, typography classes/fonts apply to telemetry fields, and backgrounds are layered rather than flat black.",
+      "acceptanceCriteria": [
+        "All core --mm-* tokens from the design document are defined as RGB triplets for both light and dark modes.",
+        "Accent usage follows the documented semantic roles: purple/violet for identity, cyan for live/executing, amber/orange for warning, red/rose for failure/destructive, and green/teal for create/commit/complete.",
+        "Mission Control backgrounds use restrained layered atmosphere and remain content-dominant in light and dark themes.",
+        "IBM Plex Sans is the default UI typeface and IBM Plex Mono or tabular numerics are used for IDs, timestamps, runtime values, logs, versions, counts, durations, and compact telemetry.",
+        "The resulting style avoids novelty HUD framing and preserves professional operator readability."
+      ],
+      "requirements": [
+        "Implement token-first visual foundation.",
+        "Apply atmosphere and separator styling through reusable Mission Control CSS.",
+        "Align typography and telemetry styling with the design system.",
+        "Keep spectacle subordinate to readability and hierarchy."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-001: establishes the visual-language foundation of the design system.",
+        "DESIGN-REQ-002: owns the professional mission-control/nightlife product expression.",
+        "DESIGN-REQ-009: owns the RGB-triplet color token contract and accent balance.",
+        "DESIGN-REQ-010: owns layered atmosphere and horizon separator treatment.",
+        "DESIGN-REQ-011: owns typography and mono telemetry styling.",
+        "DESIGN-REQ-027: enforces the non-goal of novelty HUD or spectacle-first expression."
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing frontend test tooling can inspect computed CSS variables and rendered class output."
+      ],
+      "needsClarification": [],
+      "handoff": "Implement the Mission Control token and atmosphere foundation as a single Moon Spec story. Start with failing frontend style or component tests that verify tokens, semantic accents, typography, and background posture before updating CSS."
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Implement surface hierarchy and liquidGL fallback contract",
+      "shortName": "surface-glass-hierarchy",
+      "description": "As an operator, I want content surfaces, control surfaces, and premium liquid-glass surfaces to have distinct roles and reliable fallbacks so dense work stays readable while elevated controls feel premium.",
+      "why": "The design system depends on separating matte data/editing areas from glass controls and treating liquidGL as a bounded enhancement rather than a baseline styling system.",
+      "scope": [
+        "Codify surface roles for atmosphere, matte data slabs, satin form surfaces, glass control surfaces, liquidGL hero surfaces, and accent/live surfaces.",
+        "Implement token-driven CSS glass with fill, luminous border, blur/saturation where supported, edge light, shadow, and near-opaque fallback.",
+        "Ensure dense tables, logs, long forms, large textareas, and scrolling evidence regions use matte or satin surfaces rather than liquidGL.",
+        "Define the liquidGL target contract: bounded elevated fixed/sticky surfaces only, complete CSS shell, explicit stacking/overflow behavior, readable foreground, and standard glass fallback.",
+        "Limit premium liquidGL usage to one hero surface per page by default, with two only when hierarchy is clear."
+      ],
+      "outOfScope": [
+        "Implementing every route-specific page composition.",
+        "Replacing the existing styling source or build pipeline."
+      ],
+      "sourceReference": {
+        "path": "docs/UI/MissionControlDesignSystem.md",
+        "title": "Mission Control Design System",
+        "sections": [
+          "3.2 Matte for content, glass for controls",
+          "3.3 One hero effect per page",
+          "4. Surface hierarchy",
+          "8. Glass system",
+          "13.5 liquidGL enhancement contract"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-027"
+        ]
+      },
+      "independentTest": "Render representative matte slab, satin form, glass control, overlay, and liquidGL-target components with liquidGL enabled and disabled; assert text remains legible, fallback classes provide complete styling, dense surfaces do not receive liquidGL, and only approved bounded targets opt in.",
+      "acceptanceCriteria": [
+        "Surface classes or modifiers clearly distinguish matte data slabs, satin form surfaces, glass controls, liquidGL hero targets, and accent/live surfaces.",
+        "Default glass surfaces have token-driven translucent fill, 1px luminous border, controlled shadow separation, supported backdrop-filter blur/saturation, and coherent near-opaque fallback.",
+        "liquidGL target components remain fully laid out, bordered, padded, shadowed, and legible with JavaScript/WebGL disabled.",
+        "liquidGL is not applied to dense tables, large cards, long forms, large scrolling containers, large textareas, or default panel/card classes.",
+        "A page has no more than one liquidGL hero surface by default; any second usage must be explicit and non-competing.",
+        "Nested dense cards and panels use quieter, more opaque weights rather than repeating the same glass effect."
+      ],
+      "requirements": [
+        "Implement strict surface hierarchy.",
+        "Provide CSS glass as the default glass foundation.",
+        "Treat liquidGL as bounded enhancement with graceful fallback.",
+        "Preserve matte readability for dense content and editing surfaces."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-003: keeps dense data and editing readability ahead of decorative effects.",
+        "DESIGN-REQ-004: owns matte-for-content and glass-for-controls rules.",
+        "DESIGN-REQ-005: owns one-hero-effect hierarchy.",
+        "DESIGN-REQ-007: owns strict surface hierarchy.",
+        "DESIGN-REQ-008: owns liquidGL enhancement contract.",
+        "DESIGN-REQ-015: owns CSS glass foundation and fallback.",
+        "DESIGN-REQ-018: owns distinct panel/card weights.",
+        "DESIGN-REQ-027: prevents page-wide glass or liquidGL-by-default implementation."
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "liquidGL integration points already exist or can be represented by stable opt-in classes during this story."
+      ],
+      "needsClarification": [],
+      "handoff": "Implement the Mission Control surface hierarchy and liquidGL fallback contract with failing component/style tests for each surface role, dense-surface exclusions, and WebGL/backdrop fallback behavior."
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Standardize Mission Control layout and table composition patterns",
+      "shortName": "layout-table-composition",
+      "description": "As an operator scanning operational work, I want Mission Control layouts, mastheads, control decks, utility clusters, and data slabs to make comparison and route-level hierarchy fast and predictable.",
+      "why": "The document repeatedly anchors Mission Control in disciplined space-program structure, centered navigation, compact controls, and table-first operational scanning.",
+      "scope": [
+        "Implement constrained and data-wide shell modes with disciplined spacing.",
+        "Align the masthead to the three-zone architecture with viewport-centered navigation and right-side telemetry/utilities.",
+        "Provide control deck plus data slab layout primitives for list and console-heavy pages.",
+        "Place result counts, live toggles, page size, pagination, filter summaries, and other compact utilities in separate utility clusters.",
+        "Preserve desktop table comparison with sticky headers and mobile card fallback only for narrow layouts.",
+        "Apply column economics so primary list columns focus on title, normalized status, workflow, runtime, started time, duration/updated time, and compact ID."
+      ],
+      "outOfScope": [
+        "Specific create-page launch rail behavior beyond shared layout primitives.",
+        "Changing backend task or pagination APIs."
+      ],
+      "sourceReference": {
+        "path": "docs/UI/MissionControlDesignSystem.md",
+        "title": "Mission Control Design System",
+        "sections": [
+          "7. Layout system",
+          "10.1 Masthead and navigation",
+          "10.4 Control decks and filter clusters",
+          "10.5 Tables and dense list surfaces",
+          "10.6 Column economics",
+          "11.1 /tasks/list"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-019"
+        ]
+      },
+      "independentTest": "Render Mission Control masthead and task-list/table fixtures at desktop and mobile widths; assert navigation is viewport-centered, utilities occupy the right cluster, filters are separated from data, table headers remain sticky, desktop remains table-first, and page-size/pagination stay attached to the table system.",
+      "acceptanceCriteria": [
+        "Mission Control shell supports constrained and data-wide modes with documented width ranges or equivalent responsive constraints.",
+        "Masthead uses left brand, viewport-centered nav pills, and right utility/telemetry zone rather than centering nav only in leftover space.",
+        "List/console pages separate primary filters and utilities from the matte table/data slab.",
+        "Upper-right desktop space is used for compact utilities such as live toggle, result counts, active filter summary, page size, or pagination where relevant.",
+        "The task list remains table-first on desktop and uses cards only for narrow/mobile layouts.",
+        "Sticky table headers support long-scroll scanning.",
+        "Pagination and page-size controls are visually attached to the table system, not treated as primary filters."
+      ],
+      "requirements": [
+        "Implement shell width modes and spacing rhythm.",
+        "Align masthead architecture.",
+        "Create or apply control deck plus data slab primitives.",
+        "Preserve comparison-oriented desktop table economics."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-012: owns shell widths and spacing posture.",
+        "DESIGN-REQ-013: owns masthead three-zone architecture.",
+        "DESIGN-REQ-014: owns control deck/data slab and utility cluster patterns.",
+        "DESIGN-REQ-019: owns task-list composition and sticky table behavior."
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Existing route components can adopt shared CSS primitives without a route architecture change."
+      ],
+      "needsClarification": [],
+      "handoff": "Implement the layout and table composition story with responsive rendering tests for masthead centering, control-deck separation, utility placement, sticky headers, and desktop table-first behavior."
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Align Mission Control components with shared interaction language",
+      "shortName": "component-interaction-language",
+      "description": "As an operator, I want navigation, buttons, inputs, filters, chips, overlays, and transient UI to respond consistently so controls feel precise, accessible, and operationally legible.",
+      "why": "The design system specifies a shared glow-and-grow interaction model, semantic status colors, designed inputs, compact control chips, and glass treatment for transient surfaces.",
+      "scope": [
+        "Implement nav pill active/hover states that brighten and remain unmistakable.",
+        "Align buttons to the glow plus grow model with translucent defaults, edge-light, focus-visible, disabled, press, brand, secondary, commit, and danger variants.",
+        "Align inputs, selects, and comboboxes with distinct shells, grounded inner wells, clear labels, visible focus, intentional chevrons/icons, and generous click targets.",
+        "Align control decks and filter clusters with compact high-signal filters, separate utilities, removable active filter chips, and intentional reset/clear placement.",
+        "Apply semantic status chip mappings and low-amplitude executing motion.",
+        "Ensure modals, drawers, popovers, toasts, floating rails, and sticky utility bars use appropriate glass/surface layering without competing nested effects."
+      ],
+      "outOfScope": [
+        "Full route-level page redesign.",
+        "Backend status normalization changes unless required to render existing statuses semantically."
+      ],
+      "sourceReference": {
+        "path": "docs/UI/MissionControlDesignSystem.md",
+        "title": "Mission Control Design System",
+        "sections": [
+          "9. Interaction and motion",
+          "10. Component system"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "independentTest": "Run focused component tests and visual state checks for nav pills, buttons, inputs/comboboxes, filter chips, status chips, overlays, and rails; assert hover brightens, press scales down, focus-visible is high contrast, disabled states lose motion/glow, and reduced-motion suppresses pulses/scanners.",
+      "acceptanceCriteria": [
+        "Hover states generally increase brightness, border light, or glow rather than darkening.",
+        "Buttons use subtle hover scale-up, active scale-down, crisp high-contrast focus-visible, disabled de-emphasis, and semantic variant colors.",
+        "Inputs/selects/comboboxes have designed shells, grounded wells, readable labels, visible focus, intentional icons, and clear click targets.",
+        "Active filter chips are visible, removable, and paired with an intentional reset/clear affordance.",
+        "Status chips are translucent, bordered, compact, semantically mapped, and keep finished states stable.",
+        "Executing/live effects are low-amplitude and removed or significantly softened under reduced motion.",
+        "Overlays and rails use glass only where elevation improves clarity, with readable grounded inner content."
+      ],
+      "requirements": [
+        "Implement shared interaction timing and motion model.",
+        "Align component variants and semantic states.",
+        "Provide accessible focus and reduced-motion behavior.",
+        "Keep elevated/transient surfaces readable and layered."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-006: owns bright hover, timing, scale, and restrained live motion.",
+        "DESIGN-REQ-016: owns component interaction language for nav, buttons, inputs, filters, chips, and overlays.",
+        "DESIGN-REQ-017: owns floating rail and sticky utility bar behavior.",
+        "DESIGN-REQ-018: owns nested surface weight distinctions for panels/cards.",
+        "DESIGN-REQ-022: owns focus-visible and contrast for interactive elements.",
+        "DESIGN-REQ-023: owns reduced-motion suppression for pulses/scanners."
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Existing component tests can be extended with style-class and computed-style assertions where pixel screenshots are not available."
+      ],
+      "needsClarification": [],
+      "handoff": "Implement the shared component interaction language with failing tests for hover, press, focus-visible, disabled, reduced-motion, semantic chip color, input affordance, and overlay layering behavior."
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Apply page-specific composition to task workflows",
+      "shortName": "task-page-composition",
+      "description": "As a Mission Control operator, I want the task list, task creation flow, and task detail/evidence pages to use the documented composition patterns so each workflow has a clear primary surface and readable supporting content.",
+      "why": "The design document includes concrete route-level composition rules that need to be implemented and validated after the shared foundation exists.",
+      "scope": [
+        "Apply task-list composition with compact control deck, right utility cluster, distinct table slab, attached pagination/page-size controls, active filter chips, advanced-filter affordance, and sticky header.",
+        "Apply create-page composition with matte/satin step cards, clear hierarchy across instructions, images, skill selection, presets, and action areas, plus a bottom floating launch rail as the hero premium surface.",
+        "Ensure the create-page launch rail can use liquidGL or premium glass while internal controls remain grounded and crisp.",
+        "Keep large create-page textareas matte and comfortable for sustained editing.",
+        "Apply task detail/evidence composition with concise summary header, compact facts rail, steps/evidence slabs, observability/log slab, and distinct elevated/sticky actions where needed.",
+        "Prevent glass effects from competing with evidence density on detail pages."
+      ],
+      "outOfScope": [
+        "New task workflow capabilities or API contract changes.",
+        "New liquidGL engine work beyond using the shared enhancement contract."
+      ],
+      "sourceReference": {
+        "path": "docs/UI/MissionControlDesignSystem.md",
+        "title": "Mission Control Design System",
+        "sections": [
+          "11. Page-specific composition rules",
+          "11.1 /tasks/list",
+          "11.2 /tasks/new",
+          "11.3 Task detail and evidence-heavy pages"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021"
+        ]
+      },
+      "independentTest": "Use route-level Mission Control tests for /tasks/list, /tasks/new, and a task detail fixture; assert each page has the documented primary composition, one hero effect, matte dense/evidence regions, grounded textarea/editing surfaces, and route-appropriate utility placement.",
+      "acceptanceCriteria": [
+        "/tasks/list has a compact filter/control deck above a distinct matte table slab.",
+        "/tasks/list uses right-side utility/telemetry placement, visible active filter chips, sticky table header, and pagination/page-size controls attached to the table system.",
+        "/tasks/new uses matte/satin step cards and a bottom floating launch rail as the page hero surface.",
+        "The /tasks/new primary CTA reads as the clear launch/commit action and large textareas remain matte.",
+        "Task detail pages keep summary, facts, steps, evidence, logs, and actions structurally separate and readable.",
+        "Evidence-heavy pages avoid glass effects that compete with dense evidence or logs."
+      ],
+      "requirements": [
+        "Implement task list page composition.",
+        "Implement create page launch-flow composition.",
+        "Implement task detail/evidence composition.",
+        "Validate route-specific one-hero-effect and matte dense-region rules."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-014: applies the control deck/data slab pattern to task workflows.",
+        "DESIGN-REQ-017: owns create-page floating launch rail behavior.",
+        "DESIGN-REQ-019: owns task-list route composition.",
+        "DESIGN-REQ-020: owns create-page route composition.",
+        "DESIGN-REQ-021: owns detail/evidence-heavy route composition."
+      ],
+      "dependencies": [
+        "STORY-002",
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "The listed task routes exist or have equivalent Mission Control route components in the current frontend."
+      ],
+      "needsClarification": [],
+      "handoff": "Implement page-specific task workflow composition as one Moon Spec story, with route-level tests that cover /tasks/list, /tasks/new, and task detail/evidence fixtures before changing page CSS or components."
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Enforce accessibility, performance, and graceful degradation",
+      "shortName": "a11y-performance-fallbacks",
+      "description": "As an operator using different browsers, devices, motion preferences, and power conditions, I want Mission Control to remain readable, keyboard-operable, and premium-looking when advanced visual effects are unavailable or muted.",
+      "why": "Accessibility and performance are explicit design-system requirements and must be validated across decorative styling, focus, motion, blur, and liquidGL fallbacks.",
+      "scope": [
+        "Audit decorative styling for contrast on labels, table text, placeholder text, chips, buttons, focus states, and glass-over-gradient surfaces.",
+        "Ensure every interactive component has visible high-contrast :focus-visible styling.",
+        "Provide reduced-motion behavior that removes or softens pulses, shimmer, scanner effects, and highlight drift.",
+        "Validate fallback behavior when backdrop-filter is unsupported.",
+        "Validate fallback behavior when liquidGL is unavailable, disabled, or unsuitable because of browser/device performance.",
+        "Keep heavy premium effects limited to high-value surfaces and prevent routine controls from using long lingering animations."
+      ],
+      "outOfScope": [
+        "Changing the design language itself.",
+        "Adding analytics collection for performance unless existing tooling already supports it."
+      ],
+      "sourceReference": {
+        "path": "docs/UI/MissionControlDesignSystem.md",
+        "title": "Mission Control Design System",
+        "sections": [
+          "9.4 Reduced motion",
+          "12. Accessibility and performance",
+          "8.5 Fallback posture"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "independentTest": "Run accessibility and rendering fallback tests with reduced-motion media emulation, keyboard navigation, unsupported backdrop-filter simulation/class fallback, and disabled liquidGL; assert contrast/focus remain visible and no required content or controls depend on advanced effects.",
+      "acceptanceCriteria": [
+        "Labels, table text, placeholder text, chips, buttons, focus states, and glass-over-gradient surfaces maintain clear contrast.",
+        "Every interactive surface exposes a visible high-contrast focus-visible state.",
+        "Reduced-motion mode removes or significantly softens pulses, shimmer, scanner effects, and highlight drift.",
+        "When backdrop-filter is unavailable, glass surfaces fall back to coherent token-based CSS or matte treatments.",
+        "When liquidGL is disabled or unavailable, target components keep complete CSS layout, border, shadow, contrast, and usability.",
+        "Heavy blur, glow, sticky glass, and liquidGL effects are reserved for a small number of high-value surfaces."
+      ],
+      "requirements": [
+        "Provide accessible contrast and focus states.",
+        "Implement reduced-motion paths.",
+        "Implement backdrop-filter and liquidGL fallbacks.",
+        "Limit expensive visual effects to strategic surfaces."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-003: verifies readability remains primary.",
+        "DESIGN-REQ-006: verifies restrained motion and no lingering routine animations.",
+        "DESIGN-REQ-015: verifies CSS glass fallback.",
+        "DESIGN-REQ-022: owns accessibility contrast and keyboard focus.",
+        "DESIGN-REQ-023: owns reduced-motion, performance, and graceful degradation."
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Test harness can emulate prefers-reduced-motion and inspect fallback classes or computed styles."
+      ],
+      "needsClarification": [],
+      "handoff": "Implement accessibility, reduced-motion, and fallback enforcement with failing tests for contrast-sensitive states, keyboard focus, disabled liquidGL, unsupported backdrop-filter, and reduced-motion behavior."
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Preserve Mission Control styling source and build invariants",
+      "shortName": "styling-build-invariants",
+      "description": "As a maintainer, I want Mission Control styling to remain token-first, semantically named, and built from the canonical source files so future UI work does not drift into hardcoded colors or hand-edited build artifacts.",
+      "why": "The design document defines implementation invariants that protect maintainability, build correctness, and semantic class stability across future stories.",
+      "scope": [
+        "Keep stable semantic classes for shared Mission Control surfaces and add modifiers rather than replacing shell names.",
+        "Ensure semantic classes and Tailwind utilities consume --mm-* tokens rather than hardcoded opaque colors where token-based values are appropriate.",
+        "Avoid scattered dark:* overrides when tokenized surfaces can adapt automatically.",
+        "Ensure Tailwind scans api_service/templates/react_dashboard.html, api_service/templates/_navigation.html, and frontend/src/**/*.{js,jsx,ts,tsx}.",
+        "Keep frontend/src/styles/mission-control.css as the canonical styling source.",
+        "Prevent hand edits to generated api_service/static/task_dashboard/dist/ assets as part of design-system implementation."
+      ],
+      "outOfScope": [
+        "Replacing Tailwind, Vite, or the frontend build toolchain.",
+        "Route architecture, runtime config, or API boundary changes covered by MissionControlArchitecture.md."
+      ],
+      "sourceReference": {
+        "path": "docs/UI/MissionControlDesignSystem.md",
+        "title": "Mission Control Design System",
+        "sections": [
+          "1. Purpose",
+          "13. Implementation invariants"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-024",
+          "DESIGN-REQ-025",
+          "DESIGN-REQ-026"
+        ]
+      },
+      "independentTest": "Run lint/unit/build checks that inspect Tailwind content configuration, canonical CSS imports, generated-dist cleanliness, and representative Mission Control classes for token consumption and semantic modifier naming.",
+      "acceptanceCriteria": [
+        "Existing semantic shell class names such as dashboard-root, masthead, route-nav, panel, card, toolbar, status-*, and queue-* remain stable where applicable.",
+        "New shared styling uses additive modifiers such as panel--controls, panel--data, panel--floating, panel--utility, or table-wrap--wide where useful.",
+        "Mission Control semantic classes consume --mm-* tokens instead of introducing hardcoded opaque colors for tokenized roles.",
+        "Light and dark themes stay behaviorally identical through token swaps rather than scattered one-off overrides.",
+        "Tailwind content scanning includes the documented template and frontend source paths.",
+        "Design-system changes edit frontend/src/styles/mission-control.css or source components/templates, not generated dist assets."
+      ],
+      "requirements": [
+        "Protect semantic class stability.",
+        "Enforce token-first theming.",
+        "Validate Tailwind source scanning.",
+        "Preserve the canonical styling source and generated-artifact boundary."
+      ],
+      "sourceDesignCoverage": [
+        "DESIGN-REQ-001: preserves design-system ownership boundaries and points route/API architecture elsewhere.",
+        "DESIGN-REQ-024: owns semantic class stability.",
+        "DESIGN-REQ-025: owns token-first theming implementation.",
+        "DESIGN-REQ-026: owns Tailwind scanning and canonical styling source boundaries."
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Generated dist assets may change only through an explicit build step, not by manual editing."
+      ],
+      "needsClarification": [],
+      "handoff": "Implement styling source and build invariants as a guardrail story with tests or checks that fail on missing Tailwind scan paths, hand-edited dist assets, hardcoded token-role colors, or semantic shell class churn."
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-004",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-004",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-004",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-025": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-026": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-027": [
+      "STORY-001",
+      "STORY-002"
+    ]
+  }
+}
