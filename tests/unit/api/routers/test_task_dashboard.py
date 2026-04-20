@@ -280,6 +280,21 @@ def test_navigation_exposes_single_manifest_destination(client: TestClient) -> N
     assert 'href="/tasks/manifests/new"' not in response.text
 
 
+def test_react_shell_wraps_navigation_in_centered_masthead_slot(
+    client: TestClient,
+) -> None:
+    response = client.get("/tasks/list")
+
+    assert response.status_code == 200
+    assert '<div class="masthead-nav">' in response.text
+    assert response.text.index('<div class="masthead-nav">') < response.text.index(
+        'id="mission-control-nav"'
+    )
+    assert response.text.index('id="mission-control-nav"') < response.text.index(
+        '<div class="masthead-title-meta">'
+    )
+
+
 def test_trailing_slash_alias_routes_return_404_not_detail_page(client: TestClient) -> None:
     """Trailing-slash variants /tasks/create/ and /tasks/tasks-list/ must not render a detail shell."""
     for path in ("/tasks/create/", "/tasks/tasks-list/"):
