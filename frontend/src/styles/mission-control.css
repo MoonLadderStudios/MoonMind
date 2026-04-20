@@ -117,8 +117,8 @@ samp {
   position: absolute;
   z-index: -1;
   top: calc(-1 * var(--dashboard-pt, 0.9rem));
-  left: calc(50% - 50vw);
-  right: calc(50% - 50vw);
+  left: calc(50% - 50cqw - 1rem);
+  right: calc(50% - 50cqw - 1rem);
   bottom: 0;
   background: rgb(var(--mm-panel) / 0.74);
   box-shadow: 0 14px 28px -24px rgb(var(--mm-ink) / 0.35);
@@ -127,8 +127,8 @@ samp {
 .masthead::after {
   content: "";
   position: absolute;
-  left: calc(50% - 50vw);
-  right: calc(50% - 50vw);
+  left: calc(50% - 50cqw - 1rem);
+  right: calc(50% - 50cqw - 1rem);
   bottom: 0;
   border-bottom: 1px solid rgb(var(--mm-border) / 0.7);
 }

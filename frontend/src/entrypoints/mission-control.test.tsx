@@ -124,12 +124,11 @@ describe('Mission Control shared entry', () => {
     );
 
     expect(missionControlCss).toMatch(
-      /\.masthead::before\s*\{[^}]*left:\s*calc\(50% - 50vw\);[^}]*right:\s*calc\(50% - 50vw\);/s,
+      /\.masthead::before\s*\{[^}]*left:\s*calc\(50% - 50cqw - 1rem\);[^}]*right:\s*calc\(50% - 50cqw - 1rem\);/s,
     );
     expect(missionControlCss).toMatch(
-      /\.masthead::after\s*\{[^}]*left:\s*calc\(50% - 50vw\);[^}]*right:\s*calc\(50% - 50vw\);/s,
+      /\.masthead::after\s*\{[^}]*left:\s*calc\(50% - 50cqw - 1rem\);[^}]*right:\s*calc\(50% - 50cqw - 1rem\);/s,
     );
-    expect(missionControlCss).not.toContain('50cqw');
   });
 
   it('renders an explicit error state for unknown pages', async () => {
