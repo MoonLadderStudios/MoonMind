@@ -36,6 +36,9 @@ VERIFY_LEASE_HOLDERS_PATCH = "auth-profile-manager-verify-leases-v1"
 DB_LEASE_PERSISTENCE_PATCH = "provider-profile-manager-db-lease-persistence-v1"
 SLOT_HANDOFF_RESERVATION_PATCH = "provider-profile-manager-slot-handoff-v1"
 REFRESH_RESTORED_PROFILES_PATCH = "provider-profile-manager-refresh-restored-profiles-v1"
+DB_AUTHORITATIVE_PROFILE_SYNC_PATCH = (
+    "provider-profile-manager-db-authoritative-profile-sync-v1"
+)
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -279,6 +282,8 @@ class MoonMindProviderProfileManagerWorkflow:
         self._event_count: int = 0
         self._shutdown_requested: bool = False
         self._has_new_events: bool = False
+        self._profile_refresh_requested: bool = False
+        self._has_db_profile_snapshot: bool = False
 
     # -- Signals ---------------------------------------------------------------
 
@@ -309,8 +314,12 @@ class MoonMindProviderProfileManagerWorkflow:
         for index, existing in enumerate(self._pending_requests):
             if existing.requester_workflow_id == request.requester_workflow_id:
                 self._pending_requests[index] = request
+                if workflow.patched(DB_AUTHORITATIVE_PROFILE_SYNC_PATCH):
+                    self._profile_refresh_requested = True
                 return
         self._pending_requests.append(request)
+        if workflow.patched(DB_AUTHORITATIVE_PROFILE_SYNC_PATCH):
+            self._profile_refresh_requested = True
 
     @workflow.signal
     async def release_slot(self, payload: dict[str, Any]) -> None:
@@ -365,9 +374,19 @@ class MoonMindProviderProfileManagerWorkflow:
 
     @workflow.signal
     def sync_profiles(self, payload: dict[str, Any]) -> None:
-        """Receive an updated profile list from the DB sync activity."""
+        """Request a provider-profile refresh from the authoritative DB snapshot.
+
+        The signal payload shape is preserved for in-flight workflow
+        compatibility, but new executions intentionally ignore embedded profile
+        rows. Profile existence and enabled/default state must come from the
+        provider_profile.list activity so stray or stale signal payloads cannot
+        poison slot assignment.
+        """
         self._event_count += 1
         self._has_new_events = True
+        if workflow.patched(DB_AUTHORITATIVE_PROFILE_SYNC_PATCH):
+            self._profile_refresh_requested = True
+            return
         profiles_data = payload.get("profiles", [])
         self._apply_profile_sync(profiles_data)
 
@@ -445,6 +464,24 @@ class MoonMindProviderProfileManagerWorkflow:
 
         # Main event loop: process signals, drain queue, clear cooldowns.
         while not self._shutdown_requested:
+            if workflow.patched(DB_AUTHORITATIVE_PROFILE_SYNC_PATCH):
+                if self._profile_refresh_requested:
+                    refresh_succeeded = await self._load_profiles_from_db(
+                        prune_removed_profiles=True
+                    )
+                    if not refresh_succeeded and not self._has_db_profile_snapshot:
+                        self._has_new_events = False
+                        try:
+                            await workflow.wait_condition(
+                                lambda: self._has_new_events
+                                or self._shutdown_requested,
+                                timeout=timedelta(seconds=60),
+                            )
+                        except TimeoutError:
+                            # Expected: retry the authoritative profile refresh on the next loop.
+                            pass
+                        continue
+
             # Drain pending requests against available profiles.
             await self._drain_queue()
 
@@ -606,6 +643,12 @@ class MoonMindProviderProfileManagerWorkflow:
             if pid not in seen:
                 self._profiles[pid].enabled = False
                 self._profiles[pid].is_default = False
+
+    def _prune_disabled_profiles_without_leases(self) -> None:
+        """Drop stale profile metadata that cannot still own runtime leases."""
+        for pid, profile in list(self._profiles.items()):
+            if not profile.enabled and not profile.current_leases:
+                self._profiles.pop(pid, None)
 
     @staticmethod
     def _normalize_optional_string(value: object) -> str | None:
@@ -984,8 +1027,11 @@ class MoonMindProviderProfileManagerWorkflow:
             },
         }
 
-    async def _load_profiles_from_db(self) -> None:
+    async def _load_profiles_from_db(
+        self, *, prune_removed_profiles: bool = False
+    ) -> bool:
         """Load provider profiles for this runtime from the database via activity."""
+        self._profile_refresh_requested = False
         try:
             result = await workflow.execute_activity(
                 "provider_profile.list",
@@ -1001,9 +1047,17 @@ class MoonMindProviderProfileManagerWorkflow:
             )
             profiles_data = result.get("profiles", []) if result else []
             self._apply_profile_sync(profiles_data)
+            if prune_removed_profiles:
+                self._prune_disabled_profiles_without_leases()
+            self._has_db_profile_snapshot = True
+            return True
         except Exception:
-            # If we can't load profiles, we'll wait for a sync_profiles signal.
-            pass
+            self._profile_refresh_requested = True
+            self._get_logger().warning(
+                "Failed to refresh provider profiles from DB for runtime %s",
+                self._runtime_id,
+            )
+            return False
 
     async def _sync_leases_to_db(self) -> None:
         """Persist current lease state to the database for crash recovery."""

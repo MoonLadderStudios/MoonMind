@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+    DB_AUTHORITATIVE_PROFILE_SYNC_PATCH,
     HandoffReservation,
     PendingRequest,
     SLOT_HANDOFF_RESERVATION_PATCH,
@@ -225,7 +226,7 @@ class TestProviderProfileManagerHelpers:
         # Leases should be preserved across sync.
         assert wf._profiles["p1"].current_leases == ["wf1"]
 
-    def test_apply_profile_sync_disables_removed(self):
+    def test_apply_profile_sync_disables_removed_profiles_without_leases(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(
             profile_id="p1",
@@ -235,11 +236,233 @@ class TestProviderProfileManagerHelpers:
             enabled=True,
             is_default=True,
         )
-        # Sync with empty list — p1 should be disabled but not deleted.
+        # Legacy sync merge keeps the row but makes it unavailable.
         wf._apply_profile_sync([])
         assert "p1" in wf._profiles
         assert not wf._profiles["p1"].enabled
         assert not wf._profiles["p1"].is_default
+
+    def test_prune_disabled_profiles_without_leases_removes_dead_state(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=False,
+            is_default=False,
+        )
+
+        wf._prune_disabled_profiles_without_leases()
+
+        assert "p1" not in wf._profiles
+
+    def test_apply_profile_sync_disables_removed_profiles_with_leases(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            current_leases=["wf1"],
+        )
+
+        wf._apply_profile_sync([])
+
+        assert "p1" in wf._profiles
+        assert not wf._profiles["p1"].enabled
+        assert not wf._profiles["p1"].is_default
+
+    def test_sync_profiles_legacy_payload_path_before_db_authoritative_patch(self):
+        wf = self._make_workflow()
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = False
+            wf.sync_profiles(
+                {
+                    "profiles": [
+                        {
+                            "profile_id": "payload_profile",
+                            "max_parallel_runs": 1,
+                            "rate_limit_policy": "backoff",
+                            "enabled": True,
+                        }
+                    ]
+                }
+            )
+
+        assert "payload_profile" in wf._profiles
+        assert wf._profile_refresh_requested is False
+
+    def test_sync_profiles_requests_db_refresh_after_authoritative_patch(self):
+        wf = self._make_workflow()
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == DB_AUTHORITATIVE_PROFILE_SYNC_PATCH
+            )
+            wf.sync_profiles(
+                {
+                    "profiles": [
+                        {
+                            "profile_id": "polluted_profile",
+                            "max_parallel_runs": 1,
+                            "rate_limit_policy": "backoff",
+                            "enabled": True,
+                        }
+                    ]
+                }
+            )
+
+        assert "polluted_profile" not in wf._profiles
+        assert wf._profile_refresh_requested is True
+
+    @pytest.mark.asyncio
+    async def test_polluted_sync_payload_does_not_assign_missing_profile(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        async def fake_execute_activity(
+            activity_name: str,
+            payload: dict,
+            **_: object,
+        ) -> dict:
+            assert activity_name == "provider_profile.list"
+            assert payload == {"runtime_id": "codex_cli"}
+            return {
+                "profiles": [
+                    {
+                        "profile_id": "codex_default",
+                        "max_parallel_runs": 1,
+                        "cooldown_after_429_seconds": 900,
+                        "rate_limit_policy": "backoff",
+                        "enabled": True,
+                        "is_default": True,
+                        "provider_id": "openai",
+                        "runtime_materialization_mode": "oauth_home",
+                    }
+                ]
+            }
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.side_effect = lambda patch_id: patch_id in {
+                SLOT_HANDOFF_RESERVATION_PATCH,
+                DB_AUTHORITATIVE_PROFILE_SYNC_PATCH,
+            }
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+            mock_wf.now.return_value = datetime(2026, 4, 20, tzinfo=timezone.utc)
+
+            wf.sync_profiles(
+                {
+                    "profiles": [
+                        {
+                            "profile_id": "runtime_default_second",
+                            "max_parallel_runs": 1,
+                            "cooldown_after_429_seconds": 900,
+                            "rate_limit_policy": "backoff",
+                            "enabled": True,
+                            "is_default": True,
+                        }
+                    ]
+                }
+            )
+            wf.request_slot(
+                {
+                    "requester_workflow_id": "resolver-run:agent:node-1",
+                    "runtime_id": "codex_cli",
+                    "lease_group_id": "resolver-run",
+                    "profile_selector": {"tagsAny": [], "tagsAll": []},
+                }
+            )
+
+            assert (
+                await wf._load_profiles_from_db(prune_removed_profiles=True)
+                is True
+            )
+            await wf._drain_queue()
+
+        assert assigned == [("resolver-run:agent:node-1", "codex_default")]
+        assert "runtime_default_second" not in wf._profiles
+        assert wf._profiles["codex_default"].current_leases == [
+            "resolver-run:agent:node-1"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_profile_refresh_preserves_signal_that_arrives_during_activity(
+        self,
+    ):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profile_refresh_requested = True
+
+        async def fake_execute_activity(*_: object, **__: object) -> dict:
+            wf._profile_refresh_requested = True
+            return {
+                "profiles": [
+                    {
+                        "profile_id": "codex_default",
+                        "max_parallel_runs": 1,
+                        "cooldown_after_429_seconds": 900,
+                        "rate_limit_policy": "backoff",
+                        "enabled": True,
+                        "is_default": True,
+                    }
+                ]
+            }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+
+            assert await wf._load_profiles_from_db() is True
+
+        assert wf._has_db_profile_snapshot is True
+        assert wf._profile_refresh_requested is True
+
+    @pytest.mark.asyncio
+    async def test_failed_profile_refresh_keeps_known_good_snapshot_available(
+        self,
+    ):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._has_db_profile_snapshot = True
+        wf._profiles["codex_default"] = ProfileSlotState(
+            profile_id="codex_default",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=900,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+
+        async def fake_execute_activity(*_: object, **__: object) -> dict:
+            raise RuntimeError("temporary DB outage")
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+
+            assert await wf._load_profiles_from_db() is False
+
+        assert wf._has_db_profile_snapshot is True
+        assert wf._profile_refresh_requested is True
+        assert wf._profiles["codex_default"].enabled is True
 
     def test_find_available_profile_picks_most_free(self):
         wf = self._make_workflow()
