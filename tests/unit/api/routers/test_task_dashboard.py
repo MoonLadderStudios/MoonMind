@@ -186,6 +186,7 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert "moonmind-ui-boot" in response.text
         assert 'type="module"' in response.text
         assert "/static/task_dashboard/dist/assets/" in response.text
+        assert 'class="dashboard-shell-full"' in response.text
         assert 'class="masthead-brand"' in response.text
         assert 'src="/static/task_dashboard/moonmindlogo.webp"' in response.text
         assert "MOONMIND OPERATIONS" not in response.text

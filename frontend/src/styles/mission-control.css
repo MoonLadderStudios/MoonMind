@@ -101,6 +101,10 @@ samp {
   max-width: min(112rem, calc(100vw - 2rem));
 }
 
+.dashboard-shell-full {
+  width: 100%;
+}
+
 .masthead {
   position: relative;
   isolation: isolate;
