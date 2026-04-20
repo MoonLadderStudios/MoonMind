@@ -1496,7 +1496,7 @@ async def test_signal_skip_dependency_wait_routes_update_and_records_audit(
             "SkipDependencyWait",
         )
         refreshed = await service.describe_execution(created.workflow_id)
-        assert refreshed.state is MoonMindWorkflowState.EXECUTING
+        assert refreshed.state is MoonMindWorkflowState.AWAITING_SLOT
         assert refreshed.paused is False
         assert (
             refreshed.memo["intervention_audit"][-1]["action"]

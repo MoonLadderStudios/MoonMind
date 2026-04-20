@@ -1193,7 +1193,7 @@ class TemporalExecutionService:
                 record.paused = False
                 self._clear_waiting_metadata(record)
                 self._clear_wait_metadata(record)
-                self._set_state(record, MoonMindWorkflowState.EXECUTING)
+                self._set_state(record, MoonMindWorkflowState.AWAITING_SLOT)
                 self._append_intervention_audit(
                     record,
                     action="skip_dependency_wait",
