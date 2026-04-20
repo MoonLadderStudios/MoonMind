@@ -304,7 +304,7 @@ def _task_template_primary_skill_name(task_payload: Mapping[str, Any]) -> str | 
         "applied_step_templates"
     )
     if isinstance(applied_templates, list):
-        for item in applied_templates:
+        for item in reversed(applied_templates):
             if not isinstance(item, Mapping):
                 continue
             candidate = _coerce_temporal_scalar(

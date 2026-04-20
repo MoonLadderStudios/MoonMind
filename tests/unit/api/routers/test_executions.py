@@ -2162,6 +2162,35 @@ def test_serialize_execution_surfaces_applied_template_slug_as_primary_skill() -
     assert dumped["taskSkills"] == ["jira-orchestrate"]
 
 
+def test_serialize_execution_uses_latest_applied_template_as_primary_skill() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "targetRuntime": "codex_cli",
+        "task": {
+            "instructions": "Run the latest applied preset.",
+            "appliedStepTemplates": [
+                {
+                    "slug": "initial-preset",
+                    "version": "1.0.0",
+                    "stepIds": ["tpl:initial-preset:1"],
+                },
+                {
+                    "slug": "latest-preset",
+                    "version": "1.0.0",
+                    "stepIds": ["tpl:latest-preset:1"],
+                },
+            ],
+        },
+    }
+
+    payload = _serialize_execution(record)
+    dumped = payload.model_dump(by_alias=True)
+
+    assert dumped["targetSkill"] == "latest-preset"
+    assert dumped["taskSkills"] == ["latest-preset"]
+    assert dumped["skillRuntime"]["selectedSkills"] == ["latest-preset"]
+
+
 def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
