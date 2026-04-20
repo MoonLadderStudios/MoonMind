@@ -116,6 +116,21 @@ describe('Mission Control shared entry', () => {
     );
   });
 
+  it('lets masthead chrome span the viewport while content stays constrained', async () => {
+    const { readFileSync } = await import('node:fs');
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      'utf8',
+    );
+
+    expect(missionControlCss).toMatch(
+      /\.masthead::before\s*\{[^}]*left:\s*calc\(50% - 50cqw - 1rem\);[^}]*right:\s*calc\(50% - 50cqw - 1rem\);/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.masthead::after\s*\{[^}]*left:\s*calc\(50% - 50cqw - 1rem\);[^}]*right:\s*calc\(50% - 50cqw - 1rem\);/s,
+    );
+  });
+
   it('renders an explicit error state for unknown pages', async () => {
     renderWithClient(
       <MissionControlApp payload={{ page: 'not-a-page', apiBase: '/api' }} />,
