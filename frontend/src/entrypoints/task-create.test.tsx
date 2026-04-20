@@ -5659,6 +5659,18 @@ describe("Task Create Entrypoint", () => {
     );
   });
 
+  it("gives repository, branch, and publish controls equal desktop space in the floating bar", async () => {
+    const { readFileSync } = await import("node:fs");
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      "utf8",
+    );
+
+    expect(missionControlCss).toMatch(
+      /\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)\s*auto/s,
+    );
+  });
+
   it("centers the constrained create page panel with equal side margins", async () => {
     const { readFileSync } = await import("node:fs");
     const missionControlCss = readFileSync(

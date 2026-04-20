@@ -1877,7 +1877,7 @@ button.secondary:hover {
 
 .queue-floating-bar-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.7fr) auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   gap: 0.5rem;
   align-items: center;
 }
