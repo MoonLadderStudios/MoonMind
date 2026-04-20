@@ -2250,6 +2250,82 @@ describe('Task Detail Entrypoint', () => {
     confirmSpy.mockRestore();
   });
 
+  it('supports manually skipping dependency waiting from the Intervention panel', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Blocked dependent task',
+      summary: 'Waiting on prerequisites',
+      status: 'waiting',
+      state: 'waiting_on_dependencies',
+      rawState: 'waiting_on_dependencies',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      blockedOnDependencies: true,
+      dependencies: [{ workflowId: 'dep-1', title: 'Prerequisite one', state: 'running' }],
+      dependents: [],
+      actions: {
+        canCancel: true,
+        canSkipDependencyWait: true,
+      },
+      interventionAudit: [],
+    };
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      if (url.endsWith('/signal')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...mockExecution,
+            state: 'executing',
+            rawState: 'executing',
+            summary: 'Dependency wait skipped by operator.',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Skip Dependency Wait' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/signal',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            signalName: 'SkipDependencyWait',
+            payload: {},
+          }),
+        }),
+      );
+    });
+
+    confirmSpy.mockRestore();
+  });
+
   it('renders a Session Continuity panel for Codex managed-session task runs', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,

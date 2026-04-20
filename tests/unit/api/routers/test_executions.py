@@ -1899,6 +1899,41 @@ def test_signal_execution_routes_send_message_and_serializes_audit(
     assert body["interventionAudit"][0]["detail"] == "Continue with provider profiles."
 
 
+def test_signal_execution_routes_skip_dependency_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.WAITING_ON_DEPENDENCIES)
+    record.memo["intervention_audit"] = [
+        {
+            "action": "skip_dependency_wait",
+            "transport": "temporal_update",
+            "summary": "Dependency wait skipped by operator.",
+            "createdAt": "2026-03-31T01:02:03Z",
+        }
+    ]
+    mock_service.describe_execution.return_value = record
+    mock_service.signal_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions/mm:wf-1/signal",
+            json={"signalName": "SkipDependencyWait", "payload": {}},
+        )
+
+    assert response.status_code == 202
+    called = mock_service.signal_execution.await_args.kwargs
+    assert called["signal_name"] == "SkipDependencyWait"
+    assert called["payload"] == {}
+    body = response.json()
+    assert body["actions"]["canSkipDependencyWait"] is True
+    assert body["interventionAudit"][0]["action"] == "skip_dependency_wait"
+
+
 def test_cancel_execution_passes_reject_action_to_service() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record(

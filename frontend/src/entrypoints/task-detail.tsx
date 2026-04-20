@@ -287,6 +287,7 @@ const ExecutionDetailSchema = z
         canCancel: z.boolean().optional(),
         canReject: z.boolean().optional(),
         canSendMessage: z.boolean().optional(),
+        canSkipDependencyWait: z.boolean().optional(),
         disabledReasons: z.record(z.string(), z.string()).optional(),
       })
       .passthrough()
@@ -2305,6 +2306,7 @@ function InterventionPanel({
   onCancel,
   onReject,
   onSendMessage,
+  onSkipDependencyWait,
 }: {
   actions: NonNullable<z.infer<typeof ExecutionDetailSchema>['actions']>;
   busy: boolean;
@@ -2321,6 +2323,7 @@ function InterventionPanel({
   onCancel: () => void;
   onReject: () => void;
   onSendMessage: (message: string) => void;
+  onSkipDependencyWait: () => void;
 }) {
   const [operatorMessage, setOperatorMessage] = useState('');
   const hasControls = Boolean(
@@ -2329,6 +2332,7 @@ function InterventionPanel({
       actions.canApprove ||
       actions.canCancel ||
       actions.canReject ||
+      actions.canSkipDependencyWait ||
       actions.canSendMessage,
   );
 
@@ -2373,6 +2377,11 @@ function InterventionPanel({
               onClick={onReject}
             >
               Reject
+            </button>
+          ) : null}
+          {actions.canSkipDependencyWait ? (
+            <button type="button" disabled={busy} className="secondary" onClick={onSkipDependencyWait}>
+              Skip Dependency Wait
             </button>
           ) : null}
           {actions.canCancel ? (
@@ -3098,6 +3107,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     signalMutation.mutate({ signalName: 'Approve', payload: {} });
   };
 
+  const onSkipDependencyWait = () => {
+    setActionError(null);
+    if (!window.confirm('Skip dependency waiting and continue this task?')) return;
+    signalMutation.mutate({ signalName: 'SkipDependencyWait', payload: {} });
+  };
+
   const onSendMessage = (message: string) => {
     setActionError(null);
     signalMutation.mutate({ signalName: 'SendMessage', payload: { message } });
@@ -3151,6 +3166,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
         actions.canCancel ||
         actions.canReject ||
         actions.canSendMessage ||
+        actions.canSkipDependencyWait ||
         (execution?.interventionAudit?.length ?? 0) > 0
       ),
   );
@@ -3662,6 +3678,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               onCancel={onCancel}
               onReject={onReject}
               onSendMessage={onSendMessage}
+              onSkipDependencyWait={onSkipDependencyWait}
             />
           ) : null}
 

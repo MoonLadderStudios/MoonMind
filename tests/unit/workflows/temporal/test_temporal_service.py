@@ -1463,6 +1463,53 @@ async def test_signal_send_message_records_intervention_audit_without_state_chan
 
 
 @pytest.mark.asyncio
+async def test_signal_skip_dependency_wait_routes_update_and_records_audit(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.WAITING_ON_DEPENDENCIES
+        await session.commit()
+
+        await service.signal_execution(
+            workflow_id=created.workflow_id,
+            signal_name="SkipDependencyWait",
+            payload={},
+            payload_artifact_ref=None,
+        )
+
+        service._client_adapter.update_workflow.assert_awaited_once_with(
+            created.workflow_id,
+            "SkipDependencyWait",
+        )
+        refreshed = await service.describe_execution(created.workflow_id)
+        assert refreshed.state is MoonMindWorkflowState.EXECUTING
+        assert refreshed.paused is False
+        assert (
+            refreshed.memo["intervention_audit"][-1]["action"]
+            == "skip_dependency_wait"
+        )
+        assert (
+            refreshed.memo["intervention_audit"][-1]["summary"]
+            == "Dependency wait skipped by operator."
+        )
+        assert refreshed.memo.get("waiting_reason") is None
+
+
+@pytest.mark.asyncio
 async def test_signal_send_message_rejects_noncanonical_payload(
     tmp_path, mock_client_adapter
 ):
