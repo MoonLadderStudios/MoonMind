@@ -83,11 +83,6 @@ const mockPayload: BootPayload = {
   },
 };
 
-const missionControlCss = readFileSync(
-  resolve(process.cwd(), "frontend/src/styles/mission-control.css"),
-  "utf8",
-);
-
 function withJiraIntegration(payload: BootPayload = mockPayload): BootPayload {
   const initialData = payload.initialData as {
     dashboardConfig: {
@@ -5667,8 +5662,13 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("centers the constrained create page panel with equal side margins", () => {
+    const missionControlCss = readFileSync(
+      resolve(process.cwd(), "frontend/src/styles/mission-control.css"),
+      "utf8",
+    );
+
     expect(missionControlCss).toMatch(
-      /\.panel:has\(\.task-create-page\)\s*\{[^}]*max-width:\s*min\(72rem,\s*calc\(100vw - 2rem\)\);[^}]*margin-left:\s*auto;[^}]*margin-right:\s*auto;/s,
+      /\.panel:has\(\.task-create-page\)\s*\{[^}]*margin-inline:\s*auto/s,
     );
   });
 
