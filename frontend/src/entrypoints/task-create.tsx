@@ -957,12 +957,12 @@ function resolveEffectiveSkillId(
   primarySkillId: string,
   appliedTemplates: AppliedTemplateState[],
 ): string {
-  if (hasExplicitSkillSelection(primarySkillId)) {
-    return primarySkillId;
-  }
   if (appliedTemplates.length > 0) {
     const lastTemplate = appliedTemplates[appliedTemplates.length - 1];
     return lastTemplate?.slug ?? primarySkillId;
+  }
+  if (hasExplicitSkillSelection(primarySkillId)) {
+    return primarySkillId;
   }
   return primarySkillId;
 }
@@ -5042,7 +5042,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         : cleaned;
     })();
 
-    // Determine skill: use template slug when a preset is applied without explicit skill selection.
+    // Determine skill: applied presets define the workflow-level primary skill.
     const effectiveSubmissionSkillId = resolveEffectiveSkillId(
       primarySkillId,
       appliedTemplates,

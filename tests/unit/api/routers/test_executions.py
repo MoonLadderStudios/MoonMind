@@ -2115,6 +2115,53 @@ def test_serialize_execution_surfaces_runtime_fields_from_task_runtime_payload()
     assert dumped["profileId"] == "profile:claude-default"
 
 
+def test_serialize_execution_surfaces_task_template_slug_as_primary_skill() -> None:
+    record = _build_execution_record(
+        state=MoonMindWorkflowState.WAITING_ON_DEPENDENCIES
+    )
+    record.parameters = {
+        "targetRuntime": "codex_cli",
+        "task": {
+            "title": "Run Jira Orchestrate for MM-501",
+            "instructions": "Use the existing Jira Orchestrate workflow.",
+            "taskTemplate": {
+                "slug": "jira-orchestrate",
+                "version": "1.0.0",
+            },
+        },
+    }
+
+    payload = _serialize_execution(record)
+    dumped = payload.model_dump(by_alias=True)
+
+    assert dumped["targetSkill"] == "jira-orchestrate"
+    assert dumped["taskSkills"] == ["jira-orchestrate"]
+    assert dumped["skillRuntime"]["selectedSkills"] == ["jira-orchestrate"]
+
+
+def test_serialize_execution_surfaces_applied_template_slug_as_primary_skill() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "targetRuntime": "codex_cli",
+        "task": {
+            "instructions": "Run the applied preset.",
+            "appliedStepTemplates": [
+                {
+                    "slug": "jira-orchestrate",
+                    "version": "1.0.0",
+                    "stepIds": ["tpl:jira-orchestrate:1"],
+                }
+            ],
+        },
+    }
+
+    payload = _serialize_execution(record)
+    dumped = payload.model_dump(by_alias=True)
+
+    assert dumped["targetSkill"] == "jira-orchestrate"
+    assert dumped["taskSkills"] == ["jira-orchestrate"]
+
+
 def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
