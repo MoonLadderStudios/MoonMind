@@ -677,6 +677,7 @@ class JiraBrowserService:
         client: JiraClient,
     ) -> list[Mapping[str, Any]]:
         issues: list[Mapping[str, Any]] = []
+        jql = self._board_issue_scope_jql()
         start_at = 0
         while True:
             payload = await self._request_json_with_client(
@@ -686,6 +687,7 @@ class JiraBrowserService:
                 action="jira_browser.list_issues",
                 params={
                     "fields": "summary,issuetype,status,assignee,updated,project",
+                    "jql": jql,
                     "maxResults": _JIRA_BROWSER_PAGE_SIZE,
                     "startAt": start_at,
                 },
@@ -703,6 +705,15 @@ class JiraBrowserService:
             if isinstance(total, int) and start_at >= total:
                 break
         return issues
+
+    def _board_issue_scope_jql(self) -> str:
+        recent_done_days = self._feature_flags.jira_create_page_recent_done_days
+        if recent_done_days <= 0:
+            return "statusCategory != Done ORDER BY updated DESC"
+        return (
+            f"(statusCategory != Done OR updated >= -{recent_done_days}d) "
+            "ORDER BY updated DESC"
+        )
 
     def _ensure_enabled(self) -> None:
         if not self._feature_flags.jira_create_page_enabled:

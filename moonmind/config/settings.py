@@ -1663,6 +1663,18 @@ class FeatureFlagsSettings(BaseSettings):
             "project and board in browser session storage."
         ),
     )
+    jira_create_page_recent_done_days: int = Field(
+        30,
+        ge=0,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_RECENT_DONE_DAYS",
+            "JIRA_CREATE_PAGE_RECENT_DONE_DAYS",
+        ),
+        description=(
+            "Limit Create-page Jira board issue browsing to non-Done issues plus "
+            "Done issues updated within this many days. Set to 0 to exclude Done."
+        ),
+    )
 
     task_template_catalog: bool = Field(
         True,
