@@ -348,6 +348,40 @@ async def test_evaluate_pull_request_readiness_ignores_empty_combined_status_pen
 
 
 @pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_respects_failed_combined_status_without_check_runs(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
+            _mock_get_response(200, {"state": "failure", "statuses": []}),
+            _mock_get_response(200, {"check_runs": []}),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "disabled"},
+        )
+
+    assert result.ready is False
+    assert result.checks_complete is True
+    assert result.checks_passing is False
+    assert result.blockers[0]["kind"] == "checks_failed"
+
+
+@pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_treats_commented_automated_review_as_complete(
     monkeypatch,
 ):
@@ -395,6 +429,56 @@ async def test_evaluate_pull_request_readiness_treats_commented_automated_review
     assert result.ready is True
     assert result.automated_review_complete is True
     assert result.blockers == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_waits_for_human_commented_review(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
+            _mock_get_response(200, {"state": "success"}),
+            _mock_get_response(
+                200,
+                {
+                    "check_runs": [
+                        {"status": "completed", "conclusion": "success"},
+                    ]
+                },
+            ),
+            _mock_get_response(
+                200,
+                [
+                    {
+                        "state": "COMMENTED",
+                        "submitted_at": "2026-04-19T20:18:26Z",
+                        "user": {"login": "reviewer-a", "type": "User"},
+                    },
+                ],
+            ),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "required"},
+        )
+
+    assert result.ready is False
+    assert result.automated_review_complete is False
+    assert result.blockers[0]["kind"] == "automated_review_pending"
 
 
 @pytest.mark.asyncio

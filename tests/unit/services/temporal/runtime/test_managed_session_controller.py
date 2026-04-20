@@ -823,10 +823,13 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
             "socket_path": DockerCodexManagedSessionController._build_github_socket_path(
                 run_id=request.session_id,
                 support_root=str(Path(request.session_workspace_path) / ".moonmind"),
+                socket_root=str(workspace_root / ".mm-gh"),
             ),
         }
     ]
-    assert len(github_auth_brokers.starts[0]["socket_path"].encode("utf-8")) < 80
+    assert github_auth_brokers.starts[0]["socket_path"].startswith(
+        str(workspace_root / ".mm-gh")
+    )
     assert request.session_workspace_path not in github_auth_brokers.starts[0]["socket_path"]
     docker_run_text = " ".join(docker_commands[0])
     assert token not in docker_run_text

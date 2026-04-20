@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -568,7 +568,9 @@ class GitHubService:
         status_pending = status_state in {"pending", "expected"} and (
             has_commit_statuses or not has_check_runs
         )
-        status_failed = status_state in {"failure", "error"} and has_commit_statuses
+        status_failed = status_state in {"failure", "error"} and (
+            has_commit_statuses or not has_check_runs
+        )
         if status_pending or pending_runs:
             blockers.append(
                 {
@@ -640,7 +642,7 @@ class GitHubService:
                 ],
             }
 
-        latest_review_states: dict[str, str] = {}
+        latest_review_states: dict[str, tuple[str, bool]] = {}
         review_items = [
             (str(review.get("submitted_at") or ""), index, review)
             for index, review in enumerate(reviews)
@@ -649,14 +651,18 @@ class GitHubService:
         for _submitted_at, index, review in sorted(review_items):
             user = review.get("user") if isinstance(review.get("user"), dict) else {}
             reviewer = str(user.get("login") or review.get("user") or index)
-            latest_review_states[reviewer] = str(review.get("state") or "").upper()
+            latest_review_states[reviewer] = (
+                str(review.get("state") or "").upper(),
+                self._is_trusted_automation_reviewer(reviewer, user),
+            )
 
         review_completed = any(
-            state in {"APPROVED", "COMMENTED"}
-            for state in latest_review_states.values()
+            state == "APPROVED" or (state == "COMMENTED" and trusted_automation)
+            for state, trusted_automation in latest_review_states.values()
         )
         changes_requested = any(
-            state == "CHANGES_REQUESTED" for state in latest_review_states.values()
+            state == "CHANGES_REQUESTED"
+            for state, _trusted_automation in latest_review_states.values()
         )
         if review_completed and not changes_requested:
             return {"complete": True, "blockers": []}
@@ -683,6 +689,24 @@ class GitHubService:
                 }
             ],
         }
+
+    @staticmethod
+    def _is_trusted_automation_reviewer(
+        reviewer: str,
+        user: Mapping[str, Any],
+    ) -> bool:
+        login = reviewer.strip().lower()
+        user_type = str(user.get("type") or "").strip().lower()
+        return (
+            user_type == "bot"
+            or login.endswith("[bot]")
+            or login
+            in {
+                "chatgpt-codex-connector",
+                "gemini-code-assist",
+                "github-actions",
+            }
+        )
 
 
 __all__ = [
