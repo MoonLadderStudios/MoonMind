@@ -61,7 +61,9 @@ function AppShell({
 }) {
   return (
     <>
-      <div className="dashboard-shell-constrained">
+      <div
+        className={`dashboard-shell-constrained${dataWidePanel ? ' dashboard-shell-constrained--data-wide' : ''}`}
+      >
         <DashboardAlerts />
       </div>
       <section
