@@ -550,7 +550,7 @@ async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
     ]
     assert service.calls[2]["params"] == {
         "fields": "summary,issuetype,status,assignee,updated,project",
-        "jql": "(statusCategory != Done OR updated >= -30d) ORDER BY updated DESC",
+        "jql": "(statusCategory != Done OR updated >= -30d)",
         "maxResults": 50,
         "startAt": 0,
     }
@@ -587,9 +587,7 @@ async def test_board_issues_can_exclude_done_statuses_entirely() -> None:
     issue_calls = [
         call for call in service.calls if call["path"] == "agile:/board/42/issue"
     ]
-    assert issue_calls[0]["params"]["jql"] == (
-        "statusCategory != Done ORDER BY updated DESC"
-    )
+    assert issue_calls[0]["params"]["jql"] == "statusCategory != Done"
 
 
 async def test_board_issues_filter_to_selected_project_scope() -> None:

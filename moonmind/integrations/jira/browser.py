@@ -709,11 +709,8 @@ class JiraBrowserService:
     def _board_issue_scope_jql(self) -> str:
         recent_done_days = self._feature_flags.jira_create_page_recent_done_days
         if recent_done_days <= 0:
-            return "statusCategory != Done ORDER BY updated DESC"
-        return (
-            f"(statusCategory != Done OR updated >= -{recent_done_days}d) "
-            "ORDER BY updated DESC"
-        )
+            return "statusCategory != Done"
+        return f"(statusCategory != Done OR updated >= -{recent_done_days}d)"
 
     def _ensure_enabled(self) -> None:
         if not self._feature_flags.jira_create_page_enabled:
