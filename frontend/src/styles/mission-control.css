@@ -89,12 +89,16 @@ samp {
   container-type: inline-size;
 }
 
-/* Mission Control shell spans full width and left-aligns so content is not trapped in a narrow text column. */
+/* Most pages read best in a centered working container; data-table routes opt into wide. */
 .dashboard-shell-constrained {
-  max-width: 1800px;
-  margin-left: 0;
-  margin-right: 0;
+  max-width: min(72rem, calc(100vw - 2rem));
+  margin-left: auto;
+  margin-right: auto;
   width: 100%;
+}
+
+.dashboard-shell-constrained--data-wide {
+  max-width: min(112rem, calc(100vw - 2rem));
 }
 
 .masthead {
@@ -355,9 +359,9 @@ h1 {
 
 .panel {
   margin-top: 1rem;
-  margin-left: 0;
-  margin-right: 0;
-  max-width: none;
+  margin-left: auto;
+  margin-right: auto;
+  max-width: min(72rem, calc(100vw - 2rem));
   width: 100%;
   border-radius: 1rem;
   border: 1px solid rgb(var(--mm-border) / 0.8);
