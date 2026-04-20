@@ -19,6 +19,7 @@ import {
 import { renderWithClient } from "../utils/test-utils";
 import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
+  LIQUID_GL_OPTIONS,
   preferredTemplate,
   resolveObjectiveInstructions,
   TaskCreatePage,
@@ -5657,6 +5658,10 @@ describe("Task Create Entrypoint", () => {
     expect(within(floatingBar as HTMLElement).getByRole("button", { name: "Create" })).toBe(
       createButton,
     );
+  });
+
+  it("keeps the bottom submission controls present during liquid glass initialization", () => {
+    expect(LIQUID_GL_OPTIONS.reveal).toBe(false);
   });
 
   it("gives repository, branch, and publish controls equal desktop space in the floating bar", async () => {
