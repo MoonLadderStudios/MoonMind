@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Iterator
@@ -33,6 +34,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
 )
 from moonmind.schemas.temporal_models import (
+    ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
     StepLedgerSnapshotModel,
 )
@@ -2615,6 +2617,73 @@ def test_describe_execution_includes_live_merge_automation_summary() -> None:
             ),
         }
     ]
+
+
+def test_describe_execution_queries_resolver_children_concurrently() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record()
+    record.parameters = {
+        "publishMode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
+    record.memo = {
+        **record.memo,
+        "merge_automation": {
+            "enabled": True,
+            "status": "awaiting_child",
+            "childWorkflowId": "merge-automation:mm:wf-1:pr:1614:head:abc123",
+        },
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    resolver_ids = [
+        "resolver:mm:wf-1:pr:1614:head:abc123:1",
+        "resolver:mm:wf-1:pr:1614:head:abc123:2",
+        "resolver:mm:wf-1:pr:1614:head:abc123:3",
+    ]
+    _override_query_client(
+        app,
+        progress={"total": 1},
+        summary={
+            "status": "waiting",
+            "resolverChildWorkflowIds": resolver_ids,
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    started: list[str] = []
+    all_started = asyncio.Event()
+
+    async def fake_child_observability(
+        *,
+        temporal_client,
+        workflow_id: str,
+    ) -> ExecutionMergeAutomationResolverChildModel:
+        started.append(workflow_id)
+        if len(started) == len(resolver_ids):
+            all_started.set()
+        await asyncio.wait_for(all_started.wait(), timeout=1)
+        return ExecutionMergeAutomationResolverChildModel(
+            workflow_id=workflow_id,
+            status="running",
+            detail_href=f"/tasks/{workflow_id}",
+        )
+
+    with patch(
+        "api_service.api.routers.executions._resolver_child_observability",
+        side_effect=fake_child_observability,
+    ):
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    assert started == resolver_ids
+    assert [
+        child["workflowId"]
+        for child in response.json()["mergeAutomation"]["resolverChildren"]
+    ] == resolver_ids
 
 
 def test_describe_execution_prefers_progress_query_run_id_when_newer_latest_run() -> None:

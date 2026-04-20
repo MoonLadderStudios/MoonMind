@@ -250,6 +250,7 @@ const MergeAutomationSchema = z
         resolverAttempts: z.array(z.string()).default([]).optional(),
       })
       .passthrough()
+      .nullable()
       .optional(),
   })
   .passthrough();

@@ -1323,13 +1323,15 @@ async def _enrich_execution_merge_automation(
 
     resolver_ids = list(normalized.resolver_child_workflow_ids)
     if resolver_ids:
-        resolver_children = [
-            await _resolver_child_observability(
-                temporal_client=temporal_client,
-                workflow_id=child_workflow_id,
+        resolver_children = await asyncio.gather(
+            *(
+                _resolver_child_observability(
+                    temporal_client=temporal_client,
+                    workflow_id=child_workflow_id,
+                )
+                for child_workflow_id in resolver_ids[:10]
             )
-            for child_workflow_id in resolver_ids[:10]
-        ]
+        )
         normalized = normalized.model_copy(
             update={"resolver_children": resolver_children}
         )

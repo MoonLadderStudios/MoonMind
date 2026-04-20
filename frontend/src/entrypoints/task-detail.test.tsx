@@ -1711,6 +1711,61 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
+  it('accepts null merge automation artifact refs from execution detail', async () => {
+    const mockExecution = {
+      taskId: 'test-null-merge-artifact-refs',
+      workflowId: 'test-null-merge-artifact-refs',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Null merge artifact refs task',
+      summary: 'Waiting on merge automation',
+      status: 'running',
+      state: 'awaiting_external',
+      rawState: 'awaiting_external',
+      temporalStatus: 'running',
+      closeStatus: null,
+      mergeAutomationSelected: true,
+      mergeAutomation: {
+        enabled: true,
+        workflowId: 'merge-automation:test-null-merge-artifact-refs',
+        status: 'waiting',
+        resolverChildWorkflowIds: [],
+        artifactRefs: null,
+      },
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: null,
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Null merge artifact refs task')).toBeTruthy();
+      expect(screen.getByText('waiting')).toBeTruthy();
+      expect(screen.getByText('merge-automation:test-null-merge-artifact-refs')).toBeTruthy();
+    });
+  });
+
   it('renders prerequisite and dependent panels for dependency-aware runs', async () => {
     const mockExecution = {
       taskId: 'mm:dependent-1',
