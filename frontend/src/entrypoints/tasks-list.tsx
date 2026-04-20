@@ -35,7 +35,7 @@ const TEMPORAL_STATUSES = [
 ] as const;
 const ENTRY_OPTIONS = ['run', 'manifest'] as const;
 
-const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'startedAt', 'closedAt']);
+const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'closedAt']);
 const TABLE_COLUMNS = [
   ['taskId', 'ID'],
   ['targetRuntime', 'Runtime'],
@@ -45,7 +45,6 @@ const TABLE_COLUMNS = [
   ['title', 'Title'],
   ['scheduledFor', 'Scheduled'],
   ['createdAt', 'Created'],
-  ['startedAt', 'Started'],
   ['closedAt', 'Finished'],
 ] as const;
 const VALID_TABLE_SORT_FIELDS = new Set<string>([...TABLE_COLUMNS.map((column) => column[0]), 'integration']);
@@ -475,7 +474,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                     <col className="queue-table-column-date" />
                     <col className="queue-table-column-date" />
                     <col className="queue-table-column-date" />
-                    <col className="queue-table-column-date" />
                   </colgroup>
                   <thead>
                     <tr>
@@ -526,7 +524,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           <td className="queue-table-cell-date">{formatWhen(row.scheduledFor)}</td>
                           <td className="queue-table-cell-date">{formatWhen(row.createdAt)}</td>
-                          <td className="queue-table-cell-date">{formatWhen(row.startedAt)}</td>
                           <td className="queue-table-cell-date">{formatWhen(row.closedAt)}</td>
                         </tr>
                       );
@@ -588,10 +585,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                       <div>
                         <dt>Created</dt>
                         <dd>{formatWhen(row.createdAt)}</dd>
-                      </div>
-                      <div>
-                        <dt>Started</dt>
-                        <dd>{formatWhen(row.startedAt)}</dd>
                       </div>
                       <div>
                         <dt>Finished</dt>

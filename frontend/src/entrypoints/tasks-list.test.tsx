@@ -27,6 +27,7 @@ describe('Tasks List Entrypoint', () => {
             status: 'completed',
             state: 'succeeded',
             rawState: 'succeeded',
+            startedAt: '2026-03-28T00:00:01Z',
             createdAt: '2026-03-28T00:00:00Z',
           },
         ],
@@ -55,6 +56,15 @@ describe('Tasks List Entrypoint', () => {
         'Runtime. Sorted ascending. Activate to sort descending.',
       );
     });
+  });
+
+  it('keeps started time out of the task list presentation', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(screen.queryByRole('button', { name: /^Started\./i })).toBeNull();
+    expect(screen.queryByText('Started')).toBeNull();
   });
 
   it('orders scheduled rows by latest scheduled time before created time by default', async () => {
@@ -341,7 +351,7 @@ describe('Tasks List Entrypoint', () => {
       .map((element) => element.closest('table'))
       .find((candidate): candidate is HTMLTableElement => Boolean(candidate));
     expect(table?.querySelectorAll('col.queue-table-column-id')).toHaveLength(1);
-    expect(table?.querySelectorAll('col.queue-table-column-date')).toHaveLength(4);
+    expect(table?.querySelectorAll('col.queue-table-column-date')).toHaveLength(3);
     const idCell = table?.querySelector('td.queue-table-cell-id');
     expect(idCell?.textContent).toBe(longWorkflowId);
   });
