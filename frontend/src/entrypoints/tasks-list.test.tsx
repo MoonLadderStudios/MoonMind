@@ -124,6 +124,41 @@ describe('Tasks List Entrypoint', () => {
     expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
   });
 
+  it('labels the lifecycle filter as status and exposes canonical status options', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    const statusFilter = screen.getByLabelText('Status') as HTMLSelectElement;
+    const options = Array.from(statusFilter.options).map((option) => option.value);
+
+    expect(options).toEqual([
+      '',
+      'scheduled',
+      'initializing',
+      'waiting_on_dependencies',
+      'planning',
+      'awaiting_slot',
+      'executing',
+      'proposals',
+      'awaiting_external',
+      'finalizing',
+      'completed',
+      'failed',
+      'canceled',
+    ]);
+    expect(options).toContain('completed');
+    expect(options).not.toContain('succeeded');
+
+    const baselineCalls = fetchSpy.mock.calls.length;
+    fireEvent.change(statusFilter, { target: { value: 'completed' } });
+
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.length).toBe(baselineCalls + 1);
+    });
+    expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe('/api/executions?source=temporal&pageSize=50&state=completed');
+  });
+
   it('renders pagination as arrow buttons beside the table summary', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,

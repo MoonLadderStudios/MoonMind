@@ -19,14 +19,17 @@ type ListDashboardConfig = {
 };
 
 const WORKFLOW_TYPES = ['MoonMind.Run', 'MoonMind.ManifestIngest'] as const;
-const TEMPORAL_STATES = [
+const TEMPORAL_STATUSES = [
+  'scheduled',
   'initializing',
-  'planning',
-  'executing',
-  'awaiting_external',
   'waiting_on_dependencies',
+  'planning',
+  'awaiting_slot',
+  'executing',
+  'proposals',
+  'awaiting_external',
   'finalizing',
-  'succeeded',
+  'completed',
   'failed',
   'canceled',
 ] as const;
@@ -362,7 +365,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
             </select>
           </label>
           <label>
-            State
+            Status
             <select
               value={temporalState}
               disabled={!listEnabled}
@@ -371,10 +374,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
                 resetToFirstPage();
               }}
             >
-              <option value="">All States</option>
-              {TEMPORAL_STATES.map((state) => (
-                <option key={state} value={state}>
-                  {state}
+              <option value="">All Statuses</option>
+              {TEMPORAL_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {status}
                 </option>
               ))}
             </select>
