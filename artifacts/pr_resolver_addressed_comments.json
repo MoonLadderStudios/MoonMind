@@ -1,32 +1,12 @@
 [
   {
-    "id": 4151097778,
-    "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; the referenced timeout and instruction handoff comments are tracked and addressed individually."
-  },
-  {
-    "id": 3120624517,
+    "id": 3120666311,
     "disposition": "addressed",
-    "rationale": "Updated the Temporal start-to-close and schedule-to-close examples to 28800 and 32400 seconds, and aligned runner timeouts and provider leases with the 480-minute maximum."
+    "rationale": "Policy snapshots are now recursively sanitized before serialization, dropping secret-like keys such as password, token, apiKey, authorization, cookie, credential, private_key, secret, and auth variants while preserving safe bounded policy fields. Regression coverage verifies raw policy secrets are absent from reports/remediation_context.json."
   },
   {
-    "id": 3120624523,
+    "id": 3120666315,
     "disposition": "addressed",
-    "rationale": "Added an instruction-file path allowlist entry for the safe profile so the activity can pass the materialized instruction bundle into the container without exposing instruction content in an environment value."
-  },
-  {
-    "id": 3120624527,
-    "disposition": "addressed",
-    "rationale": "Added the same instruction-file path allowlist entry for the VPN lab profile."
-  },
-  {
-    "id": 3120627859,
-    "disposition": "addressed",
-    "rationale": "Changed the command construction example from --instruction with inline content to --instruction-file with a workspace file path, and documented that instruction payloads must not be placed in argv, labels, or env values."
-  },
-  {
-    "id": 4151100831,
-    "disposition": "not-applicable",
-    "rationale": "Automated review wrapper text with no additional actionable feedback beyond the inline comments."
+    "rationale": "Remediation context evidence refs now serialize only MoonMind artifact IDs with the art_ prefix, filtering legacy refs, local filesystem paths, storage keys, and presigned URLs before writing the durable context artifact. Regression coverage verifies unsafe refs are excluded."
   }
 ]

@@ -1037,6 +1037,11 @@ class TemporalExecutionRemediationLink(Base):
         String(32), nullable=False, default="created", server_default="created"
     )
     trigger_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    context_artifact_ref: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("temporal_artifacts.artifact_id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
