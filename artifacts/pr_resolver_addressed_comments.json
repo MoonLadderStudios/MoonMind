@@ -1,37 +1,12 @@
 [
   {
-    "id": 4150938132,
+    "id": 3120666311,
     "disposition": "addressed",
-    "rationale": "Top-level review summary called out malformed remediation handling; router now preserves present non-object remediation payloads for service validation, with regression coverage."
+    "rationale": "Policy snapshots are now recursively sanitized before serialization, dropping secret-like keys such as password, token, apiKey, authorization, cookie, credential, private_key, secret, and auth variants while preserving safe bounded policy fields. Regression coverage verifies raw policy secrets are absent from reports/remediation_context.json."
   },
   {
-    "id": 3120468287,
+    "id": 3120666315,
     "disposition": "addressed",
-    "rationale": "Updated task-shaped create normalization to pass through any present remediation payload and added a malformed-payload router regression test."
-  },
-  {
-    "id": 3120470540,
-    "disposition": "addressed",
-    "rationale": "Exported Alembic revision metadata through __all__ to mark it as intentionally consumed by Alembic."
-  },
-  {
-    "id": 3120470551,
-    "disposition": "addressed",
-    "rationale": "Exported Alembic down_revision metadata through __all__ to mark it as intentionally consumed by Alembic."
-  },
-  {
-    "id": 3120470564,
-    "disposition": "addressed",
-    "rationale": "Exported Alembic branch_labels metadata through __all__ to mark it as intentionally consumed by Alembic."
-  },
-  {
-    "id": 3120470575,
-    "disposition": "addressed",
-    "rationale": "Exported Alembic depends_on metadata through __all__ to mark it as intentionally consumed by Alembic."
-  },
-  {
-    "id": 3120483038,
-    "disposition": "addressed",
-    "rationale": "Pinned the resolved remediation target workflowId and runId back into stored task parameters and the workflow start payload, with service-level regression coverage."
+    "rationale": "Remediation context evidence refs now serialize only MoonMind artifact IDs with the art_ prefix, filtering legacy refs, local filesystem paths, storage keys, and presigned URLs before writing the durable context artifact. Regression coverage verifies unsafe refs are excluded."
   }
 ]

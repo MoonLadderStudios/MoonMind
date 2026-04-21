@@ -92,7 +92,12 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
             TemporalExecutionCanonicalRecord, target.workflow_id
         )
         assert target_source is not None
-        target_source.artifact_refs = ["art_target_summary", "artifact://legacy/ref"]
+        target_source.artifact_refs = [
+            "art_target_summary",
+            "artifact://legacy/ref",
+            str(tmp_path / "storage" / "raw.log"),
+            "https://storage.example/presigned?token=raw-secret",
+        ]
         target_source.input_ref = "art_input_ref"
         await session.commit()
 
@@ -127,15 +132,26 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
                         "evidencePolicy": {
                             "includeStepLedger": True,
                             "tailLines": 999999,
+                            "apiKey": "raw-api-key",
+                            "nested": {
+                                "enabled": True,
+                                "password": "raw-password",
+                            },
                         },
                         "actionPolicyRef": "admin_healer_default",
                         "approvalPolicy": {
                             "mode": "risk_gated",
                             "autoAllowedRisk": "medium",
+                            "token": "raw-token",
+                            "reviewers": [
+                                {"user": "ops"},
+                                {"authorization": "Bearer raw-secret"},
+                            ],
                         },
                         "lockPolicy": {
                             "scope": "target_execution",
                             "mode": "exclusive",
+                            "storageKey": "backend/raw/key",
                         },
                     },
                 }
@@ -201,13 +217,15 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         assert payload["evidence"]["taskRuns"][0] == {"taskRunId": "tr_00"}
         assert payload["evidence"]["targetArtifactRefs"] == [
             {"artifact_id": "art_target_summary"},
-            {"ref": "artifact://legacy/ref"},
             {"artifact_id": "art_input_ref", "kind": "input"},
         ]
         assert payload["policies"]["authorityMode"] == "approval_gated"
         assert payload["policies"]["actionPolicyRef"] == "admin_healer_default"
         assert payload["policies"]["evidencePolicy"]["tailLines"] == 2000
+        assert payload["policies"]["evidencePolicy"]["includeStepLedger"] is True
+        assert payload["policies"]["evidencePolicy"]["nested"] == {"enabled": True}
         assert payload["policies"]["approvalPolicy"]["mode"] == "risk_gated"
+        assert payload["policies"]["approvalPolicy"]["reviewers"] == [{"user": "ops"}]
         assert payload["policies"]["lockPolicy"]["mode"] == "exclusive"
         assert payload["liveFollow"] == {
             "mode": "snapshot_then_follow",
@@ -226,6 +244,10 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         assert str(tmp_path) not in serialized
         assert "storage_key" not in serialized
         assert "presigned" not in serialized.lower()
+        assert "raw-secret" not in serialized
+        assert "raw-password" not in serialized
+        assert "raw-token" not in serialized
+        assert "raw-api-key" not in serialized
         assert "password" not in serialized.lower()
         assert "token=" not in serialized.lower()
 

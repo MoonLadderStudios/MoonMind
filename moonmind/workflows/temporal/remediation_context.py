@@ -25,6 +25,18 @@ REMEDIATION_CONTEXT_ARTIFACT_NAME = "reports/remediation_context.json"
 REMEDIATION_CONTEXT_SCHEMA_VERSION = "v1"
 MAX_REMEDIATION_CONTEXT_TAIL_LINES = 2000
 MAX_REMEDIATION_CONTEXT_TASK_RUN_IDS = 20
+SECRET_LIKE_POLICY_KEY_PARTS = (
+    "api_key",
+    "apikey",
+    "auth",
+    "authorization",
+    "cookie",
+    "credential",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+)
 
 
 class RemediationContextError(RuntimeError):
@@ -270,7 +282,7 @@ class RemediationContextBuilder:
 
     @staticmethod
     def _normalize_evidence_policy(value: Any) -> dict[str, Any]:
-        policy = dict(value) if isinstance(value, Mapping) else {}
+        policy = _safe_policy_mapping(value) or {}
         tail_lines = _positive_int_or_none(policy.get("tailLines"))
         if tail_lines is None:
             tail_lines = MAX_REMEDIATION_CONTEXT_TAIL_LINES
@@ -308,9 +320,7 @@ class RemediationContextBuilder:
 
     @staticmethod
     def _mapping_or_none(value: Any) -> dict[str, Any] | None:
-        if not isinstance(value, Mapping):
-            return None
-        return dict(value)
+        return _safe_policy_mapping(value)
 
     @staticmethod
     def _string_or_none(value: Any) -> str | None:
@@ -319,16 +329,64 @@ class RemediationContextBuilder:
 
 def _artifact_ref_payload(raw_ref: Any, *, kind: str | None) -> dict[str, str] | None:
     ref = _string_or_none(raw_ref)
-    if not ref:
+    if not ref or not ref.startswith("art_"):
         return None
-    payload: dict[str, str]
-    if ref.startswith("art_"):
-        payload = {"artifact_id": ref}
-    else:
-        payload = {"ref": ref}
+    payload: dict[str, str] = {"artifact_id": ref}
     if kind:
         payload["kind"] = kind
     return payload
+
+
+def _safe_policy_mapping(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    sanitized: dict[str, Any] = {}
+    for raw_key, raw_item in value.items():
+        key = _string_or_none(raw_key)
+        if not key or _is_secret_like_key(key):
+            continue
+        safe_item = _safe_policy_value(raw_item)
+        if safe_item is not None:
+            sanitized[key] = safe_item
+    return sanitized
+
+
+def _safe_policy_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        mapping = _safe_policy_mapping(value)
+        return mapping if mapping else None
+    if isinstance(value, list):
+        return [
+            safe_item
+            for item in value
+            if (safe_item := _safe_policy_value(item)) is not None
+        ]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        if isinstance(value, str) and _is_unsafe_context_string(value):
+            return None
+        return value
+    return None
+
+
+def _is_secret_like_key(key: str) -> bool:
+    normalized = key.strip().lower().replace("-", "_")
+    return any(part in normalized for part in SECRET_LIKE_POLICY_KEY_PARTS)
+
+
+def _is_unsafe_context_string(value: str) -> bool:
+    normalized = value.strip().lower()
+    if not normalized:
+        return False
+    return (
+        normalized.startswith("/")
+        or normalized.startswith("file:")
+        or normalized.startswith("http://")
+        or normalized.startswith("https://")
+        or "presigned" in normalized
+        or "storage_key" in normalized
+        or "token=" in normalized
+        or "password=" in normalized
+    )
 
 
 def _string_or_none(value: Any) -> str | None:
