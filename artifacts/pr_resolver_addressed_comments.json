@@ -1,27 +1,17 @@
 [
   {
-    "id": 3115399905,
-    "disposition": "addressed",
-    "rationale": "Secret validation now checks only fields submitted by the active source mode."
-  },
-  {
-    "id": 4145431398,
+    "id": 4145803972,
     "disposition": "not-applicable",
-    "rationale": "Review summary; its single actionable point is tracked by review comments 3115399905 and 3115404834."
+    "rationale": "Top-level review summary only; no separate requested code or documentation change beyond the inline comments."
   },
   {
-    "id": 3115404834,
+    "id": 3115693329,
     "disposition": "addressed",
-    "rationale": "Registry submissions now ignore stale inactive inline YAML while preserving validation for active registry input."
+    "rationale": "Updated T004 to include floating bar coverage plus FR-005 and DESIGN-REQ-027 traceability."
   },
   {
-    "id": 3115404837,
+    "id": 3115693346,
     "disposition": "addressed",
-    "rationale": "Max Docs validation now rejects non-safe or non-finite numeric conversions before request payload construction."
-  },
-  {
-    "id": 4145436869,
-    "disposition": "not-applicable",
-    "rationale": "Automated review wrapper with no separate actionable feedback beyond the inline comments already addressed."
+    "rationale": "Updated T012 to reflect that the completed MM-424 work was committed and a pull request was created."
   }
 ]
