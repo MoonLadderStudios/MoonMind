@@ -36,4 +36,4 @@
 
 ## Notes
 
-- The source brief is preserved verbatim in `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-427-moonspec-orchestration-input.md`.
+- The trusted Jira preset brief is preserved in `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-427-moonspec-orchestration-input.md`.
