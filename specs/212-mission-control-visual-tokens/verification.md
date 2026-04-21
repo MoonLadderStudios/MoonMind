@@ -15,13 +15,15 @@
 | FR-005 | Existing semantic text, muted, border, and status tokens remain authoritative; no task/runtime behavior changed. | VERIFIED |
 | FR-006 | Shared app-shell rendering tests still pass for route loading, alerts, constrained/data-wide shells, and unknown pages. | VERIFIED |
 | FR-007 | New `mission-control.test.tsx` CSS contract tests cover token definitions and token consumption. | VERIFIED |
-| FR-008 | MM-424 and the supplied source summary are preserved in `spec.md`, this verification file, and the orchestration input artifact. | VERIFIED |
+| FR-008 | MM-424 and the trusted Jira preset brief are preserved in `spec.md`, this verification file, and the orchestration input artifact. | VERIFIED |
 
 ## Test Evidence
 
 - `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx`: BLOCKED in this container because the npm script shell could not resolve `vitest` even after `npm ci`; direct local binary invocation was used for the same test command.
 - `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/mission-control.test.tsx`: PASS, 9 tests.
 - `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx`: PASS, 3635 Python tests, 1 xpassed, 16 subtests, and 9 targeted Mission Control UI tests.
+- 2026-04-21 source alignment rerun: `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/mission-control.test.tsx`: PASS, 14 tests.
+- 2026-04-21 traceability rerun: `rg -n "MM-424|DESIGN-REQ-001|DESIGN-REQ-002|DESIGN-REQ-009|DESIGN-REQ-010|DESIGN-REQ-011|DESIGN-REQ-027|trusted Jira preset brief|docs/UI/MissionControlDesignSystem.md" specs/212-mission-control-visual-tokens docs/tmp/jira-orchestration-inputs/MM-424-moonspec-orchestration-input.md`: PASS.
 
 ## Notes
 

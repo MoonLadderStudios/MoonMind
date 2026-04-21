@@ -4,7 +4,7 @@
 
 Decision: Implement token and atmosphere changes in `frontend/src/styles/mission-control.css`, not as docs-only work.
 
-Rationale: The supplied brief asks to establish visual tokens and atmosphere. `docs/UI/MissionControlDesignSystem.md` already describes the desired-state design direction, while the runtime stylesheet still embeds several atmospheric and glass values directly. A CSS token contract makes the design system operational.
+Rationale: The trusted Jira preset brief asks to establish visual tokens and atmosphere from `docs/UI/MissionControlDesignSystem.md`. The design document already describes the desired-state design direction, while the runtime stylesheet still embeds several atmospheric and glass values directly. A CSS token contract makes the design system operational.
 
 Alternatives considered: Updating only canonical docs was rejected because the design-system doc is already present and the story needs runtime evidence. Adding a new token build system was rejected because CSS custom properties already exist and are sufficient.
 

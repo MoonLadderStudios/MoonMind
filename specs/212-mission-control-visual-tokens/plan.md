@@ -5,7 +5,7 @@
 
 ## Summary
 
-Establish MM-424 by promoting Mission Control's atmospheric and glass styling into explicit reusable CSS tokens, then consume those tokens in the shared application background and chrome. Repo inspection shows `docs/UI/MissionControlDesignSystem.md` already defines the desired product expression and core token table, while `frontend/src/styles/mission-control.css` currently has core `--mm-*` tokens plus direct gradient and glass values. The implementation keeps the work scoped to the shared stylesheet and shared entry tests: add token names for atmosphere layers, glass surfaces, input wells, and elevation, wire body, masthead, panel, and floating rail styling to those tokens, then add focused CSS contract tests without changing route/runtime behavior.
+Establish MM-424 by promoting Mission Control's atmospheric and glass styling into explicit reusable CSS tokens, then consume those tokens in the shared application background and chrome. The trusted Jira preset brief points at `docs/UI/MissionControlDesignSystem.md` sections 1, 2, 5, 6, 10.11, and 14 as runtime source requirements for tokenized color, typography, atmosphere, and product expression. Repo inspection shows the design document already defines the desired product expression and core token table, while `frontend/src/styles/mission-control.css` had core `--mm-*` tokens plus direct gradient and glass values. The implementation keeps the work scoped to the shared stylesheet and shared entry tests: add token names for atmosphere layers, glass surfaces, input wells, and elevation, wire body, masthead, panel, and floating rail styling to those tokens, then add focused CSS contract tests without changing route/runtime behavior.
 
 ## Requirement Status
 
@@ -18,7 +18,7 @@ Establish MM-424 by promoting Mission Control's atmospheric and glass styling in
 | FR-005 | implemented_unverified | existing text and border semantic tokens remain in use | preserve text/border token usage and add contract coverage | unit UI |
 | FR-006 | implemented_unverified | planned surface is CSS-only | rerun shared app-shell tests to prove behavior unchanged | unit UI |
 | FR-007 | missing | no MM-424-specific tests | add CSS contract tests in `mission-control.test.tsx` | unit UI |
-| FR-008 | implemented_unverified | `spec.md` preserves MM-424 and the supplied brief | preserve through tasks, verification, commit, and final report | final verify |
+| FR-008 | implemented_unverified | `spec.md` preserves MM-424 and the trusted Jira preset brief | preserve through tasks, verification, commit, and final report | final verify |
 
 ## Technical Context
 

@@ -7,7 +7,7 @@
 ## Phase 1: Setup
 
 - [X] T001 Review `.specify/memory/constitution.md`, `README.md`, Jira Orchestrate preset behavior, and relevant Mission Control design docs.
-- [X] T002 Create MM-424 MoonSpec artifacts under `specs/212-mission-control-visual-tokens/` and preserve the supplied Jira brief under `docs/tmp/jira-orchestration-inputs/`.
+- [X] T002 Create MM-424 MoonSpec artifacts under `specs/212-mission-control-visual-tokens/` and preserve the trusted Jira preset brief under `docs/tmp/jira-orchestration-inputs/`.
 
 ## Phase 2: Tests First
 
@@ -25,4 +25,4 @@
 - [X] T008 Attempt `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx`, then run the direct Vitest equivalent after the npm script cannot resolve `vitest` in this container. (FR-006, FR-007)
 - [X] T009 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx` or document the exact blocker. (FR-007)
 - [X] T010 Write `specs/212-mission-control-visual-tokens/verification.md` with coverage, commands, and verdict. (FR-008, SC-005)
-- [ ] T011 Commit the completed MM-424 work without pushing or creating a pull request.
+- [X] T011 Commit the completed MM-424 work without pushing or creating a pull request.
