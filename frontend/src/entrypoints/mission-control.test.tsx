@@ -495,6 +495,12 @@ describe('Mission Control shared entry', () => {
 
       expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
       expect(await screen.findByText('Ready for login')).toBeTruthy();
+      fireEvent.contextMenu(screen.getByTestId('oauth-xterm'), {
+        clientX: 24,
+        clientY: 32,
+      });
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Copy selection' }));
+      expect(clipboardMock.writeText).toHaveBeenCalledWith('Ready for login');
       fireEvent.click(screen.getByRole('button', { name: 'Copy selection' }));
       expect(clipboardMock.writeText).toHaveBeenCalledWith('Ready for login');
       await waitFor(() => {
