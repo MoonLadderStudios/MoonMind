@@ -1,13 +1,13 @@
 # Tasks: Mission Control Shared Interaction Language
 
-**Input**: Design artifacts from `specs/215-mission-control-interaction-language/`  
+**Input**: Design artifacts from `specs/218-mission-control-interaction-language/`  
 **Prerequisites**: `spec.md`, `plan.md`, `research.md`, `contracts/interaction-language.md`, `quickstart.md`  
 **Tests**: Add focused unit/CSS contract tests before production CSS changes. Confirm the new tests fail for missing interaction tokens or legacy lift, then implement until they pass. Use existing Mission Control app-shell and task-list render tests as the integration-style regression because backend contracts and persistence are unchanged.
 
 ## Phase 1: Setup
 
 - [X] T001 Review `.specify/memory/constitution.md`, `README.md`, Jira Orchestrate preset behavior, and `docs/UI/MissionControlDesignSystem.md`.
-- [X] T002 Create MM-427 MoonSpec artifacts under `specs/215-mission-control-interaction-language/` and preserve the trusted Jira preset brief under `docs/tmp/jira-orchestration-inputs/`.
+- [X] T002 Create MM-427 MoonSpec artifacts under `specs/218-mission-control-interaction-language/` and preserve the trusted Jira preset brief under `docs/tmp/jira-orchestration-inputs/`.
 
 ## Phase 2: Tests First
 
@@ -29,5 +29,5 @@
 
 - [X] T013 Run `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx` or the direct Vitest equivalent if npm cannot resolve `vitest`. The npm script could not resolve `vitest`; the direct local binary passed both focused UI files. (FR-009, FR-010)
 - [X] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx` or document the exact blocker. (FR-009, FR-010)
-- [X] T015 Run final `/moonspec-verify` work by writing `specs/215-mission-control-interaction-language/verification.md` with coverage, commands, and verdict. (FR-011, SC-005)
+- [X] T015 Run final `/moonspec-verify` work by writing `specs/218-mission-control-interaction-language/verification.md` with coverage, commands, and verdict. (FR-011, SC-005)
 - [X] T016 Commit the completed MM-427 work without pushing or creating a pull request.

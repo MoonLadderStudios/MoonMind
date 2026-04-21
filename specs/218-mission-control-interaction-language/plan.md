@@ -1,7 +1,7 @@
 # Implementation Plan: Mission Control Shared Interaction Language
 
-**Branch**: `run-jira-orchestrate-for-mm-427-align-mi-00e0a46d` | **Date**: 2026-04-21 | **Spec**: `specs/215-mission-control-interaction-language/spec.md`  
-**Input**: Single-story feature specification from `specs/215-mission-control-interaction-language/spec.md`
+**Branch**: `run-jira-orchestrate-for-mm-427-align-mi-00e0a46d` | **Date**: 2026-04-21 | **Spec**: `specs/218-mission-control-interaction-language/spec.md`  
+**Input**: Single-story feature specification from `specs/218-mission-control-interaction-language/spec.md`
 
 ## Summary
 
@@ -21,7 +21,7 @@ Implement MM-427 by aligning Mission Control's routine controls with the interac
 | FR-008 | partial | reduced-motion rules exist for some features but not shared control scale | add reduced-motion control interaction guard | UI unit / CSS |
 | FR-009 | implemented_unverified | existing app-shell and task-list tests cover behavior | rerun focused tests after CSS changes | UI unit |
 | FR-010 | missing | no MM-427-specific interaction tests | add CSS contract assertions | UI unit / CSS |
-| FR-011 | implemented_unverified | `spec.md` preserves MM-427 and the trusted Jira preset brief | preserve through tasks, verification, and commit/PR metadata when those outputs are requested | final verify |
+| FR-011 | verified | `spec.md` preserves MM-427 and the trusted Jira preset brief | preserve through tasks, verification, and commit/PR metadata when those outputs are requested | final verify |
 
 ## Technical Context
 
@@ -56,7 +56,7 @@ Implement MM-427 by aligning Mission Control's routine controls with the interac
 ## Project Structure
 
 ```text
-specs/215-mission-control-interaction-language/
+specs/218-mission-control-interaction-language/
 ├── spec.md
 ├── plan.md
 ├── research.md
