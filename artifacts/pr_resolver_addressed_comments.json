@@ -1,32 +1,12 @@
 [
   {
-    "id": 3114878011,
+    "id": 3114793791,
     "disposition": "addressed",
-    "rationale": "Caught SkillResolutionError for zip-derived skill names and return HTTP 400 instead of surfacing a server error."
+    "rationale": "Updated the mobile floating bar grid to preserve the publish-mode minimum width while the repository control spans the full row, and added CSS regression coverage."
   },
   {
-    "id": 4144869522,
-    "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; actionable inline comments are tracked separately."
-  },
-  {
-    "id": 3114882451,
+    "id": 4144781567,
     "disposition": "addressed",
-    "rationale": "Root SKILL.md uploads now convert invalid fallback filenames to HTTP 400 with regression coverage."
-  },
-  {
-    "id": 3114882461,
-    "disposition": "addressed",
-    "rationale": "Nested skill directory uploads now convert invalid root prefixes to HTTP 400 with regression coverage."
-  },
-  {
-    "id": 3114882463,
-    "disposition": "addressed",
-    "rationale": "Zip extraction now uses mkdtemp with explicit cleanup and shutil.move, avoiding TemporaryDirectory cleanup after moving the source path."
-  },
-  {
-    "id": 4144873847,
-    "disposition": "not-applicable",
-    "rationale": "Top-level review summary; actionable inline comments are tracked separately."
+    "rationale": "The review summary identified the same mobile grid issue as the inline comment; the CSS fix and regression test address it."
   }
 ]
