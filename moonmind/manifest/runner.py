@@ -4,9 +4,18 @@ import logging
 from importlib import import_module
 from typing import Any, Dict, List, Optional
 
-from llama_index.core import download_loader
-
 from moonmind.schemas import Manifest
+
+
+def download_loader(type_name: str):
+    """Resolve a llama-index reader loader across supported package layouts."""
+    try:
+        from llama_index.core import download_loader as core_download_loader
+    except ImportError:
+        from llama_index.core.readers.download import (
+            download_loader as core_download_loader,
+        )
+    return core_download_loader(type_name)
 
 
 class ManifestRunner:
