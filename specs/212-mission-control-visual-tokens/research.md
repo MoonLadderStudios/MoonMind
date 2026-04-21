@@ -4,7 +4,7 @@
 
 Decision: Implement token and atmosphere changes in `frontend/src/styles/mission-control.css`, not as docs-only work.
 
-Rationale: The trusted Jira preset brief asks to establish visual tokens and atmosphere from `docs/UI/MissionControlDesignSystem.md`. The design document already describes the desired-state design direction, while the runtime stylesheet still embeds several atmospheric and glass values directly. A CSS token contract makes the design system operational.
+Rationale: The trusted Jira preset brief asks to establish visual tokens and atmosphere from `docs/UI/MissionControlDesignSystem.md`. The design document already describes the desired-state design direction. Before MM-424, the runtime stylesheet embedded several atmospheric and glass values directly; a CSS token contract makes the design system operational.
 
 Alternatives considered: Updating only canonical docs was rejected because the design-system doc is already present and the story needs runtime evidence. Adding a new token build system was rejected because CSS custom properties already exist and are sufficient.
 
@@ -12,7 +12,7 @@ Alternatives considered: Updating only canonical docs was rejected because the d
 
 Decision: Add named `--mm-atmosphere-*`, `--mm-glass-*`, `--mm-input-*`, and `--mm-elevation-*` tokens in both `:root` and `.dark`.
 
-Rationale: Current core tokens (`--mm-bg`, `--mm-panel`, `--mm-ink`, and status colors) are stable, but the body gradient and glass shells encode alpha/elevation choices inline. Named tokens let surfaces consume the same visual language while preserving flexible alpha composition.
+Rationale: Core tokens (`--mm-bg`, `--mm-panel`, `--mm-ink`, and status colors) are stable. Before MM-424, the body gradient and glass shells encoded alpha/elevation choices inline. Named tokens let surfaces consume the same visual language while preserving flexible alpha composition.
 
 Alternatives considered: Creating route-specific variables was rejected because MM-424 is a shared Mission Control foundation story. Replacing core semantic tokens was rejected because existing components already depend on them.
 

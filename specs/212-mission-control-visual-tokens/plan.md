@@ -11,14 +11,14 @@ Establish MM-424 by promoting Mission Control's atmospheric and glass styling in
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | core tokens exist in `mission-control.css`; atmosphere/glass tokens are implicit | add explicit atmosphere, glass, input, and elevation tokens | unit UI |
-| FR-002 | partial | `.dark` overrides core tokens only | add matching dark overrides for new token names | unit UI |
-| FR-003 | partial | body has layered gradients with direct semantic-token alpha usage | route body gradient through atmosphere layer tokens | unit UI |
-| FR-004 | partial | masthead/panel/floating bar use a mix of semantic tokens and one-off alpha values | consume shared surface/elevation tokens for chrome posture | unit UI |
-| FR-005 | implemented_unverified | existing text and border semantic tokens remain in use | preserve text/border token usage and add contract coverage | unit UI |
-| FR-006 | implemented_unverified | planned surface is CSS-only | rerun shared app-shell tests to prove behavior unchanged | unit UI |
-| FR-007 | missing | no MM-424-specific tests | add CSS contract tests in `mission-control.test.tsx` | unit UI |
-| FR-008 | implemented_unverified | `spec.md` preserves MM-424 and the trusted Jira preset brief | preserve through tasks, verification, commit, and final report | final verify |
+| FR-001 | implemented_verified | `mission-control.css` defines `--mm-atmosphere-*`, `--mm-glass-*`, `--mm-input-well`, and `--mm-elevation-*`; `verification.md` records passing contract tests | no new implementation | final verify |
+| FR-002 | implemented_verified | `:root` and `.dark` define the same new visual token names with theme-specific values | no new implementation | final verify |
+| FR-003 | implemented_verified | `body` and `.dark body` consume the atmosphere token stack | no new implementation | final verify |
+| FR-004 | implemented_verified | `.masthead::before`, `.panel`, and the Create page floating rail consume shared glass/elevation tokens | no new implementation | final verify |
+| FR-005 | implemented_verified | semantic text, muted, border, and status token usage remains authoritative; verification records no task/runtime behavior change | no new implementation | final verify |
+| FR-006 | implemented_verified | shared app-shell rendering tests pass for route loading, alerts, constrained/data-wide shells, and unknown pages | no new implementation | final verify |
+| FR-007 | implemented_verified | `mission-control.test.tsx` covers token definitions and token consumption; targeted Vitest rerun passed with 14 tests | no new implementation | final verify |
+| FR-008 | implemented_verified | `spec.md`, `verification.md`, and `docs/tmp/jira-orchestration-inputs/MM-424-moonspec-orchestration-input.md` preserve MM-424 and the trusted Jira preset brief | no new implementation | final verify |
 
 ## Technical Context
 
