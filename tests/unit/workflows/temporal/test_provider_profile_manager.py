@@ -13,6 +13,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     HandoffReservation,
     PendingRequest,
     SLOT_HANDOFF_RESERVATION_PATCH,
+    VERIFY_PENDING_REQUESTS_PATCH,
     WORKFLOW_NAME,
     MoonMindProviderProfileManagerWorkflow,
     ProfileSlotState,
@@ -825,6 +826,178 @@ class TestProviderProfileManagerHelpers:
         ]
         assert "run-1" not in wf._handoff_reservations
 
+    @pytest.mark.asyncio
+    async def test_verify_pending_requesters_prunes_terminal_workflows(self):
+        wf = self._make_workflow()
+        wf._pending_requests = [
+            PendingRequest(
+                requester_workflow_id="wf-canceled",
+                runtime_id="gemini_cli",
+            ),
+            PendingRequest(
+                requester_workflow_id="wf-running",
+                runtime_id="gemini_cli",
+            ),
+            PendingRequest(
+                requester_workflow_id="wf-missing-from-result",
+                runtime_id="gemini_cli",
+            ),
+        ]
+        captured_payloads: list[dict] = []
+
+        async def fake_execute_activity(
+            activity_name: str,
+            payload: dict,
+            **_: object,
+        ) -> dict:
+            captured_payloads.append(payload)
+            assert activity_name == "provider_profile.verify_lease_holders"
+            return {
+                "wf-canceled": {"running": False, "status": "CANCELED"},
+                "wf-running": {"running": True, "status": "RUNNING"},
+            }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+            removed_count = await wf._verify_pending_requesters()
+
+        assert removed_count == 1
+        assert captured_payloads == [
+            {
+                "workflow_ids": [
+                    "wf-canceled",
+                    "wf-running",
+                    "wf-missing-from-result",
+                ]
+            }
+        ]
+        assert [req.requester_workflow_id for req in wf._pending_requests] == [
+            "wf-running",
+            "wf-missing-from-result",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_verify_pending_requesters_keeps_queue_on_activity_failure(self):
+        wf = self._make_workflow()
+        wf._pending_requests = [
+            PendingRequest(
+                requester_workflow_id="wf-unknown",
+                runtime_id="gemini_cli",
+            )
+        ]
+
+        async def fake_execute_activity(*_: object, **__: object) -> dict:
+            raise RuntimeError("temporal unavailable")
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+            removed_count = await wf._verify_pending_requesters()
+
+        assert removed_count == 0
+        assert [req.requester_workflow_id for req in wf._pending_requests] == [
+            "wf-unknown"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_verify_workflow_statuses_batches_large_workflow_id_sets(self):
+        wf = self._make_workflow()
+        workflow_ids = [f"wf-{idx}" for idx in range(205)]
+        captured_batches: list[list[str]] = []
+
+        async def fake_execute_activity(
+            activity_name: str,
+            payload: dict,
+            **_: object,
+        ) -> dict:
+            assert activity_name == "provider_profile.verify_lease_holders"
+            batch = payload["workflow_ids"]
+            captured_batches.append(batch)
+            return {workflow_id: {"running": True} for workflow_id in batch}
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+            statuses = await wf._verify_workflow_statuses(workflow_ids)
+
+        assert statuses is not None
+        assert len(statuses) == 205
+        assert [len(batch) for batch in captured_batches] == [100, 100, 5]
+
+    @pytest.mark.asyncio
+    async def test_verify_active_workflows_consolidates_pending_and_lease_checks(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=2,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            current_leases=["wf-lease-terminal", "wf-shared"],
+        )
+        wf._pending_requests = [
+            PendingRequest(
+                requester_workflow_id="wf-pending-terminal",
+                runtime_id="gemini_cli",
+            ),
+            PendingRequest(
+                requester_workflow_id="wf-shared",
+                runtime_id="gemini_cli",
+            ),
+        ]
+        captured_payloads: list[dict] = []
+
+        async def fake_execute_activity(
+            activity_name: str,
+            payload: dict,
+            **_: object,
+        ) -> dict:
+            captured_payloads.append(payload)
+            assert activity_name == "provider_profile.verify_lease_holders"
+            return {
+                "wf-lease-terminal": {"running": False, "status": "CANCELED"},
+                "wf-pending-terminal": {"running": False, "status": "TERMINATED"},
+                "wf-shared": {"running": True, "status": "RUNNING"},
+            }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+            mock_wf.patched.return_value = False
+            await wf._verify_active_workflows(
+                verify_lease_holders=True,
+                verify_pending_requesters=True,
+            )
+
+        assert captured_payloads == [
+            {
+                "workflow_ids": [
+                    "wf-lease-terminal",
+                    "wf-shared",
+                    "wf-pending-terminal",
+                ]
+            }
+        ]
+        assert wf._profiles["p1"].current_leases == ["wf-shared"]
+        assert [req.requester_workflow_id for req in wf._pending_requests] == [
+            "wf-shared"
+        ]
+
+    def test_run_drains_queue_before_best_effort_pending_verification(self):
+        import inspect
+
+        source = inspect.getsource(MoonMindProviderProfileManagerWorkflow.run)
+        drain_index = source.index("await self._drain_queue()")
+        verify_index = source.index("await self._verify_active_workflows(")
+
+        assert drain_index < verify_index
+
     def test_handoff_reservation_blocks_only_one_slot(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(
@@ -922,6 +1095,13 @@ class TestProviderProfileManagerHelpers:
 
 def test_workflow_name():
     assert WORKFLOW_NAME == "MoonMind.ProviderProfileManager"
+
+
+def test_verify_pending_requests_patch_id():
+    assert (
+        VERIFY_PENDING_REQUESTS_PATCH
+        == "provider-profile-manager-verify-pending-requests-v1"
+    )
 
 
 def test_registered_workflow_types():
