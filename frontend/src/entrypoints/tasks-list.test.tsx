@@ -222,24 +222,46 @@ describe('Tasks List Entrypoint', () => {
   });
 
   it('keeps the task list surfaces to one control deck and one data slab', async () => {
-    const { readFileSync } = await import('node:fs');
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
-      'utf8',
+    renderWithClient(
+      <section className="panel" aria-live="polite">
+        <TasksListPage payload={mockPayload} />
+      </section>,
     );
 
-    expect(missionControlCss).toMatch(
-      /\.panel:has\(\.task-list-control-deck\)\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;[^}]*padding:\s*0;[^}]*min-height:\s*0;/s,
-    );
-    expect(missionControlCss).toMatch(
-      /\.task-list-control-grid\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*none;[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(12rem,\s*1fr\)\)/s,
-    );
-    expect(missionControlCss).toMatch(
-      /\.task-list-data-slab\s*\{[^}]*gap:\s*0;[^}]*overflow:\s*hidden;[^}]*padding:\s*0;[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.96\)/s,
-    );
-    expect(missionControlCss).toMatch(
-      /\.task-list-data-slab \.queue-table-wrapper\s*\{[^}]*border:\s*0;[^}]*border-radius:\s*0;[^}]*background:\s*transparent/s,
-    );
+    await screen.findAllByText('Example task');
+
+    const shellPanel = document.querySelector<HTMLElement>('.panel');
+    const controlDecks = document.querySelectorAll<HTMLElement>('.task-list-control-deck.panel--controls');
+    const dataSlabs = document.querySelectorAll<HTMLElement>('.task-list-data-slab.panel--data');
+    const controlGrid = controlDecks[0]?.querySelector<HTMLElement>('.task-list-control-grid');
+    const tableWrapper = dataSlabs[0]?.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
+
+    expect(controlDecks).toHaveLength(1);
+    expect(dataSlabs).toHaveLength(1);
+    expect(controlGrid).toBeTruthy();
+    expect(tableWrapper).toBeTruthy();
+
+    const shellPanelStyles = getComputedStyle(shellPanel as HTMLElement);
+    expect(shellPanelStyles.borderTopWidth).toBe('0px');
+    expect(shellPanelStyles.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(shellPanelStyles.boxShadow).toBe('none');
+    expect(shellPanelStyles.paddingTop).toBe('0px');
+    expect(shellPanelStyles.minHeight).toBe('0px');
+
+    const controlGridStyles = getComputedStyle(controlGrid as HTMLElement);
+    expect(controlGridStyles.width).toBe('100%');
+    expect(controlGridStyles.maxWidth).toBe('none');
+    expect(controlGridStyles.gridTemplateColumns).toBe('repeat(4, minmax(12rem, 1fr))');
+
+    const dataSlabStyles = getComputedStyle(dataSlabs[0]);
+    expect(dataSlabStyles.gap).toBe('0px');
+    expect(dataSlabStyles.overflow).toBe('hidden');
+    expect(dataSlabStyles.paddingTop).toBe('0px');
+
+    const tableWrapperStyles = getComputedStyle(tableWrapper as HTMLElement);
+    expect(tableWrapperStyles.borderTopWidth).toBe('0px');
+    expect(tableWrapperStyles.borderRadius).toBe('0px');
+    expect(tableWrapperStyles.backgroundColor).toBe('rgba(0, 0, 0, 0)');
   });
 
   it('shows active filter chips and clears filters from the control deck', async () => {
