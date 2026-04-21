@@ -3,15 +3,60 @@
 **Feature Branch**: `run-jira-orchestrate-for-mm-426-standard-7f2da784`  
 **Created**: 2026-04-21  
 **Status**: Draft  
-**Input**: Jira Orchestrate for MM-426. Source story: STORY-003. Source summary: "Standardize Mission Control layout and table composition patterns." Source Jira issue: unknown. Original brief reference: not provided.
+**Input**: Jira issue MM-426 from the trusted Jira preset brief in `docs/tmp/jira-orchestration-inputs/MM-426-moonspec-orchestration-input.md`: "Standardize Mission Control layout and table composition patterns." Source design: `docs/UI/MissionControlDesignSystem.md` sections 7, 10.1, 10.4, 10.5, 10.6, and 11.1. Coverage IDs: DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-019.
 
 ## Original Jira Preset Brief
 
-Jira issue: MM-426
+Jira issue: MM-426 from MM project
+Summary: Standardize Mission Control layout and table composition patterns
+Issue type: Story
+Current Jira status at orchestration input fetch time: In Progress
+Jira project key: MM
 
-Source story: STORY-003. Source summary: Standardize Mission Control layout and table composition patterns. Source Jira issue: unknown. Original brief reference: not provided.
+Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-426 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
 
-Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve this Jira issue reference in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+MM-426: Standardize Mission Control layout and table composition patterns
+
+Source Reference
+- Source Document: docs/UI/MissionControlDesignSystem.md
+- Source Title: Mission Control Design System
+- Source Sections:
+  - 7. Layout system
+  - 10.1 Masthead and navigation
+  - 10.4 Control decks and filter clusters
+  - 10.5 Tables and dense list surfaces
+  - 10.6 Column economics
+  - 11.1 /tasks/list
+- Coverage IDs:
+  - DESIGN-REQ-012
+  - DESIGN-REQ-013
+  - DESIGN-REQ-014
+  - DESIGN-REQ-019
+
+User Story
+As an operator scanning operational work, I want Mission Control layouts, mastheads, control decks, utility clusters, and data slabs to make comparison and route-level hierarchy fast and predictable.
+
+Acceptance Criteria
+- Mission Control shell supports constrained and data-wide modes with documented width ranges or equivalent responsive constraints.
+- Masthead uses left brand, viewport-centered nav pills, and right utility/telemetry zone rather than centering nav only in leftover space.
+- List/console pages separate primary filters and utilities from the matte table/data slab.
+- Upper-right desktop space is used for compact utilities such as live toggle, result counts, active filter summary, page size, or pagination where relevant.
+- The task list remains table-first on desktop and uses cards only for narrow/mobile layouts.
+- Sticky table headers support long-scroll scanning.
+- Pagination and page-size controls are visually attached to the table system, not treated as primary filters.
+
+Requirements
+- Implement shell width modes and spacing rhythm.
+- Align masthead architecture.
+- Create or apply control deck plus data slab primitives.
+- Preserve comparison-oriented desktop table economics.
+
+Implementation Notes
+- Preserve MM-426 in MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+- Use `docs/UI/MissionControlDesignSystem.md` as the source design reference for Mission Control layout, masthead, control deck, table, and column-composition patterns.
+- Keep desktop Mission Control list and console pages comparison-oriented and table-first.
+- Use narrow/mobile cards only for constrained viewports where table economics no longer fit.
+- Keep compact utility controls visually associated with route-level state and table/data-slab systems rather than treating them as primary filters.
 
 ## Classification
 
@@ -43,6 +88,7 @@ Single-story runtime feature request. The brief contains one independently testa
 ## Assumptions
 
 - "Mission Control layout and table composition patterns" refers to the desired-state control deck, data slab, sticky table header, and table-first desktop guidance in `docs/UI/MissionControlDesignSystem.md`.
+- The Jira brief points at `docs/UI/MissionControlDesignSystem.md`, so those design-system sections are runtime source requirements for this story.
 - The task list is the primary implementation target because it is the canonical table-first operational route.
 - Shared `DataTable` styling should be standardized for existing DataTable consumers, but route-specific page redesigns for manifests and schedules are outside this story.
 - No backend persistence, API contract, route ownership, or Temporal behavior change is required.
@@ -57,7 +103,7 @@ Single-story runtime feature request. The brief contains one independently testa
 - **FR-006**: Shared DataTable markup MUST use Mission Control table slab/table classes rather than unthemed standalone utility-class shells.
 - **FR-007**: Existing task-list behavior for requests, sorting, pagination, dependency summaries, runtime labels, and mobile cards MUST remain unchanged.
 - **FR-008**: Automated verification MUST cover the new composition structure, active filter chips, sticky table header posture, and existing task-list behavior.
-- **FR-009**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve MM-426 and the original supplied brief.
+- **FR-009**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve MM-426 and the canonical trusted Jira preset brief.
 
 ## Key Entities
 
@@ -71,4 +117,4 @@ Single-story runtime feature request. The brief contains one independently testa
 - **SC-002**: Task-list UI tests confirm active filters appear as chips and clear back to default filter values.
 - **SC-003**: CSS/computed-style verification confirms the table wrapper scrolls and desktop table headers use sticky positioning.
 - **SC-004**: Existing task-list UI tests continue to pass.
-- **SC-005**: Traceability verification confirms MM-426 and the supplied source summary are preserved in MoonSpec artifacts and final evidence.
+- **SC-005**: Traceability verification confirms MM-426, the canonical trusted Jira preset brief, and source design coverage IDs are preserved in MoonSpec artifacts and final evidence.

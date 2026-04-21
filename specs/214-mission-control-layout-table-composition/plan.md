@@ -19,7 +19,7 @@ Implement MM-426 by making Mission Control's task-list composition match the des
 | FR-006 | partial | `DataTable` uses standalone Tailwind utility classes | switch to shared Mission Control table classes | compile/UI unit |
 | FR-007 | implemented_unverified | existing task-list tests cover behavior | rerun focused and wrapper tests | UI unit |
 | FR-008 | missing | no MM-426-specific tests | add composition and filter-chip tests | UI unit |
-| FR-009 | implemented_unverified | `spec.md` preserves MM-426 and source summary | preserve through tasks, verification, and commit | final verify |
+| FR-009 | implemented_unverified | `spec.md` preserves MM-426, the trusted Jira preset brief, and source design coverage IDs | preserve through tasks, verification, and commit | final verify |
 
 ## Technical Context
 

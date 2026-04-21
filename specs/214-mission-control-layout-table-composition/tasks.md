@@ -27,4 +27,4 @@
 - [X] T010 Attempt `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx`, then run the direct Vitest equivalent after the npm script cannot resolve `vitest` in this container. (FR-007, FR-008)
 - [X] T011 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` or document the exact blocker. (FR-008)
 - [X] T012 Write `specs/214-mission-control-layout-table-composition/verification.md` with coverage, commands, and verdict. (FR-009, SC-005)
-- [ ] T013 Commit the completed MM-426 work without pushing or creating a pull request.
+- [X] T013 Commit the completed MM-426 work without pushing or creating a pull request.
