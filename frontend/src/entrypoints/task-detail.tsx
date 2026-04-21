@@ -206,6 +206,55 @@ const SkillRuntimeSchema = z
   })
   .passthrough();
 
+const MergeAutomationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    workflowId: z.string().nullable().optional(),
+    childWorkflowId: z.string().nullable().optional(),
+    status: z.string().nullable().optional(),
+    prNumber: z.union([z.number(), z.string()]).nullable().optional(),
+    prUrl: z.string().nullable().optional(),
+    latestHeadSha: z.string().nullable().optional(),
+    cycles: z.union([z.number(), z.string()]).nullable().optional(),
+    resolverChildWorkflowIds: z.array(z.string()).default([]).optional(),
+    resolverChildren: z
+      .array(
+        z
+          .object({
+            workflowId: z.string(),
+            taskRunId: z.string().nullable().optional(),
+            status: z.string().nullable().optional(),
+            detailHref: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .default([])
+      .optional(),
+    blockers: z
+      .array(
+        z
+          .object({
+            kind: z.string().nullable().optional(),
+            summary: z.string().nullable().optional(),
+            source: z.string().nullable().optional(),
+            retryable: z.boolean().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .default([])
+      .optional(),
+    artifactRefs: z
+      .object({
+        summary: z.string().nullable().optional(),
+        gateSnapshots: z.array(z.string()).default([]).optional(),
+        resolverAttempts: z.array(z.string()).default([]).optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+  })
+  .passthrough();
+
 const ExecutionDetailSchema = z
   .object({
     taskId: z.string(),
@@ -252,6 +301,7 @@ const ExecutionDetailSchema = z
     skillRuntime: SkillRuntimeSchema.nullable().optional(),
     publishMode: z.string().nullable().optional(),
     mergeAutomationSelected: z.boolean().optional().default(false),
+    mergeAutomation: MergeAutomationSchema.nullable().optional(),
     summaryArtifactRef: z.string().nullable().optional(),
     summary_artifact_ref: z.string().nullable().optional(),
     scheduledFor: z.string().nullable().optional(),
@@ -288,6 +338,7 @@ const ExecutionDetailSchema = z
         canReject: z.boolean().optional(),
         canSendMessage: z.boolean().optional(),
         canBypassDependencies: z.boolean().optional(),
+        canSkipDependencyWait: z.boolean().optional(),
         disabledReasons: z.record(z.string(), z.string()).optional(),
       })
       .passthrough()
@@ -610,39 +661,7 @@ const RunSummaryArtifactSchema = z
       })
       .passthrough()
       .optional(),
-    mergeAutomation: z
-      .object({
-        enabled: z.boolean().optional(),
-        status: z.string().nullable().optional(),
-        prNumber: z.union([z.number(), z.string()]).nullable().optional(),
-        prUrl: z.string().nullable().optional(),
-        latestHeadSha: z.string().nullable().optional(),
-        cycles: z.union([z.number(), z.string()]).nullable().optional(),
-        childWorkflowId: z.string().nullable().optional(),
-        resolverChildWorkflowIds: z.array(z.string()).default([]).optional(),
-        blockers: z
-          .array(
-            z
-              .object({
-                kind: z.string().nullable().optional(),
-                summary: z.string().nullable().optional(),
-                source: z.string().nullable().optional(),
-              })
-              .passthrough(),
-          )
-          .default([])
-          .optional(),
-        artifactRefs: z
-          .object({
-            summary: z.string().nullable().optional(),
-            gateSnapshots: z.array(z.string()).default([]).optional(),
-            resolverAttempts: z.array(z.string()).default([]).optional(),
-          })
-          .passthrough()
-          .optional(),
-      })
-      .passthrough()
-      .optional(),
+    mergeAutomation: MergeAutomationSchema.optional(),
   })
   .passthrough();
 
@@ -798,6 +817,123 @@ function formatDependencyResolution(value: string | null | undefined): string {
 
 function dependencyHref(workflowId: string): string {
   return `/tasks/${encodeURIComponent(workflowId)}?source=temporal`;
+}
+
+function MergeAutomationPanel({
+  mergeAutomation,
+}: {
+  mergeAutomation: z.infer<typeof MergeAutomationSchema>;
+}) {
+  const workflowId = mergeAutomation.workflowId || mergeAutomation.childWorkflowId || '';
+  const resolverChildren: Array<{
+    workflowId: string;
+    taskRunId?: string | null;
+    status?: string | null;
+    detailHref?: string | null;
+  }> = mergeAutomation.resolverChildren?.length
+    ? mergeAutomation.resolverChildren
+    : (mergeAutomation.resolverChildWorkflowIds || []).map((childWorkflowId) => ({
+        workflowId: childWorkflowId,
+      }));
+  const blockers = mergeAutomation.blockers || [];
+  const artifactRefs = mergeAutomation.artifactRefs;
+
+  return (
+    <section className="stack">
+      <h3>Merge Automation</h3>
+      <div className="grid-2">
+        <Card label="Status">{mergeAutomation.status || '—'}</Card>
+        {mergeAutomation.cycles !== undefined && mergeAutomation.cycles !== null ? (
+          <Card label="Cycles">{String(mergeAutomation.cycles)}</Card>
+        ) : null}
+        {mergeAutomation.prUrl ? (
+          <Card label="PR Link">
+            {(() => {
+              const normalizedUrl = normalizeGitHubPullRequestUrl(mergeAutomation.prUrl);
+              return normalizedUrl ? (
+                <a href={normalizedUrl} target="_blank" rel="noreferrer">
+                  {normalizedUrl}
+                </a>
+              ) : (
+                '—'
+              );
+            })()}
+          </Card>
+        ) : null}
+        {mergeAutomation.latestHeadSha ? (
+          <Card label="Latest Head SHA">
+            <code className="text-xs break-all">{mergeAutomation.latestHeadSha}</code>
+          </Card>
+        ) : null}
+        {workflowId ? (
+          <Card label="Child Workflow">
+            <code className="text-xs break-all">{workflowId}</code>
+          </Card>
+        ) : null}
+      </div>
+
+      {resolverChildren.length ? (
+        <div>
+          <strong>Resolver Children</strong>
+          <ul>
+            {resolverChildren.map((child) => (
+              <li key={child.workflowId}>
+                <a href={child.detailHref || dependencyHref(child.workflowId)}>
+                  <code className="text-xs break-all">{child.workflowId}</code>
+                </a>
+                {child.status ? <span className="small"> {child.status}</span> : null}
+                {child.taskRunId ? (
+                  <span className="small">
+                    {' '}
+                    logs: <code className="text-xs break-all">{child.taskRunId}</code>
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="small">Waiting for required checks before launching pr-resolver.</p>
+      )}
+
+      {blockers.length ? (
+        <div>
+          <strong>Blockers</strong>
+          <ul>
+            {blockers.map((blocker, index) => (
+              <li key={`${blocker.kind || 'blocker'}-${index}`}>
+                {blocker.summary || blocker.kind || 'Blocked'}
+                {blocker.source ? <span className="small"> ({blocker.source})</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {artifactRefs ? (
+        <div>
+          <strong>Artifacts</strong>
+          <ul>
+            {artifactRefs.summary ? (
+              <li>
+                Summary: <code className="text-xs break-all">{artifactRefs.summary}</code>
+              </li>
+            ) : null}
+            {artifactRefs.gateSnapshots?.map((artifactRef) => (
+              <li key={`gate-${artifactRef}`}>
+                Gate snapshot: <code className="text-xs break-all">{artifactRef}</code>
+              </li>
+            ))}
+            {artifactRefs.resolverAttempts?.map((artifactRef) => (
+              <li key={`resolver-${artifactRef}`}>
+                Resolver attempt: <code className="text-xs break-all">{artifactRef}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
+  );
 }
 
 function formatDebugValue(value: unknown): string {
@@ -2306,6 +2442,7 @@ function InterventionPanel({
   onCancel,
   onReject,
   onSendMessage,
+  onSkipDependencyWait,
 }: {
   actions: NonNullable<z.infer<typeof ExecutionDetailSchema>['actions']>;
   busy: boolean;
@@ -2322,6 +2459,7 @@ function InterventionPanel({
   onCancel: () => void;
   onReject: () => void;
   onSendMessage: (message: string) => void;
+  onSkipDependencyWait: () => void;
 }) {
   const [operatorMessage, setOperatorMessage] = useState('');
   const hasControls = Boolean(
@@ -2330,6 +2468,7 @@ function InterventionPanel({
       actions.canApprove ||
       actions.canCancel ||
       actions.canReject ||
+      actions.canSkipDependencyWait ||
       actions.canSendMessage,
   );
 
@@ -2374,6 +2513,11 @@ function InterventionPanel({
               onClick={onReject}
             >
               Reject
+            </button>
+          ) : null}
+          {actions.canSkipDependencyWait ? (
+            <button type="button" disabled={busy} className="secondary" onClick={onSkipDependencyWait}>
+              Skip Dependency Wait
             </button>
           ) : null}
           {actions.canCancel ? (
@@ -2962,6 +3106,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     refetchInterval: liveUpdates && summaryArtifactRef ? detailPoll : false,
   });
   const runSummary = runSummaryQuery.data;
+  const displayedMergeAutomation =
+    execution?.mergeAutomation || runSummary?.mergeAutomation || null;
   const displayedSummary = runSummary?.operatorSummary || execution?.summary || '—';
   const prUrl =
     normalizeGitHubPullRequestUrl(execution?.prUrl) ||
@@ -3099,6 +3245,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     signalMutation.mutate({ signalName: 'Approve', payload: {} });
   };
 
+  const onSkipDependencyWait = () => {
+    setActionError(null);
+    if (!window.confirm('Skip dependency waiting and continue this task?')) return;
+    signalMutation.mutate({ signalName: 'SkipDependencyWait', payload: {} });
+  };
+
   const onSendMessage = (message: string) => {
     setActionError(null);
     signalMutation.mutate({ signalName: 'SendMessage', payload: { message } });
@@ -3161,6 +3313,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
         actions.canCancel ||
         actions.canReject ||
         actions.canSendMessage ||
+        actions.canSkipDependencyWait ||
         (execution?.interventionAudit?.length ?? 0) > 0
       ),
   );
@@ -3391,93 +3544,6 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                   ) : null}
                 </div>
               ) : null}
-              {runSummary.mergeAutomation ? (
-                <section>
-                  <h3>Merge Automation</h3>
-                  <div className="grid-2">
-                    <Card label="Status">{runSummary.mergeAutomation.status || '—'}</Card>
-                    {runSummary.mergeAutomation.cycles !== undefined &&
-                    runSummary.mergeAutomation.cycles !== null ? (
-                      <Card label="Cycles">{String(runSummary.mergeAutomation.cycles)}</Card>
-                    ) : null}
-                    {runSummary.mergeAutomation.prUrl ? (
-                      <Card label="PR Link">
-                        {(() => {
-                          const normalizedUrl = normalizeGitHubPullRequestUrl(
-                            runSummary.mergeAutomation.prUrl,
-                          );
-                          return normalizedUrl ? (
-                            <a href={normalizedUrl} target="_blank" rel="noreferrer">
-                              {normalizedUrl}
-                            </a>
-                          ) : (
-                            '—'
-                          );
-                        })()}
-                      </Card>
-                    ) : null}
-                    {runSummary.mergeAutomation.latestHeadSha ? (
-                      <Card label="Latest Head SHA">
-                        <code className="text-xs break-all">{runSummary.mergeAutomation.latestHeadSha}</code>
-                      </Card>
-                    ) : null}
-                    {runSummary.mergeAutomation.childWorkflowId ? (
-                      <Card label="Child Workflow">
-                        <code className="text-xs break-all">{runSummary.mergeAutomation.childWorkflowId}</code>
-                      </Card>
-                    ) : null}
-                  </div>
-                  {runSummary.mergeAutomation.resolverChildWorkflowIds?.length ? (
-                    <div>
-                      <strong>Resolver Children</strong>
-                      <ul>
-                        {runSummary.mergeAutomation.resolverChildWorkflowIds.map((workflowId) => (
-                          <li key={workflowId}>
-                            <code className="text-xs break-all">{workflowId}</code>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {runSummary.mergeAutomation.blockers?.length ? (
-                    <div>
-                      <strong>Blockers</strong>
-                      <ul>
-                        {runSummary.mergeAutomation.blockers.map((blocker, index) => (
-                          <li key={`${blocker.kind || 'blocker'}-${index}`}>
-                            {blocker.summary || blocker.kind || 'Blocked'}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {runSummary.mergeAutomation.artifactRefs ? (
-                    <div>
-                      <strong>Artifacts</strong>
-                      <ul>
-                        {runSummary.mergeAutomation.artifactRefs.summary ? (
-                          <li>
-                            Summary:{' '}
-                            <code className="text-xs break-all">
-                              {runSummary.mergeAutomation.artifactRefs.summary}
-                            </code>
-                          </li>
-                        ) : null}
-                        {runSummary.mergeAutomation.artifactRefs.gateSnapshots?.map((artifactRef) => (
-                          <li key={`gate-${artifactRef}`}>
-                            Gate snapshot: <code className="text-xs break-all">{artifactRef}</code>
-                          </li>
-                        ))}
-                        {runSummary.mergeAutomation.artifactRefs.resolverAttempts?.map((artifactRef) => (
-                          <li key={`resolver-${artifactRef}`}>
-                            Resolver attempt: <code className="text-xs break-all">{artifactRef}</code>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                </section>
-              ) : null}
               {runSummary.lastStep?.summary && runSummary.lastStep.summary !== displayedSummary ? (
                 <div>
                   <strong>Last Step</strong>
@@ -3493,6 +3559,10 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               <h3>Waiting Reason</h3>
               <p>{execution.waitingReason}</p>
             </section>
+          ) : null}
+
+          {displayedMergeAutomation ? (
+            <MergeAutomationPanel mergeAutomation={displayedMergeAutomation} />
           ) : null}
 
           {hasStepsEndpoint ? (
@@ -3684,6 +3754,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               onCancel={onCancel}
               onReject={onReject}
               onSendMessage={onSendMessage}
+              onSkipDependencyWait={onSkipDependencyWait}
             />
           ) : null}
 

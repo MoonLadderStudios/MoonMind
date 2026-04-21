@@ -37,6 +37,7 @@ SUPPORTED_SIGNAL_NAMES = (
     "Pause",
     "Resume",
     "Approve",
+    "SkipDependencyWait",
     "SendMessage",
     "DependencyResolved",
     "BypassDependencies",
@@ -648,6 +649,7 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_reject: bool = Field(False, alias="canReject")
     can_send_message: bool = Field(False, alias="canSendMessage")
     can_bypass_dependencies: bool = Field(False, alias="canBypassDependencies")
+    can_skip_dependency_wait: bool = Field(False, alias="canSkipDependencyWait")
     disabled_reasons: dict[str, str] = Field(
         default_factory=dict, alias="disabledReasons"
     )
@@ -799,6 +801,77 @@ class ExecutionProgressModel(BaseModel):
     canceled: int = Field(0, alias="canceled", ge=0)
     current_step_title: str | None = Field(None, alias="currentStepTitle")
     updated_at: datetime = Field(..., alias="updatedAt")
+
+
+class ExecutionMergeAutomationBlockerModel(BaseModel):
+    """Operator-visible merge automation blocker."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    kind: str | None = Field(None, alias="kind")
+    summary: str | None = Field(None, alias="summary")
+    retryable: bool | None = Field(None, alias="retryable")
+    source: str | None = Field(None, alias="source")
+
+
+class ExecutionMergeAutomationArtifactRefsModel(BaseModel):
+    """Artifact refs produced by merge automation."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    summary: str | None = Field(None, alias="summary")
+    gate_snapshots: list[str] = Field(default_factory=list, alias="gateSnapshots")
+    resolver_attempts: list[str] = Field(default_factory=list, alias="resolverAttempts")
+
+
+class ExecutionMergeAutomationResolverChildModel(BaseModel):
+    """Resolver child workflow reference plus observability binding when known."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId")
+    task_run_id: str | None = Field(None, alias="taskRunId")
+    status: str | None = Field(None, alias="status")
+    detail_href: str | None = Field(None, alias="detailHref")
+
+
+class ExecutionMergeAutomationModel(BaseModel):
+    """Live or terminal merge automation visibility for an execution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    enabled: bool = Field(True, alias="enabled")
+    workflow_id: str | None = Field(None, alias="workflowId")
+    child_workflow_id: str | None = Field(None, alias="childWorkflowId")
+    status: str | None = Field(None, alias="status")
+    pr_number: int | str | None = Field(None, alias="prNumber")
+    pr_url: str | None = Field(None, alias="prUrl")
+    latest_head_sha: str | None = Field(None, alias="latestHeadSha")
+    cycles: int | str | None = Field(None, alias="cycles")
+    blockers: list[ExecutionMergeAutomationBlockerModel] = Field(
+        default_factory=list,
+        alias="blockers",
+    )
+    artifact_refs: ExecutionMergeAutomationArtifactRefsModel | None = Field(
+        None,
+        alias="artifactRefs",
+    )
+    resolver_child_workflow_ids: list[str] = Field(
+        default_factory=list,
+        alias="resolverChildWorkflowIds",
+    )
+    resolver_children: list[ExecutionMergeAutomationResolverChildModel] = Field(
+        default_factory=list,
+        alias="resolverChildren",
+    )
+
+    @model_validator(mode="after")
+    def _mirror_child_workflow_id(self) -> "ExecutionMergeAutomationModel":
+        if not self.workflow_id and self.child_workflow_id:
+            self.workflow_id = self.child_workflow_id
+        if not self.child_workflow_id and self.workflow_id:
+            self.child_workflow_id = self.workflow_id
+        return self
 
 
 class TaskInputSnapshotDescriptorModel(BaseModel):
@@ -1019,6 +1092,10 @@ class ExecutionModel(BaseModel):
     )
     publish_mode: Optional[str] = Field(None, alias="publishMode")
     merge_automation_selected: bool = Field(False, alias="mergeAutomationSelected")
+    merge_automation: ExecutionMergeAutomationModel | None = Field(
+        None,
+        alias="mergeAutomation",
+    )
     resolved_skillset_ref: Optional[str] = Field(None, alias="resolvedSkillsetRef")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
     skill_runtime: Optional[ExecutionSkillRuntimeModel] = Field(

@@ -1122,7 +1122,13 @@ class TemporalExecutionService:
             )
         record = await self._require_source_execution(workflow_id)
 
-        if signal_name in {"Pause", "Resume", "Approve", "SendMessage"}:
+        if signal_name in {
+            "Pause",
+            "Resume",
+            "Approve",
+            "SkipDependencyWait",
+            "SendMessage",
+        }:
             self._ensure_non_terminal(record)
             operator_message = self._extract_operator_message(payload)
             update_arg: dict[str, Any] = {}
@@ -1183,6 +1189,19 @@ class TemporalExecutionService:
                     self._update_summary(record, "Clarification reply sent to agent.")
                 else:
                     self._update_summary(record, "Execution resumed.")
+            elif signal_name == "SkipDependencyWait":
+                record.paused = False
+                self._clear_waiting_metadata(record)
+                self._clear_wait_metadata(record)
+                self._set_state(record, MoonMindWorkflowState.AWAITING_SLOT)
+                self._append_intervention_audit(
+                    record,
+                    action="skip_dependency_wait",
+                    transport="temporal_update",
+                    summary="Dependency wait skipped by operator.",
+                    detail=operator_message,
+                )
+                self._update_summary(record, "Dependency wait skipped by operator.")
             else:
                 if signal_name == "Approve":
                     record.paused = False

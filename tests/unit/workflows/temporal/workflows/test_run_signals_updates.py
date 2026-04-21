@@ -10,6 +10,7 @@ from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from temporalio import workflow
 from moonmind.workflows.temporal.workflows.run import (
     DEPENDENCY_RECONCILE_INTERVAL,
+    DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
     STATE_AWAITING_SLOT,
     STATE_WAITING_ON_DEPENDENCIES,
     MoonMindRunWorkflow,
@@ -607,3 +608,48 @@ async def test_wait_for_dependencies_reconciles_again_after_timeout(monkeypatch)
 
     assert reconcile_calls == [["dep-1"], ["dep-1"]]
     assert wait_timeouts == [DEPENDENCY_RECONCILE_INTERVAL]
+
+
+@pytest.mark.asyncio
+async def test_skip_dependency_wait_unblocks_dependency_gate(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._owner_id = "owner-1"
+    workflow_instance._owner_type = "user"
+    memo_updates: list[dict[str, object]] = []
+
+    async def fake_reconcile(dependency_ids):
+        return None
+
+    async def fake_wait_condition(predicate, timeout=None):
+        workflow_instance.skip_dependency_wait()
+        assert predicate()
+
+    monkeypatch.setattr(workflow_instance, "_reconcile_dependencies", fake_reconcile)
+    monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
+    monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(
+        workflow,
+        "logger",
+        type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
+    )
+
+    await workflow_instance._wait_for_dependencies(["dep-1", "dep-2"])
+
+    assert workflow_instance._dependency_resolution == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+    assert workflow_instance._dependency_manual_override_unresolved_count == 2
+    assert workflow_instance._unresolved_dependency_ids == set()
+    assert workflow_instance._failed_dependency_id is None
+    assert workflow_instance._waiting_reason is None
+    assert any(
+        (memo.get("dependencies") or {}).get("resolution")
+        == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+        for memo in memo_updates
+    )

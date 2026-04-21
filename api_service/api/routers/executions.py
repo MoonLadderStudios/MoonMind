@@ -10,7 +10,7 @@ import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,8 @@ from moonmind.schemas.temporal_models import (
     ExecutionActionCapabilityModel,
     ExecutionDependencySummaryModel,
     ExecutionDebugFieldsModel,
+    ExecutionMergeAutomationModel,
+    ExecutionMergeAutomationResolverChildModel,
     ExecutionProjectionDiagnosticModel,
     ExecutionListResponse,
     ExecutionModel,
@@ -780,6 +782,71 @@ def _derive_full_task_instructions(task_payload: Mapping[str, Any]) -> str | Non
     return None
 
 
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        candidate = str(item or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        normalized.append(candidate)
+    return normalized
+
+
+def _normalize_merge_automation_visibility_payload(
+    payload: Any,
+) -> ExecutionMergeAutomationModel | None:
+    if not isinstance(payload, Mapping):
+        return None
+    normalized = dict(payload)
+    workflow_id = (
+        _coerce_temporal_scalar(normalized.get("workflowId"))
+        or _coerce_temporal_scalar(normalized.get("childWorkflowId"))
+        or _coerce_temporal_scalar(normalized.get("mergeAutomationWorkflowId"))
+    )
+    if workflow_id:
+        normalized["workflowId"] = workflow_id
+        normalized["childWorkflowId"] = workflow_id
+
+    normalized["resolverChildWorkflowIds"] = _normalize_string_list(
+        normalized.get("resolverChildWorkflowIds")
+    )
+    blockers = normalized.get("blockers")
+    normalized["blockers"] = blockers if isinstance(blockers, list) else []
+    artifact_refs = normalized.get("artifactRefs")
+    if isinstance(artifact_refs, Mapping):
+        artifact_refs = dict(artifact_refs)
+        artifact_refs["gateSnapshots"] = _normalize_string_list(
+            artifact_refs.get("gateSnapshots")
+        )
+        artifact_refs["resolverAttempts"] = _normalize_string_list(
+            artifact_refs.get("resolverAttempts")
+        )
+        normalized["artifactRefs"] = artifact_refs
+    elif artifact_refs is not None:
+        normalized["artifactRefs"] = None
+
+    normalized["resolverChildren"] = (
+        normalized.get("resolverChildren")
+        if isinstance(normalized.get("resolverChildren"), list)
+        else []
+    )
+    normalized.setdefault("enabled", True)
+
+    try:
+        return ExecutionMergeAutomationModel.model_validate(normalized)
+    except ValidationError as exc:
+        logger.warning(
+            "Invalid merge automation visibility payload: %s",
+            exc,
+            exc_info=True,
+        )
+        return None
+
+
 def _serialize_execution(
     record, *, include_artifact_refs: bool = True, user: Optional["User"] = None
 ) -> ExecutionModel:
@@ -1064,6 +1131,9 @@ def _serialize_execution(
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
     merge_automation_selected = _merge_automation_selected_from_parameters(params)
+    merge_automation = _normalize_merge_automation_visibility_payload(
+        memo.get("merge_automation") or memo.get("mergeAutomation")
+    )
     pr_url = _extract_execution_pr_url(memo, search_attributes, params)
     is_admin = _is_execution_admin(user)
     steps_href = (
@@ -1123,6 +1193,7 @@ def _serialize_execution(
         pr_url=pr_url,
         publish_mode=publish_mode,
         merge_automation_selected=merge_automation_selected,
+        merge_automation=merge_automation,
         resolved_skillset_ref=resolved_skillset_ref,
         task_skills=task_skills,
         skill_runtime=skill_runtime,
@@ -1227,6 +1298,104 @@ async def _enrich_execution_dependencies(
             ],
         }
     )
+
+
+async def _resolver_child_observability(
+    *,
+    temporal_client: Client,
+    workflow_id: str,
+) -> ExecutionMergeAutomationResolverChildModel:
+    task_run_id: str | None = None
+    child_status: str | None = None
+    try:
+        payload = await query_workflow(
+            temporal_client,
+            workflow_id,
+            "get_step_ledger",
+        )
+    except Exception as exc:
+        logger.debug(
+            "Failed to query resolver child step ledger for %s: %s",
+            workflow_id,
+            exc,
+        )
+        payload = None
+    if isinstance(payload, Mapping):
+        steps = payload.get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                if not isinstance(step, Mapping):
+                    continue
+                if child_status is None:
+                    child_status = _coerce_temporal_scalar(step.get("status")) or None
+                refs = step.get("refs")
+                if not isinstance(refs, Mapping):
+                    continue
+                task_run_id = (
+                    _coerce_temporal_scalar(refs.get("taskRunId"))
+                    or _coerce_temporal_scalar(refs.get("task_run_id"))
+                    or None
+                )
+                if task_run_id:
+                    break
+    return ExecutionMergeAutomationResolverChildModel(
+        workflowId=workflow_id,
+        taskRunId=task_run_id,
+        status=child_status,
+        detailHref=f"/tasks/{quote(workflow_id, safe='')}?source=temporal",
+    )
+
+
+async def _enrich_execution_merge_automation(
+    execution: ExecutionModel,
+    *,
+    temporal_client: Client,
+) -> ExecutionModel:
+    merge_automation = execution.merge_automation
+    if merge_automation is None:
+        return execution
+    workflow_id = merge_automation.workflow_id or merge_automation.child_workflow_id
+    payload = merge_automation.model_dump(by_alias=True, exclude_none=True)
+    if workflow_id:
+        try:
+            live_payload = await query_workflow(
+                temporal_client,
+                workflow_id,
+                "summary",
+            )
+        except Exception as exc:
+            logger.debug(
+                "Failed to query merge automation summary for %s: %s",
+                workflow_id,
+                exc,
+            )
+        else:
+            if isinstance(live_payload, Mapping):
+                payload.update(dict(live_payload))
+                payload["workflowId"] = workflow_id
+                payload["childWorkflowId"] = workflow_id
+                payload["enabled"] = True
+
+    normalized = _normalize_merge_automation_visibility_payload(payload)
+    if normalized is None:
+        return execution
+
+    resolver_ids = list(normalized.resolver_child_workflow_ids)
+    if resolver_ids:
+        resolver_children = await asyncio.gather(
+            *(
+                _resolver_child_observability(
+                    temporal_client=temporal_client,
+                    workflow_id=child_workflow_id,
+                )
+                for child_workflow_id in resolver_ids[:10]
+            )
+        )
+        normalized = normalized.model_copy(
+            update={"resolver_children": resolver_children}
+        )
+
+    return execution.model_copy(update={"merge_automation": normalized})
 
 
 async def _hydrate_provider_profile_metadata(
@@ -1489,6 +1658,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                     "reject",
                     "sendMessage",
                     "bypassDependencies",
+                    "skipDependencyWait",
                 )
             }
         )
@@ -1504,6 +1674,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             "can_update_inputs",
             "can_cancel",
             "can_bypass_dependencies",
+            "can_skip_dependency_wait",
         },
         "awaiting_slot": {"can_set_title", "can_update_inputs", "can_cancel"},
         "planning": {"can_set_title", "can_update_inputs", "can_cancel"},
@@ -1549,6 +1720,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",
         "can_bypass_dependencies": "canBypassDependencies",
+        "can_skip_dependency_wait": "canSkipDependencyWait",
     }
     disabled_reasons = {}
     for field_name, alias in capability_values.items():
@@ -1578,6 +1750,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_reject="can_reject" in enabled,
         can_send_message="can_send_message" in enabled,
         can_bypass_dependencies="can_bypass_dependencies" in enabled,
+        can_skip_dependency_wait="can_skip_dependency_wait" in enabled,
         disabled_reasons=disabled_reasons,
     )
 
@@ -3601,6 +3774,10 @@ async def describe_execution(
             update["run_id"] = queried_run_id
             update["temporal_run_id"] = queried_run_id
         execution = execution.model_copy(update=update)
+        execution = await _enrich_execution_merge_automation(
+            execution,
+            temporal_client=temporal_client,
+        )
     if not execution.task_run_id:
         task_run_ids = await asyncio.to_thread(
             _resolve_task_run_ids_from_managed_store,

@@ -1657,6 +1657,126 @@ describe('Task Detail Entrypoint', () => {
     });
   });
 
+  it('renders live merge automation visibility from execution detail', async () => {
+    const mockExecution = {
+      taskId: 'test-live-merge-visibility',
+      workflowId: 'test-live-merge-visibility',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Live merge visibility task',
+      summary: 'Waiting on merge automation',
+      status: 'running',
+      state: 'awaiting_external',
+      rawState: 'awaiting_external',
+      temporalStatus: 'running',
+      closeStatus: null,
+      mergeAutomationSelected: true,
+      mergeAutomation: {
+        enabled: true,
+        workflowId: 'merge-automation:test-live-merge-visibility',
+        status: 'waiting',
+        prNumber: 1614,
+        prUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/1614',
+        latestHeadSha: 'abc123',
+        blockers: [{ kind: 'checks_failed', summary: 'Required checks are failing.', source: 'github' }],
+        resolverChildWorkflowIds: [],
+        artifactRefs: {
+          gateSnapshots: ['gate-snapshot-artifact'],
+          resolverAttempts: [],
+        },
+      },
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: null,
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Live merge visibility task')).toBeTruthy();
+      expect(screen.getByText('waiting')).toBeTruthy();
+      expect(screen.getByText('merge-automation:test-live-merge-visibility')).toBeTruthy();
+      expect(screen.getByText('Required checks are failing.')).toBeTruthy();
+      expect(screen.getByText('Waiting for required checks before launching pr-resolver.')).toBeTruthy();
+      expect(screen.getByText('gate-snapshot-artifact')).toBeTruthy();
+    });
+  });
+
+  it('accepts null merge automation artifact refs from execution detail', async () => {
+    const mockExecution = {
+      taskId: 'test-null-merge-artifact-refs',
+      workflowId: 'test-null-merge-artifact-refs',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Null merge artifact refs task',
+      summary: 'Waiting on merge automation',
+      status: 'running',
+      state: 'awaiting_external',
+      rawState: 'awaiting_external',
+      temporalStatus: 'running',
+      closeStatus: null,
+      mergeAutomationSelected: true,
+      mergeAutomation: {
+        enabled: true,
+        workflowId: 'merge-automation:test-null-merge-artifact-refs',
+        status: 'waiting',
+        resolverChildWorkflowIds: [],
+        artifactRefs: null,
+      },
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: null,
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Null merge artifact refs task')).toBeTruthy();
+      expect(screen.getByText('waiting')).toBeTruthy();
+      expect(screen.getByText('merge-automation:test-null-merge-artifact-refs')).toBeTruthy();
+    });
+  });
+
   it('renders prerequisite and dependent panels for dependency-aware runs', async () => {
     const mockExecution = {
       taskId: 'mm:dependent-1',
@@ -2328,6 +2448,82 @@ describe('Task Detail Entrypoint', () => {
             action: 'reject',
             graceful: true,
             reason: 'Rejected by operator.',
+          }),
+        }),
+      );
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it('supports manually skipping dependency waiting from the Intervention panel', async () => {
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Blocked dependent task',
+      summary: 'Waiting on prerequisites',
+      status: 'waiting',
+      state: 'waiting_on_dependencies',
+      rawState: 'waiting_on_dependencies',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      blockedOnDependencies: true,
+      dependencies: [{ workflowId: 'dep-1', title: 'Prerequisite one', state: 'running' }],
+      dependents: [],
+      actions: {
+        canCancel: true,
+        canSkipDependencyWait: true,
+      },
+      interventionAudit: [],
+    };
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      if (url.endsWith('/signal')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...mockExecution,
+            state: 'executing',
+            rawState: 'executing',
+            summary: 'Dependency wait skipped by operator.',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Skip Dependency Wait' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/signal',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            signalName: 'SkipDependencyWait',
+            payload: {},
           }),
         }),
       );

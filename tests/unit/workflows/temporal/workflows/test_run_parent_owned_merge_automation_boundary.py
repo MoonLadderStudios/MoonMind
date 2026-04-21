@@ -45,6 +45,8 @@ async def test_parent_owned_merge_automation_awaits_child_success(
     ) -> dict[str, Any]:
         calls.append({"workflow_type": workflow_type, "payload": payload, "kwargs": kwargs})
         assert workflow._awaiting_external is True
+        assert workflow._state == "awaiting_external"
+        assert workflow._waiting_reason == "Waiting for PR merge automation."
         return {"status": "merged", "prNumber": 350, "prUrl": payload["pullRequest"]["url"]}
 
     monkeypatch.setattr(
