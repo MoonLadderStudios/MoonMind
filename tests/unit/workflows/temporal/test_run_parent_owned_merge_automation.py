@@ -133,6 +133,22 @@ def test_run_records_merge_automation_disposition_from_step_outputs() -> None:
     assert workflow._merge_automation_head_sha == "abc123"
 
 
+def test_run_records_pushed_head_sha_for_parent_owned_merge_automation() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_execution_context(
+        node_id="publish",
+        execution_result={
+            "outputs": {
+                "push_status": "pushed",
+                "push_head_sha": "pushed-head-sha",
+            }
+        },
+    )
+
+    assert workflow._publish_context["headSha"] == "pushed-head-sha"
+
+
 def test_parent_run_summary_projects_merge_automation_visibility() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._publish_context = {

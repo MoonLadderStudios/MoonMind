@@ -296,6 +296,9 @@ class TestPushWorkspaceBranch:
             elif call_count == 4:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
+            elif call_count == 5:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"abc123head\n", b""))
+                proc.returncode = 0
             else:
                 raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
             return proc
@@ -311,6 +314,7 @@ class TestPushWorkspaceBranch:
         assert result["push_branch"] == "develop"
         assert result["push_base_ref"] == "origin/develop"
         assert result["push_commit_count"] == 1
+        assert result["push_head_sha"] == "abc123head"
 
     @pytest.mark.asyncio
     async def test_push_keeps_target_branch_protected_when_head_differs(self):
@@ -353,6 +357,9 @@ class TestPushWorkspaceBranch:
             elif call_count == 4:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
+            elif call_count == 5:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"pushed-head-sha\n", b""))
+                proc.returncode = 0
             else:  # rev-list --count
                 proc.communicate = AsyncMock(return_value=(b"2\n", b""))
                 proc.returncode = 0
@@ -364,6 +371,7 @@ class TestPushWorkspaceBranch:
         assert result["push_branch"] == "feature/delete-spec-048"
         assert result["push_base_branch"] == "trunk"
         assert result["push_base_ref"] == "origin/trunk"
+        assert result["push_head_sha"] == "pushed-head-sha"
         assert "push_error" not in result
 
     @pytest.mark.asyncio
@@ -415,6 +423,9 @@ class TestPushWorkspaceBranch:
             elif call_count == 4:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
+            elif call_count == 5:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"safe-head-sha\n", b""))
+                proc.returncode = 0
             else:  # rev-list --count
                 proc.communicate = AsyncMock(return_value=(b"1\n", b""))
                 proc.returncode = 0
@@ -424,7 +435,8 @@ class TestPushWorkspaceBranch:
             result = await activities._push_workspace_branch("run-1")
 
         assert result["push_status"] == "pushed"
-        assert len(recorded_calls) == 5
+        assert result["push_head_sha"] == "safe-head-sha"
+        assert len(recorded_calls) == 6
         for call in recorded_calls:
             command = list(call)
             assert command[:5] == [
@@ -579,8 +591,14 @@ class TestPushWorkspaceBranch:
             elif call_count == 5:  # commit
                 proc.communicate = AsyncMock(return_value=(b"[auto-dirty123 abc123] msg\n", b""))
                 proc.returncode = 0
-            elif call_count == 6:  # push
+            elif call_count == 6:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 7:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 8:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"dirty-head-sha\n", b""))
                 proc.returncode = 0
             else:  # rev-list --count
                 proc.communicate = AsyncMock(return_value=(b"1\n", b""))
@@ -596,6 +614,7 @@ class TestPushWorkspaceBranch:
         assert result["push_status"] == "pushed"
         assert result["push_branch"] == "auto-dirty123"
         assert result["push_commit_count"] == 1
+        assert result["push_head_sha"] == "dirty-head-sha"
         assert result["push_commit_message"] == "Ship dirty workspace"
         add_call = recorded_calls[2]
         assert list(add_call[-3:]) == [
@@ -924,6 +943,9 @@ class TestPushWorkspaceBranch:
             elif call_count == 3:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
+            elif call_count == 4:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"develop-head-sha\n", b""))
+                proc.returncode = 0
             else:  # rev-list --count
                 captured_revlist_args = args
                 proc.communicate = AsyncMock(return_value=(b"5\n", b""))
@@ -935,6 +957,7 @@ class TestPushWorkspaceBranch:
                 "run-1", target_branch="develop",
             )
         assert result["push_status"] == "pushed"
+        assert result["push_head_sha"] == "develop-head-sha"
         # Verify the rev-list range uses origin/develop, not origin/main
         assert captured_revlist_args is not None
         revlist_range = [a for a in captured_revlist_args if ".." in str(a)]

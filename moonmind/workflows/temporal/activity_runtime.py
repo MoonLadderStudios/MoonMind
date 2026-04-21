@@ -4690,8 +4690,8 @@ class TemporalAgentRuntimeActivities:
         """Push the workspace branch to origin.
 
         Returns a dict with ``push_status``, ``push_branch``, and optionally
-        ``push_error``, ``push_base_ref``, and ``push_commit_count`` that the
-        caller merges into result metadata.
+        ``push_error``, ``push_base_ref``, ``push_head_sha``, and
+        ``push_commit_count`` that the caller merges into result metadata.
 
         Uses ``asyncio.create_subprocess_exec`` to avoid blocking the event
         loop.
@@ -4859,6 +4859,12 @@ class TemporalAgentRuntimeActivities:
                     "push_error": error_detail,
                 }
 
+            head_sha = await self._resolve_workspace_head_sha(
+                workspace=workspace,
+                run_id=run_id,
+                env=command_env,
+            )
+
             # Verify the branch actually has commits over the publish base.
             # git push succeeds as a no-op when the branch is already
             # up-to-date, which would cause repo.create_pr to fail
@@ -4900,6 +4906,8 @@ class TemporalAgentRuntimeActivities:
                 "push_base_ref": base_ref,
             }
             result.update(commit_info)
+            if head_sha:
+                result["push_head_sha"] = head_sha
             if commit_count >= 0:
                 result["push_commit_count"] = commit_count
             return result
@@ -4913,6 +4921,41 @@ class TemporalAgentRuntimeActivities:
                 "push_status": "failed",
                 "push_error": str(exc),
             }
+
+    async def _resolve_workspace_head_sha(
+        self,
+        *,
+        workspace: str,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> str | None:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *self._workspace_git_command(workspace, "rev-parse", "HEAD"),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=10,
+            )
+        except Exception:
+            logger.warning(
+                "Could not resolve pushed HEAD SHA for run %s",
+                run_id,
+                exc_info=True,
+            )
+            return None
+        if proc.returncode != 0:
+            detail = stderr_bytes.decode("utf-8", errors="replace").strip()
+            logger.warning(
+                "Could not resolve pushed HEAD SHA for run %s: %s",
+                run_id,
+                detail or f"git rev-parse exited with {proc.returncode}",
+            )
+            return None
+        head_sha = stdout_bytes.decode("utf-8", errors="replace").strip()
+        return head_sha or None
 
     async def _resolve_workspace_default_branch(
         self,
