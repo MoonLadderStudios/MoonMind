@@ -27,7 +27,7 @@
 
 **Independent Test**: Submit valid and invalid zip uploads through the Skills Page and canonical import API, then verify valid bundles are saved under the local skills mirror and invalid archives or manifests are rejected without leaving a partial skill directory.
 
-**Traceability**: FR-001..013, DESIGN-REQ-001..009, SC-001..004
+**Traceability**: FR-001..013, DESIGN-REQ-001..011, SC-001..004
 
 ### Unit Tests
 
