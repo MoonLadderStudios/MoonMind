@@ -1,4 +1,11 @@
 {
-  "jira_issue_key": "Use liquid-glass-studio to add a liquid glass blur and refraction to the panel that holds the github repo, branch, publish mode, and create task buttons at the bottom of the create page",
-  "pull_request_url": "https://github.com/MoonLadderStudios/MoonMind/pull/1593"
+  "jira_issue_key": "MM-424",
+  "pull_request_url": "https://github.com/MoonLadderStudios/MoonMind/pull/1642",
+  "code_review_transition": {
+    "previous_status": "In Progress",
+    "confirmed_status": "Code Review",
+    "transition_id": "51",
+    "transition_name": "Code Review",
+    "jira_comment_added": true
+  }
 }

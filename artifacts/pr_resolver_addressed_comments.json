@@ -1,27 +1,17 @@
 [
   {
-    "id": 3115612665,
-    "disposition": "addressed",
-    "rationale": "Added branch_labels to the migration module __all__ export so the Alembic global is intentionally exposed."
-  },
-  {
-    "id": 3115612672,
-    "disposition": "addressed",
-    "rationale": "Added depends_on to the migration module __all__ export so the Alembic global is intentionally exposed."
-  },
-  {
-    "id": 3115615569,
-    "disposition": "addressed",
-    "rationale": "Gated the hashed resolver child workflow ID with Temporal workflow.patched and preserved the legacy child ID format for pre-patch replay histories."
-  },
-  {
-    "id": 4145722830,
+    "id": 4145803972,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper comment only; actionable inline review comments are tracked separately."
+    "rationale": "Top-level review summary only; no separate requested code or documentation change beyond the inline comments."
   },
   {
-    "id": 4145733313,
-    "disposition": "not-applicable",
-    "rationale": "Review summary explicitly states there is no feedback to provide."
+    "id": 3115693329,
+    "disposition": "addressed",
+    "rationale": "Updated T004 to include floating bar coverage plus FR-005 and DESIGN-REQ-027 traceability."
+  },
+  {
+    "id": 3115693346,
+    "disposition": "addressed",
+    "rationale": "Updated T012 to reflect that the completed MM-424 work was committed and a pull request was created."
   }
 ]

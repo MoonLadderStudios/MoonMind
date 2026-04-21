@@ -6,7 +6,7 @@
 - [X] Requirements are testable.
 - [X] Success criteria are measurable.
 - [X] Scope is bounded to one independently testable story.
-- [X] MM-424 and the supplied source summary are preserved.
+- [X] MM-424 and the trusted Jira preset brief are preserved.
 
 ## Requirement Completeness
 
