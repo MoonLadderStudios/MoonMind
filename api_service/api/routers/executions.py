@@ -3143,12 +3143,16 @@ async def _get_owned_execution(
     workflow_id: str,
     user: User,
     include_orphaned_projection: bool = False,
+    use_cancel_target_fallback: bool = False,
 ):
     try:
-        record = await service.describe_execution(
-            workflow_id,
-            include_orphaned=include_orphaned_projection,
-        )
+        if use_cancel_target_fallback:
+            record = await service.describe_cancel_target_execution(workflow_id)
+        else:
+            record = await service.describe_execution(
+                workflow_id,
+                include_orphaned=include_orphaned_projection,
+            )
     except TemporalExecutionNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -4128,7 +4132,13 @@ async def cancel_execution(
     user: User = Depends(get_current_user()),
     _actions_enabled: None = Depends(_ensure_actions_enabled),
 ) -> ExecutionModel:
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+        include_orphaned_projection=True,
+        use_cancel_target_fallback=True,
+    )
 
     request = payload or CancelExecutionRequest()
     record = await service.cancel_execution(

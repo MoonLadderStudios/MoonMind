@@ -1566,7 +1566,7 @@ class TemporalExecutionService:
         graceful: bool,
         action: str = "cancel",
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
-        record = await self._require_source_execution(workflow_id)
+        record = await self._require_cancel_target_execution(workflow_id)
 
         action_name = "reject" if action == "reject" else "cancel"
         default_reason = (
@@ -1597,7 +1597,9 @@ class TemporalExecutionService:
             ) from exc
 
         if record.state in TERMINAL_STATES:
-            return await self._sync_projection_best_effort(record)
+            if isinstance(record, TemporalExecutionCanonicalRecord):
+                return await self._sync_projection_best_effort(record)
+            return record
 
         record.paused = False
         self._clear_waiting_metadata(record)
@@ -1626,7 +1628,9 @@ class TemporalExecutionService:
         await self._session.commit()
         await self._session.refresh(record)
         await self._fan_out_dependency_resolution(record)
-        return await self._sync_projection_best_effort(record)
+        if isinstance(record, TemporalExecutionCanonicalRecord):
+            return await self._sync_projection_best_effort(record)
+        return record
 
     async def mark_execution_succeeded(
         self,
@@ -1665,6 +1669,19 @@ class TemporalExecutionService:
         await self._session.commit()
         await self._session.refresh(record)
         return await self._sync_projection_best_effort(record)
+
+    async def describe_cancel_target_execution(
+        self,
+        workflow_id: str,
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        """Return the record that would be used for a cancel operation.
+
+        Canonical source rows remain authoritative. Projection-only rows are
+        accepted for child workflows that were discovered from Temporal but do
+        not have source rows of their own.
+        """
+
+        return await self._require_cancel_target_execution(workflow_id)
 
     async def mark_execution_executing(
         self,
@@ -2805,6 +2822,25 @@ class TemporalExecutionService:
                 f"Workflow execution {workflow_id} was not found"
             )
         return record
+
+    async def _require_cancel_target_execution(
+        self,
+        workflow_id: str,
+    ) -> TemporalExecutionCanonicalRecord | TemporalExecutionRecord:
+        canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
+        source = await self._load_source_execution(canonical_workflow_id)
+        if source is not None:
+            return source
+
+        projection = await self._load_projection_execution(
+            canonical_workflow_id,
+            include_orphaned=False,
+        )
+        if projection is None:
+            raise TemporalExecutionNotFoundError(
+                f"Workflow execution {canonical_workflow_id} was not found"
+            )
+        return projection
 
     async def _load_projection_execution(
         self,

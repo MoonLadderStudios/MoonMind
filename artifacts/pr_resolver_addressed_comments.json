@@ -1,22 +1,12 @@
 [
   {
-    "id": 3115891581,
-    "disposition": "addressed",
-    "rationale": "Changed status capitalization to use charAt(0), which is safe for empty strings."
-  },
-  {
-    "id": 4146021949,
+    "id": 4149445122,
     "disposition": "not-applicable",
-    "rationale": "Non-actionable bot review summary; the referenced status formatting concern is covered by comment 3115891581."
+    "rationale": "Bot review summary only; no separate requested change beyond inline comment 3119057531."
   },
   {
-    "id": 3118644455,
+    "id": 3119057531,
     "disposition": "addressed",
-    "rationale": "Added phase to the manifest run schema and stage derivation, with test coverage for /api/executions phase payloads."
-  },
-  {
-    "id": 4149013747,
-    "disposition": "not-applicable",
-    "rationale": "Non-actionable automated review body; actionable Codex feedback is covered by comment 3118644455."
+    "rationale": "cancel_execution now passes include_orphaned_projection=True for cancel-target authorization, with regression coverage for a projection-only nested parent fallback."
   }
 ]

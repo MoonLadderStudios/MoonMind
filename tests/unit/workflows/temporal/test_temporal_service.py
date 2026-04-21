@@ -1727,6 +1727,124 @@ async def test_cancel_execution_records_reject_audit_action(
 
 
 @pytest.mark.asyncio
+async def test_cancel_execution_accepts_projection_only_child_workflow(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+        owner_id = str(uuid4())
+        workflow_id = (
+            "resolver:mm:parent:pr:1634:head:"
+            "5ed0c032789b901b99da93eaa4877de6609fdf35:1"
+        )
+        now = datetime.now(UTC)
+        projection = TemporalExecutionRecord(
+            workflow_id=workflow_id,
+            run_id=str(uuid4()),
+            namespace="default",
+            workflow_type=TemporalWorkflowType.RUN,
+            owner_id=owner_id,
+            owner_type=TemporalExecutionOwnerType.USER,
+            state=MoonMindWorkflowState.AWAITING_SLOT,
+            close_status=None,
+            entry="run",
+            search_attributes={
+                "mm_owner_type": "user",
+                "mm_owner_id": owner_id,
+                "mm_state": "awaiting_slot",
+                "mm_updated_at": now.isoformat(),
+                "mm_entry": "run",
+            },
+            memo={"title": "Resolve PR #1634", "summary": "Waiting for slot."},
+            artifact_refs=[],
+            parameters={},
+            paused=False,
+            awaiting_external=True,
+            waiting_reason="provider_profile_slot",
+            attention_required=False,
+            projection_version=1,
+            last_synced_at=now,
+            sync_state=TemporalExecutionProjectionSyncState.FRESH,
+            sync_error=None,
+            source_mode=TemporalExecutionProjectionSourceMode.PROJECTION_ONLY,
+            created_at=now,
+            started_at=now,
+            updated_at=now,
+            closed_at=None,
+        )
+        session.add(projection)
+        await session.commit()
+
+        canceled = await service.cancel_execution(
+            workflow_id=workflow_id,
+            reason="stop child",
+            graceful=True,
+        )
+
+        assert canceled.workflow_id == workflow_id
+        assert canceled.state is MoonMindWorkflowState.CANCELED
+        assert canceled.close_status is TemporalExecutionCloseStatus.CANCELED
+        assert canceled.waiting_reason is None
+        assert canceled.memo["summary"] == "stop child"
+        assert canceled.memo["intervention_audit"][-1]["action"] == "cancel"
+        assert canceled.search_attributes["mm_state"] == "canceled"
+        mock_client_adapter.cancel_workflow.assert_called_once_with(workflow_id)
+
+
+@pytest.mark.asyncio
+async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+        owner_id = str(uuid4())
+        now = datetime.now(UTC)
+        projection = TemporalExecutionRecord(
+            workflow_id="resolver:mm:orphaned:pr:1634:head:abc:1",
+            run_id=str(uuid4()),
+            namespace="default",
+            workflow_type=TemporalWorkflowType.RUN,
+            owner_id=owner_id,
+            owner_type=TemporalExecutionOwnerType.USER,
+            state=MoonMindWorkflowState.AWAITING_SLOT,
+            close_status=None,
+            entry="run",
+            search_attributes={
+                "mm_owner_type": "user",
+                "mm_owner_id": owner_id,
+                "mm_state": "awaiting_slot",
+                "mm_updated_at": now.isoformat(),
+                "mm_entry": "run",
+            },
+            memo={"title": "Resolve PR #1634", "summary": "Waiting for slot."},
+            artifact_refs=[],
+            parameters={},
+            projection_version=1,
+            last_synced_at=now,
+            sync_state=TemporalExecutionProjectionSyncState.ORPHANED,
+            sync_error="temporal execution missing",
+            source_mode=TemporalExecutionProjectionSourceMode.PROJECTION_ONLY,
+            created_at=now,
+            started_at=now,
+            updated_at=now,
+            closed_at=None,
+        )
+        session.add(projection)
+        await session.commit()
+
+        with pytest.raises(TemporalExecutionNotFoundError):
+            await service.cancel_execution(
+                workflow_id=projection.workflow_id,
+                reason="stop child",
+                graceful=True,
+            )
+
+        mock_client_adapter.cancel_workflow.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_cancel_execution_best_effort_terminates_task_scoped_codex_session(
     tmp_path, mock_client_adapter, monkeypatch
 ):

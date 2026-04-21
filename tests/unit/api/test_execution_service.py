@@ -113,7 +113,7 @@ async def test_cancel_action_routes_to_temporal(
         state=MoonMindWorkflowState.EXECUTING,
         entry="run",
     )
-    service._require_source_execution = AsyncMock(return_value=record)
+    service._require_cancel_target_execution = AsyncMock(return_value=record)
     service._sync_projection_best_effort = AsyncMock(return_value=record)
 
     await service.cancel_execution(
@@ -136,7 +136,7 @@ async def test_force_terminate_routes_to_temporal_terminate(
         state=MoonMindWorkflowState.EXECUTING,
         entry="run",
     )
-    service._require_source_execution = AsyncMock(return_value=record)
+    service._require_cancel_target_execution = AsyncMock(return_value=record)
     service._sync_projection_best_effort = AsyncMock(return_value=record)
 
     await service.cancel_execution(
