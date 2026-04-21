@@ -1,37 +1,32 @@
 [
   {
-    "id": 4150938132,
-    "disposition": "addressed",
-    "rationale": "Top-level review summary called out malformed remediation handling; router now preserves present non-object remediation payloads for service validation, with regression coverage."
+    "id": 4151097778,
+    "disposition": "not-applicable",
+    "rationale": "Top-level review summary only; the referenced timeout and instruction handoff comments are tracked and addressed individually."
   },
   {
-    "id": 3120468287,
+    "id": 3120624517,
     "disposition": "addressed",
-    "rationale": "Updated task-shaped create normalization to pass through any present remediation payload and added a malformed-payload router regression test."
+    "rationale": "Updated the Temporal start-to-close and schedule-to-close examples to 28800 and 32400 seconds, and aligned runner timeouts and provider leases with the 480-minute maximum."
   },
   {
-    "id": 3120470540,
+    "id": 3120624523,
     "disposition": "addressed",
-    "rationale": "Exported Alembic revision metadata through __all__ to mark it as intentionally consumed by Alembic."
+    "rationale": "Added an instruction-file path allowlist entry for the safe profile so the activity can pass the materialized instruction bundle into the container without exposing instruction content in an environment value."
   },
   {
-    "id": 3120470551,
+    "id": 3120624527,
     "disposition": "addressed",
-    "rationale": "Exported Alembic down_revision metadata through __all__ to mark it as intentionally consumed by Alembic."
+    "rationale": "Added the same instruction-file path allowlist entry for the VPN lab profile."
   },
   {
-    "id": 3120470564,
+    "id": 3120627859,
     "disposition": "addressed",
-    "rationale": "Exported Alembic branch_labels metadata through __all__ to mark it as intentionally consumed by Alembic."
+    "rationale": "Changed the command construction example from --instruction with inline content to --instruction-file with a workspace file path, and documented that instruction payloads must not be placed in argv, labels, or env values."
   },
   {
-    "id": 3120470575,
-    "disposition": "addressed",
-    "rationale": "Exported Alembic depends_on metadata through __all__ to mark it as intentionally consumed by Alembic."
-  },
-  {
-    "id": 3120483038,
-    "disposition": "addressed",
-    "rationale": "Pinned the resolved remediation target workflowId and runId back into stored task parameters and the workflow start payload, with service-level regression coverage."
+    "id": 4151100831,
+    "disposition": "not-applicable",
+    "rationale": "Automated review wrapper text with no additional actionable feedback beyond the inline comments."
   }
 ]
