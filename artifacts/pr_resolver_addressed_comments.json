@@ -1,22 +1,17 @@
 [
   {
-    "id": 3115891581,
+    "id": 3119218535,
     "disposition": "addressed",
-    "rationale": "Changed status capitalization to use charAt(0), which is safe for empty strings."
+    "rationale": "Excluded .td-instructions-toggle from the global primary button selectors so its lightweight hover/active styling is preserved."
   },
   {
-    "id": 4146021949,
+    "id": 4149618936,
     "disposition": "not-applicable",
-    "rationale": "Non-actionable bot review summary; the referenced status formatting concern is covered by comment 3115891581."
+    "rationale": "Automated review summary container; the actionable inline comment from this review is tracked separately."
   },
   {
-    "id": 3118644455,
-    "disposition": "addressed",
-    "rationale": "Added phase to the manifest run schema and stage derivation, with test coverage for /api/executions phase payloads."
-  },
-  {
-    "id": 4149013747,
+    "id": 4149627539,
     "disposition": "not-applicable",
-    "rationale": "Non-actionable automated review body; actionable Codex feedback is covered by comment 3118644455."
+    "rationale": "Review body explicitly states there is no feedback to address."
   }
 ]
