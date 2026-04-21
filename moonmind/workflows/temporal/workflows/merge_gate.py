@@ -186,13 +186,16 @@ def classify_readiness(
         deduped.append(blocker)
 
     explicit_ready = bool(payload.get("ready", False)) and not pull_request_merged
+    checks_are_failing = (
+        payload.get("checksPassing") is False
+        or payload.get("checks_passing") is False
+    )
+    checks_are_complete = not (
+        payload.get("checksComplete") is False
+        or payload.get("checks_complete") is False
+    )
     checks_failed_but_actionable = (
-        not pull_request_merged
-        and (payload.get("checksPassing") is False or payload.get("checks_passing") is False)
-        and not (
-            payload.get("checksComplete") is False
-            or payload.get("checks_complete") is False
-        )
+        not pull_request_merged and checks_are_failing and checks_are_complete
     )
     ready = (explicit_ready or checks_failed_but_actionable) and not deduped
     return ReadinessEvidenceModel.model_validate(
