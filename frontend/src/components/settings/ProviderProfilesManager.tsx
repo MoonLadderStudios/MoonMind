@@ -664,22 +664,74 @@ export function ProviderProfilesManager({
       </div>
 
       <div className="provider-profiles-table-wrap mt-6 overflow-x-auto">
-        <table className="provider-profiles-table min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-left text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-800/50">
-            <tr>
-              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Profile</th>
-              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Runtime</th>
-              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Provider</th>
-              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Credential</th>
-              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Secret refs</th>
-              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Status</th>
-              <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Actions</th>
+        <table
+          className="provider-profiles-table min-w-full md:divide-y divide-slate-200 dark:divide-slate-800 text-left text-sm"
+          role="table"
+        >
+          <thead className="bg-slate-50 dark:bg-slate-800/50" role="rowgroup">
+            <tr role="row">
+              <th
+                id="provider-profile-header-profile"
+                scope="col"
+                role="columnheader"
+                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+              >
+                Profile
+              </th>
+              <th
+                id="provider-profile-header-runtime"
+                scope="col"
+                role="columnheader"
+                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+              >
+                Runtime
+              </th>
+              <th
+                id="provider-profile-header-provider"
+                scope="col"
+                role="columnheader"
+                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+              >
+                Provider
+              </th>
+              <th
+                id="provider-profile-header-credential"
+                scope="col"
+                role="columnheader"
+                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+              >
+                Credential
+              </th>
+              <th
+                id="provider-profile-header-secret-refs"
+                scope="col"
+                role="columnheader"
+                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+              >
+                Secret refs
+              </th>
+              <th
+                id="provider-profile-header-status"
+                scope="col"
+                role="columnheader"
+                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+              >
+                Status
+              </th>
+              <th
+                id="provider-profile-header-actions"
+                scope="col"
+                role="columnheader"
+                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
+              >
+                Actions
+              </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-mm-border/80 bg-transparent">
+          <tbody className="divide-y divide-mm-border/80 bg-transparent" role="rowgroup">
             {profiles.length === 0 ? (
-              <tr>
-                <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={7}>
+              <tr role="row">
+                <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={7} role="cell">
                   No provider profiles configured yet.
                 </td>
               </tr>
@@ -688,8 +740,13 @@ export function ProviderProfilesManager({
                 const oauthSession = oauthSessions[profile.profile_id];
                 const canStartOAuth = isCodexOAuthCapable(profile);
                 return (
-                <tr key={profile.profile_id}>
-                  <td className="px-3 py-4" data-label="Profile">
+                <tr key={profile.profile_id} role="row">
+                  <td
+                    className="px-3 py-4"
+                    data-label="Profile"
+                    headers="provider-profile-header-profile"
+                    role="cell"
+                  >
                     <div className="font-medium text-slate-900 dark:text-white">{profile.profile_id}</div>
                     {profile.is_default ? (
                       <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
@@ -708,23 +765,50 @@ export function ProviderProfilesManager({
                       </div>
                     )}
                   </td>
-                  <td className="px-3 py-4 text-slate-700 dark:text-slate-300" data-label="Runtime">{profile.runtime_id}</td>
-                  <td className="px-3 py-4" data-label="Provider">
+                  <td
+                    className="px-3 py-4 text-slate-700 dark:text-slate-300"
+                    data-label="Runtime"
+                    headers="provider-profile-header-runtime"
+                    role="cell"
+                  >
+                    {profile.runtime_id}
+                  </td>
+                  <td
+                    className="px-3 py-4"
+                    data-label="Provider"
+                    headers="provider-profile-header-provider"
+                    role="cell"
+                  >
                     <div className="text-slate-700 dark:text-slate-300">{profile.provider_id}</div>
                     {profile.provider_label ? (
                       <div className="text-xs text-slate-500 dark:text-slate-400">{profile.provider_label}</div>
                     ) : null}
                   </td>
-                  <td className="px-3 py-4 text-slate-700 dark:text-slate-300" data-label="Credential">
+                  <td
+                    className="px-3 py-4 text-slate-700 dark:text-slate-300"
+                    data-label="Credential"
+                    headers="provider-profile-header-credential"
+                    role="cell"
+                  >
                     <div>{profile.credential_source}</div>
                     <div className="text-xs text-slate-500 dark:text-slate-400">
                       {profile.runtime_materialization_mode}
                     </div>
                   </td>
-                  <td className="px-3 py-4 font-mono text-xs text-slate-600 dark:text-slate-400" data-label="Secret refs">
+                  <td
+                    className="px-3 py-4 font-mono text-xs text-slate-600 dark:text-slate-400"
+                    data-label="Secret refs"
+                    headers="provider-profile-header-secret-refs"
+                    role="cell"
+                  >
                     {summarizeSecretRefs(profile.secret_refs)}
                   </td>
-                  <td className="px-3 py-4" data-label="Status">
+                  <td
+                    className="px-3 py-4"
+                    data-label="Status"
+                    headers="provider-profile-header-status"
+                    role="cell"
+                  >
                     <span
                       className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
                         profile.enabled
@@ -745,7 +829,12 @@ export function ProviderProfilesManager({
                       </div>
                     ) : null}
                   </td>
-                  <td className="px-3 py-4" data-label="Actions">
+                  <td
+                    className="px-3 py-4"
+                    data-label="Actions"
+                    headers="provider-profile-header-actions"
+                    role="cell"
+                  >
                     <div className="flex flex-wrap gap-2">
                       {canStartOAuth ? (
                         <button

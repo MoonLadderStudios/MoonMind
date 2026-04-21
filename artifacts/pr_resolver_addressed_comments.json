@@ -1,17 +1,27 @@
 [
   {
-    "id": 3114803761,
+    "id": 3114948062,
     "disposition": "addressed",
-    "rationale": "Memoized activeFilters in frontend/src/entrypoints/tasks-list.tsx with dependencies on the filter state values."
+    "rationale": "Changed the provider profiles table divider utility to md:divide-y so the hidden mobile header does not leave an extra top border above the card list."
   },
   {
-    "id": 4144793623,
+    "id": 3114948072,
+    "disposition": "addressed",
+    "rationale": "Added explicit table, rowgroup, row, columnheader, and cell roles plus stable header associations for the responsive table/card layout."
+  },
+  {
+    "id": 4144944042,
+    "disposition": "addressed",
+    "rationale": "Review summary covered the same divider and accessibility feedback, both of which were addressed in this change."
+  },
+  {
+    "id": 3114948151,
+    "disposition": "addressed",
+    "rationale": "Replaced display:none on the mobile table header with visually-hidden styling and added headers mappings so header context remains available to assistive technologies."
+  },
+  {
+    "id": 4144944133,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable items are tracked by the two inline review comments."
-  },
-  {
-    "id": 3114803770,
-    "disposition": "addressed",
-    "rationale": "Wrapped clearFilters in useCallback and stabilized resetToFirstPage with useCallback for a stable dependency."
+    "rationale": "Automated review wrapper text only; it contained no separate actionable request beyond the linked review comments."
   }
 ]

@@ -350,6 +350,12 @@ describe('ProviderProfilesManager form controls', () => {
       'Status',
       'Actions',
     ]);
+    expect(screen.getByRole('columnheader', { name: 'Profile' }).getAttribute('id')).toBe(
+      'provider-profile-header-profile',
+    );
+    expect(profileRow?.querySelector('td[data-label="Profile"]')?.getAttribute('headers')).toBe(
+      'provider-profile-header-profile',
+    );
   });
 
   it('sends runtime default changes when updating an edited profile', async () => {
