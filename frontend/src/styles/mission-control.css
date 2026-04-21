@@ -2231,6 +2231,14 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   margin: 4px 0 0;
 }
 
+.oauth-terminal-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .oauth-terminal-status {
   border: 1px solid var(--mm-border, #cbd5e1);
   border-radius: 8px;

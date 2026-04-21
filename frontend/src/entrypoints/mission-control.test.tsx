@@ -11,7 +11,7 @@ import {
 import postcss from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
-import { renderWithClient, screen, waitFor } from '../utils/test-utils';
+import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { MissionControlApp } from './mission-control-app';
 
 function normalizeCssSelector(selector: string): string {
@@ -61,6 +61,9 @@ vi.mock('@xterm/xterm', () => {
     }
     onData(_callback: (data: string) => void) {
       return { dispose: vi.fn() };
+    }
+    getSelection() {
+      return this.element?.textContent ?? '';
     }
     dispose() {}
   }
@@ -360,6 +363,12 @@ describe('Mission Control shared entry', () => {
 
   it('renders the OAuth terminal page and attaches through the session bridge', async () => {
     const sentFrames: string[] = [];
+    const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const clipboardMock = { writeText: vi.fn() };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: clipboardMock,
+    });
     class MockWebSocket extends EventTarget {
       static readonly OPEN = 1;
       readonly OPEN = 1;
@@ -424,9 +433,16 @@ describe('Mission Control shared entry', () => {
 
     expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
     expect(await screen.findByText('Ready for login')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy selection' }));
+    expect(clipboardMock.writeText).toHaveBeenCalledWith('Ready for login');
     await waitFor(() => {
       expect(sentFrames.some((frame) => frame.includes('"heartbeat"'))).toBe(true);
     });
     expect(document.body.textContent).not.toContain('Docker exec');
+    if (originalClipboardDescriptor) {
+      Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor);
+    } else {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
   });
 });

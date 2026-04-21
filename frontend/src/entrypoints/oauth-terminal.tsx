@@ -17,6 +17,24 @@ type AttachResponse = {
   attach_token: string;
 };
 
+function copyTextToClipboard(text: string): void {
+  if (
+    typeof navigator === 'undefined' ||
+    !navigator.clipboard ||
+    typeof navigator.clipboard.writeText !== 'function'
+  ) {
+    return;
+  }
+  try {
+    const maybePromise = navigator.clipboard.writeText(text);
+    if (typeof maybePromise?.catch === 'function') {
+      maybePromise.catch(() => undefined);
+    }
+  } catch {
+    // Clipboard permissions can vary by browser/context; keep terminal input stable.
+  }
+}
+
 function readSessionId(payload: BootPayload): string {
   const initialData = payload.initialData as OAuthTerminalInitialData | undefined;
   if (initialData?.sessionId) {
@@ -40,6 +58,13 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+
+  const copyTerminalSelection = () => {
+    const selectedText = terminalRef.current?.getSelection() ?? '';
+    if (selectedText) {
+      copyTextToClipboard(selectedText);
+    }
+  };
 
   useEffect(() => {
     const terminalElement = terminalElementRef.current;
@@ -65,6 +90,16 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
+    const copySelectionListener = (event: ClipboardEvent) => {
+      const selectedText = terminal.getSelection();
+      if (!selectedText) {
+        return;
+      }
+      event.preventDefault();
+      event.clipboardData?.setData('text/plain', selectedText);
+    };
+    terminalElement.addEventListener('copy', copySelectionListener);
+
     const sendResize = () => {
       const socket = socketRef.current;
       if (socket?.readyState === WebSocket.OPEN) {
@@ -84,6 +119,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       terminal.writeln('Missing OAuth session');
       return () => {
         window.removeEventListener('resize', resizeListener);
+        terminalElement.removeEventListener('copy', copySelectionListener);
         terminal.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;
@@ -156,6 +192,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
     return () => {
       closed = true;
       window.removeEventListener('resize', resizeListener);
+      terminalElement.removeEventListener('copy', copySelectionListener);
       inputDisposable.dispose();
       socketRef.current?.close();
       socketRef.current = null;
@@ -172,7 +209,12 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           <p className="eyebrow">OAuth enrollment</p>
           <h1>Provider Login Terminal</h1>
         </div>
-        <span className="oauth-terminal-status">{status}</span>
+        <div className="oauth-terminal-actions">
+          <button type="button" className="secondary" onClick={copyTerminalSelection}>
+            Copy selection
+          </button>
+          <span className="oauth-terminal-status">{status}</span>
+        </div>
       </header>
       <section className="oauth-terminal-surface" aria-label="OAuth terminal output">
         <div ref={terminalElementRef} className="oauth-terminal-xterm" />
