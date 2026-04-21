@@ -1877,7 +1877,7 @@ button.secondary:hover {
   bottom: 1.1rem;
   transform: translateX(-50%);
   z-index: 40;
-  width: min(100% - 1.5rem, 64rem);
+  width: min(100% - 1.5rem, 72rem);
   padding: 0.55rem 0.7rem;
   border-radius: 1.5rem;
   background: var(--mm-glass-fill);
@@ -1900,7 +1900,11 @@ button.secondary:hover {
 
 .queue-floating-bar-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  grid-template-columns:
+    minmax(0, 1.35fr)
+    minmax(0, 1.35fr)
+    minmax(9.5rem, 0.8fr)
+    auto;
   gap: 0.5rem;
   align-items: center;
 }
