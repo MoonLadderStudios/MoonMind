@@ -1,27 +1,22 @@
 [
   {
-    "id": 3114948062,
+    "id": 3115257689,
     "disposition": "addressed",
-    "rationale": "Changed the provider profiles table divider utility to md:divide-y so the hidden mobile header does not leave an extra top border above the card list."
+    "rationale": "Removed the unconditional provider_profile.ensure_manager activity from the request_slot=false path and moved auto-start to the sync_profiles signal retry only when ExternalWorkflowExecutionNotFound is observed."
   },
   {
-    "id": 3114948072,
-    "disposition": "addressed",
-    "rationale": "Added explicit table, rowgroup, row, columnheader, and cell roles plus stable header associations for the responsive table/card layout."
-  },
-  {
-    "id": 4144944042,
-    "disposition": "addressed",
-    "rationale": "Review summary covered the same divider and accessibility feedback, both of which were addressed in this change."
-  },
-  {
-    "id": 3114948151,
-    "disposition": "addressed",
-    "rationale": "Replaced display:none on the mobile table header with visually-hidden styling and added headers mappings so header context remains available to assistive technologies."
-  },
-  {
-    "id": 4144944133,
+    "id": 4145277063,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper text only; it contained no separate actionable request beyond the linked review comments."
+    "rationale": "Automated review summary; the actionable optimization it summarized is tracked by review comment 3115257689."
+  },
+  {
+    "id": 3115269139,
+    "disposition": "addressed",
+    "rationale": "Pre-slot manager startup is no longer a hard dependency; sync_profiles failures, including ensure_manager retry failures, remain best-effort and allow the run to continue to slot request."
+  },
+  {
+    "id": 4145288894,
+    "disposition": "not-applicable",
+    "rationale": "Automated review container/comment metadata; the actionable P1 item is tracked by review comment 3115269139."
   }
 ]
