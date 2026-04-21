@@ -424,7 +424,7 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
                             "workflowId": target.workflow_id,
                             "taskRunIds": ["tr_allowed"],
                         },
-                        "evidencePolicy": {"tailLines": 9999},
+                        "evidencePolicy": {"tailLines": 100},
                     },
                 }
             },
@@ -434,7 +434,9 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
             session=session,
             artifact_service=artifact_service,
         )
-        await builder.build_context(remediation_workflow_id=remediation.workflow_id)
+        build_result = await builder.build_context(
+            remediation_workflow_id=remediation.workflow_id
+        )
 
         reader = RecordingLogReader()
         tools = RemediationEvidenceToolService(
@@ -442,6 +444,16 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
             artifact_service=artifact_service,
             log_reader=reader,
         )
+        context_reads = 0
+        original_read = artifact_service.read
+
+        async def read_spy(*, artifact_id, principal):
+            nonlocal context_reads
+            if artifact_id == build_result.artifact.artifact_id:
+                context_reads += 1
+            return await original_read(artifact_id=artifact_id, principal=principal)
+
+        artifact_service.read = read_spy
         context = await tools.get_context(remediation_workflow_id=remediation.workflow_id)
         assert context["target"]["workflowId"] == target.workflow_id
 
@@ -463,9 +475,10 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
                 "task_run_id": "tr_allowed",
                 "stream": "merged",
                 "cursor": None,
-                "tail_lines": 2000,
+                "tail_lines": 100,
             }
         ]
+        assert context_reads == 1
 
         with pytest.raises(RemediationEvidenceToolError, match="not listed"):
             await tools.read_target_artifact(

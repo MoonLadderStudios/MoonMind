@@ -67,7 +67,7 @@ class RemediationLogReader(Protocol):
         cursor: str | None = None,
         tail_lines: int | None = None,
     ) -> RemediationLogReadResult:
-        ...
+        raise NotImplementedError
 
 
 class RemediationLiveFollower(Protocol):
@@ -79,7 +79,7 @@ class RemediationLiveFollower(Protocol):
         task_run_id: str,
         from_sequence: int | None = None,
     ) -> RemediationLiveFollowResult:
-        ...
+        raise NotImplementedError
 
 
 class _UnavailableLogReader:
@@ -126,6 +126,7 @@ class RemediationEvidenceToolService:
         self._log_reader = log_reader or _UnavailableLogReader()
         self._live_follower = live_follower or _UnavailableLiveFollower()
         self._cursor_recorder = cursor_recorder
+        self._context_payload_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def get_context(
         self,
@@ -262,6 +263,11 @@ class RemediationEvidenceToolService:
         link: db_models.TemporalExecutionRemediationLink,
         principal: str,
     ) -> dict[str, Any]:
+        cache_key = (link.remediation_workflow_id, link.context_artifact_ref)
+        cached = self._context_payload_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         artifact, payload = await self._artifact_service.read(
             artifact_id=link.context_artifact_ref,
             principal=principal,
@@ -287,6 +293,7 @@ class RemediationEvidenceToolService:
             raise RemediationEvidenceToolError(
                 "Remediation context target workflow does not match the persisted link."
             )
+        self._context_payload_cache[cache_key] = decoded
         return decoded
 
 
@@ -346,25 +353,36 @@ def _bounded_tail_lines(context: Mapping[str, Any], requested: int | None) -> in
     boundedness = context.get("boundedness")
     if isinstance(boundedness, Mapping):
         try:
-            parsed = int(boundedness.get("maxTailLines") or max_tail_lines)
+            value = boundedness.get("maxTailLines")
+            parsed = int(value) if value is not None else max_tail_lines
             if parsed >= 0:
                 max_tail_lines = parsed
         except (TypeError, ValueError):
+            # Ignore invalid policy metadata and keep the default/current bound.
             pass
+
+    policy_tail_lines: int | None = None
+    evidence_policy = (
+        context.get("policies", {}).get("evidencePolicy")
+        if isinstance(context.get("policies"), Mapping)
+        else None
+    )
+    if isinstance(evidence_policy, Mapping):
+        try:
+            parsed_policy = int(evidence_policy.get("tailLines"))
+            if parsed_policy >= 0:
+                policy_tail_lines = parsed_policy
+        except (TypeError, ValueError):
+            policy_tail_lines = None
+
+    effective_limit = min(
+        value for value in (max_tail_lines, policy_tail_lines) if value is not None
+    )
     if requested is None:
-        evidence_policy = (
-            context.get("policies", {}).get("evidencePolicy")
-            if isinstance(context.get("policies"), Mapping)
-            else None
-        )
-        if isinstance(evidence_policy, Mapping):
-            try:
-                requested = int(evidence_policy.get("tailLines"))
-            except (TypeError, ValueError):
-                requested = None
-    if requested is None:
-        return max_tail_lines
-    return max(0, min(int(requested), max_tail_lines))
+        requested = policy_tail_lines
+        if requested is None:
+            requested = max_tail_lines
+    return max(0, min(int(requested), effective_limit))
 
 
 def _normalize_log_stream(value: Any) -> RemediationLogStream:
@@ -407,6 +425,7 @@ __all__ = [
     "RemediationEvidenceToolService",
     "RemediationLiveFollowEvent",
     "RemediationLiveFollowResult",
+    "RemediationLiveFollower",
     "RemediationLogReadResult",
     "RemediationLogReader",
     "RemediationLogStream",
