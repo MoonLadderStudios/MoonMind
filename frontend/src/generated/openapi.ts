@@ -1840,6 +1840,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/skills/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Dashboard Skill Zip
+         * @description Create a new local skill from an uploaded zip bundle.
+         */
+        post: operations["upload_dashboard_skill_zip_api_tasks_skills_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/task-step-templates": {
         parameters: {
             query?: never;
@@ -2666,6 +2686,11 @@ export interface components {
             token: string;
             /** Password */
             password: string;
+        };
+        /** Body_upload_dashboard_skill_zip_api_tasks_skills_upload_post */
+        Body_upload_dashboard_skill_zip_api_tasks_skills_upload_post: {
+            /** File */
+            file: string;
         };
         /** Body_verify_request_token_api_v1_auth_request_verify_token_post */
         Body_verify_request_token_api_v1_auth_request_verify_token_post: {
@@ -10034,6 +10059,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardBranchListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_dashboard_skill_zip_api_tasks_skills_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_dashboard_skill_zip_api_tasks_skills_upload_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */

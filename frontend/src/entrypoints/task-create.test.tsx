@@ -5334,6 +5334,39 @@ describe("Task Create Entrypoint", () => {
     ).toBe("Create this task");
   });
 
+  it("adds hover tooltips to floating bar repository, branch, and publish controls", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const repoInput = await screen.findByLabelText("GitHub Repo");
+    const branchInput = screen.getByLabelText("Branch");
+    const publishModeSelect = screen.getByLabelText("Publish Mode");
+
+    expect(repoInput.getAttribute("title")).toBe(
+      "Select the GitHub repository for this task",
+    );
+    expect(
+      repoInput.closest(".queue-inline-selector--repo")?.getAttribute("title"),
+    ).toBe("Select the GitHub repository for this task");
+    await waitFor(() => {
+      expect(branchInput.getAttribute("title")).toBe(
+        "Select the branch to check out before the task starts",
+      );
+    });
+    expect(
+      branchInput
+        .closest(".queue-inline-selector--branch")
+        ?.getAttribute("title"),
+    ).toBe("Select the branch to check out before the task starts");
+    expect(publishModeSelect.getAttribute("title")).toBe(
+      "Select how MoonMind publishes task changes",
+    );
+    expect(
+      publishModeSelect
+        .closest(".queue-inline-selector--publish")
+        ?.getAttribute("title"),
+    ).toBe("Select how MoonMind publishes task changes");
+  });
+
   it("adds hover tooltips to Jira browser buttons", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
@@ -5664,7 +5697,7 @@ describe("Task Create Entrypoint", () => {
     expect(LIQUID_GL_OPTIONS.reveal).toBe(false);
   });
 
-  it("gives repository, branch, and publish controls equal desktop space in the floating bar", async () => {
+  it("lets repository, branch, and publish controls fill the floating bar on desktop", async () => {
     const { readFileSync } = await import("node:fs");
     const missionControlCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/mission-control.css`,
@@ -5672,7 +5705,13 @@ describe("Task Create Entrypoint", () => {
     );
 
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)\s*auto/s,
+      /\.queue-floating-bar\s*\{[^}]*width:\s*min\(100% - 1\.5rem,\s*72rem\)/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.35fr\)\s*minmax\(0,\s*1\.35fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto/s,
+    );
+    expect(missionControlCss).toMatch(
+      /@media \(max-width:\s*640px\)\s*\{[^}]*\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto/s,
     );
   });
 
@@ -5752,6 +5791,14 @@ describe("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
+      expect(branchInput.getAttribute("title")).toBe(
+        "Loading branches for the selected repository...",
+      );
+      expect(
+        branchInput
+          .closest(".queue-inline-selector--branch")
+          ?.getAttribute("title"),
+      ).toBe("Loading branches for the selected repository...");
     });
     expect(
       Array.from(document.querySelectorAll("p")).some(
