@@ -225,7 +225,8 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
       }
       const body = new FormData();
       body.append('file', zipFile);
-      const response = await fetch('/api/tasks/skills/upload', {
+      body.append('collision_policy', 'reject');
+      const response = await fetch('/api/skills/imports', {
         method: 'POST',
         headers: {
           Accept: 'application/json',
@@ -236,11 +237,11 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
         const text = await response.text();
         throw new Error(text || 'Failed to upload skill zip.');
       }
-      return response.json() as Promise<{ skill?: string }>;
+      return response.json() as Promise<{ name?: string; skill?: string }>;
     },
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ['skills', 'detail'] });
-      setSelectedSkillId(result.skill || zipFile?.name.replace(/\.zip$/i, '') || '');
+      setSelectedSkillId(result.name || result.skill || zipFile?.name.replace(/\.zip$/i, '') || '');
       setIsCreating(false);
       setZipFile(null);
       setMessage(null);

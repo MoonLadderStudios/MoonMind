@@ -310,14 +310,19 @@ describe('Mission Control shared entry', () => {
   });
 
   it('aligns compact controls, focus rings, disabled states, and reduced motion', async () => {
-    const compactControlBlock = cssRuleBlock(missionControlCss, '.queue-inline-toggle,\n.queue-inline-filter');
-    expect(compactControlBlock).toContain('background: var(--mm-control-shell)');
-    expect(compactControlBlock).toContain('border: 1px solid var(--mm-control-border)');
+    const inlineToggleBlock = cssRuleBlock(missionControlCss, '.queue-inline-toggle {');
+    expect(inlineToggleBlock).toContain('padding: 0');
+    expect(inlineToggleBlock).not.toContain('background: var(--mm-control-shell)');
+    expect(inlineToggleBlock).not.toContain('border: 1px solid var(--mm-control-border)');
+
+    const inlineFilterBlock = cssRuleBlock(missionControlCss, '.queue-inline-filter {');
+    expect(inlineFilterBlock).toContain('background: var(--mm-control-shell)');
+    expect(inlineFilterBlock).toContain('border: 1px solid var(--mm-control-border)');
 
     const filterChipBlock = cssRuleBlock(missionControlCss, '.task-list-filter-chip {');
     expect(filterChipBlock).toContain('background: var(--mm-control-shell)');
     expect(filterChipBlock).toContain('border: 1px solid var(--mm-control-border)');
-    expect(cssRuleBlock(missionControlCss, '.queue-inline-toggle:focus-within,\n.queue-inline-filter:focus-within')).toContain(
+    expect(cssRuleBlock(missionControlCss, '.queue-inline-filter:focus-within')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
     expect(cssRuleBlock(missionControlCss, 'button:focus-visible')).toContain(
@@ -495,6 +500,45 @@ describe('Mission Control shared entry', () => {
 
       expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
       expect(await screen.findByText('Ready for login')).toBeTruthy();
+      const terminalElement = screen.getByTestId('oauth-xterm');
+      vi.spyOn(terminalElement, 'getBoundingClientRect').mockReturnValue({
+        x: 10,
+        y: 20,
+        left: 10,
+        top: 20,
+        right: 90,
+        bottom: 60,
+        width: 80,
+        height: 40,
+        toJSON: () => ({}),
+      } as DOMRect);
+
+      fireEvent.contextMenu(terminalElement, {
+        clientX: 24,
+        clientY: 32,
+      });
+      const copyMenuItem = screen.getByRole('menuitem', { name: 'Copy selection' });
+      await waitFor(() => {
+        expect(document.activeElement).toBe(copyMenuItem);
+      });
+      fireEvent.contextMenu(document.body, {
+        clientX: 200,
+        clientY: 220,
+      });
+      expect(screen.queryByRole('menuitem', { name: 'Copy selection' })).toBeNull();
+
+      fireEvent.contextMenu(terminalElement, {
+        clientX: 0,
+        clientY: 0,
+      });
+      const fallbackMenuItem = screen.getByRole('menuitem', { name: 'Copy selection' });
+      const fallbackMenu = fallbackMenuItem.closest('.oauth-terminal-context-menu');
+      expect(fallbackMenu).toBeInstanceOf(HTMLElement);
+      expect((fallbackMenu as HTMLElement).style.left).toBe('34px');
+      expect((fallbackMenu as HTMLElement).style.top).toBe('40px');
+
+      fireEvent.click(fallbackMenuItem);
+      expect(clipboardMock.writeText).toHaveBeenCalledWith('Ready for login');
       fireEvent.click(screen.getByRole('button', { name: 'Copy selection' }));
       expect(clipboardMock.writeText).toHaveBeenCalledWith('Ready for login');
       await waitFor(() => {

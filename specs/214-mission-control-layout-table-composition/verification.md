@@ -16,13 +16,18 @@
 | FR-006 | `frontend/src/components/tables/DataTable.tsx` now emits `.data-table-slab`, `.data-table`, and `.data-table-empty` classes. | VERIFIED |
 | FR-007 | Existing task-list tests for request/query behavior, sorting, pagination, dependency summaries, runtime labels, and mobile cards still pass. | VERIFIED |
 | FR-008 | New focused UI tests cover composition structure, active filter chips, and sticky table posture. | VERIFIED |
-| FR-009 | MM-426 and the supplied source summary are preserved in `spec.md`, this verification file, and the orchestration input artifact. | VERIFIED |
+| FR-009 | MM-426, the trusted Jira preset brief, and source design coverage IDs are preserved in `spec.md`, this verification file, and the orchestration input artifact. | VERIFIED |
+| DESIGN-REQ-012 | Mission Control layout-system coverage is verified through task-list control/data surfaces, shell width tests in `mission-control.test.tsx`, and source traceability in `spec.md`. | VERIFIED |
+| DESIGN-REQ-013 | Masthead architecture is verified by `mission-control.test.tsx`, including brand-left, navigation-centered, and version/utility-right desktop alignment. | VERIFIED |
+| DESIGN-REQ-014 | Control deck and filter cluster behavior is verified by task-list tests for the control deck, utility cluster, active chips, and clear action. | VERIFIED |
+| DESIGN-REQ-019 | `/tasks/list` page composition is verified by task-list tests for control deck, data slab, sticky table header, pagination/page-size placement, and table-first desktop behavior. | VERIFIED |
 
 ## Test Evidence
 
 - `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx`: BLOCKED in this container because the npm script shell could not resolve `vitest` even after `npm ci`; direct local binary invocation was used for the same test command.
 - `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx`: PASS, 14 tests.
 - `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx`: PASS, 3663 Python tests, 1 xpassed, 16 subtests, and 14 targeted task-list UI tests.
+- `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/mission-control.test.tsx`: PASS, 18 tests.
 - `npm run ui:build:check`: BLOCKED in this container because the npm script shell could not resolve `vite`.
 - `./node_modules/.bin/vite build --config frontend/vite.config.ts`: PASS.
 - `bash tools/run_repo_python.sh tools/verify_vite_manifest.py`: PASS.

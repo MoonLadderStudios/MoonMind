@@ -18,10 +18,17 @@ describe('Skills Entrypoint', () => {
     let listCallCount = 0;
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === '/api/tasks/skills/upload' && init?.method === 'POST') {
+      if (url === '/api/skills/imports' && init?.method === 'POST') {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ status: 'success', skill: 'zip-skill' }),
+          json: async () => ({
+            status: 'saved',
+            name: 'zip-skill',
+            skill_id: 'zip-skill',
+            version_id: 'zip-skill-v1',
+            version_number: 1,
+            warnings: [],
+          }),
         } as Response);
       }
       if (url.startsWith('/api/tasks/skills') && !url.includes('includeContent=true')) {
@@ -185,7 +192,7 @@ describe('Skills Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/tasks/skills/upload',
+        '/api/skills/imports',
         expect.objectContaining({
           method: 'POST',
           body: expect.any(FormData),

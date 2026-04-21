@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import re
 import shutil
+import stat
 import tempfile
+import uuid
 import zipfile
 from collections.abc import Callable
 from html import escape
@@ -14,7 +17,17 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+import yaml
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -62,9 +75,11 @@ _STATIC_PATHS = {
     "settings",
     "skills",
 }
-_MAX_SKILL_ZIP_BYTES = 10 * 1024 * 1024
-_MAX_SKILL_UNCOMPRESSED_BYTES = 25 * 1024 * 1024
-_MAX_SKILL_ZIP_ENTRIES = 512
+_MAX_SKILL_ZIP_BYTES = 50 * 1024 * 1024
+_MAX_SKILL_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
+_MAX_SKILL_FILE_BYTES = 25 * 1024 * 1024
+_MAX_SKILL_ZIP_ENTRIES = 500
+_IMPORTED_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 # Block legacy top-level segments (e.g. removed queue source, reserved "system" path).
 _BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {
@@ -127,7 +142,22 @@ class DashboardBranchListResponse(BaseModel):
 
 class _ValidatedSkillZip(BaseModel):
     skill_name: str
+    description: str
     root_prefix: str | None = None
+    manifest_path: PurePosixPath
+
+
+class SkillImportResponse(BaseModel):
+    """Skill import result returned by the canonical upload contract."""
+
+    import_id: str = Field(..., alias="import_id")
+    status: Literal["saved"]
+    skill_id: str = Field(..., alias="skill_id")
+    version_id: str = Field(..., alias="version_id")
+    version_number: int = Field(..., alias="version_number")
+    name: str
+    description: str
+    warnings: list[dict[str, str]] = Field(default_factory=list)
 
 
 class DashboardTaskSourceResponse(BaseModel):
@@ -315,7 +345,12 @@ def _render_react_page(
 
 def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
     mode = (info.external_attr >> 16) & 0o170000
-    return mode == 0o120000
+    return mode == stat.S_IFLNK
+
+
+def _is_unsupported_zip_file_type(info: zipfile.ZipInfo) -> bool:
+    mode = (info.external_attr >> 16) & 0o170000
+    return mode not in {0, stat.S_IFREG}
 
 
 def _normalize_zip_member(name: str) -> PurePosixPath:
@@ -338,6 +373,76 @@ def _normalize_zip_member(name: str) -> PurePosixPath:
 
 def _is_ignored_zip_member(path: PurePosixPath) -> bool:
     return "__MACOSX" in path.parts or path.name == ".DS_Store"
+
+
+def _validate_imported_skill_name(skill_name: str) -> str:
+    try:
+        normalized = validate_skill_name(skill_name)
+    except SkillResolutionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if _IMPORTED_SKILL_NAME_RE.fullmatch(normalized) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Skill manifest name must use lowercase letters, digits, and single "
+                "hyphens only."
+            ),
+        )
+    return normalized
+
+
+def _parse_skill_manifest_metadata(markdown: str, parent_name: str) -> tuple[str, str]:
+    lines = markdown.splitlines()
+    if not lines or lines[0] != "---":
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest must be Markdown with YAML frontmatter.",
+        )
+
+    try:
+        end_index = lines[1:].index("---") + 1
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest must close YAML frontmatter with '---'.",
+        ) from exc
+
+    raw_frontmatter = "\n".join(lines[1:end_index])
+    try:
+        metadata = yaml.safe_load(raw_frontmatter) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest YAML frontmatter is invalid.",
+        ) from exc
+    if not isinstance(metadata, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest YAML frontmatter must be a mapping.",
+        )
+
+    raw_name = metadata.get("name")
+    raw_description = metadata.get("description")
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        raise HTTPException(status_code=400, detail="Skill manifest name is required.")
+    if not isinstance(raw_description, str) or not raw_description.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest description is required.",
+        )
+    if len(raw_description.strip()) > 1024:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest description must be 1024 characters or fewer.",
+        )
+
+    skill_name = _validate_imported_skill_name(raw_name)
+    if skill_name != parent_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest name must match the parent directory.",
+        )
+    return skill_name, raw_description.strip()
 
 
 def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkillZip:
@@ -373,10 +478,15 @@ def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkill
                     status_code=400,
                     detail="Encrypted skill zip entries are not supported.",
                 )
-            if _is_zip_symlink(info):
+            if _is_zip_symlink(info) or _is_unsupported_zip_file_type(info):
                 raise HTTPException(
                     status_code=400,
-                    detail="Skill zip cannot contain symlinks.",
+                    detail="Skill zip cannot contain symlinks, hardlinks, or device files.",
+                )
+            if info.file_size > _MAX_SKILL_FILE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Skill zip contains a file that is too large.",
                 )
             total_size += info.file_size
             if total_size > _MAX_SKILL_UNCOMPRESSED_BYTES:
@@ -398,27 +508,13 @@ def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkill
         if not normalized_paths:
             raise HTTPException(status_code=400, detail="Skill zip must contain skill files.")
 
-        skill_files = [path for path in normalized_paths if path.name == "SKILL.md"]
-        root_skill_files = [path for path in skill_files if len(path.parts) == 1]
+        skill_files = [path for path in normalized_paths if path.name.lower() == "skill.md"]
         top_level_names = {path.parts[0] for path in normalized_paths}
         nested_skill_files = [
             path
             for path in skill_files
-            if len(path.parts) >= 2 and path.parts[1:] == ("SKILL.md",)
+            if len(path.parts) == 2 and path.parts[1].lower() == "skill.md"
         ]
-
-        if root_skill_files:
-            if len(skill_files) > 1:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Skill zip must contain only one SKILL.md file.",
-                )
-            fallback_name = Path(filename or "skill").stem
-            try:
-                skill_name = validate_skill_name(fallback_name)
-            except SkillResolutionError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return _ValidatedSkillZip(skill_name=skill_name)
 
         if (
             len(top_level_names) != 1
@@ -427,17 +523,32 @@ def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkill
         ):
             raise HTTPException(
                 status_code=400,
-                detail="Skill zip must contain one skill directory with a SKILL.md file.",
+                detail=(
+                    "Skill zip must contain one skill directory with one "
+                    "SKILL.md or skill.md file."
+                ),
             )
 
         root_prefix = next(iter(top_level_names))
+        skill_name = _validate_imported_skill_name(root_prefix)
+        manifest_path = nested_skill_files[0]
         try:
-            skill_name = validate_skill_name(root_prefix)
-        except SkillResolutionError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            with archive.open(str(manifest_path)) as manifest_source:
+                manifest_markdown = manifest_source.read().decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Skill manifest must be UTF-8 Markdown.",
+            ) from exc
+        manifest_name, description = _parse_skill_manifest_metadata(
+            manifest_markdown,
+            parent_name=skill_name,
+        )
         return _ValidatedSkillZip(
-            skill_name=skill_name,
+            skill_name=manifest_name,
+            description=description,
             root_prefix=root_prefix,
+            manifest_path=manifest_path,
         )
 
 
@@ -445,6 +556,8 @@ def _write_skill_zip(
     skill_dir: Path,
     payload: bytes,
     validated: _ValidatedSkillZip,
+    *,
+    collision_policy: Literal["reject", "new_version"] = "reject",
 ) -> None:
     parent = skill_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -460,8 +573,13 @@ def _write_skill_zip(
                 relative_parts = normalized.parts
                 if validated.root_prefix is not None:
                     if relative_parts[0] != validated.root_prefix:
-                        raise HTTPException(status_code=400, detail="Skill zip root changed during extraction.")
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Skill zip root changed during extraction.",
+                        )
                     relative_parts = relative_parts[1:]
+                if relative_parts and relative_parts[-1].lower() == "skill.md":
+                    relative_parts = (*relative_parts[:-1], "SKILL.md")
                 target = temp_dir.joinpath(*relative_parts)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(info) as source, target.open("wb") as destination:
@@ -474,14 +592,51 @@ def _write_skill_zip(
         if not (temp_dir / "SKILL.md").is_file():
             raise HTTPException(status_code=400, detail="Skill zip must contain a SKILL.md file.")
         if skill_dir.exists():
-            raise HTTPException(
-                status_code=409,
-                detail=f"Skill '{validated.skill_name}' already exists locally.",
-            )
+            detail = f"Skill '{validated.skill_name}' already exists locally."
+            if collision_policy == "new_version":
+                detail = (
+                    f"Skill '{validated.skill_name}' already exists locally; "
+                    "new_version requires versioned skill storage."
+                )
+            raise HTTPException(status_code=409, detail=detail)
         shutil.move(str(temp_dir), str(skill_dir))
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
+
+
+def _build_skill_import_response(
+    payload: bytes,
+    validated: _ValidatedSkillZip,
+) -> SkillImportResponse:
+    content_hash = hashlib.sha256(payload).hexdigest()
+    return SkillImportResponse(
+        import_id=f"skill-import-{uuid.uuid4().hex}",
+        status="saved",
+        skill_id=validated.skill_name,
+        version_id=f"{validated.skill_name}-{content_hash[:12]}",
+        version_number=1,
+        name=validated.skill_name,
+        description=validated.description,
+        warnings=[],
+    )
+
+
+async def _import_skill_zip(
+    file: UploadFile,
+    collision_policy: Literal["reject", "new_version"],
+) -> SkillImportResponse:
+    payload = await file.read()
+    validated = _validate_skill_zip(file.filename, payload)
+    skills_root = resolve_skills_local_mirror_root()
+    skill_dir = skills_root / validated.skill_name
+    _write_skill_zip(
+        skill_dir,
+        payload,
+        validated,
+        collision_policy=collision_policy,
+    )
+    return _build_skill_import_response(payload, validated)
 
 
 @router.get("/tasks/secrets")
@@ -738,6 +893,21 @@ async def create_dashboard_skill(
 
 
 @router.post(
+    "/api/skills/imports",
+    status_code=201,
+    response_model=SkillImportResponse,
+)
+async def create_skill_import(
+    file: UploadFile = File(...),
+    collision_policy: Literal["reject", "new_version"] = Form("reject"),
+    _user: User = Depends(get_current_user()),
+) -> SkillImportResponse:
+    """Create a new local skill from an uploaded zip bundle."""
+
+    return await _import_skill_zip(file, collision_policy)
+
+
+@router.post(
     "/api/tasks/skills/upload",
     status_code=201,
 )
@@ -747,14 +917,9 @@ async def upload_dashboard_skill_zip(
 ) -> dict[str, str]:
     """Create a new local skill from an uploaded zip bundle."""
 
-    payload = await file.read()
-    validated = _validate_skill_zip(file.filename, payload)
-    skills_root = resolve_skills_local_mirror_root()
-    skill_dir = skills_root / validated.skill_name
+    result = await _import_skill_zip(file, "reject")
 
-    _write_skill_zip(skill_dir, payload, validated)
-
-    return {"status": "success", "skill": validated.skill_name}
+    return {"status": "success", "skill": result.name}
 
 
 __all__ = [
