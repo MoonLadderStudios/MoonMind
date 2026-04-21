@@ -495,11 +495,44 @@ describe('Mission Control shared entry', () => {
 
       expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
       expect(await screen.findByText('Ready for login')).toBeTruthy();
-      fireEvent.contextMenu(screen.getByTestId('oauth-xterm'), {
+      const terminalElement = screen.getByTestId('oauth-xterm');
+      vi.spyOn(terminalElement, 'getBoundingClientRect').mockReturnValue({
+        x: 10,
+        y: 20,
+        left: 10,
+        top: 20,
+        right: 90,
+        bottom: 60,
+        width: 80,
+        height: 40,
+        toJSON: () => ({}),
+      } as DOMRect);
+
+      fireEvent.contextMenu(terminalElement, {
         clientX: 24,
         clientY: 32,
       });
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Copy selection' }));
+      const copyMenuItem = screen.getByRole('menuitem', { name: 'Copy selection' });
+      await waitFor(() => {
+        expect(document.activeElement).toBe(copyMenuItem);
+      });
+      fireEvent.contextMenu(document.body, {
+        clientX: 200,
+        clientY: 220,
+      });
+      expect(screen.queryByRole('menuitem', { name: 'Copy selection' })).toBeNull();
+
+      fireEvent.contextMenu(terminalElement, {
+        clientX: 0,
+        clientY: 0,
+      });
+      const fallbackMenuItem = screen.getByRole('menuitem', { name: 'Copy selection' });
+      const fallbackMenu = fallbackMenuItem.closest('.oauth-terminal-context-menu');
+      expect(fallbackMenu).toBeInstanceOf(HTMLElement);
+      expect((fallbackMenu as HTMLElement).style.left).toBe('34px');
+      expect((fallbackMenu as HTMLElement).style.top).toBe('40px');
+
+      fireEvent.click(fallbackMenuItem);
       expect(clipboardMock.writeText).toHaveBeenCalledWith('Ready for login');
       fireEvent.click(screen.getByRole('button', { name: 'Copy selection' }));
       expect(clipboardMock.writeText).toHaveBeenCalledWith('Ready for login');

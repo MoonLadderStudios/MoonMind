@@ -128,6 +128,23 @@ function isTerminalAttachable(session: OAuthSessionResponse): boolean {
   );
 }
 
+function contextMenuPositionForEvent(
+  event: MouseEvent,
+  fallbackElement: HTMLElement,
+): Pick<TerminalContextMenuState, 'x' | 'y'> {
+  if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+    if (event.clientX !== 0 || event.clientY !== 0) {
+      return { x: event.clientX, y: event.clientY };
+    }
+  }
+
+  const rect = fallbackElement.getBoundingClientRect();
+  return {
+    x: rect.left + Math.min(24, Math.max(rect.width / 2, 0)),
+    y: rect.top + Math.min(24, Math.max(rect.height / 2, 0)),
+  };
+}
+
 async function readErrorDetail(response: Response, fallback: string): Promise<string> {
   const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
   return typeof payload?.detail === 'string' ? payload.detail : fallback;
@@ -138,6 +155,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const [status, setStatus] = useState('Preparing terminal');
   const [contextMenu, setContextMenu] = useState<TerminalContextMenuState | null>(null);
   const terminalElementRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuItemRef = useRef<HTMLButtonElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -161,11 +179,14 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         closeContextMenu();
       }
     };
+    contextMenuItemRef.current?.focus({ preventScroll: true });
     window.addEventListener('click', closeContextMenu);
+    window.addEventListener('contextmenu', closeContextMenu, true);
     window.addEventListener('keydown', closeContextMenuOnEscape);
     window.addEventListener('resize', closeContextMenu);
     return () => {
       window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('contextmenu', closeContextMenu, true);
       window.removeEventListener('keydown', closeContextMenuOnEscape);
       window.removeEventListener('resize', closeContextMenu);
     };
@@ -211,10 +232,11 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         return;
       }
       event.preventDefault();
+      const position = contextMenuPositionForEvent(event, terminalElement);
       setContextMenu({
         selectedText,
-        x: event.clientX,
-        y: event.clientY,
+        x: position.x,
+        y: position.y,
       });
     };
     terminalElement.addEventListener('contextmenu', contextMenuListener);
@@ -381,6 +403,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           onMouseDown={(event) => event.preventDefault()}
         >
           <button
+            ref={contextMenuItemRef}
             type="button"
             role="menuitem"
             onClick={() => {
