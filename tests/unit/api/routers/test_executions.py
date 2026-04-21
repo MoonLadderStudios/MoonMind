@@ -3198,7 +3198,8 @@ def test_describe_execution_hydrates_provider_profile_metadata() -> None:
                 provider_id="google",
                 provider_label="Google",
             )
-        )
+        ),
+        rollback=AsyncMock(),
     )
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)

@@ -14,6 +14,7 @@ from moonmind.workflows.temporal.workflows.merge_automation import (
 )
 from moonmind.workflows.temporal.workflows.merge_gate import (
     deterministic_resolver_idempotency_key,
+    legacy_resolver_idempotency_key,
 )
 
 
@@ -56,6 +57,15 @@ def _payload_with_post_merge_jira(**post_merge_overrides: Any) -> dict[str, Any]
         **post_merge_overrides,
     }
     return payload
+
+
+@pytest.fixture(autouse=True)
+def _default_temporal_patch_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda _patch_id: True,
+    )
 
 
 def test_merge_automation_extracts_artifact_id_from_ref_shapes() -> None:
@@ -309,6 +319,82 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
     assert search_attributes["mm_owner_type"] == ["user"]
     assert search_attributes["mm_owner_id"] == ["wf-parent"]
     assert search_attributes["mm_repo"] == ["MoonLadderStudios/MoonMind"]
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_resolver_child_uses_legacy_id_before_patch_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    child_workflow_ids: list[str] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        _payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.Run"
+        child_workflow_ids.append(str(kwargs["id"]))
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert result["status"] == "merged"
+    legacy_resolver_id = legacy_resolver_idempotency_key(
+        parent_workflow_id="wf-parent",
+        repo="MoonLadderStudios/MoonMind",
+        pr_number=350,
+        head_sha="abc123",
+    )
+    assert child_workflow_ids == [f"{legacy_resolver_id}:1"]
 
 
 @pytest.mark.asyncio

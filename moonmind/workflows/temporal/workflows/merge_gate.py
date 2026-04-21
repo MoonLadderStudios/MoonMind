@@ -240,6 +240,17 @@ def deterministic_resolver_idempotency_key(
     return f"resolver:pr:{pr_prefix}:head:{head_prefix}:h:{digest}"
 
 
+def legacy_resolver_idempotency_key(
+    *,
+    parent_workflow_id: str,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+) -> str:
+    # Preserve the exact pre-hash child workflow id for workflow replay.
+    return f"resolver:{parent_workflow_id}:pr:{pr_number}:head:{head_sha}"
+
+
 def build_resolver_run_request(
     *,
     parent_workflow_id: str,

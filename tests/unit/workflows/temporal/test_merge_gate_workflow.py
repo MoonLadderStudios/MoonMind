@@ -8,6 +8,7 @@ from moonmind.workflows.temporal.workflows.merge_gate import (
     classify_readiness,
     deterministic_resolver_idempotency_key,
     build_continue_as_new_input,
+    legacy_resolver_idempotency_key,
 )
 
 
@@ -168,6 +169,17 @@ def test_deterministic_resolver_idempotency_key_is_revision_scoped() -> None:
     assert "mm:parent" not in first
     assert "MoonLadderStudios" not in first
     assert "/" not in first
+
+
+def test_legacy_resolver_idempotency_key_preserves_replay_format() -> None:
+    legacy = legacy_resolver_idempotency_key(
+        parent_workflow_id="mm:parent",
+        repo="MoonLadderStudios/MoonMind",
+        pr_number=341,
+        head_sha="abc123",
+    )
+
+    assert legacy == "resolver:mm:parent:pr:341:head:abc123"
 
 
 def test_build_resolver_run_request_uses_pr_resolver_and_publish_none() -> None:

@@ -1,27 +1,27 @@
 [
   {
-    "id": 3115365887,
+    "id": 3115612665,
     "disposition": "addressed",
-    "rationale": "Refactored resolver child request construction to consume a single canonical resolverTemplate.executionProfileRef key and write only task.runtime.executionProfileRef for the child run."
+    "rationale": "Added branch_labels to the migration module __all__ export so the Alembic global is intentionally exposed."
   },
   {
-    "id": 3115365890,
+    "id": 3115612672,
     "disposition": "addressed",
-    "rationale": "Refactored merge automation resolver template construction to read the parent profile from the existing parameters.profileId source and emit only resolverTemplate.executionProfileRef."
+    "rationale": "Added depends_on to the migration module __all__ export so the Alembic global is intentionally exposed."
   },
   {
-    "id": 4145395537,
+    "id": 3115615569,
     "disposition": "addressed",
-    "rationale": "Removed redundant profile/model/effort alias propagation from the merge automation resolver template and child runtime payload."
+    "rationale": "Gated the hashed resolver child workflow ID with Temporal workflow.patched and preserved the legacy child ID format for pre-patch replay histories."
   },
   {
-    "id": 3115378317,
-    "disposition": "addressed",
-    "rationale": "Removed the multiple-profile-field selection path so conflicting resolverTemplate aliases are no longer accepted or silently prioritized."
-  },
-  {
-    "id": 4145408425,
+    "id": 4145722830,
     "disposition": "not-applicable",
-    "rationale": "Informational Codex review wrapper with no actionable code feedback."
+    "rationale": "Automated review wrapper comment only; actionable inline review comments are tracked separately."
+  },
+  {
+    "id": 4145733313,
+    "disposition": "not-applicable",
+    "rationale": "Review summary explicitly states there is no feedback to provide."
   }
 ]
