@@ -134,6 +134,8 @@ def test_agent_runtime_topology_exposes_docker_workload_capability():
 
     assert "docker_workload" in topology.capabilities
     assert "workload.run" in topology.activity_types
+    assert "oauth_session.start_auth_runner" in topology.activity_types
+    assert "oauth_session.verify_volume" in topology.activity_types
 
 
 def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: Path):
@@ -168,10 +170,10 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
             assert {binding.fleet for binding in bindings} == {ARTIFACTS_FLEET}
             activity_types = {binding.activity_type for binding in bindings}
             assert "mm.skill.execute" in activity_types
-            assert "oauth_session.ensure_volume" in activity_types
             assert "oauth_session.update_status" in activity_types
             assert "oauth_session.mark_failed" in activity_types
             assert "oauth_session.cleanup_stale" in activity_types
+            assert "oauth_session.start_auth_runner" not in activity_types
             assert "manifest.compile" in activity_types
             assert "manifest.write_summary" in activity_types
             assert {binding.task_queue for binding in bindings} == {
@@ -260,14 +262,24 @@ def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_
                 for binding in bindings
                 if binding.activity_type == "agent_runtime.reconcile_managed_sessions"
             ]
+            oauth_runner_bindings = [
+                binding
+                for binding in bindings
+                if binding.activity_type == "oauth_session.start_auth_runner"
+            ]
             assert len(workload_bindings) == 1
             assert len(reconcile_bindings) == 1
+            assert len(oauth_runner_bindings) == 1
             assert (
                 workload_bindings[0].task_queue
                 == settings.temporal.activity_agent_runtime_task_queue
             )
             assert (
                 reconcile_bindings[0].task_queue
+                == settings.temporal.activity_agent_runtime_task_queue
+            )
+            assert (
+                oauth_runner_bindings[0].task_queue
                 == settings.temporal.activity_agent_runtime_task_queue
             )
         finally:

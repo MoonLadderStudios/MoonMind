@@ -26,6 +26,8 @@ from moonmind.workflows.temporal.activities.oauth_session_activities import (
     oauth_session_update_terminal_session,
 )
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
+from moonmind.workflows.temporal.activity_catalog import AGENT_RUNTIME_FLEET
+from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_FLEET
 from moonmind.workflows.temporal.runtime.providers import registry as provider_registry
 from moonmind.workflows.temporal.workers import REGISTERED_TEMPORAL_WORKFLOW_TYPES
 
@@ -56,20 +58,20 @@ class TestOAuthSessionCatalogRegistration:
         catalog = build_default_activity_catalog()
         route = catalog.resolve_activity("oauth_session.ensure_volume")
         assert route.activity_type == "oauth_session.ensure_volume"
-        assert route.fleet == "artifacts"
-        assert route.capability_class == "artifacts"
+        assert route.fleet == AGENT_RUNTIME_FLEET
+        assert route.capability_class == "agent_runtime"
 
     def test_update_status_in_catalog(self) -> None:
         catalog = build_default_activity_catalog()
         route = catalog.resolve_activity("oauth_session.update_status")
         assert route.activity_type == "oauth_session.update_status"
-        assert route.fleet == "artifacts"
+        assert route.fleet == ARTIFACTS_FLEET
 
     def test_mark_failed_in_catalog(self) -> None:
         catalog = build_default_activity_catalog()
         route = catalog.resolve_activity("oauth_session.mark_failed")
         assert route.activity_type == "oauth_session.mark_failed"
-        assert route.fleet == "artifacts"
+        assert route.fleet == ARTIFACTS_FLEET
 
     def test_ensure_volume_timeouts(self) -> None:
         catalog = build_default_activity_catalog()
@@ -87,7 +89,7 @@ class TestOAuthSessionCatalogRegistration:
         catalog = build_default_activity_catalog()
         route = catalog.resolve_activity("oauth_session.update_terminal_session")
         assert route.activity_type == "oauth_session.update_terminal_session"
-        assert route.fleet == "artifacts"
+        assert route.fleet == ARTIFACTS_FLEET
         assert route.timeouts.start_to_close_seconds == 15
         assert route.timeouts.schedule_to_close_seconds == 30
 
@@ -95,7 +97,7 @@ class TestOAuthSessionCatalogRegistration:
         catalog = build_default_activity_catalog()
         route = catalog.resolve_activity("oauth_session.verify_volume")
         assert route.activity_type == "oauth_session.verify_volume"
-        assert route.fleet == "artifacts"
+        assert route.fleet == AGENT_RUNTIME_FLEET
         assert route.timeouts.start_to_close_seconds == 60
         assert route.timeouts.schedule_to_close_seconds == 120
 

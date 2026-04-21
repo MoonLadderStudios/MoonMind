@@ -195,8 +195,15 @@ async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
     assert result["container_name"] == "moonmind_auth_oas_terminal_runner"
     assert "-v" in observed
     assert "codex_auth_volume:/home/app/.codex" in observed
-    assert observed[-3:] == ["codex", "login", "--device-auth"]
-    assert "sleep" not in observed
+    assert "--user" in observed
+    assert "1000:1000" in observed
+    assert "-e" in observed
+    assert "CODEX_HOME=/home/app/.codex" in observed
+    assert observed[-3:-1] == ["/bin/sh", "-lc"]
+    assert "command -v codex" in observed[-1]
+    assert "sleep 1800" in observed[-1]
+    assert observed[-1].count("codex") == 2
+    assert observed[-1] != "codex login --device-auth"
 
 
 @pytest.mark.asyncio
