@@ -5785,6 +5785,14 @@ describe("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
+      expect(branchInput.getAttribute("title")).toBe(
+        "Loading branches for the selected repository...",
+      );
+      expect(
+        branchInput
+          .closest(".queue-inline-selector--branch")
+          ?.getAttribute("title"),
+      ).toBe("Loading branches for the selected repository...");
     });
     expect(
       Array.from(document.querySelectorAll("p")).some(

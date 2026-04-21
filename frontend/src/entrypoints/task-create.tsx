@@ -5289,9 +5289,12 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         ? "Start a new run from this task draft"
         : "Create this task";
   const repositoryTooltip = "Select the GitHub repository for this task";
-  const branchTooltip = branchControlDisabled
-    ? "Choose a valid GitHub repository before selecting a branch"
-    : "Select the branch to check out before the task starts";
+  const branchTooltip = branchOptionsQuery.isLoading
+    ? "Loading branches for the selected repository..."
+    : branchControlDisabled
+      ? branchStatusMessage ||
+        "Choose a valid GitHub repository before selecting a branch"
+      : "Select the branch to check out before the task starts";
   const publishModeTooltip = "Select how MoonMind publishes task changes";
   const applyPresetTooltip = presetReapplyNeeded
     ? "Reapply the selected preset to update preset-derived steps"

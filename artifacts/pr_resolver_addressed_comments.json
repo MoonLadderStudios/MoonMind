@@ -1,12 +1,22 @@
 [
   {
-    "id": 3114361904,
+    "id": 3114795326,
     "disposition": "addressed",
-    "rationale": "Updated deactivate_templates telemetry to increment the delete metric by the number of templates deactivated, with unit coverage for the bulk path."
+    "rationale": "Updated the Branch tooltip to report branch loading explicitly and reuse the existing branch status message for disabled states instead of always implying an invalid repository."
   },
   {
-    "id": 4144292983,
+    "id": 4144783396,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; the only concrete feedback item it referenced was addressed separately."
+    "rationale": "Automated review summary container; the actionable line feedback is tracked separately."
+  },
+  {
+    "id": 3114795465,
+    "disposition": "addressed",
+    "rationale": "Added loading-specific Branch tooltip text and test coverage that asserts the loading tooltip on both the input and wrapper."
+  },
+  {
+    "id": 4144783500,
+    "disposition": "not-applicable",
+    "rationale": "Review summary repeats the actionable Branch loading tooltip concern, which is addressed by the associated line comments."
   }
 ]
