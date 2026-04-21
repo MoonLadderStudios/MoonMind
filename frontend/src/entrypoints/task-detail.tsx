@@ -3325,7 +3325,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   };
 
   return (
-    <div className="stack">
+    <div className="stack task-detail-page">
       <div className="toolbar">
         <div>
           <h2 className="page-title">Temporal Task Detail</h2>
@@ -3430,14 +3430,15 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             ) : null}
           </div>
 
-          <SkillProvenanceBadge
-            resolvedSkillsetRef={execution.resolvedSkillsetRef}
-            taskSkills={execution.taskSkills}
-            targetSkill={execution.targetSkill}
-            skillRuntime={execution.skillRuntime}
-          />
+          <div className="td-facts-region">
+            <SkillProvenanceBadge
+              resolvedSkillsetRef={execution.resolvedSkillsetRef}
+              taskSkills={execution.taskSkills}
+              targetSkill={execution.targetSkill}
+              skillRuntime={execution.skillRuntime}
+            />
 
-          <FactGroup title="Runtime">
+            <FactGroup title="Runtime">
             {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
             {execution.model ? (
               <Fact label="Model">
@@ -3509,9 +3510,10 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               <code className="text-xs break-all">{workflowId}</code>
             </Fact>
           </FactGroup>
+          </div>
 
           {runSummary ? (
-            <section className="stack">
+            <section className="stack td-run-summary-region td-evidence-region">
               <h3>Run Summary</h3>
               {runSummary.finishOutcome ? (
                 <div className="grid-2">
@@ -3568,7 +3570,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           ) : null}
 
           {hasStepsEndpoint ? (
-            <section className="stack">
+            <section className="stack td-steps-region td-evidence-region">
               <div className="step-tl-section-header">
                 <h3>Steps</h3>
                 <span className="step-tl-header-meta">
@@ -3710,7 +3712,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           ) : null}
 
           {actionsOn && actions && hasTaskActions ? (
-            <section className="stack">
+            <section className="stack td-actions-region">
               <div>
                 <h3>Task Actions</h3>
                 <p className="small">Workflow editing actions stay separate from intervention controls.</p>
@@ -3778,9 +3780,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             apiBase={payload.apiBase}
           />
 
-          <section className="stack">
+          <section className="stack td-timeline-region td-evidence-region">
             <h3>Timeline</h3>
-            <div className="queue-table-wrapper" data-layout="table">
+            <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
               <table>
                 <thead>
                   <tr>
@@ -3822,14 +3824,14 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             </div>
           </section>
 
-          <section className="stack">
+          <section className="stack td-artifacts-region td-evidence-region">
             <h3>Artifacts</h3>
             {artifactsQuery.isLoading ? (
               <p className="loading">Loading artifacts...</p>
             ) : artifactsQuery.isError ? (
               <div className="notice error">{(artifactsQuery.error as Error).message}</div>
             ) : (
-              <div className="queue-table-wrapper" data-layout="table">
+              <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
                 <table>
                   <thead>
                     <tr>
@@ -3871,7 +3873,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           </section>
 
           {showExecutionObservationFallback ? (
-            <section className="stack">
+            <section className="stack td-observation-region td-evidence-region">
               <div>
                 <h3>Observation</h3>
                 <p className="small">

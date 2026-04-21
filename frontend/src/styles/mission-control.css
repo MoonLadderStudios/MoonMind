@@ -2089,6 +2089,11 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   }
 }
 
+.queue-step-instructions,
+.queue-step-skill-args {
+  background: var(--mm-input-well);
+}
+
 .queue-step-instructions {
   min-height: 120px;
 }
@@ -2855,6 +2860,49 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 }
 
 /* Task detail: grouped flat facts */
+
+.task-detail-page {
+  min-width: 0;
+}
+
+.td-facts-region {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.td-evidence-region {
+  min-width: 0;
+  padding: 0.85rem;
+  border: 1px solid rgb(var(--mm-border) / 0.58);
+  border-radius: 0.8rem;
+  background: rgb(var(--mm-panel) / 0.9);
+  box-shadow: 0 16px 36px -30px rgb(var(--mm-ink) / 0.48);
+}
+
+.td-run-summary-region,
+.td-steps-region,
+.td-artifacts-region,
+.td-timeline-region,
+.td-observation-region {
+  overflow-wrap: anywhere;
+}
+
+.td-actions-region {
+  padding: 0.8rem;
+  border: 1px solid rgb(var(--mm-border) / 0.62);
+  border-radius: 0.85rem;
+  background: var(--mm-control-shell);
+}
+
+.td-evidence-slab {
+  background: rgb(var(--mm-panel) / 0.94);
+}
+
+.td-evidence-region .live-logs-panel {
+  margin: 0;
+}
+
 .td-hero {
   display: flex;
   flex-direction: column;
