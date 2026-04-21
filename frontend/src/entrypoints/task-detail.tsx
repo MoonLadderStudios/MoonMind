@@ -3329,7 +3329,18 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       <div className="toolbar">
         <div>
           <h2 className="page-title">Temporal Task Detail</h2>
-          <p className="page-meta">Task {taskId || '—'}</p>
+          <div className="toolbar-identity-row">
+            <p className="page-meta">Task {taskId || '—'}</p>
+            {execution ? (
+              <span
+                className={executionStatusPillClasses(
+                  execution.rawState || execution.state || execution.status,
+                )}
+              >
+                {execution.rawState || execution.state || execution.status || '—'}
+              </span>
+            ) : null}
+          </div>
         </div>
         <div className="toolbar-controls">
           <label className="queue-inline-toggle toolbar-live-toggle">
@@ -3369,54 +3380,45 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       ) : execution ? (
         <>
           <div className="td-hero">
-            <div>
+            <div className="td-hero-body">
+              <div className="td-hero-headline">
+                <h3 className="td-title-text">{execution.title}</h3>
+                <span className="meta-inline">
+                  Temporal
+                  {execution.workflowType ? (
+                    <>
+                      <span className="dot">·</span>
+                      {execution.workflowType}
+                    </>
+                  ) : null}
+                  {execution.entry ? (
+                    <>
+                      <span className="dot">·</span>
+                      {execution.entry}
+                    </>
+                  ) : null}
+                </span>
+              </div>
               <button
                 type="button"
-                className="td-title-toggle"
+                className="td-instructions-toggle"
                 aria-expanded={instructionsExpanded}
                 aria-controls="task-instructions-panel"
                 onClick={() => setInstructionsExpanded((current) => !current)}
               >
-                <span className="td-title-toggle-copy">
-                  <span className="td-title-text">{execution.title}</span>
-                  <span className="meta-inline">
-                    Temporal
-                    {execution.workflowType ? (
-                      <>
-                        <span className="dot">·</span>
-                        {execution.workflowType}
-                      </>
-                    ) : null}
-                    {execution.entry ? (
-                      <>
-                        <span className="dot">·</span>
-                        {execution.entry}
-                      </>
-                    ) : null}
-                  </span>
-                </span>
-                <span className="td-title-toggle-hint">
-                  {instructionsExpanded ? 'Hide instructions' : 'Show instructions'}
-                </span>
+                {instructionsExpanded ? 'Hide instructions' : 'Show instructions'}
               </button>
             </div>
-            <div className="td-hero-right">
-              <span className={executionStatusPillClasses(execution.rawState || execution.state || execution.status)}>
-                {execution.rawState || execution.state || execution.status || '—'}
-              </span>
-            </div>
+            {instructionsExpanded ? (
+              <div id="task-instructions-panel" className="td-instructions-panel">
+                {hasTaskInstructions ? (
+                  <pre>{taskInstructions}</pre>
+                ) : (
+                  <p className="small">Full instructions are not available for this task.</p>
+                )}
+              </div>
+            ) : null}
           </div>
-
-          {instructionsExpanded ? (
-            <div id="task-instructions-panel" className="td-instructions-panel">
-              <h4>Instructions</h4>
-              {hasTaskInstructions ? (
-                <pre>{taskInstructions}</pre>
-              ) : (
-                <p className="small">Full instructions are not available for this task.</p>
-              )}
-            </div>
-          ) : null}
 
           <div className="td-summary-block">
             <h4>Summary</h4>

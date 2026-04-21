@@ -1374,8 +1374,8 @@ describe('Task Detail Entrypoint', () => {
     });
 
     expect(screen.queryByText('Inspect the repository.')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /Example task/ }));
-    expect(screen.getByText('Instructions')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Show instructions/ }));
+    expect(screen.getByRole('button', { name: /Hide instructions/ }).getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText(/Inspect the repository\./)).toBeTruthy();
     expect(screen.getByText(/Then run the focused UI tests\./)).toBeTruthy();
 
