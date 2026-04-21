@@ -1433,7 +1433,7 @@ class TaskTemplateCatalogService:
                     "scope": scope_type.value,
                 },
             )
-            _METRICS.increment("delete")
+            _METRICS.increment("delete", len(templates))
         return len(templates)
 
     async def set_release_status(
