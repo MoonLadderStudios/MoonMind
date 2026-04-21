@@ -18,9 +18,23 @@ type Notice = {
   href?: string;
 };
 
+const RAW_SECRET_PATTERNS = [
+  /\bghp_[A-Za-z0-9_]{20,}\b/i,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/i,
+  /\bAIza[A-Za-z0-9_-]{20,}\b/,
+  /\bATATT[A-Za-z0-9_-]{10,}\b/,
+  /\bAKIA[A-Z0-9]{16}\b/,
+  /-----BEGIN\s+(?:RSA|EC|DSA|OPENSSH)\s+PRIVATE\s+KEY-----/i,
+  /\b(?:token|password|secret)\s*[:=]\s*(?!\s*(?:\$\{|env:\/\/|vault:\/\/))[^\s'",}]+/i,
+];
+
 const ManifestsResponseSchema = z.object({
   items: z.array(ManifestRunSchema),
 });
+
+function hasRawSecretLikeValue(values: string[]): boolean {
+  return values.some((value) => RAW_SECRET_PATTERNS.some((pattern) => pattern.test(value)));
+}
 
 export function ManifestsPage({ payload }: { payload: BootPayload }) {
   const [manifestName, setManifestName] = useState('');
@@ -66,6 +80,29 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
       setNotice({ level: 'error', text: 'Manifest YAML is required.' });
       return;
     }
+    const secretCheckValues =
+      sourceKind === 'registry' ? [trimmedRegistryName] : [trimmedManifestName, manifestContent];
+    if (hasRawSecretLikeValue(secretCheckValues)) {
+      setNotice({
+        level: 'error',
+        text: 'Raw secret-like values are not allowed. Use env or Vault references instead.',
+      });
+      return;
+    }
+    const trimmedMaxDocs = maxDocs.trim();
+    let parsedMaxDocs: number | undefined;
+    if (trimmedMaxDocs) {
+      const maxDocsCandidate = Number(trimmedMaxDocs);
+      if (
+        !/^[1-9]\d*$/.test(trimmedMaxDocs) ||
+        !Number.isSafeInteger(maxDocsCandidate) ||
+        maxDocsCandidate <= 0
+      ) {
+        setNotice({ level: 'error', text: 'Max Docs must be a positive whole number.' });
+        return;
+      }
+      parsedMaxDocs = maxDocsCandidate;
+    }
 
     setIsSubmitting(true);
     setNotice(null);
@@ -76,8 +113,7 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
     if (forceFull) {
       options.forceFull = true;
     }
-    const parsedMaxDocs = Number(maxDocs);
-    if (Number.isFinite(parsedMaxDocs) && parsedMaxDocs >= 1) {
+    if (parsedMaxDocs !== undefined) {
       options.maxDocs = parsedMaxDocs;
     }
 
