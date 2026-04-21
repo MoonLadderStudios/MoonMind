@@ -1,17 +1,22 @@
 [
   {
-    "id": 3115713023,
+    "id": 3115891581,
     "disposition": "addressed",
-    "rationale": "Removed the redundant .panel--controls background declaration so the shared glass-control group remains the single source for that fill."
+    "rationale": "Changed status capitalization to use charAt(0), which is safe for empty strings."
   },
   {
-    "id": 3115713032,
-    "disposition": "addressed",
-    "rationale": "Aligned .panel--data to the matte data surface opacity of rgb(var(--mm-panel) / 0.92) and added a CSS contract assertion."
-  },
-  {
-    "id": 4145824587,
+    "id": 4146021949,
     "disposition": "not-applicable",
-    "rationale": "Summary review comment only; its two actionable findings are tracked and addressed by the linked inline review comments."
+    "rationale": "Non-actionable bot review summary; the referenced status formatting concern is covered by comment 3115891581."
+  },
+  {
+    "id": 3118644455,
+    "disposition": "addressed",
+    "rationale": "Added phase to the manifest run schema and stage derivation, with test coverage for /api/executions phase payloads."
+  },
+  {
+    "id": 4149013747,
+    "disposition": "not-applicable",
+    "rationale": "Non-actionable automated review body; actionable Codex feedback is covered by comment 3118644455."
   }
 ]
