@@ -5697,7 +5697,7 @@ describe("Task Create Entrypoint", () => {
     expect(LIQUID_GL_OPTIONS.reveal).toBe(false);
   });
 
-  it("gives repository, branch, and publish controls equal desktop space in the floating bar", async () => {
+  it("lets repository, branch, and publish controls fill the floating bar on desktop", async () => {
     const { readFileSync } = await import("node:fs");
     const missionControlCss = readFileSync(
       `${process.cwd()}/frontend/src/styles/mission-control.css`,
@@ -5705,7 +5705,13 @@ describe("Task Create Entrypoint", () => {
     );
 
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)\s*auto/s,
+      /\.queue-floating-bar\s*\{[^}]*width:\s*min\(100% - 1\.5rem,\s*72rem\)/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.35fr\)\s*minmax\(0,\s*1\.35fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto/s,
+    );
+    expect(missionControlCss).toMatch(
+      /@media \(max-width:\s*640px\)\s*\{[^}]*\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto/s,
     );
   });
 
