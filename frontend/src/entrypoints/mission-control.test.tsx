@@ -369,80 +369,83 @@ describe('Mission Control shared entry', () => {
       configurable: true,
       value: clipboardMock,
     });
-    class MockWebSocket extends EventTarget {
-      static readonly OPEN = 1;
-      readonly OPEN = 1;
-      readyState = 1;
-      onopen: ((event: Event) => void) | null = null;
-      onmessage: ((event: MessageEvent) => void) | null = null;
-      onclose: ((event: CloseEvent) => void) | null = null;
-      onerror: ((event: Event) => void) | null = null;
-      constructor(readonly url: string) {
-        super();
-        setTimeout(() => {
-          this.onopen?.(new Event('open'));
-          this.onmessage?.(new MessageEvent('message', { data: 'Ready for login' }));
-        }, 0);
+    try {
+      class MockWebSocket extends EventTarget {
+        static readonly OPEN = 1;
+        readonly OPEN = 1;
+        readyState = 1;
+        onopen: ((event: Event) => void) | null = null;
+        onmessage: ((event: MessageEvent) => void) | null = null;
+        onclose: ((event: CloseEvent) => void) | null = null;
+        onerror: ((event: Event) => void) | null = null;
+        constructor(readonly url: string) {
+          super();
+          setTimeout(() => {
+            this.onopen?.(new Event('open'));
+            this.onmessage?.(new MessageEvent('message', { data: 'Ready for login' }));
+          }, 0);
+        }
+        send(frame: string) {
+          sentFrames.push(frame);
+        }
+        close() {
+          this.onclose?.(new CloseEvent('close'));
+        }
       }
-      send(frame: string) {
-        sentFrames.push(frame);
-      }
-      close() {
-        this.onclose?.(new CloseEvent('close'));
-      }
-    }
-    window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/api/v1/oauth-sessions/oas_terminal_ui/terminal/attach') {
+      window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+      fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/oauth-sessions/oas_terminal_ui/terminal/attach') {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              session_id: 'oas_terminal_ui',
+              terminal_session_id: 'term_oas_terminal_ui',
+              terminal_bridge_id: 'br_oas_terminal_ui',
+              websocket_url:
+                '/api/v1/oauth-sessions/oas_terminal_ui/terminal/ws?token=once',
+              attach_token: 'once',
+            }),
+          } as Response);
+        }
+        if (url === '/api/v1/secrets') {
+          return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+        }
+        if (url === '/api/v1/provider-profiles') {
+          return Promise.resolve({ ok: true, json: async () => [] } as Response);
+        }
         return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: 'oas_terminal_ui',
-            terminal_session_id: 'term_oas_terminal_ui',
-            terminal_bridge_id: 'br_oas_terminal_ui',
-            websocket_url:
-              '/api/v1/oauth-sessions/oas_terminal_ui/terminal/ws?token=once',
-            attach_token: 'once',
-          }),
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          text: async () => 'Unhandled fetch',
         } as Response);
-      }
-      if (url === '/api/v1/secrets') {
-        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
-      }
-      if (url === '/api/v1/provider-profiles') {
-        return Promise.resolve({ ok: true, json: async () => [] } as Response);
-      }
-      return Promise.resolve({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-        text: async () => 'Unhandled fetch',
-      } as Response);
-    });
+      });
 
-    renderWithClient(
-      <MissionControlApp
-        payload={{
-          page: 'oauth-terminal',
-          apiBase: '/api',
-          initialData: { sessionId: 'oas_terminal_ui' },
-        }}
-      />,
-    );
+      renderWithClient(
+        <MissionControlApp
+          payload={{
+            page: 'oauth-terminal',
+            apiBase: '/api',
+            initialData: { sessionId: 'oas_terminal_ui' },
+          }}
+        />,
+      );
 
-    expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
-    expect(await screen.findByText('Ready for login')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy selection' }));
-    expect(clipboardMock.writeText).toHaveBeenCalledWith('Ready for login');
-    await waitFor(() => {
-      expect(sentFrames.some((frame) => frame.includes('"heartbeat"'))).toBe(true);
-    });
-    expect(document.body.textContent).not.toContain('Docker exec');
-    if (originalClipboardDescriptor) {
-      Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor);
-    } else {
-      Reflect.deleteProperty(navigator, 'clipboard');
+      expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
+      expect(await screen.findByText('Ready for login')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Copy selection' }));
+      expect(clipboardMock.writeText).toHaveBeenCalledWith('Ready for login');
+      await waitFor(() => {
+        expect(sentFrames.some((frame) => frame.includes('"heartbeat"'))).toBe(true);
+      });
+      expect(document.body.textContent).not.toContain('Docker exec');
+    } finally {
+      if (originalClipboardDescriptor) {
+        Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor);
+      } else {
+        Reflect.deleteProperty(navigator, 'clipboard');
+      }
     }
   });
 });

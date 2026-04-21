@@ -92,11 +92,11 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
 
     const copySelectionListener = (event: ClipboardEvent) => {
       const selectedText = terminal.getSelection();
-      if (!selectedText) {
+      if (!selectedText || !event.clipboardData) {
         return;
       }
       event.preventDefault();
-      event.clipboardData?.setData('text/plain', selectedText);
+      event.clipboardData.setData('text/plain', selectedText);
     };
     terminalElement.addEventListener('copy', copySelectionListener);
 
