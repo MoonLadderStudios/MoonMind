@@ -14,7 +14,7 @@ Decision: Update routine button, button-link, action, extension, and icon-button
 
 Rationale: The design system explicitly prefers small scale changes and avoids translate lift for core buttons and nav pills. Existing CSS still had several `translateY(-1px)` hover rules.
 
-Alternatives considered: Keeping lift on elevated controls was rejected for this story because the supplied brief asks to align components with the shared interaction language, and no specific component requires vertical motion to remain understandable.
+Alternatives considered: Keeping lift on elevated controls was rejected for this story because the trusted Jira preset brief asks to align components with the shared interaction language, and no specific component requires vertical motion to remain understandable.
 
 ## Decision 3: Treat toggles, filters, and chips as compact control shells
 

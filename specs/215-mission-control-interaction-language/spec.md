@@ -3,15 +3,55 @@
 **Feature Branch**: `run-jira-orchestrate-for-mm-427-align-mi-00e0a46d`  
 **Created**: 2026-04-21  
 **Status**: Draft  
-**Input**: Jira Orchestrate for MM-427. Source story: STORY-004. Source summary: "Align Mission Control components with shared interaction language." Source Jira issue: unknown. Original brief reference: not provided.
+**Input**: Trusted Jira preset brief for MM-427 from `docs/tmp/jira-orchestration-inputs/MM-427-moonspec-orchestration-input.md`. Summary: "Align Mission Control components with shared interaction language." Source design: `docs/UI/MissionControlDesignSystem.md`, sections 9 and 10.
 
 ## Original Jira Preset Brief
 
-Jira issue: MM-427
+Jira issue: MM-427 from MM project
+Summary: Align Mission Control components with shared interaction language
+Issue type: Story
+Current Jira status at trusted fetch time: In Progress
+Jira project key: MM
 
-Source story: STORY-004. Source summary: Align Mission Control components with shared interaction language. Source Jira issue: unknown. Original brief reference: not provided.
+Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-427 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
 
-Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve this Jira issue reference in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+MM-427: Align Mission Control components with shared interaction language
+
+Source Reference
+- Source Document: docs/UI/MissionControlDesignSystem.md
+- Source Title: Mission Control Design System
+- Source Sections:
+  - 9. Interaction and motion
+  - 10. Component system
+- Coverage IDs:
+  - DESIGN-REQ-006
+  - DESIGN-REQ-016
+  - DESIGN-REQ-017
+  - DESIGN-REQ-018
+  - DESIGN-REQ-022
+  - DESIGN-REQ-023
+
+User Story
+As an operator, I want navigation, buttons, inputs, filters, chips, overlays, and transient UI to respond consistently so controls feel precise, accessible, and operationally legible.
+
+Acceptance Criteria
+- Hover states generally increase brightness, border light, or glow rather than darkening.
+- Buttons use subtle hover scale-up, active scale-down, crisp high-contrast focus-visible, disabled de-emphasis, and semantic variant colors.
+- Inputs/selects/comboboxes have designed shells, grounded wells, readable labels, visible focus, intentional icons, and clear click targets.
+- Active filter chips are visible, removable, and paired with an intentional reset/clear affordance.
+- Status chips are translucent, bordered, compact, semantically mapped, and keep finished states stable.
+- Executing/live effects are low-amplitude and removed or significantly softened under reduced motion.
+- Overlays and rails use glass only where elevation improves clarity, with readable grounded inner content.
+
+Requirements
+- Implement shared interaction timing and motion model.
+- Align component variants and semantic states.
+- Provide accessible focus and reduced-motion behavior.
+- Keep elevated/transient surfaces readable and layered.
+
+Dependencies
+- Trusted Jira link metadata at fetch time shows MM-427 is blocked by MM-428, whose embedded status is Backlog.
+- Trusted Jira link metadata also shows MM-427 blocks MM-426, which is not a blocker for MM-427 and is ignored for dependency gating.
 
 ## Classification
 
@@ -46,7 +86,8 @@ Single-story runtime feature request. The brief contains one independently testa
 - "Shared interaction language" refers to the interaction and component-system rules in `docs/UI/MissionControlDesignSystem.md`, especially sections 9 and 10.
 - This story aligns shared CSS behavior and focused tests; it does not introduce a new React component library.
 - Existing Create page liquid glass and task-list composition work are foundations this story consumes rather than redesigns.
-- The trusted Jira issue fetch is unavailable in this local managed runtime, so the supplied MM-427 task text is preserved as the canonical brief.
+- The trusted Jira preset brief for MM-427 is available in `docs/tmp/jira-orchestration-inputs/MM-427-moonspec-orchestration-input.md` and is the canonical source for this runtime story.
+- MM-427 has a trusted Jira dependency note showing blocker MM-428 in Backlog at fetch time; this spec records that dependency context but does not alter the already completed runtime implementation evidence.
 
 ## Requirements *(mandatory)*
 
@@ -60,7 +101,7 @@ Single-story runtime feature request. The brief contains one independently testa
 - **FR-008**: Reduced-motion preferences MUST remove interaction scale and long-running motion effects for shared controls.
 - **FR-009**: Existing Mission Control behavior for routing, task-list filters, sorting, pagination, mobile cards, and shared app-shell rendering MUST remain unchanged.
 - **FR-010**: Automated verification MUST cover the interaction token contract, no-lift routine control behavior, compact-control alignment, focus/disabled rules, and unchanged existing UI behavior.
-- **FR-011**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve MM-427 and the original supplied brief.
+- **FR-011**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve MM-427 and the trusted Jira preset brief.
 
 ## Key Entities
 
@@ -74,4 +115,4 @@ Single-story runtime feature request. The brief contains one independently testa
 - **SC-002**: CSS verification confirms routine button/control hover and press rules do not use `translateY`.
 - **SC-003**: CSS verification confirms compact toggles, filters, and chips consume the shared control-shell language.
 - **SC-004**: Existing shared Mission Control app-shell and task-list UI tests continue to pass.
-- **SC-005**: Traceability verification confirms MM-427 and the supplied source summary are preserved in MoonSpec artifacts and final evidence.
+- **SC-005**: Traceability verification confirms MM-427 and the trusted Jira preset brief are preserved in MoonSpec artifacts and final evidence.

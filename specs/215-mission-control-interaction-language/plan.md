@@ -21,7 +21,7 @@ Implement MM-427 by aligning Mission Control's routine controls with the interac
 | FR-008 | partial | reduced-motion rules exist for some features but not shared control scale | add reduced-motion control interaction guard | UI unit / CSS |
 | FR-009 | implemented_unverified | existing app-shell and task-list tests cover behavior | rerun focused tests after CSS changes | UI unit |
 | FR-010 | missing | no MM-427-specific interaction tests | add CSS contract assertions | UI unit / CSS |
-| FR-011 | implemented_unverified | `spec.md` preserves MM-427 and source summary | preserve through tasks, verification, and commit | final verify |
+| FR-011 | implemented_unverified | `spec.md` preserves MM-427 and the trusted Jira preset brief | preserve through tasks, verification, and commit/PR metadata when those outputs are requested | final verify |
 
 ## Technical Context
 

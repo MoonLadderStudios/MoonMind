@@ -7,7 +7,7 @@
 ## Phase 1: Setup
 
 - [X] T001 Review `.specify/memory/constitution.md`, `README.md`, Jira Orchestrate preset behavior, and `docs/UI/MissionControlDesignSystem.md`.
-- [X] T002 Create MM-427 MoonSpec artifacts under `specs/215-mission-control-interaction-language/` and preserve the supplied Jira brief under `docs/tmp/jira-orchestration-inputs/`.
+- [X] T002 Create MM-427 MoonSpec artifacts under `specs/215-mission-control-interaction-language/` and preserve the trusted Jira preset brief under `docs/tmp/jira-orchestration-inputs/`.
 
 ## Phase 2: Tests First
 
