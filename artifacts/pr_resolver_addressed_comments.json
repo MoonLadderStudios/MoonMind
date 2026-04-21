@@ -1,17 +1,12 @@
 [
   {
-    "id": 3115713023,
+    "id": 3119379489,
     "disposition": "addressed",
-    "rationale": "Removed the redundant .panel--controls background declaration so the shared glass-control group remains the single source for that fill."
+    "rationale": "Replaced the exhausted session status fallback with an explicit stable awaiting_user terminal status in the Mission Control OAuth terminal wait test mock."
   },
   {
-    "id": 3115713032,
-    "disposition": "addressed",
-    "rationale": "Aligned .panel--data to the matte data surface opacity of rgb(var(--mm-panel) / 0.92) and added a CSS contract assertion."
-  },
-  {
-    "id": 4145824587,
+    "id": 4149792433,
     "disposition": "not-applicable",
-    "rationale": "Summary review comment only; its two actionable findings are tracked and addressed by the linked inline review comments."
+    "rationale": "Review summary comment only; the underlying actionable inline feedback is tracked and addressed separately."
   }
 ]

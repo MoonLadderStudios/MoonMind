@@ -550,7 +550,11 @@ describe('Mission Control shared entry', () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/v1/oauth-sessions/oas_terminal_wait') {
-        const nextStatus = sessionStatuses.shift() ?? sessionStatuses[sessionStatuses.length - 1];
+        const nextStatus = sessionStatuses.shift() ?? {
+          status: 'awaiting_user',
+          terminal_session_id: 'term_oas_terminal_wait',
+          terminal_bridge_id: 'br_oas_terminal_wait',
+        };
         return Promise.resolve({
           ok: true,
           json: async () => ({
