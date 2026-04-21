@@ -868,7 +868,7 @@ class TemporalExecutionCanonicalRecord(Base):
         ),
     )
 
-    workflow_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     run_id: Mapped[str] = mapped_column(String(64), nullable=False)
     namespace: Mapped[str] = mapped_column(
         String(128), nullable=False, default="moonmind"
@@ -993,12 +993,12 @@ class TemporalExecutionDependency(Base):
     )
 
     dependent_workflow_id: Mapped[str] = mapped_column(
-        String(64),
+        String(255),
         ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
         primary_key=True,
     )
     prerequisite_workflow_id: Mapped[str] = mapped_column(
-        String(64),
+        String(255),
         ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
         primary_key=True,
     )
@@ -1037,7 +1037,7 @@ class TemporalExecutionRecord(Base):
         ),
     )
 
-    workflow_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     run_id: Mapped[str] = mapped_column(String(64), nullable=False)
     namespace: Mapped[str] = mapped_column(
         String(128), nullable=False, default="moonmind"
@@ -1225,7 +1225,7 @@ class TemporalIntegrationCorrelationRecord(Base):
         String(255), nullable=True
     )
     workflow_id: Mapped[str] = mapped_column(
-        String(64),
+        String(255),
         ForeignKey("temporal_executions.workflow_id", ondelete="CASCADE"),
         nullable=False,
     )

@@ -1,62 +1,27 @@
 [
   {
-    "id": 3115538327,
+    "id": 3115612665,
     "disposition": "addressed",
-    "rationale": "Added jira-pr-verify to the agent-only Jira skill registry exclusion in activity_runtime.py."
+    "rationale": "Added branch_labels to the migration module __all__ export so the Alembic global is intentionally exposed."
   },
   {
-    "id": 3115538341,
+    "id": 3115612672,
     "disposition": "addressed",
-    "rationale": "Added jira-pr-verify to _JIRA_AGENT_SKILLS in worker_runtime.py."
+    "rationale": "Added depends_on to the migration module __all__ export so the Alembic global is intentionally exposed."
   },
   {
-    "id": 3115538350,
+    "id": 3115615569,
     "disposition": "addressed",
-    "rationale": "Added jira-pr-verify to _PR_OPTIONAL_AGENT_SKILLS in workflows/run.py."
+    "rationale": "Gated the hashed resolver child workflow ID with Temporal workflow.patched and preserved the legacy child ID format for pre-patch replay histories."
   },
   {
-    "id": 4145629251,
+    "id": 4145722830,
     "disposition": "not-applicable",
-    "rationale": "Review summary comment with no standalone actionable request beyond the inline comments."
+    "rationale": "Automated review wrapper comment only; actionable inline review comments are tracked separately."
   },
   {
-    "id": 3115548163,
-    "disposition": "addressed",
-    "rationale": "Made the jira-pr-verify issue-fetch example string concatenation explicit in activity_runtime.py."
-  },
-  {
-    "id": 3115548165,
-    "disposition": "addressed",
-    "rationale": "Made the adjacent issue-fetch string literals explicit in the same activity_runtime.py block."
-  },
-  {
-    "id": 3115548171,
-    "disposition": "addressed",
-    "rationale": "Made the jira-verify issue-fetch example string concatenation explicit in activity_runtime.py."
-  },
-  {
-    "id": 3115548178,
-    "disposition": "addressed",
-    "rationale": "Made the jira-verify comment-posting example string concatenation explicit in activity_runtime.py."
-  },
-  {
-    "id": 3115548182,
-    "disposition": "addressed",
-    "rationale": "Made the jira.add_comment example JSON string concatenation explicit in activity_runtime.py."
-  },
-  {
-    "id": 3115548184,
-    "disposition": "addressed",
-    "rationale": "Made the trailing jira.add_comment example string literal boundaries explicit in activity_runtime.py."
-  },
-  {
-    "id": 3115555454,
-    "disposition": "addressed",
-    "rationale": "Added jira_auth_failed to Jira skill blocker detection and covered it with a unit test."
-  },
-  {
-    "id": 4145654917,
+    "id": 4145733313,
     "disposition": "not-applicable",
-    "rationale": "Automated review header/about text with no standalone actionable request."
+    "rationale": "Review summary explicitly states there is no feedback to provide."
   }
 ]
