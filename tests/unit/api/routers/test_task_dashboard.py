@@ -598,6 +598,16 @@ def _skill_zip(entries: dict[str, str]) -> bytes:
     return payload.getvalue()
 
 
+VALID_SKILL_MARKDOWN = """---
+name: zip-skill
+description: Uploaded from a zip.
+---
+# Zip Skill
+
+Use this bundle.
+"""
+
+
 def test_upload_dashboard_skill_zip_saves_valid_bundle(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -608,7 +618,7 @@ def test_upload_dashboard_skill_zip_saves_valid_bundle(
 
     payload = _skill_zip(
         {
-            "zip-skill/SKILL.md": "# Zip Skill\n\nUse this bundle.",
+            "zip-skill/SKILL.md": VALID_SKILL_MARKDOWN,
             "zip-skill/scripts/check.sh": "#!/usr/bin/env bash\nexit 0\n",
             "zip-skill/references/context.md": "Reference material.\n",
         }
@@ -621,12 +631,168 @@ def test_upload_dashboard_skill_zip_saves_valid_bundle(
 
     assert response.status_code == 201
     assert response.json() == {"status": "success", "skill": "zip-skill"}
-    assert (tmp_path / "zip-skill" / "SKILL.md").read_text(encoding="utf-8") == (
-        "# Zip Skill\n\nUse this bundle."
-    )
+    assert (tmp_path / "zip-skill" / "SKILL.md").read_text(encoding="utf-8") == VALID_SKILL_MARKDOWN
     assert (tmp_path / "zip-skill" / "scripts" / "check.sh").is_file()
     assert (tmp_path / "zip-skill" / "references" / "context.md").is_file()
     assert not list(tmp_path.glob(".skill-upload-*"))
+
+
+def test_skill_import_api_saves_valid_bundle_with_result_metadata(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    response = client.post(
+        "/api/skills/imports",
+        data={"collision_policy": "reject"},
+        files={
+            "file": (
+                "zip-skill.zip",
+                _skill_zip(
+                    {
+                        "zip-skill/skill.md": VALID_SKILL_MARKDOWN,
+                        "zip-skill/assets/icon.txt": "asset",
+                        "zip-skill/notes.txt": "extra file",
+                    }
+                ),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "saved"
+    assert payload["name"] == "zip-skill"
+    assert payload["description"] == "Uploaded from a zip."
+    assert payload["skill_id"] == "zip-skill"
+    assert payload["version_number"] == 1
+    assert payload["warnings"] == []
+    assert payload["import_id"]
+    assert payload["version_id"]
+    assert (tmp_path / "zip-skill" / "SKILL.md").read_text(encoding="utf-8") == VALID_SKILL_MARKDOWN
+    assert (tmp_path / "zip-skill" / "assets" / "icon.txt").is_file()
+    assert (tmp_path / "zip-skill" / "notes.txt").is_file()
+
+
+def test_skill_import_api_rejects_missing_frontmatter(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    response = client.post(
+        "/api/skills/imports",
+        files={
+            "file": (
+                "zip-skill.zip",
+                _skill_zip({"zip-skill/SKILL.md": "# Zip Skill\n\nNo frontmatter."}),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "YAML frontmatter" in response.json()["detail"]
+    assert not (tmp_path / "zip-skill").exists()
+
+
+def test_skill_import_api_rejects_manifest_name_mismatch(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    response = client.post(
+        "/api/skills/imports",
+        files={
+            "file": (
+                "zip-skill.zip",
+                _skill_zip(
+                    {
+                        "zip-skill/SKILL.md": """---
+name: other-skill
+description: Wrong parent.
+---
+# Zip Skill
+"""
+                    }
+                ),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "must match the parent directory" in response.json()["detail"]
+    assert not (tmp_path / "zip-skill").exists()
+
+
+def test_skill_import_api_rejects_existing_skill_by_default(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+    skill_dir = tmp_path / "zip-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(VALID_SKILL_MARKDOWN, encoding="utf-8")
+
+    response = client.post(
+        "/api/skills/imports",
+        files={
+            "file": (
+                "zip-skill.zip",
+                _skill_zip({"zip-skill/SKILL.md": VALID_SKILL_MARKDOWN}),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 409
+    assert "already exists locally" in response.json()["detail"]
+
+
+def test_skill_import_api_new_version_does_not_overwrite_without_versioned_storage(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+    skill_dir = tmp_path / "zip-skill"
+    skill_dir.mkdir()
+    original_markdown = """---
+name: zip-skill
+description: Original skill.
+---
+# Original
+"""
+    (skill_dir / "SKILL.md").write_text(original_markdown, encoding="utf-8")
+
+    response = client.post(
+        "/api/skills/imports",
+        data={"collision_policy": "new_version"},
+        files={
+            "file": (
+                "zip-skill.zip",
+                _skill_zip({"zip-skill/SKILL.md": VALID_SKILL_MARKDOWN}),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 409
+    assert "versioned skill storage" in response.json()["detail"]
+    assert (skill_dir / "SKILL.md").read_text(encoding="utf-8") == original_markdown
 
 
 def test_upload_dashboard_skill_zip_rejects_invalid_root_skill_filename(
@@ -642,14 +808,14 @@ def test_upload_dashboard_skill_zip_rejects_invalid_root_skill_filename(
         files={
             "file": (
                 "my skill.zip",
-                _skill_zip({"SKILL.md": "# Invalid inferred name\n"}),
+                _skill_zip({"SKILL.md": VALID_SKILL_MARKDOWN}),
                 "application/zip",
             )
         },
     )
 
     assert response.status_code == 400
-    assert "Invalid skill name" in response.json()["detail"]
+    assert "one skill directory" in response.json()["detail"]
     assert not list(tmp_path.iterdir())
 
 
@@ -666,7 +832,7 @@ def test_upload_dashboard_skill_zip_rejects_invalid_top_level_directory(
         files={
             "file": (
                 "bundle.zip",
-                _skill_zip({"my skill/SKILL.md": "# Invalid directory name\n"}),
+                _skill_zip({"my skill/SKILL.md": VALID_SKILL_MARKDOWN}),
                 "application/zip",
             )
         },
@@ -714,7 +880,7 @@ def test_upload_dashboard_skill_zip_rejects_path_traversal(
         files={
             "file": (
                 "unsafe.zip",
-                _skill_zip({"unsafe/SKILL.md": "# Unsafe\n", "../escape.txt": "no\n"}),
+                _skill_zip({"unsafe/SKILL.md": VALID_SKILL_MARKDOWN, "../escape.txt": "no\n"}),
                 "application/zip",
             )
         },
