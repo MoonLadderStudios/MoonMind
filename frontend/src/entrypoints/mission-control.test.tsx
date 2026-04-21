@@ -11,7 +11,7 @@ import {
 import postcss from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
-import { renderWithClient, screen, waitFor } from '../utils/test-utils';
+import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { MissionControlApp } from './mission-control-app';
 
 function normalizeCssSelector(selector: string): string {
@@ -61,6 +61,9 @@ vi.mock('@xterm/xterm', () => {
     }
     onData(_callback: (data: string) => void) {
       return { dispose: vi.fn() };
+    }
+    getSelection() {
+      return this.element?.textContent ?? '';
     }
     dispose() {}
   }
@@ -360,73 +363,89 @@ describe('Mission Control shared entry', () => {
 
   it('renders the OAuth terminal page and attaches through the session bridge', async () => {
     const sentFrames: string[] = [];
-    class MockWebSocket extends EventTarget {
-      static readonly OPEN = 1;
-      readonly OPEN = 1;
-      readyState = 1;
-      onopen: ((event: Event) => void) | null = null;
-      onmessage: ((event: MessageEvent) => void) | null = null;
-      onclose: ((event: CloseEvent) => void) | null = null;
-      onerror: ((event: Event) => void) | null = null;
-      constructor(readonly url: string) {
-        super();
-        setTimeout(() => {
-          this.onopen?.(new Event('open'));
-          this.onmessage?.(new MessageEvent('message', { data: 'Ready for login' }));
-        }, 0);
+    const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const clipboardMock = { writeText: vi.fn() };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: clipboardMock,
+    });
+    try {
+      class MockWebSocket extends EventTarget {
+        static readonly OPEN = 1;
+        readonly OPEN = 1;
+        readyState = 1;
+        onopen: ((event: Event) => void) | null = null;
+        onmessage: ((event: MessageEvent) => void) | null = null;
+        onclose: ((event: CloseEvent) => void) | null = null;
+        onerror: ((event: Event) => void) | null = null;
+        constructor(readonly url: string) {
+          super();
+          setTimeout(() => {
+            this.onopen?.(new Event('open'));
+            this.onmessage?.(new MessageEvent('message', { data: 'Ready for login' }));
+          }, 0);
+        }
+        send(frame: string) {
+          sentFrames.push(frame);
+        }
+        close() {
+          this.onclose?.(new CloseEvent('close'));
+        }
       }
-      send(frame: string) {
-        sentFrames.push(frame);
-      }
-      close() {
-        this.onclose?.(new CloseEvent('close'));
+      window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+      fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/v1/oauth-sessions/oas_terminal_ui/terminal/attach') {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              session_id: 'oas_terminal_ui',
+              terminal_session_id: 'term_oas_terminal_ui',
+              terminal_bridge_id: 'br_oas_terminal_ui',
+              websocket_url:
+                '/api/v1/oauth-sessions/oas_terminal_ui/terminal/ws?token=once',
+              attach_token: 'once',
+            }),
+          } as Response);
+        }
+        if (url === '/api/v1/secrets') {
+          return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+        }
+        if (url === '/api/v1/provider-profiles') {
+          return Promise.resolve({ ok: true, json: async () => [] } as Response);
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          text: async () => 'Unhandled fetch',
+        } as Response);
+      });
+
+      renderWithClient(
+        <MissionControlApp
+          payload={{
+            page: 'oauth-terminal',
+            apiBase: '/api',
+            initialData: { sessionId: 'oas_terminal_ui' },
+          }}
+        />,
+      );
+
+      expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
+      expect(await screen.findByText('Ready for login')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Copy selection' }));
+      expect(clipboardMock.writeText).toHaveBeenCalledWith('Ready for login');
+      await waitFor(() => {
+        expect(sentFrames.some((frame) => frame.includes('"heartbeat"'))).toBe(true);
+      });
+      expect(document.body.textContent).not.toContain('Docker exec');
+    } finally {
+      if (originalClipboardDescriptor) {
+        Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor);
+      } else {
+        Reflect.deleteProperty(navigator, 'clipboard');
       }
     }
-    window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/api/v1/oauth-sessions/oas_terminal_ui/terminal/attach') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            session_id: 'oas_terminal_ui',
-            terminal_session_id: 'term_oas_terminal_ui',
-            terminal_bridge_id: 'br_oas_terminal_ui',
-            websocket_url:
-              '/api/v1/oauth-sessions/oas_terminal_ui/terminal/ws?token=once',
-            attach_token: 'once',
-          }),
-        } as Response);
-      }
-      if (url === '/api/v1/secrets') {
-        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
-      }
-      if (url === '/api/v1/provider-profiles') {
-        return Promise.resolve({ ok: true, json: async () => [] } as Response);
-      }
-      return Promise.resolve({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-        text: async () => 'Unhandled fetch',
-      } as Response);
-    });
-
-    renderWithClient(
-      <MissionControlApp
-        payload={{
-          page: 'oauth-terminal',
-          apiBase: '/api',
-          initialData: { sessionId: 'oas_terminal_ui' },
-        }}
-      />,
-    );
-
-    expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
-    expect(await screen.findByText('Ready for login')).toBeTruthy();
-    await waitFor(() => {
-      expect(sentFrames.some((frame) => frame.includes('"heartbeat"'))).toBe(true);
-    });
-    expect(document.body.textContent).not.toContain('Docker exec');
   });
 });
