@@ -1,17 +1,32 @@
 [
   {
-    "id": 3119218535,
+    "id": 3119651338,
     "disposition": "addressed",
-    "rationale": "Excluded .td-instructions-toggle from the global primary button selectors so its lightweight hover/active styling is preserved."
+    "rationale": "Moved pending-request verification after the initial queue drain so best-effort cleanup activity delays cannot block healthy slot assignment."
   },
   {
-    "id": 4149618936,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary container; the actionable inline comment from this review is tracked separately."
+    "id": 3119651341,
+    "disposition": "addressed",
+    "rationale": "Added bounded workflow-status activity batches so large pending queues are not sent in one unbounded verification call."
   },
   {
-    "id": 4149627539,
+    "id": 4150084160,
     "disposition": "not-applicable",
-    "rationale": "Review body explicitly states there is no feedback to address."
+    "rationale": "Automated review summary comment; the actionable inline feedback from the review was handled separately."
+  },
+  {
+    "id": 3119681735,
+    "disposition": "addressed",
+    "rationale": "Consolidated lease-holder and pending-requester verification in the main loop into one shared status pass."
+  },
+  {
+    "id": 3119681739,
+    "disposition": "addressed",
+    "rationale": "Refactored duplicate activity invocation and status-application logic into shared private helpers."
+  },
+  {
+    "id": 4150114952,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary comment; its consolidation and refactoring recommendations were addressed through the inline comments."
   }
 ]
