@@ -1,17 +1,17 @@
 [
   {
-    "id": 4145803972,
+    "id": 3115713023,
+    "disposition": "addressed",
+    "rationale": "Removed the redundant .panel--controls background declaration so the shared glass-control group remains the single source for that fill."
+  },
+  {
+    "id": 3115713032,
+    "disposition": "addressed",
+    "rationale": "Aligned .panel--data to the matte data surface opacity of rgb(var(--mm-panel) / 0.92) and added a CSS contract assertion."
+  },
+  {
+    "id": 4145824587,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; no separate requested code or documentation change beyond the inline comments."
-  },
-  {
-    "id": 3115693329,
-    "disposition": "addressed",
-    "rationale": "Updated T004 to include floating bar coverage plus FR-005 and DESIGN-REQ-027 traceability."
-  },
-  {
-    "id": 3115693346,
-    "disposition": "addressed",
-    "rationale": "Updated T012 to reflect that the completed MM-424 work was committed and a pull request was created."
+    "rationale": "Summary review comment only; its two actionable findings are tracked and addressed by the linked inline review comments."
   }
 ]

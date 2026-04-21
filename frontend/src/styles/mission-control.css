@@ -541,16 +541,90 @@ h1 {
   box-shadow: var(--mm-elevation-panel);
 }
 
+.surface--glass-control,
+.panel--controls,
+.panel--floating,
+.panel--utility {
+  border: 1px solid var(--mm-glass-border);
+  background: var(--mm-glass-fill);
+  box-shadow: var(--mm-elevation-panel);
+  backdrop-filter: blur(18px) saturate(1.35);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+}
+
 .panel--controls {
   border-radius: 0.95rem;
-  background: var(--mm-glass-fill);
   padding: 0.9rem;
+}
+
+.panel--floating,
+.panel--utility {
+  border-radius: 1rem;
+  padding: 0.85rem;
+}
+
+.panel--floating {
+  box-shadow: var(--mm-elevation-floating);
+}
+
+.surface--matte-data {
+  border: 1px solid rgb(var(--mm-border) / 0.72);
+  border-radius: 0.75rem;
+  background: rgb(var(--mm-panel) / 0.92);
+  box-shadow: 0 16px 36px -30px rgb(var(--mm-ink) / 0.55);
 }
 
 .panel--data {
   border-radius: 0.8rem;
-  background: rgb(var(--mm-panel) / 0.9);
+  background: rgb(var(--mm-panel) / 0.92);
   padding: 0.85rem;
+}
+
+.panel--satin {
+  border: 1px solid rgb(var(--mm-border) / 0.74);
+  border-radius: 0.85rem;
+  background: var(--mm-input-well);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.14),
+    0 12px 26px -24px rgb(var(--mm-ink) / 0.45);
+}
+
+.surface--nested-dense {
+  border: 1px solid rgb(var(--mm-border) / 0.66);
+  border-radius: 0.65rem;
+  background: rgb(var(--mm-panel) / 0.86);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08);
+}
+
+.surface--accent-live {
+  border: 1px solid rgb(var(--mm-accent) / 0.42);
+  border-radius: 999px;
+  background: rgb(var(--mm-accent) / 0.14);
+  color: rgb(var(--mm-ink));
+  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.16);
+}
+
+.surface--liquidgl-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid var(--mm-glass-border);
+  border-radius: 1.5rem;
+  background: var(--mm-glass-fill);
+  box-shadow: var(--mm-elevation-floating);
+  backdrop-filter: blur(26px) saturate(1.65);
+  -webkit-backdrop-filter: blur(26px) saturate(1.65);
+}
+
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .surface--glass-control,
+  .panel--controls,
+  .panel--floating,
+  .panel--utility,
+  .surface--liquidgl-hero,
+  .queue-floating-bar {
+    background: rgb(var(--mm-panel) / 0.94);
+  }
 }
 
 .task-list-control-deck {
@@ -803,6 +877,13 @@ tbody tr:hover {
   border-radius: 0.75rem;
   background: rgb(var(--mm-panel) / 0.92);
   box-shadow: 0 16px 36px -30px rgb(var(--mm-ink) / 0.55);
+}
+
+.data-table-slab.surface--nested-dense,
+.panel--data .card,
+.panel--data .queue-card {
+  background: rgb(var(--mm-panel) / 0.86);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08);
 }
 
 .data-table {
@@ -2177,6 +2258,12 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 .queue-floating-bar--liquid-glass[data-liquid-gl-initialized="true"] {
   border-color: rgb(255 255 255 / 0.22);
+}
+
+.queue-floating-bar--liquid-glass {
+  position: fixed;
+  isolation: isolate;
+  overflow: hidden;
 }
 
 .queue-floating-bar--liquid-glass[data-liquid-gl-initialized="true"] > * {
