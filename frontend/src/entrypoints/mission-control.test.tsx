@@ -196,6 +196,53 @@ describe('Mission Control shared entry', () => {
     );
   });
 
+  it('defines the MM-425 shared surface hierarchy roles', async () => {
+    const matteBlock = cssRuleBlock(missionControlCss, '.surface--matte-data');
+    const satinBlock = cssRuleBlock(missionControlCss, '.panel--satin');
+    const glassBlock = cssRuleBlock(
+      missionControlCss,
+      '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility',
+    );
+    const liquidBlock = cssRuleBlock(missionControlCss, '.surface--liquidgl-hero');
+    const accentBlock = cssRuleBlock(missionControlCss, '.surface--accent-live');
+    const nestedDenseBlock = cssRuleBlock(missionControlCss, '.surface--nested-dense');
+
+    expect(matteBlock).toContain('background: rgb(var(--mm-panel) / 0.92)');
+    expect(satinBlock).toContain('background: var(--mm-input-well)');
+    expect(glassBlock).toContain('background: var(--mm-glass-fill)');
+    expect(glassBlock).toContain('border: 1px solid var(--mm-glass-border)');
+    expect(glassBlock).toContain('box-shadow: var(--mm-elevation-panel)');
+    expect(liquidBlock).toContain('background: var(--mm-glass-fill)');
+    expect(liquidBlock).toContain('box-shadow: var(--mm-elevation-floating)');
+    expect(accentBlock).toContain('background: rgb(var(--mm-accent) / 0.14)');
+    expect(nestedDenseBlock).toContain('background: rgb(var(--mm-panel) / 0.86)');
+  });
+
+  it('keeps glass token based with near-opaque fallbacks when backdrop filtering is unavailable', async () => {
+    const glassBlock = cssRuleBlock(
+      missionControlCss,
+      '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility',
+    );
+
+    expect(glassBlock).toContain('backdrop-filter: blur(18px) saturate(1.35)');
+    expect(glassBlock).toContain('-webkit-backdrop-filter: blur(18px) saturate(1.35)');
+    expect(missionControlCss).toMatch(
+      /@supports not \(\(backdrop-filter:\s*blur\(2px\)\) or \(-webkit-backdrop-filter:\s*blur\(2px\)\)\)\s*\{[^}]*\.surface--glass-control,\s*\.panel--controls,\s*\.panel--floating,\s*\.panel--utility,\s*\.surface--liquidgl-hero,\s*\.queue-floating-bar\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.94\);/s,
+    );
+  });
+
+  it('keeps liquidGL opt-in and away from default dense surfaces', async () => {
+    expect(cssRuleBlock(missionControlCss, '.panel')).not.toContain('liquid');
+    expect(cssRuleBlock(missionControlCss, '.card')).not.toContain('liquid');
+    expect(cssRuleBlock(missionControlCss, 'table')).not.toContain('liquid');
+    expect(cssRuleBlock(missionControlCss, '.data-table-slab')).not.toContain('liquid');
+
+    const liquidBlock = cssRuleBlock(missionControlCss, '.surface--liquidgl-hero');
+    expect(liquidBlock).toContain('isolation: isolate');
+    expect(liquidBlock).toContain('overflow: hidden');
+    expect(liquidBlock).toContain('backdrop-filter: blur(26px) saturate(1.65)');
+  });
+
   it('defines shared interaction tokens for routine controls', async () => {
     const requiredTokens = [
       '--mm-control-hover-scale',
