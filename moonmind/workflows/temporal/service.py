@@ -1122,7 +1122,13 @@ class TemporalExecutionService:
             )
         record = await self._require_source_execution(workflow_id)
 
-        if signal_name in {"Pause", "Resume", "Approve", "SendMessage"}:
+        if signal_name in {
+            "Pause",
+            "Resume",
+            "Approve",
+            "SkipDependencyWait",
+            "SendMessage",
+        }:
             self._ensure_non_terminal(record)
             operator_message = self._extract_operator_message(payload)
             update_arg: dict[str, Any] = {}
@@ -1183,6 +1189,19 @@ class TemporalExecutionService:
                     self._update_summary(record, "Clarification reply sent to agent.")
                 else:
                     self._update_summary(record, "Execution resumed.")
+            elif signal_name == "SkipDependencyWait":
+                record.paused = False
+                self._clear_waiting_metadata(record)
+                self._clear_wait_metadata(record)
+                self._set_state(record, MoonMindWorkflowState.AWAITING_SLOT)
+                self._append_intervention_audit(
+                    record,
+                    action="skip_dependency_wait",
+                    transport="temporal_update",
+                    summary="Dependency wait skipped by operator.",
+                    detail=operator_message,
+                )
+                self._update_summary(record, "Dependency wait skipped by operator.")
             else:
                 if signal_name == "Approve":
                     record.paused = False
@@ -1225,7 +1244,26 @@ class TemporalExecutionService:
             ) from exc
 
         signal_payload = dict(payload or {})
-        if signal_name == "ExternalEvent":
+        if signal_name == "BypassDependencies":
+            bypass_reason = str(signal_payload.get("reason") or "").strip() or None
+            if record.state == MoonMindWorkflowState.WAITING_ON_DEPENDENCIES:
+                self._append_intervention_audit(
+                    record,
+                    action="bypass_dependencies",
+                    transport="temporal_signal",
+                    summary="Dependency wait bypass requested.",
+                    detail=bypass_reason,
+                )
+                self._update_summary(record, "Dependency wait bypass requested.")
+            else:
+                self._append_intervention_audit(
+                    record,
+                    action="bypass_dependencies",
+                    transport="temporal_signal",
+                    summary="Dependency wait bypass ignored outside dependency wait.",
+                    detail=bypass_reason,
+                )
+        elif signal_name == "ExternalEvent":
             source_raw = signal_payload.get("source")
             event_type_raw = signal_payload.get("event_type")
             if not source_raw or not event_type_raw:

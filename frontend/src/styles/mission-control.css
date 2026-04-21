@@ -128,12 +128,11 @@ samp {
 .masthead {
   position: relative;
   isolation: isolate;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: flex-start;
-  gap: 1.25rem;
+  column-gap: 1rem;
   padding: 0.65rem 1rem 0.62rem;
-  flex-wrap: wrap;
 }
 
 .masthead::before {
@@ -160,6 +159,7 @@ samp {
 .masthead-brand {
   display: inline-flex;
   align-items: center;
+  justify-self: start;
   gap: 0.55rem;
   min-width: 0;
 }
@@ -179,11 +179,11 @@ samp {
 }
 
 .masthead-title-meta {
-  margin-left: auto;
   display: flex;
   align-items: center;
+  justify-self: end;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.4rem;
   row-gap: 0.25rem;
   min-width: 0;
@@ -289,6 +289,13 @@ h1 {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.55rem;
+}
+
+.masthead-nav {
+  display: flex;
+  justify-content: center;
+  justify-self: center;
+  min-width: 0;
 }
 
 .nav-hamburger {
@@ -2282,7 +2289,14 @@ button.secondary:hover {
   align-items: center;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1180px) {
+  .masthead {
+    display: flex;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 1.25rem;
+  }
+
   .masthead-brand {
     flex: 1 1 auto;
     min-width: 0;
@@ -2300,6 +2314,10 @@ button.secondary:hover {
 
   .version-badge {
     margin-left: 0;
+  }
+
+  .masthead-nav {
+    display: contents;
   }
 
   .route-nav {
@@ -2330,7 +2348,9 @@ button.secondary:hover {
     text-align: left;
     background: transparent;
   }
+}
 
+@media (max-width: 900px) {
   .grid-2 {
     grid-template-columns: 1fr;
   }

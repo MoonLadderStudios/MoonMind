@@ -1657,6 +1657,8 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                     "cancel",
                     "reject",
                     "sendMessage",
+                    "bypassDependencies",
+                    "skipDependencyWait",
                 )
             }
         )
@@ -1667,7 +1669,13 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     state_actions = {
         "scheduled": {"can_set_title", "can_update_inputs", "can_cancel"},
         "initializing": {"can_set_title", "can_update_inputs", "can_cancel"},
-        "waiting_on_dependencies": {"can_set_title", "can_update_inputs", "can_cancel"},
+        "waiting_on_dependencies": {
+            "can_set_title",
+            "can_update_inputs",
+            "can_cancel",
+            "can_bypass_dependencies",
+            "can_skip_dependency_wait",
+        },
         "awaiting_slot": {"can_set_title", "can_update_inputs", "can_cancel"},
         "planning": {"can_set_title", "can_update_inputs", "can_cancel"},
         "executing": {
@@ -1711,6 +1719,8 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_cancel": "canCancel",
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",
+        "can_bypass_dependencies": "canBypassDependencies",
+        "can_skip_dependency_wait": "canSkipDependencyWait",
     }
     disabled_reasons = {}
     for field_name, alias in capability_values.items():
@@ -1739,6 +1749,8 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_cancel="can_cancel" in enabled,
         can_reject="can_reject" in enabled,
         can_send_message="can_send_message" in enabled,
+        can_bypass_dependencies="can_bypass_dependencies" in enabled,
+        can_skip_dependency_wait="can_skip_dependency_wait" in enabled,
         disabled_reasons=disabled_reasons,
     )
 

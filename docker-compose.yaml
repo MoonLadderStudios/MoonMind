@@ -52,6 +52,9 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - TEMPORAL_DASHBOARD_SUBMIT_ENABLED=true
       - TEMPORAL_TASK_EDITING_ENABLED=${TEMPORAL_TASK_EDITING_ENABLED:-true}
+      - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
       # OIDC specific variables for API service
       - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # local, google, or disabled
@@ -73,6 +76,7 @@ services:
     command: sh /app/api_service/entrypoint.sh
     networks:
       - local-network
+      - docker-proxy-network
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/healthz')"]
       interval: 30s
@@ -88,6 +92,8 @@ services:
       postgres:
         condition: service_healthy
       minio:
+        condition: service_started
+      docker-proxy:
         condition: service_started
 
   postgres:
@@ -475,6 +481,7 @@ services:
       - TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE:-mm.activity.agent_runtime}
       - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-4}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
+      - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}

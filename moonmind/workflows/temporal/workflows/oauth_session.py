@@ -26,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
 WORKFLOW_NAME = "MoonMind.OAuthSession"
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
+RUNNER_ACTIVITY_TASK_QUEUE = "mm.activity.agent_runtime"
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ class MoonMindOAuthSessionWorkflow:
             await workflow.execute_activity(
                 "oauth_session.ensure_volume",
                 {"session_id": self._session_id, "volume_ref": volume_ref},
-                task_queue=ACTIVITY_TASK_QUEUE,
+                task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=60),
                 retry_policy=RetryPolicy(
                     initial_interval=timedelta(seconds=2),
@@ -218,7 +219,7 @@ class MoonMindOAuthSessionWorkflow:
                         "volume_mount_path": volume_mount_path,
                         "session_ttl": session_ttl,
                     },
-                    task_queue=ACTIVITY_TASK_QUEUE,
+                    task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
                     start_to_close_timeout=timedelta(seconds=120),
                     retry_policy=RetryPolicy(
                         initial_interval=timedelta(seconds=3),
@@ -325,7 +326,7 @@ class MoonMindOAuthSessionWorkflow:
                     "volume_ref": volume_ref,
                     "volume_mount_path": volume_mount_path,
                 },
-                task_queue=ACTIVITY_TASK_QUEUE,
+                task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=60),
                 retry_policy=RetryPolicy(
                     initial_interval=timedelta(seconds=2),
@@ -409,7 +410,7 @@ class MoonMindOAuthSessionWorkflow:
                     "session_id": self._session_id,
                     "container_name": self._container_name,
                 },
-                task_queue=ACTIVITY_TASK_QUEUE,
+                task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
                 start_to_close_timeout=timedelta(seconds=60),
                 retry_policy=RetryPolicy(
                     initial_interval=timedelta(seconds=2),

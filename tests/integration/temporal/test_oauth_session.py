@@ -1,5 +1,8 @@
 """Temporal regression tests for OAuth session workflow."""
 
+from collections.abc import AsyncIterator, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
+
 import pytest
 from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
@@ -9,6 +12,7 @@ from moonmind.workflows.temporal.workflows.oauth_session import (
     MoonMindOAuthSessionWorkflow,
     WORKFLOW_TASK_QUEUE,
     ACTIVITY_TASK_QUEUE,
+    RUNNER_ACTIVITY_TASK_QUEUE,
 )
 
 # NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping consistently exceed CI timeout thresholds. Kept for local dev verification.
@@ -56,29 +60,57 @@ async def mock_mark_failed(request: dict) -> dict:
     return {}
 
 
+@asynccontextmanager
+async def _oauth_workers(
+    env: WorkflowEnvironment,
+    *,
+    activity_activities: Sequence[object],
+    runner_activities: Sequence[object],
+) -> AsyncIterator[None]:
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(
+            Worker(
+                env.client,
+                task_queue=ACTIVITY_TASK_QUEUE,
+                activities=list(activity_activities),
+            )
+        )
+        if runner_activities:
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue=RUNNER_ACTIVITY_TASK_QUEUE,
+                    activities=list(runner_activities),
+                )
+            )
+        await stack.enter_async_context(
+            Worker(
+                env.client,
+                task_queue=WORKFLOW_TASK_QUEUE,
+                workflows=[MoonMindOAuthSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            )
+        )
+        yield
+
+
 async def test_oauth_session_workflow_success() -> None:
     """Test full successful OAuth session workflow lifecycle."""
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        # We need two workers since the workflow calls activities on ACTIVITY_TASK_QUEUE
-        # while itself running on WORKFLOW_TASK_QUEUE (or another workflow queue)
-        
-        async with Worker(
-            env.client,
-            task_queue=ACTIVITY_TASK_QUEUE,
-            activities=[
-                mock_ensure_volume,
-                mock_start_auth_runner,
+        async with _oauth_workers(
+            env,
+            activity_activities=[
                 mock_update_terminal_session,
                 mock_update_status,
-                mock_verify_cli_fingerprint,
                 mock_register_profile,
+                mock_mark_failed,
+            ],
+            runner_activities=[
+                mock_ensure_volume,
+                mock_start_auth_runner,
+                mock_verify_cli_fingerprint,
                 mock_stop_auth_runner,
             ],
-        ), Worker(
-            env.client,
-            task_queue=WORKFLOW_TASK_QUEUE,
-            workflows=[MoonMindOAuthSessionWorkflow],
-            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
                 MoonMindOAuthSessionWorkflow.run,
@@ -103,23 +135,20 @@ async def test_oauth_session_workflow_success() -> None:
 async def test_oauth_session_workflow_cancel() -> None:
     """Test OAuth session workflow cancellation."""
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue=ACTIVITY_TASK_QUEUE,
-            activities=[
-                mock_ensure_volume,
-                mock_start_auth_runner,
+        async with _oauth_workers(
+            env,
+            activity_activities=[
                 mock_update_terminal_session,
                 mock_update_status,
-                mock_verify_cli_fingerprint,
                 mock_register_profile,
+                mock_mark_failed,
+            ],
+            runner_activities=[
+                mock_ensure_volume,
+                mock_start_auth_runner,
+                mock_verify_cli_fingerprint,
                 mock_stop_auth_runner,
             ],
-        ), Worker(
-            env.client,
-            task_queue=WORKFLOW_TASK_QUEUE,
-            workflows=[MoonMindOAuthSessionWorkflow],
-            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
                 MoonMindOAuthSessionWorkflow.run,
@@ -144,23 +173,20 @@ async def test_oauth_session_workflow_cancel() -> None:
 async def test_oauth_session_workflow_external_failure() -> None:
     """Test externally observed terminal failure closes as failed."""
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue=ACTIVITY_TASK_QUEUE,
-            activities=[
-                mock_ensure_volume,
-                mock_start_auth_runner,
+        async with _oauth_workers(
+            env,
+            activity_activities=[
                 mock_update_terminal_session,
                 mock_update_status,
-                mock_verify_cli_fingerprint,
                 mock_register_profile,
+                mock_mark_failed,
+            ],
+            runner_activities=[
+                mock_ensure_volume,
+                mock_start_auth_runner,
+                mock_verify_cli_fingerprint,
                 mock_stop_auth_runner,
             ],
-        ), Worker(
-            env.client,
-            task_queue=WORKFLOW_TASK_QUEUE,
-            workflows=[MoonMindOAuthSessionWorkflow],
-            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
                 MoonMindOAuthSessionWorkflow.run,
@@ -202,24 +228,20 @@ async def test_oauth_session_workflow_start_failure_is_redacted() -> None:
         return {}
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue=ACTIVITY_TASK_QUEUE,
-            activities=[
-                mock_ensure_volume,
-                failing_start_auth_runner,
+        async with _oauth_workers(
+            env,
+            activity_activities=[
                 mock_update_terminal_session,
                 mock_update_status,
-                mock_verify_cli_fingerprint,
                 mock_register_profile,
-                mock_stop_auth_runner,
                 record_mark_failed,
             ],
-        ), Worker(
-            env.client,
-            task_queue=WORKFLOW_TASK_QUEUE,
-            workflows=[MoonMindOAuthSessionWorkflow],
-            workflow_runner=UnsandboxedWorkflowRunner(),
+            runner_activities=[
+                mock_ensure_volume,
+                failing_start_auth_runner,
+                mock_verify_cli_fingerprint,
+                mock_stop_auth_runner,
+            ],
         ):
             result = await env.client.execute_workflow(
                 MoonMindOAuthSessionWorkflow.run,
@@ -261,23 +283,20 @@ async def test_oauth_session_workflow_api_finalize_skips_verify_and_register() -
         return {"profile_id": "prof_123"}
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue=ACTIVITY_TASK_QUEUE,
-            activities=[
-                mock_ensure_volume,
-                mock_start_auth_runner,
+        async with _oauth_workers(
+            env,
+            activity_activities=[
                 mock_update_terminal_session,
                 mock_update_status,
-                counted_verify_cli_fingerprint,
                 counted_register_profile,
+                mock_mark_failed,
+            ],
+            runner_activities=[
+                mock_ensure_volume,
+                mock_start_auth_runner,
+                counted_verify_cli_fingerprint,
                 mock_stop_auth_runner,
             ],
-        ), Worker(
-            env.client,
-            task_queue=WORKFLOW_TASK_QUEUE,
-            workflows=[MoonMindOAuthSessionWorkflow],
-            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
                 MoonMindOAuthSessionWorkflow.run,
@@ -322,23 +341,20 @@ async def test_oauth_session_workflow_missing_transport_uses_legacy_bridge_defau
         return {}
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue=ACTIVITY_TASK_QUEUE,
-            activities=[
-                mock_ensure_volume,
-                record_start_auth_runner,
+        async with _oauth_workers(
+            env,
+            activity_activities=[
                 record_update_terminal_session,
                 mock_update_status,
-                mock_verify_cli_fingerprint,
                 mock_register_profile,
+                mock_mark_failed,
+            ],
+            runner_activities=[
+                mock_ensure_volume,
+                record_start_auth_runner,
+                mock_verify_cli_fingerprint,
                 mock_stop_auth_runner,
             ],
-        ), Worker(
-            env.client,
-            task_queue=WORKFLOW_TASK_QUEUE,
-            workflows=[MoonMindOAuthSessionWorkflow],
-            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
                 MoonMindOAuthSessionWorkflow.run,
@@ -395,23 +411,20 @@ async def test_oauth_session_workflow_success_starts_and_stops_runner() -> None:
         return {"stopped": True}
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue=ACTIVITY_TASK_QUEUE,
-            activities=[
-                mock_ensure_volume,
-                record_start_auth_runner,
+        async with _oauth_workers(
+            env,
+            activity_activities=[
                 record_update_terminal_session,
                 mock_update_status,
-                mock_verify_cli_fingerprint,
                 mock_register_profile,
+                mock_mark_failed,
+            ],
+            runner_activities=[
+                mock_ensure_volume,
+                record_start_auth_runner,
+                mock_verify_cli_fingerprint,
                 record_stop_auth_runner,
             ],
-        ), Worker(
-            env.client,
-            task_queue=WORKFLOW_TASK_QUEUE,
-            workflows=[MoonMindOAuthSessionWorkflow],
-            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
                 MoonMindOAuthSessionWorkflow.run,
@@ -464,15 +477,10 @@ async def test_oauth_session_workflow_rejects_codex_oauth_input_without_refs() -
         return {}
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue=ACTIVITY_TASK_QUEUE,
-            activities=[record_update_status, record_mark_failed],
-        ), Worker(
-            env.client,
-            task_queue=WORKFLOW_TASK_QUEUE,
-            workflows=[MoonMindOAuthSessionWorkflow],
-            workflow_runner=UnsandboxedWorkflowRunner(),
+        async with _oauth_workers(
+            env,
+            activity_activities=[record_update_status, record_mark_failed],
+            runner_activities=[],
         ):
             result = await env.client.execute_workflow(
                 MoonMindOAuthSessionWorkflow.run,
@@ -513,22 +521,18 @@ async def test_oauth_session_workflow_none_transport_skips_bridge_and_records_st
         return {"profile_id": "prof_123"}
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue=ACTIVITY_TASK_QUEUE,
-            activities=[
-                mock_ensure_volume,
+        async with _oauth_workers(
+            env,
+            activity_activities=[
                 record_update_status,
-                mock_verify_cli_fingerprint,
                 record_register_profile,
-                mock_stop_auth_runner,
                 mock_mark_failed,
             ],
-        ), Worker(
-            env.client,
-            task_queue=WORKFLOW_TASK_QUEUE,
-            workflows=[MoonMindOAuthSessionWorkflow],
-            workflow_runner=UnsandboxedWorkflowRunner(),
+            runner_activities=[
+                mock_ensure_volume,
+                mock_verify_cli_fingerprint,
+                mock_stop_auth_runner,
+            ],
         ):
             handle = await env.client.start_workflow(
                 MoonMindOAuthSessionWorkflow.run,

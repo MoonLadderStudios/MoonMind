@@ -86,6 +86,11 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
     )
     assert catalog.resolve_activity("workload.run").fleet == AGENT_RUNTIME_FLEET
     assert catalog.resolve_activity("workload.run").capability_class == "docker_workload"
+    assert (
+        catalog.resolve_activity("oauth_session.start_auth_runner").task_queue
+        == AGENT_RUNTIME_TASK_QUEUE
+    )
+    assert catalog.resolve_activity("oauth_session.start_auth_runner").fleet == AGENT_RUNTIME_FLEET
 
     fleets = {fleet.fleet: fleet for fleet in catalog.fleets}
     assert fleets[ARTIFACTS_FLEET].task_queues == (ARTIFACTS_TASK_QUEUE,)
