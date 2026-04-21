@@ -1,6 +1,6 @@
 # Tasks: Remediation Create Links
 
-**Input**: Design documents from `/specs/219-remediation-create-links/`
+**Input**: Design documents from `/specs/220-remediation-create-links/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Unit tests are required first. Integration coverage is represented by router/service boundary unit tests for this persistence slice.
@@ -13,7 +13,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm active story artifacts and MM-431 traceability in `specs/219-remediation-create-links/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/remediation-create-links.md`, and `quickstart.md`.
+- [X] T001 Confirm active story artifacts and MM-431 traceability in `specs/220-remediation-create-links/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/remediation-create-links.md`, and `quickstart.md`.
 
 ## Phase 2: Foundational
 
@@ -38,5 +38,5 @@
 
 ## Final Phase: Polish And Verification
 
-- [X] T011 Run relevant unit verification from `specs/219-remediation-create-links/quickstart.md`.
-- [X] T012 Run `/speckit.verify` by auditing implementation against `specs/219-remediation-create-links/spec.md` and recording the result.
+- [X] T011 Run relevant unit verification from `specs/220-remediation-create-links/quickstart.md`.
+- [X] T012 Run `/speckit.verify` by auditing implementation against `specs/220-remediation-create-links/spec.md` and recording the result.

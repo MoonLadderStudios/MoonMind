@@ -1,7 +1,7 @@
 # Implementation Plan: Remediation Create Links
 
-**Branch**: `219-remediation-create-links` | **Date**: 2026-04-21 | **Spec**: `specs/219-remediation-create-links/spec.md`
-**Input**: Single-story feature specification from `/specs/219-remediation-create-links/spec.md`
+**Branch**: `220-remediation-create-links` | **Date**: 2026-04-21 | **Spec**: `specs/220-remediation-create-links/spec.md`
+**Input**: Single-story feature specification from `/specs/220-remediation-create-links/spec.md`
 
 ## Summary
 
@@ -57,7 +57,7 @@ Implement MM-431 by adding the create-time persistence slice for Task Remediatio
 ### Documentation (this feature)
 
 ```text
-specs/219-remediation-create-links/
+specs/220-remediation-create-links/
 ├── spec.md
 ├── plan.md
 ├── research.md

@@ -8,13 +8,17 @@ Rationale: `docs/UI/MissionControlDesignSystem.md` defines the desired interacti
 
 Alternatives considered: Introducing React wrapper components was rejected because existing controls are distributed across pages and the immediate gap is styling consistency, not state ownership.
 
+Test implications: Unit/CSS contract tests verify token presence; integration-style UI render tests confirm existing Mission Control routes still consume the shared stylesheet without behavior drift.
+
 ## Decision 2: Replace routine translate lift with scale-only glow/grow behavior
 
 Decision: Update routine button, button-link, action, extension, and icon-button hover/press rules to use shared scale tokens and no `translateY`.
 
 Rationale: The design system explicitly prefers small scale changes and avoids translate lift for core buttons and nav pills. Existing CSS still had several `translateY(-1px)` hover rules.
 
-Alternatives considered: Keeping lift on elevated controls was rejected for this story because the supplied brief asks to align components with the shared interaction language, and no specific component requires vertical motion to remain understandable.
+Alternatives considered: Keeping lift on elevated controls was rejected for this story because the trusted Jira preset brief asks to align components with the shared interaction language, and no specific component requires vertical motion to remain understandable.
+
+Test implications: Unit/CSS contract tests assert routine hover and press rules use scale tokens and do not contain translate lift.
 
 ## Decision 3: Treat toggles, filters, and chips as compact control shells
 
@@ -24,8 +28,12 @@ Rationale: These controls appear in task-list control decks and utility bars. Th
 
 Alternatives considered: Leaving chips as display-only badges was rejected because active filter chips are part of the operator control language and must remain visually related to adjacent reset/filter controls.
 
+Test implications: Unit/CSS contract tests cover compact-control shells, focus rings, disabled posture, and long-value wrapping; task-list UI render tests cover active-filter behavior.
+
 ## Decision 4: Validate with CSS contract tests and existing behavior regression tests
 
 Decision: Add focused assertions to `frontend/src/entrypoints/mission-control.test.tsx` and rerun the task-list UI test file.
 
 Rationale: The story is a shared CSS contract with no backend behavior changes. CSS contract tests can directly verify token definitions and no-lift rules, while existing render tests prove behavior stayed intact.
+
+Test implications: Unit strategy uses focused Vitest/CSS assertions; integration strategy uses the existing task-list and app-shell render tests through `./tools/test_unit.sh --ui-args` because no compose-backed backend integration is required.
