@@ -445,6 +445,17 @@ describe('Mission Control shared entry', () => {
       window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
       fetchSpy.mockImplementation((input: RequestInfo | URL) => {
         const url = String(input);
+        if (url === '/api/v1/oauth-sessions/oas_terminal_ui') {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              session_id: 'oas_terminal_ui',
+              status: 'awaiting_user',
+              terminal_session_id: 'term_oas_terminal_ui',
+              terminal_bridge_id: 'br_oas_terminal_ui',
+            }),
+          } as Response);
+        }
         if (url === '/api/v1/oauth-sessions/oas_terminal_ui/terminal/attach') {
           return Promise.resolve({
             ok: true,
@@ -497,5 +508,106 @@ describe('Mission Control shared entry', () => {
         Reflect.deleteProperty(navigator, 'clipboard');
       }
     }
+  });
+
+  it('waits for OAuth terminal readiness before requesting an attach token', async () => {
+    const sentFrames: string[] = [];
+    const attachCalls: string[] = [];
+    const sessionStatuses = [
+      { status: 'pending' },
+      { status: 'starting' },
+      {
+        status: 'awaiting_user',
+        terminal_session_id: 'term_oas_terminal_wait',
+        terminal_bridge_id: 'br_oas_terminal_wait',
+      },
+    ];
+
+    class MockWebSocket extends EventTarget {
+      static readonly OPEN = 1;
+      readonly OPEN = 1;
+      readyState = 1;
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      constructor(readonly url: string) {
+        super();
+        setTimeout(() => {
+          this.onopen?.(new Event('open'));
+          this.onmessage?.(new MessageEvent('message', { data: 'Ready after wait' }));
+        }, 0);
+      }
+      send(frame: string) {
+        sentFrames.push(frame);
+      }
+      close() {
+        this.onclose?.(new CloseEvent('close'));
+      }
+    }
+    window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/v1/oauth-sessions/oas_terminal_wait') {
+        const nextStatus = sessionStatuses.shift() ?? sessionStatuses[sessionStatuses.length - 1];
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: 'oas_terminal_wait',
+            ...nextStatus,
+          }),
+        } as Response);
+      }
+      if (url === '/api/v1/oauth-sessions/oas_terminal_wait/terminal/attach') {
+        attachCalls.push(url);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: 'oas_terminal_wait',
+            terminal_session_id: 'term_oas_terminal_wait',
+            terminal_bridge_id: 'br_oas_terminal_wait',
+            websocket_url: '/api/v1/oauth-sessions/oas_terminal_wait/terminal/ws?token=once',
+            attach_token: 'once',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        json: async () => ({ detail: 'Unhandled fetch' }),
+      } as Response);
+    });
+
+    renderWithClient(
+      <MissionControlApp
+        payload={{
+          page: 'oauth-terminal',
+          apiBase: '/api',
+          initialData: { sessionId: 'oas_terminal_wait' },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/oauth-sessions/oas_terminal_wait',
+        expect.objectContaining({ headers: { Accept: 'application/json' } }),
+      );
+    });
+    expect(attachCalls).toEqual([]);
+
+    await waitFor(
+      () => {
+        expect(attachCalls).toEqual([
+          '/api/v1/oauth-sessions/oas_terminal_wait/terminal/attach',
+        ]);
+      },
+      { timeout: 3500 },
+    );
+    expect(await screen.findByText('Ready after wait')).toBeTruthy();
+    expect(sentFrames.some((frame) => frame.includes('"heartbeat"'))).toBe(true);
   });
 });

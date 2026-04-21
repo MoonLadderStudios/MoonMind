@@ -17,6 +17,39 @@ type AttachResponse = {
   attach_token: string;
 };
 
+type OAuthSessionStatus =
+  | 'pending'
+  | 'starting'
+  | 'bridge_ready'
+  | 'awaiting_user'
+  | 'verifying'
+  | 'registering_profile'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'expired';
+
+type OAuthSessionResponse = {
+  session_id: string;
+  status: OAuthSessionStatus;
+  terminal_session_id?: string | null;
+  terminal_bridge_id?: string | null;
+  failure_reason?: string | null;
+};
+
+const TERMINAL_ATTACHABLE_STATUSES: readonly OAuthSessionStatus[] = [
+  'bridge_ready',
+  'awaiting_user',
+  'verifying',
+];
+const TERMINAL_FINAL_STATUSES: readonly OAuthSessionStatus[] = [
+  'succeeded',
+  'failed',
+  'cancelled',
+  'expired',
+];
+const TERMINAL_READY_POLL_MS = 1000;
+
 function copyTextToClipboard(text: string): void {
   if (
     typeof navigator === 'undefined' ||
@@ -49,6 +82,26 @@ function websocketUrlFromAttach(websocketUrl: string): string {
     return websocketUrl;
   }
   return `${base}${websocketUrl}`;
+}
+
+function oauthStatusLabel(status: OAuthSessionStatus): string {
+  return status
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function isTerminalAttachable(session: OAuthSessionResponse): boolean {
+  return (
+    TERMINAL_ATTACHABLE_STATUSES.includes(session.status) &&
+    Boolean(session.terminal_session_id) &&
+    Boolean(session.terminal_bridge_id)
+  );
+}
+
+async function readErrorDetail(response: Response, fallback: string): Promise<string> {
+  const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+  return typeof payload?.detail === 'string' ? payload.detail : fallback;
 }
 
 export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
@@ -158,12 +211,45 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
 
     async function attach() {
       try {
-        const response = await fetch(
-          `/api/v1/oauth-sessions/${encodeURIComponent(sessionId)}/terminal/attach`,
-          { method: 'POST' },
-        );
+        const sessionEndpoint = `/api/v1/oauth-sessions/${encodeURIComponent(sessionId)}`;
+        const waitForTerminalReadiness = async (): Promise<void> => {
+          while (!closed) {
+            const sessionResponse = await fetch(sessionEndpoint, {
+              headers: { Accept: 'application/json' },
+            });
+            if (!sessionResponse.ok) {
+              const detail = await readErrorDetail(
+                sessionResponse,
+                `Session lookup failed: ${sessionResponse.status}`,
+              );
+              throw new Error(detail);
+            }
+            const session = (await sessionResponse.json()) as OAuthSessionResponse;
+            if (isTerminalAttachable(session)) {
+              return;
+            }
+            if (TERMINAL_FINAL_STATUSES.includes(session.status)) {
+              const reason = session.failure_reason ? `: ${session.failure_reason}` : '';
+              throw new Error(`OAuth session ${oauthStatusLabel(session.status)}${reason}`);
+            }
+            setStatus(
+              TERMINAL_ATTACHABLE_STATUSES.includes(session.status)
+                ? 'Preparing terminal bridge'
+                : `OAuth ${oauthStatusLabel(session.status)}`,
+            );
+            await new Promise((resolve) => window.setTimeout(resolve, TERMINAL_READY_POLL_MS));
+          }
+        };
+
+        await waitForTerminalReadiness();
+        if (closed) {
+          return;
+        }
+        setStatus('Connecting terminal');
+        const response = await fetch(`${sessionEndpoint}/terminal/attach`, { method: 'POST' });
         if (!response.ok) {
-          throw new Error(`Attach failed: ${response.status}`);
+          const detail = await readErrorDetail(response, `Attach failed: ${response.status}`);
+          throw new Error(detail);
         }
         const attachPayload = (await response.json()) as AttachResponse;
         if (closed) {
