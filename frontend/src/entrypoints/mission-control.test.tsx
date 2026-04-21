@@ -270,7 +270,7 @@ describe('Mission Control shared entry', () => {
     const routineBlocks = [
       cssRuleBlock(
         missionControlCss,
-        'button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):hover',
+        'button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):hover',
       ),
       cssRuleBlock(missionControlCss, 'button.secondary:hover'),
       cssRuleBlock(
@@ -292,7 +292,7 @@ describe('Mission Control shared entry', () => {
     const pressedBlocks = [
       cssRuleBlock(
         missionControlCss,
-        'button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):active',
+        'button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):active',
       ),
       cssRuleBlock(
         missionControlCss,
@@ -326,7 +326,7 @@ describe('Mission Control shared entry', () => {
     expect(cssRuleBlock(missionControlCss, 'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
-    expect(cssRuleBlock(missionControlCss, 'button:disabled,\nbutton:disabled:hover,\nbutton.secondary:disabled,\nbutton.secondary:disabled:hover,\nbutton:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):disabled,\nbutton:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):disabled:hover,\n.button[aria-disabled="true"],\n.button[aria-disabled="true"]:hover,\n.button.secondary[aria-disabled="true"],\n.button.secondary[aria-disabled="true"]:hover,\n.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"],\n.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"]:hover')).toMatch(
+    expect(cssRuleBlock(missionControlCss, 'button:disabled,\nbutton:disabled:hover,\nbutton.secondary:disabled,\nbutton.secondary:disabled:hover,\nbutton:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):disabled,\nbutton:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle):disabled:hover,\n.button[aria-disabled="true"],\n.button[aria-disabled="true"]:hover,\n.button.secondary[aria-disabled="true"],\n.button.secondary[aria-disabled="true"]:hover,\n.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"],\n.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"]:hover')).toMatch(
       /opacity:\s*var\(--mm-control-disabled-opacity\);[^}]*transform:\s*none;[^}]*box-shadow:\s*none;/s,
     );
     expect(missionControlCss).toMatch(

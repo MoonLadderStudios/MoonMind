@@ -1,12 +1,17 @@
 [
   {
-    "id": 3119379489,
+    "id": 3119218535,
     "disposition": "addressed",
-    "rationale": "Replaced the exhausted session status fallback with an explicit stable awaiting_user terminal status in the Mission Control OAuth terminal wait test mock."
+    "rationale": "Excluded .td-instructions-toggle from the global primary button selectors so its lightweight hover/active styling is preserved."
   },
   {
-    "id": 4149792433,
+    "id": 4149618936,
     "disposition": "not-applicable",
-    "rationale": "Review summary comment only; the underlying actionable inline feedback is tracked and addressed separately."
+    "rationale": "Automated review summary container; the actionable inline comment from this review is tracked separately."
+  },
+  {
+    "id": 4149627539,
+    "disposition": "not-applicable",
+    "rationale": "Review body explicitly states there is no feedback to address."
   }
 ]
