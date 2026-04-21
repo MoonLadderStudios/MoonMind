@@ -253,7 +253,7 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
     return normalized
 
 
-_JIRA_AGENT_SKILLS = frozenset({"jira-issue-creator"})
+_JIRA_AGENT_SKILLS = frozenset({"jira-issue-creator", "jira-pr-verify", "jira-verify"})
 _JIRA_STORY_OUTPUT_TOOLS = frozenset(
     {"story.create_jira_issues", "story.create_jira_orchestrate_tasks"}
 )
