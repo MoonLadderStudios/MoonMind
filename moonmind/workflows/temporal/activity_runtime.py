@@ -416,15 +416,15 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "provider_profile_sync_slot_leases",
     ),
-    "oauth_session.ensure_volume": ("artifacts", "oauth_session_ensure_volume"),
-    "oauth_session.start_auth_runner": ("artifacts", "oauth_session_start_auth_runner"),
+    "oauth_session.ensure_volume": ("agent_runtime", "oauth_session_ensure_volume"),
+    "oauth_session.start_auth_runner": ("agent_runtime", "oauth_session_start_auth_runner"),
     "oauth_session.update_terminal_session": ("artifacts", "oauth_session_update_terminal_session"),
-    "oauth_session.stop_auth_runner": ("artifacts", "oauth_session_stop_auth_runner"),
+    "oauth_session.stop_auth_runner": ("agent_runtime", "oauth_session_stop_auth_runner"),
     "oauth_session.update_status": ("artifacts", "oauth_session_update_status"),
     "oauth_session.mark_failed": ("artifacts", "oauth_session_mark_failed"),
     "oauth_session.cleanup_stale": ("artifacts", "oauth_session_cleanup_stale"),
-    "oauth_session.verify_volume": ("artifacts", "oauth_session_verify_volume"),
-    "oauth_session.verify_cli_fingerprint": ("artifacts", "oauth_session_verify_cli_fingerprint"),
+    "oauth_session.verify_volume": ("agent_runtime", "oauth_session_verify_volume"),
+    "oauth_session.verify_cli_fingerprint": ("agent_runtime", "oauth_session_verify_cli_fingerprint"),
     "oauth_session.register_profile": ("artifacts", "oauth_session_register_profile"),
     "integration.jules.start": ("integrations", "integration_jules_start"),
     "integration.jules.status": ("integrations", "integration_jules_status"),
@@ -907,6 +907,19 @@ def _coerce_activity_request(
             f"{activity_type} payload must be a JSON object"
         )
     return dict(request)
+
+
+def _coerce_activity_payload_input(
+    request: Any,
+    *,
+    activity_type: str,
+    kwargs: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if isinstance(request, BaseModel):
+        request = request.model_dump(mode="json", by_alias=True)
+    elif request is None:
+        request = kwargs
+    return _coerce_activity_request(request, activity_type=activity_type)
 
 
 def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
@@ -2605,6 +2618,96 @@ class TemporalAgentRuntimeActivities:
             client_adapter = temporal_client_module.TemporalClientAdapter()
         self._client_adapter = client_adapter
         self._supervision_tasks: set[asyncio.Task] = set()
+
+    async def oauth_session_ensure_volume(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Ensure an OAuth auth volume from the Docker-capable runtime fleet."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_ensure_volume as _ensure_volume,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.ensure_volume",
+            kwargs=kwargs,
+        )
+        return await _ensure_volume(payload)
+
+    async def oauth_session_start_auth_runner(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Start an OAuth auth runner from the Docker-capable runtime fleet."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_start_auth_runner as _start_auth_runner,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.start_auth_runner",
+            kwargs=kwargs,
+        )
+        return await _start_auth_runner(payload)
+
+    async def oauth_session_stop_auth_runner(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Stop an OAuth auth runner from the Docker-capable runtime fleet."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_stop_auth_runner as _stop_auth_runner,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.stop_auth_runner",
+            kwargs=kwargs,
+        )
+        return await _stop_auth_runner(payload)
+
+    async def oauth_session_verify_volume(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Verify an OAuth auth volume from the Docker-capable runtime fleet."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_verify_volume as _verify_volume,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.verify_volume",
+            kwargs=kwargs,
+        )
+        return await _verify_volume(payload)
+
+    async def oauth_session_verify_cli_fingerprint(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Verify CLI auth material from the Docker-capable runtime fleet."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_verify_cli_fingerprint as _verify_cli_fingerprint,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.verify_cli_fingerprint",
+            kwargs=kwargs,
+        )
+        return await _verify_cli_fingerprint(payload)
 
     async def _report_task_run_binding(self, workflow_id: str, run_id: str) -> None:
         """Persist the managed task-run UUID onto the execution record.

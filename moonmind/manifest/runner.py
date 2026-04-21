@@ -4,24 +4,30 @@ import logging
 from importlib import import_module
 from typing import Any, Dict, List, Optional
 
-
 from moonmind.schemas import Manifest
 
 
 def download_loader(type_name: str):
-    """Resolve llama-index reader loaders lazily for version compatibility."""
+    """Resolve a llama-index reader class without hard-importing legacy helpers."""
     try:
-        from llama_index import core as llama_index_core
-    except ImportError as exc:  # pragma: no cover - dependency import failure
-        raise ImportError("llama_index.core is required to load manifest readers") from exc
+        from llama_index.core import download_loader as core_download_loader
+    except ImportError:
+        try:
+            from llama_index.core.readers.download import (
+                download_loader as core_download_loader,
+            )
+        except ImportError:
+            core_download_loader = None
 
-    loader = getattr(llama_index_core, "download_loader", None)
-    if loader is None:
-        raise ImportError(
-            "llama_index.core.download_loader is unavailable in this version"
-        )
-    return loader(type_name)
+    if core_download_loader is not None:
+        return core_download_loader(type_name)
 
+    try:
+        module = import_module(f"llama_index.readers.{type_name.lower()}")
+        return getattr(module, type_name)
+    except Exception:
+        module = import_module("llama_index.readers")
+        return getattr(module, type_name)
 
 
 class ManifestRunner:
@@ -71,16 +77,7 @@ class ManifestRunner:
 
     def _load_reader_class(self, type_name: str):
         """Return the reader class for the given type name."""
-        try:
-            return download_loader(type_name)
-        except Exception:
-            # Fallback to importing from llama_index.readers package
-            try:
-                module = import_module(f"llama_index.readers.{type_name.lower()}")
-                return getattr(module, type_name)
-            except Exception:
-                module = import_module("llama_index.readers")
-                return getattr(module, type_name)
+        return download_loader(type_name)
 
     def _load_class(self, fq_name: str):
         """Import and return a class from its fully qualified name."""

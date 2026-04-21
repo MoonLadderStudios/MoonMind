@@ -2117,7 +2117,7 @@ function TrashIcon() {
   );
 }
 
-const LIQUID_GL_OPTIONS = {
+export const LIQUID_GL_OPTIONS = {
   target: ".queue-floating-bar--liquid-glass",
   snapshot: "body",
   resolution: 2,
@@ -2127,6 +2127,7 @@ const LIQUID_GL_OPTIONS = {
   frost: 6,
   shadow: true,
   specular: true,
+  reveal: false,
   tilt: false,
   magnify: 1,
 } as const;

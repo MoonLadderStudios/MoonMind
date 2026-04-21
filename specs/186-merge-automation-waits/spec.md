@@ -92,7 +92,7 @@ Needs Clarification
 **Acceptance Scenarios**:
 
 1. **Given** merge automation starts after a pull request is published, **when** the workflow receives parent identifiers, `publishContextRef`, `mergeAutomationConfig`, and `resolverTemplate`, **then** the start payload is accepted without embedding large publish payloads in workflow history.
-2. **Given** the latest pull request head SHA has incomplete configured checks, review providers, or Jira status, **when** the gate evaluates readiness, **then** resolver launch is blocked and the workflow records machine-readable blockers for that head SHA.
+2. **Given** the latest pull request head SHA has configured checks still running, review providers still incomplete, or Jira status still pending, **when** the gate evaluates readiness, **then** resolver launch is blocked and the workflow records machine-readable blockers for that head SHA.
 3. **Given** the pull request receives a new head SHA, **when** readiness is evaluated, **then** readiness evidence for the previous SHA is invalidated and the workflow reports waiting blockers for the new current head SHA.
 4. **Given** a GitHub or Jira event is signaled while the workflow is waiting, **when** the signal arrives before the fallback timer fires, **then** the workflow immediately re-evaluates readiness.
 5. **Given** no external signal arrives, **when** the configured `fallbackPollSeconds` elapses, **then** the workflow re-evaluates readiness and does not use an unbounded or fixed-delay resolver strategy.
@@ -139,7 +139,7 @@ Needs Clarification
 - **FR-002**: `MoonMind.MergeAutomation` MUST accept compact start input containing parent workflow id, parent run id when available, `publishContextRef`, `mergeAutomationConfig`, `resolverTemplate`, and compact PR identity fields needed for waiting.
 - **FR-003**: The workflow MUST expose lifecycle state using only `initializing`, `awaiting_external`, `executing`, `finalizing`, `completed`, `failed`, and `canceled` vocabulary where a state is applicable.
 - **FR-004**: Gate evaluation MUST return deterministic machine-readable output containing status, current head SHA, blockers, and whether resolver launch is allowed.
-- **FR-005**: Gate evaluation MUST block resolver launch when readiness evidence is missing, stale for a previous head SHA, still running, failed, Jira-disallowed, or policy-denied for the current head SHA.
+- **FR-005**: Gate evaluation MUST block resolver launch when readiness evidence is missing, stale for a previous head SHA, still running, Jira-disallowed, or policy-denied for the current head SHA. Completed-but-failing checks MUST remain visible through readiness fields but MUST NOT be treated as wait-only blockers.
 - **FR-006**: External GitHub/Jira event signals MUST cause readiness re-evaluation before the fallback polling timer would otherwise fire.
 - **FR-007**: Fallback polling MUST be bounded by configured `fallbackPollSeconds`, with invalid or missing values normalized to a safe bounded default.
 - **FR-008**: Continue-As-New input MUST preserve parent id, publish context ref, PR number/URL, latest head SHA, gate policy, Jira key, blockers, cycle count, resolver history, and expire-at deadline.

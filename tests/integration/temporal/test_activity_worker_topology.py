@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base
+from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.skills.skill_plan_contracts import SkillResult
 from moonmind.workflows.temporal import (
+    AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
     LLM_FLEET,
     SANDBOX_FLEET,
@@ -30,6 +32,7 @@ from moonmind.workflows.temporal import (
     build_default_activity_catalog,
 )
 from moonmind.workflows.temporal.activity_runtime import (
+    TemporalAgentRuntimeActivities,
     TemporalProposalActivities,
     TemporalReviewActivities,
 )
@@ -160,6 +163,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 artifact_bindings["artifact.create"].task_queue
                 == "mm.activity.artifacts"
             )
+            assert "oauth_session.start_auth_runner" not in artifact_bindings
             assert artifact_ref.artifact_id.startswith("art_")
 
             llm_bindings = {
@@ -265,3 +269,39 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 sandbox_bindings["mm.skill.execute"].task_queue == "mm.activity.sandbox"
             )
             assert sandbox_result.exit_code == 0
+
+            agent_runtime_bindings = {
+                binding.activity_type: binding
+                for binding in build_worker_activity_bindings(
+                    fleet=AGENT_RUNTIME_FLEET,
+                    catalog=catalog,
+                    artifact_activities=TemporalArtifactActivities(service),
+                    plan_activities=TemporalPlanActivities(
+                        artifact_service=service,
+                        planner=_planner,
+                    ),
+                    skill_activities=TemporalSkillActivities(dispatcher=dispatcher),
+                    sandbox_activities=TemporalSandboxActivities(
+                        artifact_service=service,
+                        workspace_root=tmp_path / "workspaces",
+                    ),
+                    integration_activities=TemporalIntegrationActivities(
+                        artifact_service=service,
+                        client_factory=_UnusedIntegrationClient,
+                    ),
+                    proposal_activities=TemporalProposalActivities(
+                        artifact_service=service,
+                    ),
+                    review_activities=TemporalReviewActivities(),
+                    agent_runtime_activities=TemporalAgentRuntimeActivities(),
+                    agent_skills_activities=AgentSkillsActivities(),
+                )
+            }
+            assert (
+                agent_runtime_bindings["oauth_session.start_auth_runner"].task_queue
+                == "mm.activity.agent_runtime"
+            )
+            assert (
+                agent_runtime_bindings["oauth_session.ensure_volume"].task_queue
+                == "mm.activity.agent_runtime"
+            )

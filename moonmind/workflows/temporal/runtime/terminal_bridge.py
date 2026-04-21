@@ -16,6 +16,8 @@ _MAX_STARTUP_ERROR_OUTPUT_CHARS = 600
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(token|password|secret|api[_-]?key)=\S+"
 )
+_DEFAULT_OAUTH_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind:latest"
+_DEFAULT_OAUTH_RUNNER_USER = "1000:1000"
 
 
 class TerminalBridgeFrameError(ValueError):
@@ -86,6 +88,14 @@ def _redact_startup_output(output: bytes) -> str:
         return ""
     redacted = _SECRET_ASSIGNMENT_PATTERN.sub("[REDACTED]", text)
     return redacted[-_MAX_STARTUP_ERROR_OUTPUT_CHARS:]
+
+
+def _oauth_runner_user() -> str:
+    configured = os.environ.get("MOONMIND_OAUTH_RUNNER_USER")
+    if configured is None:
+        return _DEFAULT_OAUTH_RUNNER_USER
+    normalized = configured.strip()
+    return normalized or _DEFAULT_OAUTH_RUNNER_USER
 
 
 class DockerExecPtyAdapter:
@@ -254,15 +264,24 @@ async def start_terminal_bridge_container(
     session_ttl: int,
     bootstrap_command: tuple[str, ...] | list[str],
 ) -> dict[str, Any]:
-    """Start an auth container that exposes a bridge for PTY websocket connections."""
+    """Start an idle auth container for PTY-owned provider bootstrap."""
     command = tuple(str(part).strip() for part in bootstrap_command)
     if not command or any(not part for part in command):
         raise ValueError("provider bootstrap command is not configured")
 
     container_name = f"moonmind_auth_{session_id}"
-    logger.info("Starting auth runner container %s for %s", container_name, session_id)
+    logger.info("Starting auth runner container")
 
-    runner_image = os.environ.get("MOONMIND_OAUTH_RUNNER_IMAGE", "alpine:3.19")
+    runner_image = os.environ.get(
+        "MOONMIND_OAUTH_RUNNER_IMAGE",
+        _DEFAULT_OAUTH_RUNNER_IMAGE,
+    )
+    executable = shlex.quote(command[0])
+    idle_command = (
+        f"command -v {executable} >/dev/null 2>&1 "
+        f"|| {{ echo 'OAuth runner image does not contain {executable}' >&2; exit 127; }}; "
+        f"sleep {int(session_ttl)}"
+    )
     try:
         proc = await asyncio.create_subprocess_exec(
             "docker", "run", "-d", "-i", "-t", "--rm",
@@ -270,16 +289,21 @@ async def start_terminal_bridge_container(
             "--label", "moonmind.oauth_session=true",
             "--label", f"moonmind.oauth_session_id={session_id}",
             "--label", f"moonmind.runtime_id={runtime_id}",
+            "--user", _oauth_runner_user(),
+            "-e", "HOME=/home/app",
+            "-e", f"CODEX_HOME={volume_mount_path}",
+            "-e", f"CODEX_CONFIG_HOME={volume_mount_path}",
+            "-e", f"CODEX_CONFIG_PATH={volume_mount_path.rstrip('/')}/config.toml",
             "-v", f"{volume_ref}:{volume_mount_path}",
-            runner_image, *command,
+            runner_image,
+            "/bin/sh",
+            "-lc",
+            idle_command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError as exc:
-        logger.error(
-            "Failed to start auth container %s: docker CLI not found on PATH",
-            container_name,
-        )
+        logger.error("Failed to start auth container: docker CLI not found on PATH")
         raise RuntimeError(
             "Docker CLI is not available on this worker. "
             "Ensure Docker is installed and 'docker' is on the PATH, "

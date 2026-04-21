@@ -375,10 +375,10 @@ async def test_evaluate_pull_request_readiness_respects_failed_combined_status_w
             policy={"checks": "required", "automatedReview": "disabled"},
         )
 
-    assert result.ready is False
+    assert result.ready is True
     assert result.checks_complete is True
     assert result.checks_passing is False
-    assert result.blockers[0]["kind"] == "checks_failed"
+    assert result.blockers == []
 
 
 @pytest.mark.asyncio

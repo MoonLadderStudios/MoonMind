@@ -1696,6 +1696,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/oauth-terminal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oauth Terminal Route
+         * @description Serve the OAuth terminal shell launched from Settings.
+         */
+        get: operations["oauth_terminal_route_oauth_terminal_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tasks/new": {
         parameters: {
             query?: never;
@@ -3198,6 +3218,16 @@ export interface components {
              * @default false
              */
             canSendMessage: boolean;
+            /**
+             * Canbypassdependencies
+             * @default false
+             */
+            canBypassDependencies: boolean;
+            /**
+             * Canskipdependencywait
+             * @default false
+             */
+            canSkipDependencyWait: boolean;
             /** Disabledreasons */
             disabledReasons?: {
                 [key: string]: string;
@@ -3320,6 +3350,84 @@ export interface components {
             degradedCount: boolean;
             /** Refreshedat */
             refreshedAt?: string | null;
+        };
+        /**
+         * ExecutionMergeAutomationArtifactRefsModel
+         * @description Artifact refs produced by merge automation.
+         */
+        ExecutionMergeAutomationArtifactRefsModel: {
+            /** Summary */
+            summary?: string | null;
+            /** Gatesnapshots */
+            gateSnapshots?: string[];
+            /** Resolverattempts */
+            resolverAttempts?: string[];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ExecutionMergeAutomationBlockerModel
+         * @description Operator-visible merge automation blocker.
+         */
+        ExecutionMergeAutomationBlockerModel: {
+            /** Kind */
+            kind?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Retryable */
+            retryable?: boolean | null;
+            /** Source */
+            source?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ExecutionMergeAutomationModel
+         * @description Live or terminal merge automation visibility for an execution.
+         */
+        ExecutionMergeAutomationModel: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Workflowid */
+            workflowId?: string | null;
+            /** Childworkflowid */
+            childWorkflowId?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Prnumber */
+            prNumber?: number | string | null;
+            /** Prurl */
+            prUrl?: string | null;
+            /** Latestheadsha */
+            latestHeadSha?: string | null;
+            /** Cycles */
+            cycles?: number | string | null;
+            /** Blockers */
+            blockers?: components["schemas"]["ExecutionMergeAutomationBlockerModel"][];
+            artifactRefs?: components["schemas"]["ExecutionMergeAutomationArtifactRefsModel"] | null;
+            /** Resolverchildworkflowids */
+            resolverChildWorkflowIds?: string[];
+            /** Resolverchildren */
+            resolverChildren?: components["schemas"]["ExecutionMergeAutomationResolverChildModel"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ExecutionMergeAutomationResolverChildModel
+         * @description Resolver child workflow reference plus observability binding when known.
+         */
+        ExecutionMergeAutomationResolverChildModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Taskrunid */
+            taskRunId?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Detailhref */
+            detailHref?: string | null;
         };
         /**
          * ExecutionModel
@@ -3450,6 +3558,7 @@ export interface components {
              * @default false
              */
             mergeAutomationSelected: boolean;
+            mergeAutomation?: components["schemas"]["ExecutionMergeAutomationModel"] | null;
             /** Resolvedskillsetref */
             resolvedSkillsetRef?: string | null;
             /** Taskskills */
@@ -5080,7 +5189,7 @@ export interface components {
              * Signalname
              * @enum {string}
              */
-            signalName: "ExternalEvent" | "Pause" | "Resume" | "Approve" | "SendMessage" | "DependencyResolved";
+            signalName: "ExternalEvent" | "Pause" | "Resume" | "Approve" | "SkipDependencyWait" | "SendMessage" | "DependencyResolved" | "BypassDependencies";
             /** Payload */
             payload?: {
                 [key: string]: unknown;
@@ -9715,6 +9824,37 @@ export interface operations {
                 };
                 content: {
                     "text/html": string;
+                };
+            };
+        };
+    };
+    oauth_terminal_route_oauth_terminal_get: {
+        parameters: {
+            query?: {
+                session_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
