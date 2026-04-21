@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import zipfile
+from io import BytesIO
 from contextlib import contextmanager
 from html.parser import HTMLParser
 from pathlib import Path
@@ -586,3 +588,138 @@ def test_create_dashboard_skill_already_exists(
 
     assert response.status_code == 409
     assert "already exists locally" in response.json()["detail"]
+
+
+def _skill_zip(entries: dict[str, str]) -> bytes:
+    payload = BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+    return payload.getvalue()
+
+
+def test_upload_dashboard_skill_zip_saves_valid_bundle(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    payload = _skill_zip(
+        {
+            "zip-skill/SKILL.md": "# Zip Skill\n\nUse this bundle.",
+            "zip-skill/scripts/check.sh": "#!/usr/bin/env bash\nexit 0\n",
+            "zip-skill/references/context.md": "Reference material.\n",
+        }
+    )
+
+    response = client.post(
+        "/api/tasks/skills/upload",
+        files={"file": ("zip-skill.zip", payload, "application/zip")},
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {"status": "success", "skill": "zip-skill"}
+    assert (tmp_path / "zip-skill" / "SKILL.md").read_text(encoding="utf-8") == (
+        "# Zip Skill\n\nUse this bundle."
+    )
+    assert (tmp_path / "zip-skill" / "scripts" / "check.sh").is_file()
+    assert (tmp_path / "zip-skill" / "references" / "context.md").is_file()
+    assert not list(tmp_path.glob(".skill-upload-*"))
+
+
+def test_upload_dashboard_skill_zip_rejects_invalid_root_skill_filename(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    response = client.post(
+        "/api/tasks/skills/upload",
+        files={
+            "file": (
+                "my skill.zip",
+                _skill_zip({"SKILL.md": "# Invalid inferred name\n"}),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid skill name" in response.json()["detail"]
+    assert not list(tmp_path.iterdir())
+
+
+def test_upload_dashboard_skill_zip_rejects_invalid_top_level_directory(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    response = client.post(
+        "/api/tasks/skills/upload",
+        files={
+            "file": (
+                "bundle.zip",
+                _skill_zip({"my skill/SKILL.md": "# Invalid directory name\n"}),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid skill name" in response.json()["detail"]
+    assert not list(tmp_path.iterdir())
+
+
+def test_upload_dashboard_skill_zip_rejects_missing_skill_markdown(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    response = client.post(
+        "/api/tasks/skills/upload",
+        files={
+            "file": (
+                "broken.zip",
+                _skill_zip({"broken/README.md": "No skill entrypoint.\n"}),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "SKILL.md" in response.json()["detail"]
+    assert not (tmp_path / "broken").exists()
+
+
+def test_upload_dashboard_skill_zip_rejects_path_traversal(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    response = client.post(
+        "/api/tasks/skills/upload",
+        files={
+            "file": (
+                "unsafe.zip",
+                _skill_zip({"unsafe/SKILL.md": "# Unsafe\n", "../escape.txt": "no\n"}),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "unsafe path" in response.json()["detail"]
+    assert not (tmp_path / "unsafe").exists()

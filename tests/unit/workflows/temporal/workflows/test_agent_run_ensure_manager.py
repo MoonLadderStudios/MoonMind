@@ -24,7 +24,7 @@ class TestEnsureManagerAutoStart:
         source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
         tree = ast.parse(source)
 
-        found_ensure_manager_call = False
+        found_request_slot_call = False
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -35,7 +35,6 @@ class TestEnsureManagerAutoStart:
                 and func.attr == "_ensure_manager_and_signal"
             ):
                 continue
-            found_ensure_manager_call = True
 
             # Find the request_slot keyword arg
             request_slot_kw = [
@@ -45,16 +44,152 @@ class TestEnsureManagerAutoStart:
                 "_ensure_manager_and_signal must have exactly one request_slot kwarg"
             )
             kw_value = request_slot_kw[0].value
-            # Must be True (ast.Constant with value True)
-            assert isinstance(kw_value, ast.Constant) and kw_value.value is True, (
-                "_ensure_manager_and_signal must be called with request_slot=True "
-                "so the auto-start fallback fires when the ProviderProfileManager "
-                "doesn't exist. Using request_slot=False bypasses auto-start "
-                "and causes ExternalWorkflowExecutionNotFound crashes."
-            )
+            if isinstance(kw_value, ast.Constant) and kw_value.value is True:
+                found_request_slot_call = True
 
-        assert found_ensure_manager_call, (
-            "Could not find _ensure_manager_and_signal call in MoonMindAgentRun.run"
+        assert found_request_slot_call, (
+            "Could not find a _ensure_manager_and_signal(..., request_slot=True) "
+            "call in MoonMindAgentRun.run"
+        )
+
+    def test_profile_sync_happens_before_slot_request_on_new_patch_path(self):
+        """New managed runs must refresh manager profiles before requesting a slot."""
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        tree = ast.parse(source)
+
+        patched_block: ast.If | None = None
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            if not (
+                isinstance(test, ast.Call)
+                and isinstance(test.func, ast.Attribute)
+                and test.func.attr == "patched"
+                and test.args
+                and isinstance(test.args[0], ast.Name)
+                and test.args[0].id == "SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID"
+            ):
+                continue
+            patched_block = node
+            break
+
+        assert patched_block is not None, (
+            "MoonMindAgentRun.run must patch-gate sync-before-slot ordering"
+        )
+
+        sync_line = None
+        request_line = None
+        for statement in patched_block.body:
+            nodes = ast.walk(statement)
+            for node in nodes:
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if not isinstance(func, ast.Attribute):
+                    continue
+                if func.attr == "_sync_manager_profiles":
+                    sync_line = node.lineno
+                if func.attr != "_ensure_manager_and_signal":
+                    continue
+                request_slot_kw = [
+                    kw for kw in node.keywords if kw.arg == "request_slot"
+                ]
+                if (
+                    request_slot_kw
+                    and isinstance(request_slot_kw[0].value, ast.Constant)
+                    and request_slot_kw[0].value.value is True
+                ):
+                    request_line = node.lineno
+            if sync_line is not None and request_line is not None:
+                break
+
+        assert sync_line is not None, "Patched path must call _sync_manager_profiles"
+        assert request_line is not None, (
+            "Patched path must request a slot through _ensure_manager_and_signal"
+        )
+        assert sync_line < request_line, (
+            "Provider profiles must sync before request_slot to avoid stale "
+            "manager assignments."
+        )
+
+    def test_ensure_manager_without_slot_does_not_start_manager_activity(self):
+        """The pre-slot path must not start the singleton manager unconditionally."""
+        source = textwrap.dedent(
+            inspect.getsource(MoonMindAgentRun._ensure_manager_and_signal)
+        )
+        tree = ast.parse(source)
+
+        found_no_slot_branch = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            if not (
+                isinstance(test, ast.UnaryOp)
+                and isinstance(test.op, ast.Not)
+                and isinstance(test.operand, ast.Name)
+                and test.operand.id == "request_slot"
+            ):
+                continue
+            found_no_slot_branch = True
+            for child in ast.walk(node):
+                if not isinstance(child, ast.Constant):
+                    continue
+                if child.value == "provider_profile.ensure_manager":
+                    raise AssertionError(
+                        "request_slot=False must not call provider_profile.ensure_manager "
+                        "unless a later signal observes ExternalWorkflowExecutionNotFound."
+                    )
+
+        assert found_no_slot_branch, (
+            "_ensure_manager_and_signal must handle request_slot=False"
+        )
+
+    def test_profile_sync_auto_starts_manager_only_after_not_found(self):
+        """Profile sync must use signal-with-start fallback without hard startup dependency."""
+        source = textwrap.dedent(
+            inspect.getsource(MoonMindAgentRun._sync_manager_profiles)
+        )
+        tree = ast.parse(source)
+
+        found_sync_signal = False
+        found_not_found_guard = False
+        found_ensure_activity = False
+        found_retry_handle = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if (
+                    node.func.attr == "signal"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "sync_profiles"
+                ):
+                    found_sync_signal = True
+                if (
+                    node.func.attr == "get_external_workflow_handle"
+                    and node.args
+                    and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == "manager_id"
+                ):
+                    found_retry_handle = True
+            if isinstance(node, ast.Constant):
+                if node.value == "ExternalWorkflowExecutionNotFound":
+                    found_not_found_guard = True
+                if node.value == "provider_profile.ensure_manager":
+                    found_ensure_activity = True
+
+        assert found_sync_signal, "_sync_manager_profiles must signal sync_profiles"
+        assert found_not_found_guard, (
+            "_sync_manager_profiles must only start the manager after "
+            "ExternalWorkflowExecutionNotFound."
+        )
+        assert found_ensure_activity, (
+            "_sync_manager_profiles must auto-start the manager before retrying "
+            "a missing-manager sync signal."
+        )
+        assert found_retry_handle, (
+            "_sync_manager_profiles must reacquire the manager handle before retrying."
         )
 
     def test_no_bare_request_slot_signal_after_ensure_manager(self):

@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import re
-from html import escape
+import shutil
+import tempfile
+import zipfile
 from collections.abc import Callable
-from pathlib import Path
+from html import escape
+from pathlib import Path, PurePosixPath
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -58,6 +62,9 @@ _STATIC_PATHS = {
     "settings",
     "skills",
 }
+_MAX_SKILL_ZIP_BYTES = 10 * 1024 * 1024
+_MAX_SKILL_UNCOMPRESSED_BYTES = 25 * 1024 * 1024
+_MAX_SKILL_ZIP_ENTRIES = 512
 
 # Block legacy top-level segments (e.g. removed queue source, reserved "system" path).
 _BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {
@@ -116,6 +123,11 @@ class DashboardBranchListResponse(BaseModel):
 
     items: list[DashboardBranchOption] = Field(default_factory=list)
     error: str | None = Field(None)
+
+
+class _ValidatedSkillZip(BaseModel):
+    skill_name: str
+    root_prefix: str | None = None
 
 
 class DashboardTaskSourceResponse(BaseModel):
@@ -299,6 +311,177 @@ def _render_react_page(
             "build_id": system_config.get("buildId"),
         },
     )
+
+
+def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
+    mode = (info.external_attr >> 16) & 0o170000
+    return mode == 0o120000
+
+
+def _normalize_zip_member(name: str) -> PurePosixPath:
+    if "\\" in name:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill zip contains an unsafe path.",
+        )
+    path = PurePosixPath(name)
+    if path.is_absolute() or ".." in path.parts:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill zip contains an unsafe path.",
+        )
+    parts = tuple(part for part in path.parts if part not in ("", "."))
+    if not parts:
+        raise HTTPException(status_code=400, detail="Skill zip contains an empty path.")
+    return PurePosixPath(*parts)
+
+
+def _is_ignored_zip_member(path: PurePosixPath) -> bool:
+    return "__MACOSX" in path.parts or path.name == ".DS_Store"
+
+
+def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkillZip:
+    if not payload:
+        raise HTTPException(status_code=400, detail="Skill zip file is empty.")
+    if len(payload) > _MAX_SKILL_ZIP_BYTES:
+        raise HTTPException(status_code=413, detail="Skill zip file is too large.")
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(payload))
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is not a valid zip archive.",
+        ) from exc
+
+    with archive:
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+        if not infos:
+            raise HTTPException(status_code=400, detail="Skill zip must contain files.")
+        if len(infos) > _MAX_SKILL_ZIP_ENTRIES:
+            raise HTTPException(
+                status_code=413,
+                detail="Skill zip contains too many files.",
+            )
+
+        total_size = 0
+        normalized_paths: list[PurePosixPath] = []
+        seen_paths: set[PurePosixPath] = set()
+        for info in infos:
+            if info.flag_bits & 0x1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Encrypted skill zip entries are not supported.",
+                )
+            if _is_zip_symlink(info):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Skill zip cannot contain symlinks.",
+                )
+            total_size += info.file_size
+            if total_size > _MAX_SKILL_UNCOMPRESSED_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Skill zip expands to too much data.",
+                )
+            normalized_path = _normalize_zip_member(info.filename)
+            if _is_ignored_zip_member(normalized_path):
+                continue
+            if normalized_path in seen_paths:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Skill zip contains duplicate file paths.",
+                )
+            seen_paths.add(normalized_path)
+            normalized_paths.append(normalized_path)
+
+        if not normalized_paths:
+            raise HTTPException(status_code=400, detail="Skill zip must contain skill files.")
+
+        skill_files = [path for path in normalized_paths if path.name == "SKILL.md"]
+        root_skill_files = [path for path in skill_files if len(path.parts) == 1]
+        top_level_names = {path.parts[0] for path in normalized_paths}
+        nested_skill_files = [
+            path
+            for path in skill_files
+            if len(path.parts) >= 2 and path.parts[1:] == ("SKILL.md",)
+        ]
+
+        if root_skill_files:
+            if len(skill_files) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Skill zip must contain only one SKILL.md file.",
+                )
+            fallback_name = Path(filename or "skill").stem
+            try:
+                skill_name = validate_skill_name(fallback_name)
+            except SkillResolutionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return _ValidatedSkillZip(skill_name=skill_name)
+
+        if (
+            len(top_level_names) != 1
+            or len(nested_skill_files) != 1
+            or len(skill_files) != 1
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Skill zip must contain one skill directory with a SKILL.md file.",
+            )
+
+        root_prefix = next(iter(top_level_names))
+        try:
+            skill_name = validate_skill_name(root_prefix)
+        except SkillResolutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _ValidatedSkillZip(
+            skill_name=skill_name,
+            root_prefix=root_prefix,
+        )
+
+
+def _write_skill_zip(
+    skill_dir: Path,
+    payload: bytes,
+    validated: _ValidatedSkillZip,
+) -> None:
+    parent = skill_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix=".skill-upload-", dir=parent))
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                normalized = _normalize_zip_member(info.filename)
+                if _is_ignored_zip_member(normalized):
+                    continue
+                relative_parts = normalized.parts
+                if validated.root_prefix is not None:
+                    if relative_parts[0] != validated.root_prefix:
+                        raise HTTPException(status_code=400, detail="Skill zip root changed during extraction.")
+                    relative_parts = relative_parts[1:]
+                target = temp_dir.joinpath(*relative_parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(info) as source, target.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+
+                permissions = (info.external_attr >> 16) & 0o777
+                if permissions & 0o111:
+                    target.chmod(0o755)
+
+        if not (temp_dir / "SKILL.md").is_file():
+            raise HTTPException(status_code=400, detail="Skill zip must contain a SKILL.md file.")
+        if skill_dir.exists():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Skill '{validated.skill_name}' already exists locally.",
+            )
+        shutil.move(str(temp_dir), str(skill_dir))
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
 
 
 @router.get("/tasks/secrets")
@@ -552,6 +735,26 @@ async def create_dashboard_skill(
     skill_file.write_text(request.markdown, encoding="utf-8")
 
     return {"status": "success"}
+
+
+@router.post(
+    "/api/tasks/skills/upload",
+    status_code=201,
+)
+async def upload_dashboard_skill_zip(
+    file: UploadFile = File(...),
+    _user: User = Depends(get_current_user()),
+) -> dict[str, str]:
+    """Create a new local skill from an uploaded zip bundle."""
+
+    payload = await file.read()
+    validated = _validate_skill_zip(file.filename, payload)
+    skills_root = resolve_skills_local_mirror_root()
+    skill_dir = skills_root / validated.skill_name
+
+    _write_skill_zip(skill_dir, payload, validated)
+
+    return {"status": "success", "skill": validated.skill_name}
 
 
 __all__ = [
