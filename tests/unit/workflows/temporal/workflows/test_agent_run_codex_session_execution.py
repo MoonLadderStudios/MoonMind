@@ -812,13 +812,14 @@ async def test_agent_run_clears_auto_profile_after_provider_cooldown_retry(
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
     ) -> _FakeManagerHandle:
-        ensure_profile_refs.append(execution_profile_ref)
-        run.slot_assigned_event.set()
-        run._assigned_profile_id = (
-            "codex_openrouter_qwen36_plus"
-            if len(ensure_profile_refs) == 1
-            else "codex-default"
-        )
+        if request_slot:
+            ensure_profile_refs.append(execution_profile_ref)
+            run.slot_assigned_event.set()
+            run._assigned_profile_id = (
+                "codex_openrouter_qwen36_plus"
+                if len(ensure_profile_refs) == 1
+                else "codex-default"
+            )
         return _FakeManagerHandle()
 
     async def fake_sync_manager_profiles(

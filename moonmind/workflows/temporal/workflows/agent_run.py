@@ -126,6 +126,9 @@ MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID = (
 )
 MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
 SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
+SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
+    "agent-run-sync-profiles-before-slot-request-v1"
+)
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.Run (run.py:50).
@@ -662,7 +665,12 @@ class MoonMindAgentRun:
         if profile_selector:
             signal_payload["profile_selector"] = profile_selector
         if not request_slot:
-            return manager_handle
+            await self._execute_routed_activity(
+                "provider_profile.ensure_manager",
+                {"runtime_id": runtime_id},
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            return workflow.get_external_workflow_handle(manager_id)
 
         for attempt in range(2):
             try:
@@ -736,6 +744,20 @@ class MoonMindAgentRun:
             request_slot=True,
             execution_profile_ref=execution_profile_ref,
             profile_selector=profile_selector,
+        )
+
+    async def _ensure_manager_started(
+        self,
+        manager_id: str,
+        runtime_id: str,
+    ) -> workflow.ExternalWorkflowHandle:
+        """Ensure the provider-profile manager exists without requesting a slot."""
+        return await self._ensure_manager_and_signal(
+            manager_id,
+            runtime_id,
+            request_slot=False,
+            execution_profile_ref=None,
+            profile_selector=None,
         )
 
     async def _sync_manager_profiles(
@@ -1058,17 +1080,38 @@ class MoonMindAgentRun:
                     manager_id = self._manager_workflow_id(runtime_id)
 
                     self.slot_assigned_event.clear()
-                    manager_handle = await self._ensure_manager_and_signal(
-                        manager_id,
-                        runtime_id,
-                        request_slot=True,
-                        execution_profile_ref=request.execution_profile_ref,
-                        profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True),
+                    selector_payload = request.profile_selector.model_dump(
+                        by_alias=True,
+                        exclude_none=True,
                     )
-                    profile_count = await self._sync_manager_profiles(
-                        manager_handle=manager_handle,
-                        runtime_id=runtime_id,
-                    )
+                    if workflow.patched(SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID):
+                        manager_handle = await self._ensure_manager_started(
+                            manager_id,
+                            runtime_id,
+                        )
+                        profile_count = await self._sync_manager_profiles(
+                            manager_handle=manager_handle,
+                            runtime_id=runtime_id,
+                        )
+                        manager_handle = await self._ensure_manager_and_signal(
+                            manager_id,
+                            runtime_id,
+                            request_slot=True,
+                            execution_profile_ref=request.execution_profile_ref,
+                            profile_selector=selector_payload,
+                        )
+                    else:
+                        manager_handle = await self._ensure_manager_and_signal(
+                            manager_id,
+                            runtime_id,
+                            request_slot=True,
+                            execution_profile_ref=request.execution_profile_ref,
+                            profile_selector=selector_payload,
+                        )
+                        profile_count = await self._sync_manager_profiles(
+                            manager_handle=manager_handle,
+                            runtime_id=runtime_id,
+                        )
                     if profile_count == 0:
                         raise ApplicationError(
                             f"No enabled provider profiles found for runtime_id='{runtime_id}'",
