@@ -155,6 +155,29 @@ describe('Mission Control shared entry', () => {
     );
   });
 
+  it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
+    const { readFileSync } = await import('node:fs');
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      'utf8',
+    );
+
+    const mastheadBreakpointStart = missionControlCss.indexOf('@media (max-width: 1180px)');
+    const sharedMobileStart = missionControlCss.indexOf('@media (max-width: 900px)');
+    const mastheadResponsive = missionControlCss.slice(
+      mastheadBreakpointStart,
+      sharedMobileStart,
+    );
+    const sharedMobile = missionControlCss.slice(sharedMobileStart);
+
+    expect(mastheadBreakpointStart).toBeGreaterThanOrEqual(0);
+    expect(sharedMobileStart).toBeGreaterThan(mastheadBreakpointStart);
+    expect(mastheadResponsive).toContain('.masthead {');
+    expect(mastheadResponsive).not.toContain('.grid-2 {');
+    expect(sharedMobile).toContain('.grid-2 {');
+    expect(sharedMobile).toContain('.queue-submit-form {');
+  });
+
   it('renders an explicit error state for unknown pages', async () => {
     renderWithClient(
       <MissionControlApp payload={{ page: 'not-a-page', apiBase: '/api' }} />,

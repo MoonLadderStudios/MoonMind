@@ -112,7 +112,6 @@ samp {
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   column-gap: 1rem;
-  row-gap: 0.55rem;
   padding: 0.65rem 1rem 0.62rem;
 }
 
@@ -2333,7 +2332,9 @@ button.secondary:hover {
     text-align: left;
     background: transparent;
   }
+}
 
+@media (max-width: 900px) {
   .grid-2 {
     grid-template-columns: 1fr;
   }
