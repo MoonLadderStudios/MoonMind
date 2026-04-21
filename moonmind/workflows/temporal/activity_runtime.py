@@ -909,6 +909,19 @@ def _coerce_activity_request(
     return dict(request)
 
 
+def _coerce_activity_payload_input(
+    request: Any,
+    *,
+    activity_type: str,
+    kwargs: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if isinstance(request, BaseModel):
+        request = request.model_dump(mode="json", by_alias=True)
+    elif request is None:
+        request = kwargs
+    return _coerce_activity_request(request, activity_type=activity_type)
+
+
 def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
     """Validate external activity input, including scalar legacy histories."""
 
@@ -2617,7 +2630,11 @@ class TemporalAgentRuntimeActivities:
             oauth_session_ensure_volume as _ensure_volume,
         )
 
-        payload = request if isinstance(request, dict) else dict(kwargs)
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.ensure_volume",
+            kwargs=kwargs,
+        )
         return await _ensure_volume(payload)
 
     async def oauth_session_start_auth_runner(
@@ -2631,7 +2648,11 @@ class TemporalAgentRuntimeActivities:
             oauth_session_start_auth_runner as _start_auth_runner,
         )
 
-        payload = request if isinstance(request, dict) else dict(kwargs)
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.start_auth_runner",
+            kwargs=kwargs,
+        )
         return await _start_auth_runner(payload)
 
     async def oauth_session_stop_auth_runner(
@@ -2645,7 +2666,11 @@ class TemporalAgentRuntimeActivities:
             oauth_session_stop_auth_runner as _stop_auth_runner,
         )
 
-        payload = request if isinstance(request, dict) else dict(kwargs)
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.stop_auth_runner",
+            kwargs=kwargs,
+        )
         return await _stop_auth_runner(payload)
 
     async def oauth_session_verify_volume(
@@ -2659,7 +2684,11 @@ class TemporalAgentRuntimeActivities:
             oauth_session_verify_volume as _verify_volume,
         )
 
-        payload = request if isinstance(request, dict) else dict(kwargs)
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.verify_volume",
+            kwargs=kwargs,
+        )
         return await _verify_volume(payload)
 
     async def oauth_session_verify_cli_fingerprint(
@@ -2673,7 +2702,11 @@ class TemporalAgentRuntimeActivities:
             oauth_session_verify_cli_fingerprint as _verify_cli_fingerprint,
         )
 
-        payload = request if isinstance(request, dict) else dict(kwargs)
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="oauth_session.verify_cli_fingerprint",
+            kwargs=kwargs,
+        )
         return await _verify_cli_fingerprint(payload)
 
     async def _report_task_run_binding(self, workflow_id: str, run_id: str) -> None:

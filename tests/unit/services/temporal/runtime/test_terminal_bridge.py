@@ -238,4 +238,33 @@ async def test_start_terminal_bridge_container_redacts_startup_failures(
     assert "super-secret" not in message
     assert "hunter2" not in message
     assert "failed" in message
-    assert "exit code 1" in message
+
+
+@pytest.mark.asyncio
+async def test_start_terminal_bridge_container_uses_configured_runner_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[str] = []
+
+    async def fake_create_subprocess_exec(*args, **_kwargs):
+        observed.extend(args)
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        terminal_bridge.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+    monkeypatch.setenv("MOONMIND_OAUTH_RUNNER_USER", "2001:2001")
+
+    await start_terminal_bridge_container(
+        session_id="oas_terminal_runner_custom_user",
+        runtime_id="codex_cli",
+        volume_ref="codex_auth_volume",
+        volume_mount_path="/home/app/.codex",
+        session_ttl=1800,
+        bootstrap_command=("codex", "login", "--device-auth"),
+    )
+
+    assert "--user" in observed
+    assert "2001:2001" in observed

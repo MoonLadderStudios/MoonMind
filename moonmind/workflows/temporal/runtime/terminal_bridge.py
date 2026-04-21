@@ -17,6 +17,7 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(token|password|secret|api[_-]?key)=\S+"
 )
 _DEFAULT_OAUTH_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind:latest"
+_DEFAULT_OAUTH_RUNNER_USER = "1000:1000"
 
 
 class TerminalBridgeFrameError(ValueError):
@@ -87,6 +88,14 @@ def _redact_startup_output(output: bytes) -> str:
         return ""
     redacted = _SECRET_ASSIGNMENT_PATTERN.sub("[REDACTED]", text)
     return redacted[-_MAX_STARTUP_ERROR_OUTPUT_CHARS:]
+
+
+def _oauth_runner_user() -> str:
+    configured = os.environ.get("MOONMIND_OAUTH_RUNNER_USER")
+    if configured is None:
+        return _DEFAULT_OAUTH_RUNNER_USER
+    normalized = configured.strip()
+    return normalized or _DEFAULT_OAUTH_RUNNER_USER
 
 
 class DockerExecPtyAdapter:
@@ -280,7 +289,7 @@ async def start_terminal_bridge_container(
             "--label", "moonmind.oauth_session=true",
             "--label", f"moonmind.oauth_session_id={session_id}",
             "--label", f"moonmind.runtime_id={runtime_id}",
-            "--user", "1000:1000",
+            "--user", _oauth_runner_user(),
             "-e", "HOME=/home/app",
             "-e", f"CODEX_HOME={volume_mount_path}",
             "-e", f"CODEX_CONFIG_HOME={volume_mount_path}",
