@@ -233,11 +233,15 @@ describe('Tasks List Entrypoint', () => {
     const shellPanel = document.querySelector<HTMLElement>('.panel');
     const controlDecks = document.querySelectorAll<HTMLElement>('.task-list-control-deck.panel--controls');
     const dataSlabs = document.querySelectorAll<HTMLElement>('.task-list-data-slab.panel--data');
-    const controlGrid = controlDecks[0]?.querySelector<HTMLElement>('.task-list-control-grid');
-    const tableWrapper = dataSlabs[0]?.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
 
     expect(controlDecks).toHaveLength(1);
     expect(dataSlabs).toHaveLength(1);
+
+    const controlDeck = controlDecks[0] as HTMLElement;
+    const dataSlab = dataSlabs[0] as HTMLElement;
+    const controlGrid = controlDeck.querySelector<HTMLElement>('.task-list-control-grid');
+    const tableWrapper = dataSlab.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
+
     expect(controlGrid).toBeTruthy();
     expect(tableWrapper).toBeTruthy();
 
@@ -253,7 +257,7 @@ describe('Tasks List Entrypoint', () => {
     expect(controlGridStyles.maxWidth).toBe('none');
     expect(controlGridStyles.gridTemplateColumns).toBe('repeat(4, minmax(12rem, 1fr))');
 
-    const dataSlabStyles = getComputedStyle(dataSlabs[0]);
+    const dataSlabStyles = getComputedStyle(dataSlab);
     expect(dataSlabStyles.gap).toBe('0px');
     expect(dataSlabStyles.overflow).toBe('hidden');
     expect(dataSlabStyles.paddingTop).toBe('0px');
