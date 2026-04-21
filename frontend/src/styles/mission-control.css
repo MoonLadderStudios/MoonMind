@@ -2265,6 +2265,8 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   -webkit-backdrop-filter: blur(26px) saturate(1.65);
   display: grid;
   gap: 0.4rem;
+  justify-content: stretch;
+  justify-items: stretch;
   isolation: isolate;
 }
 
@@ -2284,6 +2286,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 .queue-floating-bar-row {
   display: grid;
+  width: 100%;
   grid-template-columns:
     minmax(0, 1.35fr)
     minmax(0, 1.35fr)
