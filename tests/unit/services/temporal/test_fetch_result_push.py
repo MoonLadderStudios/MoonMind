@@ -513,8 +513,14 @@ class TestPushWorkspaceBranch:
             elif call_count == 2:  # status --porcelain
                 proc.communicate = AsyncMock(return_value=(b"", b""))
                 proc.returncode = 0
-            elif call_count == 3:  # push
+            elif call_count == 3:  # remote default branch
+                proc.communicate = AsyncMock(return_value=(b"origin/main\n", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 5:  # rev-parse HEAD
+                proc.communicate = AsyncMock(return_value=(b"no-commit-head-sha\n", b""))
                 proc.returncode = 0
             else:  # rev-list --count
                 proc.communicate = AsyncMock(return_value=(b"0\n", b""))
@@ -527,7 +533,28 @@ class TestPushWorkspaceBranch:
         assert result["push_branch"] == "auto-abc123"
         assert result["push_base_ref"] == "origin/main"
         assert result["push_commit_count"] == 0
+        assert result["push_head_sha"] == "no-commit-head-sha"
         assert "push_error" not in result
+
+    @pytest.mark.asyncio
+    async def test_resolve_workspace_head_sha_timeout_kills_process(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        proc = MagicMock()
+        proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError())
+        proc.kill = MagicMock()
+        proc.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await activities._resolve_workspace_head_sha(
+                workspace="/work/agent_jobs/run-1/repo",
+                run_id="run-1",
+                env={},
+            )
+
+        assert result is None
+        proc.kill.assert_called_once_with()
+        proc.wait.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_push_with_commits(self):

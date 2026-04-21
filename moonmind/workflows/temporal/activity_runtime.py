@@ -4886,13 +4886,16 @@ class TemporalAgentRuntimeActivities:
                     current_branch,
                     base_ref,
                 )
-                return {
+                result = {
                     "push_status": "no_commits",
                     "push_branch": current_branch,
                     "push_base_branch": base_branch_name,
                     "push_base_ref": base_ref,
                     "push_commit_count": 0,
                 }
+                if head_sha:
+                    result["push_head_sha"] = head_sha
+                return result
 
             logger.info(
                 "Post-agent git push completed for run %s (branch=%s)",
@@ -4936,9 +4939,14 @@ class TemporalAgentRuntimeActivities:
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=10,
-            )
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(), timeout=10,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise
         except Exception:
             logger.warning(
                 "Could not resolve pushed HEAD SHA for run %s",
