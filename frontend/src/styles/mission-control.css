@@ -1942,7 +1942,7 @@ button.secondary:hover {
 
 @media (max-width: 640px) {
   .queue-floating-bar-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) minmax(9.5rem, 0.8fr) auto;
   }
 
   .queue-floating-bar-row .queue-inline-selector--repo {

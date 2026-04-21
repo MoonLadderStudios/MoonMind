@@ -5677,6 +5677,9 @@ describe("Task Create Entrypoint", () => {
     expect(missionControlCss).toMatch(
       /\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.35fr\)\s*minmax\(0,\s*1\.35fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto/s,
     );
+    expect(missionControlCss).toMatch(
+      /@media \(max-width:\s*640px\)\s*\{[^}]*\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto/s,
+    );
   });
 
   it("centers the constrained create page panel with equal side margins", async () => {

@@ -1,12 +1,12 @@
 [
   {
-    "id": 3114361904,
+    "id": 3114793791,
     "disposition": "addressed",
-    "rationale": "Updated deactivate_templates telemetry to increment the delete metric by the number of templates deactivated, with unit coverage for the bulk path."
+    "rationale": "Updated the mobile floating bar grid to preserve the publish-mode minimum width while the repository control spans the full row, and added CSS regression coverage."
   },
   {
-    "id": 4144292983,
-    "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; the only concrete feedback item it referenced was addressed separately."
+    "id": 4144781567,
+    "disposition": "addressed",
+    "rationale": "The review summary identified the same mobile grid issue as the inline comment; the CSS fix and regression test address it."
   }
 ]
