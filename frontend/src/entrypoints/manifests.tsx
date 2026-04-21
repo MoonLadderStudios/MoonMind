@@ -2,14 +2,31 @@ import { DataTable } from '../components/tables/DataTable';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
-import { useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 
-const ManifestRunSchema = z.object({
-  taskId: z.string(),
-  source: z.string(),
-  sourceLabel: z.string().optional(),
-  status: z.string(),
-});
+const ManifestRunSchema = z
+  .object({
+    taskId: z.string(),
+    source: z.string(),
+    sourceLabel: z.string().optional(),
+    title: z.string().nullable().optional(),
+    manifestName: z.string().nullable().optional(),
+    action: z.string().nullable().optional(),
+    status: z.string(),
+    state: z.string().nullable().optional(),
+    rawState: z.string().nullable().optional(),
+    temporalStatus: z.string().nullable().optional(),
+    currentStage: z.string().nullable().optional(),
+    manifestStage: z.string().nullable().optional(),
+    phase: z.string().nullable().optional(),
+    stage: z.string().nullable().optional(),
+    startedAt: z.string().nullable().optional(),
+    createdAt: z.string().nullable().optional(),
+    durationSeconds: z.number().nullable().optional(),
+    detailHref: z.string().nullable().optional(),
+    link: z.string().nullable().optional(),
+  })
+  .passthrough();
 type ManifestRun = z.infer<typeof ManifestRunSchema>;
 type SourceKind = 'inline' | 'registry';
 type Notice = {
@@ -36,6 +53,70 @@ function hasRawSecretLikeValue(values: string[]): boolean {
   return values.some((value) => RAW_SECRET_PATTERNS.some((pattern) => pattern.test(value)));
 }
 
+function displayValue(value: string | null | undefined): string {
+  const normalized = String(value || '').trim();
+  return normalized || '-';
+}
+
+function manifestLabel(run: ManifestRun): string {
+  return displayValue(run.manifestName || run.sourceLabel || run.title || run.source || run.taskId);
+}
+
+function runAction(run: ManifestRun): string {
+  return displayValue(run.action);
+}
+
+function runStage(run: ManifestRun): string {
+  return String(run.currentStage || run.manifestStage || run.phase || run.stage || '').trim();
+}
+
+function statusLabel(run: ManifestRun): string {
+  const status = displayValue(run.status || run.rawState || run.state || run.temporalStatus);
+  const stage = runStage(run);
+  if (!stage) {
+    return status;
+  }
+  const activeStatuses = new Set(['running', 'executing', 'in progress', 'processing']);
+  return activeStatuses.has(status.toLowerCase()) ? `${status.charAt(0).toUpperCase()}${status.slice(1)} · ${stage}` : status;
+}
+
+function detailHref(run: ManifestRun): string {
+  const direct = String(run.detailHref || run.link || '').trim();
+  return direct || `/tasks/${encodeURIComponent(run.taskId)}?source=temporal`;
+}
+
+function formatWhen(value: string | null | undefined): string {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '-';
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return raw;
+  }
+  return date.toLocaleString();
+}
+
+function formatDuration(seconds: number | null | undefined): string {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) {
+    return '-';
+  }
+  if (seconds < 60) {
+    return `${Math.round(seconds)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function matchesText(haystack: string[], needle: string): boolean {
+  const normalized = needle.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  return haystack.some((value) => value.toLowerCase().includes(normalized));
+}
+
 export function ManifestsPage({ payload }: { payload: BootPayload }) {
   const [manifestName, setManifestName] = useState('');
   const [action, setAction] = useState('run');
@@ -47,6 +128,9 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
   const [maxDocs, setMaxDocs] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [manifestFilter, setManifestFilter] = useState('');
+  const [searchFilter, setSearchFilter] = useState('');
 
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['manifests'],
@@ -58,6 +142,27 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
       return ManifestsResponseSchema.parse(await response.json());
     },
   });
+
+  const runs = data?.items || [];
+  const statusOptions = useMemo(() => {
+    return Array.from(new Set(runs.map((run) => run.status).filter(Boolean))).sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }, [runs]);
+  const filteredRuns = useMemo(() => {
+    return runs.filter((run) => {
+      if (statusFilter !== 'all' && run.status !== statusFilter) {
+        return false;
+      }
+      if (!matchesText([manifestLabel(run)], manifestFilter)) {
+        return false;
+      }
+      return matchesText(
+        [run.taskId, manifestLabel(run), runAction(run), statusLabel(run), runStage(run)],
+        searchFilter,
+      );
+    });
+  }, [manifestFilter, runs, searchFilter, statusFilter]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -303,16 +408,76 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
         ) : isError ? (
           <div className="p-4 rounded-md bg-red-50 text-red-700 border border-red-200 mb-4">{(error as Error).message}</div>
         ) : (
-          <DataTable
-            data={data?.items || []}
-            columns={[
-              { key: 'taskId', header: 'Task ID' },
-              { key: 'sourceLabel', header: 'Source Label', render: (item: ManifestRun) => item.sourceLabel || item.source },
-              { key: 'status', header: 'Status' },
-            ]}
-            emptyMessage="No manifest runs found."
-            getRowKey={(item) => item.taskId}
-          />
+          <>
+            <div className="grid gap-4 md:grid-cols-3 mb-4">
+              <label>
+                Filter by status
+                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                  <option value="all">All statuses</option>
+                  {statusOptions.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Filter by manifest
+                <input
+                  value={manifestFilter}
+                  onChange={(event) => setManifestFilter(event.target.value)}
+                  placeholder="Manifest name"
+                />
+              </label>
+              <label>
+                Search recent runs
+                <input
+                  value={searchFilter}
+                  onChange={(event) => setSearchFilter(event.target.value)}
+                  placeholder="Run ID, action, status, or stage"
+                />
+              </label>
+            </div>
+            <DataTable
+              ariaLabel="Recent manifest runs"
+              data={filteredRuns}
+              columns={[
+                {
+                  key: 'taskId',
+                  header: 'Run ID',
+                  render: (item: ManifestRun) => (
+                    <a href={detailHref(item)} aria-label={`Open run ${item.taskId}`}>
+                      <code>{item.taskId}</code>
+                    </a>
+                  ),
+                },
+                { key: 'manifestName', header: 'Manifest', render: manifestLabel },
+                { key: 'action', header: 'Action', render: runAction },
+                { key: 'status', header: 'Status', render: statusLabel },
+                {
+                  key: 'startedAt',
+                  header: 'Started',
+                  render: (item: ManifestRun) => formatWhen(item.startedAt || item.createdAt),
+                },
+                {
+                  key: 'durationSeconds',
+                  header: 'Duration',
+                  render: (item: ManifestRun) => formatDuration(item.durationSeconds),
+                },
+                {
+                  key: 'actions',
+                  header: 'Actions',
+                  render: (item: ManifestRun) => (
+                    <a href={detailHref(item)} aria-label={`View details for ${item.taskId}`}>
+                      View details
+                    </a>
+                  ),
+                },
+              ]}
+              emptyMessage="No manifest runs exist yet. Run a registry manifest or submit inline YAML above."
+              getRowKey={(item) => item.taskId}
+            />
+          </>
         )}
       </div>
     </div>
