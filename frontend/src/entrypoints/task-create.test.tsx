@@ -5334,6 +5334,39 @@ describe("Task Create Entrypoint", () => {
     ).toBe("Create this task");
   });
 
+  it("adds hover tooltips to floating bar repository, branch, and publish controls", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const repoInput = await screen.findByLabelText("GitHub Repo");
+    const branchInput = screen.getByLabelText("Branch");
+    const publishModeSelect = screen.getByLabelText("Publish Mode");
+
+    expect(repoInput.getAttribute("title")).toBe(
+      "Select the GitHub repository for this task",
+    );
+    expect(
+      repoInput.closest(".queue-inline-selector--repo")?.getAttribute("title"),
+    ).toBe("Select the GitHub repository for this task");
+    await waitFor(() => {
+      expect(branchInput.getAttribute("title")).toBe(
+        "Select the branch to check out before the task starts",
+      );
+    });
+    expect(
+      branchInput
+        .closest(".queue-inline-selector--branch")
+        ?.getAttribute("title"),
+    ).toBe("Select the branch to check out before the task starts");
+    expect(publishModeSelect.getAttribute("title")).toBe(
+      "Select how MoonMind publishes task changes",
+    );
+    expect(
+      publishModeSelect
+        .closest(".queue-inline-selector--publish")
+        ?.getAttribute("title"),
+    ).toBe("Select how MoonMind publishes task changes");
+  });
+
   it("adds hover tooltips to Jira browser buttons", async () => {
     renderWithClient(<TaskCreatePage payload={withJiraIntegration()} />);
 
@@ -5758,6 +5791,14 @@ describe("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
+      expect(branchInput.getAttribute("title")).toBe(
+        "Loading branches for the selected repository...",
+      );
+      expect(
+        branchInput
+          .closest(".queue-inline-selector--branch")
+          ?.getAttribute("title"),
+      ).toBe("Loading branches for the selected repository...");
     });
     expect(
       Array.from(document.querySelectorAll("p")).some(

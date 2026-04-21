@@ -16,8 +16,14 @@ describe('Skills Entrypoint', () => {
   beforeEach(() => {
     window.history.pushState({}, 'Skills', '/tasks/skills');
     let listCallCount = 0;
-    fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+    fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === '/api/tasks/skills/upload' && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ status: 'success', skill: 'zip-skill' }),
+        } as Response);
+      }
       if (url.startsWith('/api/tasks/skills') && !url.includes('includeContent=true')) {
         return Promise.resolve({
           ok: true,
@@ -32,12 +38,21 @@ describe('Skills Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            items: { worker: ['speckit-orchestrate', 'pr-resolver', ...(listCallCount > 1 ? ['fresh-skill'] : [])] },
+            items: {
+              worker: [
+                'speckit-orchestrate',
+                'pr-resolver',
+                ...(listCallCount > 1 ? ['fresh-skill', 'zip-skill'] : []),
+              ],
+            },
             legacyItems: [
               { id: 'speckit-orchestrate', markdown: '# Speckit\n\nExisting **worker** skill.\n\n- Plans\n- Tests' },
               { id: 'pr-resolver', markdown: '# PR Resolver\n\nResolves pull requests.' },
               ...(listCallCount > 1
-                ? [{ id: 'fresh-skill', markdown: '# Fresh Skill\n\nCreated from the UI.' }]
+                ? [
+                    { id: 'fresh-skill', markdown: '# Fresh Skill\n\nCreated from the UI.' },
+                    { id: 'zip-skill', markdown: '# Zip Skill\n\nUploaded from a zip.' },
+                  ]
                 : []),
             ],
           }),
@@ -154,6 +169,33 @@ describe('Skills Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('Fresh Skill')).toBeTruthy();
       expect(screen.getByText('Created from the UI.')).toBeTruthy();
+    });
+  });
+
+  it('uploads a skill zip, refreshes the list, and selects the uploaded skill', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    const file = new File(['zip-content'], 'zip-skill.zip', { type: 'application/zip' });
+    fireEvent.change(screen.getByLabelText('Skill Zip'), {
+      target: { files: [file] },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Upload Zip' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/tasks/skills/upload',
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.any(FormData),
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Zip Skill')).toBeTruthy();
+      expect(screen.getByText('Uploaded from a zip.')).toBeTruthy();
     });
   });
 
