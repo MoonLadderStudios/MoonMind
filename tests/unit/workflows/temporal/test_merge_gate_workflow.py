@@ -82,13 +82,13 @@ def test_classify_readiness_sanitizes_secret_like_blocker_summary() -> None:
             "headSha": "abc123",
             "pullRequestOpen": True,
             "checksComplete": False,
-            "checksPassing": False,
+            "checksPassing": True,
             "automatedReviewComplete": True,
             "jiraStatusAllowed": True,
             "policyAllowed": True,
             "blockers": [
                 {
-                    "kind": "checks_failed",
+                    "kind": "checks_running",
                     "summary": "failed token=fixture-secret-value",
                     "retryable": True,
                     "source": "github",
@@ -99,6 +99,33 @@ def test_classify_readiness_sanitizes_secret_like_blocker_summary() -> None:
     )
 
     assert "token=" not in evidence.blockers[0].summary
+
+
+def test_classify_readiness_allows_resolver_launch_when_checks_failed_but_are_complete() -> None:
+    evidence = classify_readiness(
+        {
+            "headSha": "abc123",
+            "ready": False,
+            "pullRequestOpen": True,
+            "checksComplete": True,
+            "checksPassing": False,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+            "policyAllowed": True,
+            "blockers": [
+                {
+                    "kind": "checks_failed",
+                    "summary": "Required checks are failing.",
+                    "retryable": True,
+                    "source": "github",
+                }
+            ],
+        },
+        tracked_head_sha="abc123",
+    )
+
+    assert evidence.ready is True
+    assert evidence.blockers == []
 
 
 def test_classify_readiness_maps_unknown_blocker_kind_to_external_unavailable() -> None:

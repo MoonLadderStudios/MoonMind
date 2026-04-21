@@ -26,6 +26,7 @@ TERMINAL_BLOCKER_KINDS = {
     "stale_revision",
     "policy_denied",
 }
+NON_BLOCKING_BLOCKER_KINDS = {"checks_failed"}
 KNOWN_BLOCKER_KINDS = {
     "checks_running",
     "checks_failed",
@@ -70,6 +71,11 @@ def _blocker_from_mapping(payload: Mapping[str, Any]) -> ReadinessBlockerModel:
     )
 
 
+def _is_non_blocking_blocker(payload: Mapping[str, Any]) -> bool:
+    kind = str(payload.get("kind") or "").strip()
+    return kind in NON_BLOCKING_BLOCKER_KINDS
+
+
 def _default_blocker(kind: str, summary: str, *, retryable: bool, source: str) -> dict[str, Any]:
     return {
         "kind": kind,
@@ -104,6 +110,8 @@ def classify_readiness(
 
     for raw in payload.get("blockers") or []:
         if isinstance(raw, Mapping):
+            if _is_non_blocking_blocker(raw):
+                continue
             blockers.append(_blocker_from_mapping(raw))
 
     if not pull_request_merged and (
@@ -137,17 +145,6 @@ def classify_readiness(
                 _default_blocker(
                     "checks_running",
                     "Required checks are still running.",
-                    retryable=True,
-                    source="github",
-                )
-            )
-        )
-    elif payload.get("checksPassing") is False or payload.get("checks_passing") is False:
-        blockers.append(
-            ReadinessBlockerModel.model_validate(
-                _default_blocker(
-                    "checks_failed",
-                    "Required checks are failing.",
                     retryable=True,
                     source="github",
                 )
@@ -189,7 +186,15 @@ def classify_readiness(
         deduped.append(blocker)
 
     explicit_ready = bool(payload.get("ready", False)) and not pull_request_merged
-    ready = explicit_ready and not deduped
+    checks_failed_but_actionable = (
+        not pull_request_merged
+        and (payload.get("checksPassing") is False or payload.get("checks_passing") is False)
+        and not (
+            payload.get("checksComplete") is False
+            or payload.get("checks_complete") is False
+        )
+    )
+    ready = (explicit_ready or checks_failed_but_actionable) and not deduped
     return ReadinessEvidenceModel.model_validate(
         {
             **dict(payload),
