@@ -1,17 +1,27 @@
 [
   {
-    "id": 4150304390,
-    "disposition": "not-applicable",
-    "rationale": "Review summary states there is no feedback to provide."
-  },
-  {
-    "id": 3119871562,
+    "id": 3120172516,
     "disposition": "addressed",
-    "rationale": "The manifest parser now requires the opening YAML frontmatter delimiter line to equal '---', with regression coverage for malformed delimiters."
+    "rationale": "Included the resolved push_head_sha in the no_commits result path and added focused unit coverage."
   },
   {
-    "id": 4150315601,
+    "id": 3120172519,
+    "disposition": "addressed",
+    "rationale": "Updated _resolve_workspace_head_sha to kill and reap the rev-parse subprocess on timeout and added focused unit coverage."
+  },
+  {
+    "id": 4150632918,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper comment with no separate actionable feedback beyond the inline review comment."
+    "rationale": "Review summary comment only; its two concrete findings are tracked and addressed by comments 3120172516 and 3120172519."
+  },
+  {
+    "id": 3120179522,
+    "disposition": "addressed",
+    "rationale": "Duplicate timeout-resource-leak finding; fixed by killing and awaiting the timed-out rev-parse subprocess."
+  },
+  {
+    "id": 4150640657,
+    "disposition": "not-applicable",
+    "rationale": "Automated review wrapper/informational comment; the concrete actionable suggestion is tracked separately as comment 3120179522."
   }
 ]
