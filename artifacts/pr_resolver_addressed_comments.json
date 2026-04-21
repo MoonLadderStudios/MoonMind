@@ -1,17 +1,37 @@
 [
   {
-    "id": 3114803761,
+    "id": 3114917657,
     "disposition": "addressed",
-    "rationale": "Memoized activeFilters in frontend/src/entrypoints/tasks-list.tsx with dependencies on the filter state values."
+    "rationale": "Replaced the fragile indexOf-based CSS block helper with PostCSS rule parsing and exact/grouped selector matching."
   },
   {
-    "id": 4144793623,
+    "id": 3114917663,
+    "disposition": "addressed",
+    "rationale": "Removed the redundant outline-offset from the base button focus-visible rule where outline remains none."
+  },
+  {
+    "id": 3114917665,
+    "disposition": "addressed",
+    "rationale": "Changed reduced-motion transition and animation durations from 0.01ms to 0s."
+  },
+  {
+    "id": 4144912415,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable items are tracked by the two inline review comments."
+    "rationale": "Automated review summary; the actionable findings from this review are tracked by their individual inline comments."
   },
   {
-    "id": 3114803770,
+    "id": 3114921221,
     "disposition": "addressed",
-    "rationale": "Wrapped clearFilters in useCallback and stabilized resetToFirstPage with useCallback for a stable dependency."
+    "rationale": "Added forced-colors focus-visible outlines for button-like controls that otherwise rely on box-shadow focus rings."
+  },
+  {
+    "id": 4144915736,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary with no standalone action beyond its linked inline suggestion."
+  },
+  {
+    "id": 3114921224,
+    "disposition": "addressed",
+    "rationale": "Strengthened disabled button and link-button selectors so disabled styles override hover glow and transform states."
   }
 ]
