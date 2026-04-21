@@ -4,9 +4,25 @@ import logging
 from importlib import import_module
 from typing import Any, Dict, List, Optional
 
-from llama_index.core import download_loader
-
 from moonmind.schemas import Manifest
+
+
+def download_loader(type_name: str):
+    """Resolve a llama-index reader class without hard-importing legacy helpers."""
+    try:
+        from llama_index.core import download_loader as core_download_loader
+    except ImportError:
+        core_download_loader = None
+
+    if core_download_loader is not None:
+        return core_download_loader(type_name)
+
+    try:
+        module = import_module(f"llama_index.readers.{type_name.lower()}")
+        return getattr(module, type_name)
+    except Exception:
+        module = import_module("llama_index.readers")
+        return getattr(module, type_name)
 
 
 class ManifestRunner:

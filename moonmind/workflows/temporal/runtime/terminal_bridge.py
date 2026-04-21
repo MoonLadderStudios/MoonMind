@@ -270,7 +270,7 @@ async def start_terminal_bridge_container(
         raise ValueError("provider bootstrap command is not configured")
 
     container_name = f"moonmind_auth_{session_id}"
-    logger.info("Starting auth runner container %s for %s", container_name, session_id)
+    logger.info("Starting auth runner container")
 
     runner_image = os.environ.get(
         "MOONMIND_OAUTH_RUNNER_IMAGE",
@@ -303,10 +303,7 @@ async def start_terminal_bridge_container(
             stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError as exc:
-        logger.error(
-            "Failed to start auth container %s: docker CLI not found on PATH",
-            container_name,
-        )
+        logger.error("Failed to start auth container: docker CLI not found on PATH")
         raise RuntimeError(
             "Docker CLI is not available on this worker. "
             "Ensure Docker is installed and 'docker' is on the PATH, "
