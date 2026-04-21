@@ -1,12 +1,57 @@
 [
   {
-    "id": 3120666311,
+    "id": 3120762036,
     "disposition": "addressed",
-    "rationale": "Policy snapshots are now recursively sanitized before serialization, dropping secret-like keys such as password, token, apiKey, authorization, cookie, credential, private_key, secret, and auth variants while preserving safe bounded policy fields. Regression coverage verifies raw policy secrets are absent from reports/remediation_context.json."
+    "rationale": "Replaced the protocol ellipsis body with an explicit NotImplementedError so the statement is no longer a no-op."
   },
   {
-    "id": 3120666315,
+    "id": 3120762042,
     "disposition": "addressed",
-    "rationale": "Remediation context evidence refs now serialize only MoonMind artifact IDs with the art_ prefix, filtering legacy refs, local filesystem paths, storage keys, and presigned URLs before writing the durable context artifact. Regression coverage verifies unsafe refs are excluded."
+    "rationale": "Replaced the protocol ellipsis body with an explicit NotImplementedError so the statement is no longer a no-op."
+  },
+  {
+    "id": 3120762046,
+    "disposition": "addressed",
+    "rationale": "Added an explanatory comment to the tolerant maxTailLines parse fallback."
+  },
+  {
+    "id": 3120762392,
+    "disposition": "addressed",
+    "rationale": "Exported RemediationLiveFollower from remediation_tools.__all__."
+  },
+  {
+    "id": 3120762405,
+    "disposition": "addressed",
+    "rationale": "Changed maxTailLines parsing to preserve an explicit zero instead of replacing it with the default."
+  },
+  {
+    "id": 3120762409,
+    "disposition": "addressed",
+    "rationale": "Cached parsed remediation context payloads by workflow ID and context artifact ref within the service instance."
+  },
+  {
+    "id": 3120762414,
+    "disposition": "addressed",
+    "rationale": "Imported RemediationLiveFollower in moonmind.workflows.temporal.__init__."
+  },
+  {
+    "id": 3120762415,
+    "disposition": "addressed",
+    "rationale": "Added RemediationLiveFollower to the package root __all__ list."
+  },
+  {
+    "id": 4151239835,
+    "disposition": "not-applicable",
+    "rationale": "Top-level review summary; its actionable inline comments were handled individually."
+  },
+  {
+    "id": 3120768401,
+    "disposition": "addressed",
+    "rationale": "Updated _bounded_tail_lines so explicit tail_lines are clamped by both boundedness.maxTailLines and policies.evidencePolicy.tailLines."
+  },
+  {
+    "id": 4151247216,
+    "disposition": "not-applicable",
+    "rationale": "Top-level automated review wrapper; its actionable inline comment was handled individually."
   }
 ]
