@@ -5,21 +5,25 @@
 
 ## Summary
 
-Implement MM-426 by making Mission Control's task-list composition match the desired control-deck plus data-slab pattern from `docs/UI/MissionControlDesignSystem.md`. Repo inspection shows the task list already has functional filters, sorting, pagination, constrained columns, and mobile cards, but its controls and table are one loose stack. The implementation keeps behavior intact while adding semantic control/data surfaces, active-filter chips, sticky table headers, and a tokenized shared `DataTable` slab for existing dense-table consumers.
+Implement MM-426 by making Mission Control's task-list composition match the desired control-deck plus data-slab pattern from `docs/UI/MissionControlDesignSystem.md`. Current repo inspection shows the implementation is present: task-list markup exposes semantic control/data surfaces, active-filter chips, sticky table headers, and shared `DataTable` slab classes while preserving existing request, sorting, pagination, and mobile-card behavior.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | task list has title, filters, and live updates but no named control deck | group them in `.task-list-control-deck.panel--controls` | UI unit |
-| FR-002 | partial | result toolbar and table exist in `.queue-layouts` | make `.task-list-data-slab.panel--data` the connected result surface | UI unit |
-| FR-003 | missing | filters update query/request state but active chips are absent | add active filter chips and clear action | UI unit |
-| FR-004 | partial | table has constrained columns but headers are not sticky | make table wrapper scrollable and headers sticky | UI unit / CSS |
-| FR-005 | implemented_unverified | existing constrained column tests cover long workflow IDs | preserve and rerun tests | UI unit |
-| FR-006 | partial | `DataTable` uses standalone Tailwind utility classes | switch to shared Mission Control table classes | compile/UI unit |
-| FR-007 | implemented_unverified | existing task-list tests cover behavior | rerun focused and wrapper tests | UI unit |
-| FR-008 | missing | no MM-426-specific tests | add composition and filter-chip tests | UI unit |
-| FR-009 | implemented_unverified | `spec.md` preserves MM-426, the trusted Jira preset brief, and source design coverage IDs | preserve through tasks, verification, and commit | final verify |
+| FR-001 | implemented_verified | `frontend/src/entrypoints/tasks-list.tsx` renders `.task-list-control-deck.panel--controls`; `tasks-list.test.tsx` asserts the control deck exists. | no new implementation | UI unit |
+| FR-002 | implemented_verified | `tasks-list.tsx` renders `.task-list-data-slab.panel--data`; `tasks-list.test.tsx` asserts the data slab and table wrapper exist. | no new implementation | UI unit |
+| FR-003 | implemented_verified | `tasks-list.tsx` renders `.task-list-filter-chip` entries and `Clear filters`; `tasks-list.test.tsx` covers chip rendering and clearing. | no new implementation | UI unit |
+| FR-004 | implemented_verified | `mission-control.css` sets `.queue-table-wrapper th { position: sticky; }`; `tasks-list.test.tsx` verifies computed sticky positioning. | no new implementation | UI unit / CSS |
+| FR-005 | implemented_verified | Existing task-list tests cover long workflow IDs, and `.queue-table-wrapper` / cell styles constrain dense table layout. | no new implementation | UI unit |
+| FR-006 | implemented_verified | `frontend/src/components/tables/DataTable.tsx` emits `.data-table-slab`, `.data-table`, and `.data-table-empty` classes. | no new implementation | compile/UI unit |
+| FR-007 | implemented_verified | Existing task-list tests continue to cover request behavior, sorting, pagination, dependency summaries, runtime labels, and mobile cards. | no new implementation | UI unit |
+| FR-008 | implemented_verified | `tasks-list.test.tsx` includes MM-426-focused composition, filter-chip, and sticky-header assertions. | no new implementation | UI unit |
+| FR-009 | implemented_verified | `spec.md`, `verification.md`, and `docs/tmp/jira-orchestration-inputs/MM-426-moonspec-orchestration-input.md` preserve MM-426, the trusted Jira preset brief, and source design coverage IDs. | no new implementation | final verify |
+| DESIGN-REQ-012 | implemented_verified | `spec.md` maps MM-426 to the Mission Control layout system; `tasks-list.tsx` uses control and data surfaces that support data-wide route composition. | no new implementation | UI unit |
+| DESIGN-REQ-013 | implemented_verified | Masthead/navigation architecture is out of direct task-list scope, and this story preserves route composition without changing masthead ownership. | no new implementation | final verify |
+| DESIGN-REQ-014 | implemented_verified | Control deck/filter cluster requirements are implemented by `.task-list-control-deck`, `.task-list-control-grid`, utility cluster, chips, and clear action. | no new implementation | UI unit |
+| DESIGN-REQ-019 | implemented_verified | `/tasks/list` uses the control deck + data slab structure, sticky table header, attached pagination/page-size controls, and table-first desktop posture. | no new implementation | UI unit |
 
 ## Technical Context
 
@@ -27,7 +31,7 @@ Implement MM-426 by making Mission Control's task-list composition match the des
 **Primary Dependencies**: React, TanStack Query, Vite/Vitest, existing Mission Control shared stylesheet  
 **Storage**: No new persistent storage  
 **Unit Testing**: `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx`; direct `./node_modules/.bin/vitest` if the npm script cannot resolve `vitest` in the managed container; final wrapper via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx`  
-**Integration Testing**: Existing task-list UI test render exercises API request shape and routing links; no compose-backed integration is required because backend contracts are unchanged  
+**Integration Testing**: Existing task-list UI render tests exercise API request shape, route links, and user-level filter/pagination flows in an integration-style browser component boundary; no compose-backed integration is required because backend contracts are unchanged
 **Target Platform**: Browser-hosted Mission Control UI served by FastAPI  
 **Project Type**: Web UI composition/design-system story  
 **Performance Goals**: Avoid new network calls, runtime loops, or heavy visual effects; sticky headers are CSS-only  
@@ -72,6 +76,8 @@ frontend/src/
 docs/tmp/jira-orchestration-inputs/
 └── MM-426-moonspec-orchestration-input.md
 ```
+
+`data-model.md` is intentionally absent because MM-426 introduces no persisted entity, state machine, schema, or data contract.
 
 **Structure Decision**: Keep behavior in the existing task-list entrypoint and shared table component. Use CSS classes as the layout contract so other Mission Control table consumers can adopt the same slab posture without new runtime APIs.
 

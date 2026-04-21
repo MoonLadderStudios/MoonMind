@@ -27,6 +27,10 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypo
 
 Expected result: Python unit suite and targeted UI tests pass through the canonical wrapper.
 
+## Integration Strategy
+
+No compose-backed integration test is required for MM-426 because backend contracts, persistence, and Temporal behavior are unchanged. The integration-style validation is the task-list browser component boundary in `frontend/src/entrypoints/tasks-list.test.tsx`, which exercises rendered filters, request/query shape, routing links, pagination, mobile cards, active-filter chips, and table structure together.
+
 ## Manual Inspection
 
 1. Open `/tasks/list`.
