@@ -241,18 +241,9 @@ def build_resolver_run_request(
     )
     template = resolver_template if isinstance(resolver_template, Mapping) else {}
     target_runtime = _compact_text(template.get("targetRuntime")) or "codex"
-    provider_profile = (
-        _compact_text(template.get("executionProfileRef"))
-        or _compact_text(template.get("runtimeProviderProfile"))
-        or _compact_text(template.get("providerProfile"))
-        or _compact_text(template.get("profileId"))
-    )
-    runtime_model = _compact_text(template.get("runtimeModel")) or _compact_text(
-        template.get("model")
-    )
-    runtime_effort = _compact_text(template.get("runtimeEffort")) or _compact_text(
-        template.get("effort")
-    )
+    provider_profile = _compact_text(template.get("executionProfileRef"))
+    runtime_model = _compact_text(template.get("model"))
+    runtime_effort = _compact_text(template.get("effort"))
     required_capabilities = [
         str(item).strip()
         for item in (template.get("requiredCapabilities") or [])
@@ -271,8 +262,6 @@ def build_resolver_run_request(
     runtime_payload: dict[str, Any] = {"mode": target_runtime}
     if provider_profile:
         runtime_payload["executionProfileRef"] = provider_profile
-        runtime_payload["providerProfile"] = provider_profile
-        runtime_payload["profileId"] = provider_profile
     if runtime_model:
         runtime_payload["model"] = runtime_model
     if runtime_effort:
@@ -306,13 +295,6 @@ def build_resolver_run_request(
     }
     if required_capabilities:
         initial_parameters["requiredCapabilities"] = required_capabilities
-    if provider_profile:
-        initial_parameters["executionProfileRef"] = provider_profile
-        initial_parameters["profileId"] = provider_profile
-    if runtime_model:
-        initial_parameters["model"] = runtime_model
-    if runtime_effort:
-        initial_parameters["effort"] = runtime_effort
     return {
         "workflow_type": "MoonMind.Run",
         "title": title,

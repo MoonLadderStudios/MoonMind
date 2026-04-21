@@ -1,12 +1,27 @@
 [
   {
-    "id": 3114361904,
+    "id": 3115365887,
     "disposition": "addressed",
-    "rationale": "Updated deactivate_templates telemetry to increment the delete metric by the number of templates deactivated, with unit coverage for the bulk path."
+    "rationale": "Refactored resolver child request construction to consume a single canonical resolverTemplate.executionProfileRef key and write only task.runtime.executionProfileRef for the child run."
   },
   {
-    "id": 4144292983,
+    "id": 3115365890,
+    "disposition": "addressed",
+    "rationale": "Refactored merge automation resolver template construction to read the parent profile from the existing parameters.profileId source and emit only resolverTemplate.executionProfileRef."
+  },
+  {
+    "id": 4145395537,
+    "disposition": "addressed",
+    "rationale": "Removed redundant profile/model/effort alias propagation from the merge automation resolver template and child runtime payload."
+  },
+  {
+    "id": 3115378317,
+    "disposition": "addressed",
+    "rationale": "Removed the multiple-profile-field selection path so conflicting resolverTemplate aliases are no longer accepted or silently prioritized."
+  },
+  {
+    "id": 4145408425,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; the only concrete feedback item it referenced was addressed separately."
+    "rationale": "Informational Codex review wrapper with no actionable code feedback."
   }
 ]

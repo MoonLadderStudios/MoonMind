@@ -100,10 +100,10 @@ def test_build_merge_gate_start_payload_preserves_parent_runtime_profile() -> No
     resolver_template = payload["resolverTemplate"]
     assert resolver_template["targetRuntime"] == "codex_cli"
     assert resolver_template["executionProfileRef"] == "codex_default"
-    assert resolver_template["profileId"] == "codex_default"
-    assert resolver_template["providerProfile"] == "codex_default"
-    assert resolver_template["runtimeModel"] == "gpt-5.4"
-    assert resolver_template["runtimeEffort"] == "high"
+    assert resolver_template["model"] == "gpt-5.4"
+    assert resolver_template["effort"] == "high"
+    assert "profileId" not in resolver_template
+    assert "providerProfile" not in resolver_template
 
 
 def test_build_merge_gate_start_payload_normalizes_timeout_values() -> None:
