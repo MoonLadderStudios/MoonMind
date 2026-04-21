@@ -90,15 +90,18 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
       return;
     }
     const trimmedMaxDocs = maxDocs.trim();
-    const parsedMaxDocs = trimmedMaxDocs ? Number(trimmedMaxDocs) : undefined;
-    if (
-      trimmedMaxDocs &&
-      (!/^[1-9]\d*$/.test(trimmedMaxDocs) ||
-        !Number.isSafeInteger(parsedMaxDocs) ||
-        parsedMaxDocs <= 0)
-    ) {
-      setNotice({ level: 'error', text: 'Max Docs must be a positive whole number.' });
-      return;
+    let parsedMaxDocs: number | undefined;
+    if (trimmedMaxDocs) {
+      const maxDocsCandidate = Number(trimmedMaxDocs);
+      if (
+        !/^[1-9]\d*$/.test(trimmedMaxDocs) ||
+        !Number.isSafeInteger(maxDocsCandidate) ||
+        maxDocsCandidate <= 0
+      ) {
+        setNotice({ level: 'error', text: 'Max Docs must be a positive whole number.' });
+        return;
+      }
+      parsedMaxDocs = maxDocsCandidate;
     }
 
     setIsSubmitting(true);
