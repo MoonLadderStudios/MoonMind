@@ -1,12 +1,12 @@
 [
   {
-    "id": 4149445122,
-    "disposition": "not-applicable",
-    "rationale": "Bot review summary only; no separate requested change beyond inline comment 3119057531."
+    "id": 3119379489,
+    "disposition": "addressed",
+    "rationale": "Replaced the exhausted session status fallback with an explicit stable awaiting_user terminal status in the Mission Control OAuth terminal wait test mock."
   },
   {
-    "id": 3119057531,
-    "disposition": "addressed",
-    "rationale": "cancel_execution now passes include_orphaned_projection=True for cancel-target authorization, with regression coverage for a projection-only nested parent fallback."
+    "id": 4149792433,
+    "disposition": "not-applicable",
+    "rationale": "Review summary comment only; the underlying actionable inline feedback is tracked and addressed separately."
   }
 ]
