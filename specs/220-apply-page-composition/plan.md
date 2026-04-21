@@ -13,20 +13,20 @@ Implement and verify route-specific task workflow page composition for MM-428. P
 | --- | --- | --- | --- | --- |
 | FR-001 | implemented_verified | `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx` | preserve current task-list control deck | targeted UI regression |
 | FR-002 | implemented_verified | `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/styles/mission-control.css`, `frontend/src/entrypoints/tasks-list.test.tsx` | preserve active chips/sticky table/pagination | targeted UI regression |
-| FR-003 | implemented_verified | `frontend/src/entrypoints/task-create.tsx` uses `queue-steps-section` and step sections | new focused create-page composition tests passed | unit + integration-style UI |
+| FR-003 | implemented_verified | `frontend/src/entrypoints/task-create.tsx` uses `queue-steps-section` and step sections; focused create-page composition tests pass | preserve guided step-card flow | unit + integration-style UI |
 | FR-004 | implemented_verified | `queue-floating-bar queue-floating-bar--liquid-glass` and existing create-page tests | preserve one floating launch rail | targeted UI regression |
 | FR-005 | implemented_verified | `queue-submit-primary` and global textarea CSS exist | new focused create-page CTA and textarea tests passed | unit + integration-style UI |
-| FR-006 | implemented_verified | `frontend/src/entrypoints/task-detail.tsx` has summary/fact/step/log/artifact sections but lacks clear composition markers | detail/evidence composition markers and tests implemented | unit + integration-style UI |
-| FR-007 | implemented_verified | live logs and artifacts use table/viewer shells; dense sections are not explicitly marked matte/evidence | matte evidence-region CSS and tests implemented | unit + integration-style UI |
-| FR-008 | implemented_verified | responsive CSS exists for task list/create; detail dense regions need explicit wrapping classes | wrapping/readability CSS and tests implemented | unit + integration-style UI |
+| FR-006 | implemented_verified | `frontend/src/entrypoints/task-detail.tsx` exposes explicit summary, facts, steps, actions, artifacts, timeline, observation/logs, and evidence-heavy composition markers | preserve detail/evidence structural separation | unit + integration-style UI |
+| FR-007 | implemented_verified | live logs, artifacts, timeline, and dense evidence sections use matte evidence-region styling and avoid competing floating/glass treatment | preserve matte evidence readability | unit + integration-style UI |
+| FR-008 | implemented_verified | responsive CSS preserves wrapping/readability safeguards for dense task workflow regions | preserve narrow/mobile readability | unit + integration-style UI |
 | FR-009 | implemented_verified | existing task-list/create/detail behavior tests exist | run targeted regression tests after markup changes | targeted UI regression |
-| FR-010 | implemented_verified | no single MM-428 cross-route coverage yet | focused route-composition tests passed | unit + integration-style UI |
+| FR-010 | implemented_verified | focused MM-428 route-composition tests cover task list, create page, and task detail/evidence page structures | preserve cross-route verification coverage | unit + integration-style UI |
 | FR-011 | implemented_verified | `spec.md` preserves MM-428 brief and source IDs | preserve through tasks and verification | final verify |
 | DESIGN-REQ-014 | implemented_verified | MM-426 task-list work | preserve | targeted UI regression |
-| DESIGN-REQ-017 | implemented_verified | create floating rail exists; detail evidence surfaces need stronger no-competing-glass posture | detail CSS/classes | unit + integration-style UI |
+| DESIGN-REQ-017 | implemented_verified | create floating rail remains isolated; detail evidence surfaces use matte evidence-region CSS/classes | preserve no-competing-glass posture | unit + integration-style UI |
 | DESIGN-REQ-019 | implemented_verified | MM-426 task-list data slab work | preserve | targeted UI regression |
 | DESIGN-REQ-020 | implemented_verified | create page has step section and floating bar | add explicit MM-428 tests | unit + integration-style UI |
-| DESIGN-REQ-021 | implemented_verified | detail page sections exist but are not explicitly composition-safe | add section markers/classes and tests | unit + integration-style UI |
+| DESIGN-REQ-021 | implemented_verified | detail page sections are explicitly composition-safe with task-detail markers/classes and tests | preserve separated evidence composition | unit + integration-style UI |
 
 ## Technical Context
 

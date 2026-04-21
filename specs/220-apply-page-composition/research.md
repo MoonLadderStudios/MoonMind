@@ -10,19 +10,19 @@ Test implications: Run targeted task-list UI tests as regression evidence.
 
 ## FR-003 / FR-004 / FR-005 / DESIGN-REQ-020
 
-Decision: Treat create-page structure as mostly implemented but add explicit MM-428 tests for guided step-card flow, one floating launch rail, launch CTA, and matte textareas.  
-Evidence: `frontend/src/entrypoints/task-create.tsx` has `data-canonical-create-section="Steps"`, `.card.queue-steps-section`, `.queue-step-section`, `data-canonical-create-section="Submit"`, and `.queue-floating-bar.queue-floating-bar--liquid-glass`; existing `task-create.test.tsx` verifies submit controls stay in the floating bar.  
-Rationale: The UI likely satisfies the behavior, but the current tests do not name all MM-428 requirements in one route-specific composition test.  
+Decision: Treat create-page structure as implemented and verified by explicit MM-428 tests for guided step-card flow, one floating launch rail, launch CTA, and matte textareas.  
+Evidence: `frontend/src/entrypoints/task-create.tsx` has `data-canonical-create-section="Steps"`, `.card.queue-steps-section`, `.queue-step-section`, `data-canonical-create-section="Submit"`, and `.queue-floating-bar.queue-floating-bar--liquid-glass`; focused `task-create.test.tsx` coverage verifies submit controls stay in the single floating launch rail and large instruction textareas remain matte.  
+Rationale: The UI satisfies the behavior with route-specific composition tests that name the MM-428 requirements.  
 Alternatives considered: Changing create-page markup immediately; rejected until tests expose an actual gap.  
-Test implications: Add focused create-page test first; implement only if it fails for a real requirement gap.
+Test implications: Preserve the focused create-page regression tests and implement only if a future red-first check exposes a real requirement gap.
 
 ## FR-006 / FR-007 / FR-008 / DESIGN-REQ-017 / DESIGN-REQ-021
 
-Decision: Add explicit task-detail/evidence composition markers and styling, then verify them with focused tests.  
-Evidence: `frontend/src/entrypoints/task-detail.tsx` has hero, summary, facts, steps, actions, artifacts, timeline, and live logs sections, but many sections use generic `section className="stack"` and dense table wrappers without route-specific composition markers.  
-Rationale: The route is functionally separated, but MM-428 requires clear composition semantics and no competing glass effects for evidence-heavy regions.  
+Decision: Preserve explicit task-detail/evidence composition markers and styling verified by focused tests.  
+Evidence: `frontend/src/entrypoints/task-detail.tsx` exposes `.task-detail-page`, `.td-facts-region`, `.td-steps-region`, `.td-actions-region`, `.td-artifacts-region`, `.td-timeline-region`, and matte `.td-evidence-region` / `.td-evidence-slab` wrappers for dense regions.  
+Rationale: The route now has clear composition semantics and no competing glass effects for evidence-heavy regions, matching MM-428 section 11.3 requirements.  
 Alternatives considered: Leaving generic sections and relying on text headings; rejected because tests would be brittle and the design contract would remain implicit.  
-Test implications: Add tests that assert summary, facts, steps, actions, artifacts/timeline/logs use explicit task-detail composition classes and matte evidence classes.
+Test implications: Preserve tests that assert summary, facts, steps, actions, artifacts/timeline/logs use explicit task-detail composition classes and matte evidence classes.
 
 ## FR-009
 
