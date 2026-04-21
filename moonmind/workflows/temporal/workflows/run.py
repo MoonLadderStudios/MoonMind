@@ -3388,6 +3388,54 @@ class MoonMindRunWorkflow:
         timeouts: dict[str, Any] = {"fallbackPollSeconds": fallback_poll_seconds or 120}
         if expire_after_seconds is not None:
             timeouts["expireAfterSeconds"] = expire_after_seconds
+        task_payload = self._mapping_value(parameters, "task") or {}
+        task_runtime_payload = (
+            self._mapping_value(task_payload, "runtime")
+            if isinstance(task_payload, Mapping)
+            else {}
+        ) or {}
+        resolver_template: dict[str, Any] = {
+            "repository": repo,
+            "targetRuntime": (
+                self._coerce_text(
+                    parameters.get("targetRuntime")
+                    or task_runtime_payload.get("mode")
+                    or task_runtime_payload.get("targetRuntime"),
+                    max_chars=80,
+                )
+                or "codex"
+            ),
+            "requiredCapabilities": ["git", "gh"],
+        }
+        profile_id = self._coerce_text(
+            parameters.get("executionProfileRef")
+            or parameters.get("execution_profile_ref")
+            or parameters.get("profileId")
+            or parameters.get("providerProfile")
+            or task_runtime_payload.get("executionProfileRef")
+            or task_runtime_payload.get("execution_profile_ref")
+            or task_runtime_payload.get("profileId")
+            or task_runtime_payload.get("providerProfile"),
+            max_chars=160,
+        )
+        if profile_id:
+            resolver_template["executionProfileRef"] = profile_id
+            resolver_template["profileId"] = profile_id
+            resolver_template["providerProfile"] = profile_id
+        runtime_model = self._coerce_text(
+            parameters.get("requestedModel")
+            or task_runtime_payload.get("model")
+            or parameters.get("model"),
+            max_chars=160,
+        )
+        if runtime_model:
+            resolver_template["runtimeModel"] = runtime_model
+        runtime_effort = self._coerce_text(
+            task_runtime_payload.get("effort") or parameters.get("effort"),
+            max_chars=80,
+        )
+        if runtime_effort:
+            resolver_template["runtimeEffort"] = runtime_effort
         return {
             "workflowType": "MoonMind.MergeAutomation",
             "parentWorkflowId": parent_workflow_id,
@@ -3434,11 +3482,7 @@ class MoonMindRunWorkflow:
                 "timeouts": timeouts,
                 "postMergeJira": request.get("postMergeJira") or {},
             },
-            "resolverTemplate": {
-                "repository": repo,
-                "targetRuntime": "codex",
-                "requiredCapabilities": ["git", "gh"],
-            },
+            "resolverTemplate": resolver_template,
             "idempotencyKey": (
                 f"merge-automation:{parent_workflow_id}:{repo}:{pr_number}:{normalized_head_sha}"
             ),

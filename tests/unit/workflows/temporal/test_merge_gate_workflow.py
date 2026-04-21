@@ -185,6 +185,35 @@ def test_build_resolver_run_request_uses_pr_resolver_and_publish_none() -> None:
     assert request["initial_parameters"]["task"]["skill"]["args"]["pr"] == "341"
 
 
+def test_build_resolver_run_request_pins_parent_provider_profile() -> None:
+    request = build_resolver_run_request(
+        parent_workflow_id="mm:parent",
+        pull_request=_pull_request(),
+        jira_issue_key=None,
+        merge_method="squash",
+        resolver_template={
+            "targetRuntime": "codex_cli",
+            "executionProfileRef": "codex_default",
+            "runtimeModel": "gpt-5.4",
+            "runtimeEffort": "high",
+            "requiredCapabilities": ["git", "gh"],
+        },
+    )
+
+    initial_parameters = request["initial_parameters"]
+    runtime = initial_parameters["task"]["runtime"]
+    assert initial_parameters["targetRuntime"] == "codex_cli"
+    assert initial_parameters["profileId"] == "codex_default"
+    assert initial_parameters["executionProfileRef"] == "codex_default"
+    assert initial_parameters["model"] == "gpt-5.4"
+    assert initial_parameters["effort"] == "high"
+    assert initial_parameters["requiredCapabilities"] == ["git", "gh"]
+    assert runtime["mode"] == "codex_cli"
+    assert runtime["executionProfileRef"] == "codex_default"
+    assert runtime["providerProfile"] == "codex_default"
+    assert runtime["profileId"] == "codex_default"
+
+
 def test_build_continue_as_new_input_preserves_compact_wait_state() -> None:
     payload = build_continue_as_new_input(
         start_input={
