@@ -28,6 +28,7 @@ Implement MM-427 by aligning Mission Control's routine controls with the interac
 **Language/Version**: TypeScript/React for Mission Control tests; CSS for shared Mission Control styling  
 **Primary Dependencies**: React, Vite/Vitest, existing Mission Control shared stylesheet  
 **Storage**: No new persistent storage  
+**Data Model**: Not required; this story changes shared UI interaction styling and exposes no new persisted data or state transition model  
 **Unit Testing**: `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx`; direct `./node_modules/.bin/vitest` if the npm script cannot resolve `vitest`; final wrapper via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx`  
 **Integration Testing**: Existing UI render tests exercise shared app shell and task-list request behavior; no compose-backed integration is required because backend contracts are unchanged  
 **Target Platform**: Browser-hosted Mission Control UI served by FastAPI  
