@@ -138,6 +138,7 @@ CLOSE_STATUS_FAILED = "failed"
 DEPENDENCY_RESOLUTION_NOT_APPLICABLE = "not_applicable"
 DEPENDENCY_RESOLUTION_SATISFIED = "satisfied"
 DEPENDENCY_RESOLUTION_FAILED = "dependency_failed"
+DEPENDENCY_RESOLUTION_BYPASSED = "bypassed"
 DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE = "manual_override"
 MERGE_AUTOMATION_SUCCESS_STATUSES = frozenset({"merged", "already_merged"})
 MERGE_AUTOMATION_FAILURE_STATUSES = frozenset({"blocked", "failed", "expired"})
@@ -1126,6 +1127,52 @@ class MoonMindRunWorkflow:
             resolved_at=signal.resolved_at.isoformat(),
             failure_category=signal.failure_category,
             message=signal.message,
+        )
+        self._update_search_attributes()
+        self._update_memo()
+
+    def _bypass_dependencies(self, payload: dict[str, Any] | None = None) -> None:
+        if self._state != STATE_WAITING_ON_DEPENDENCIES:
+            self._get_logger().warning(
+                "Ignoring BypassDependencies signal outside dependency wait",
+                extra={
+                    "event": "dependency_bypass_ignored",
+                    "state": self._state,
+                },
+            )
+            return
+
+        envelope = payload if isinstance(payload, dict) else {}
+        signal_payload = envelope.get("payload")
+        details = signal_payload if isinstance(signal_payload, dict) else envelope
+        reason = str(details.get("reason") or "").strip()
+        if not reason:
+            reason = "Dependency wait bypassed by operator."
+
+        self._update_dependency_wait_duration()
+        bypassed_at = workflow.now().isoformat().replace("+00:00", "Z")
+        for prerequisite_workflow_id in list(self._unresolved_dependency_ids):
+            self._dependency_outcomes_by_id[prerequisite_workflow_id] = {
+                "workflowId": prerequisite_workflow_id,
+                "terminalState": "bypassed",
+                "closeStatus": None,
+                "resolvedAt": bypassed_at,
+                "failureCategory": None,
+                "message": reason,
+            }
+
+        self._unresolved_dependency_ids.clear()
+        self._dependency_failure = None
+        self._failed_dependency_id = None
+        self._dependency_resolution = DEPENDENCY_RESOLUTION_BYPASSED
+        self._summary = reason
+        self._get_logger().warning(
+            "Dependency gate bypassed by operator",
+            extra={
+                "event": "dependency_gate_bypassed",
+                "dependency_count": len(self._declared_dependencies),
+                "wait_duration_ms": self._dependency_wait_duration_ms,
+            },
         )
         self._update_search_attributes()
         self._update_memo()
@@ -4886,6 +4933,10 @@ class MoonMindRunWorkflow:
     @workflow.signal(name="DependencyResolved")
     def dependency_resolved(self, payload: dict[str, Any]) -> None:
         self._record_dependency_signal(payload)
+
+    @workflow.signal(name="BypassDependencies")
+    def bypass_dependencies(self, payload: dict[str, Any] | None = None) -> None:
+        self._bypass_dependencies(payload)
 
     def _release_slot_defensive(self) -> None:
         """Release the provider-profile slot defensively when a child exits.

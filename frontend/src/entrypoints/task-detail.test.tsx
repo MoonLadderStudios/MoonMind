@@ -116,6 +116,18 @@ describe('Task Detail Entrypoint', () => {
     page: 'task-detail',
     apiBase: '/api',
   };
+  const actionsPayload: BootPayload = {
+    ...mockPayload,
+    initialData: {
+      dashboardConfig: {
+        features: {
+          temporalDashboard: {
+            actionsEnabled: true,
+          },
+        },
+      },
+    },
+  };
   const stepsPayload: BootPayload = {
     page: 'task-detail',
     apiBase: '/api',
@@ -282,7 +294,6 @@ describe('Task Detail Entrypoint', () => {
       updatedAt: '2026-04-09T00:00:04Z',
       actions: {},
     };
-
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/executions/test-123/steps')) {
@@ -1833,6 +1844,81 @@ describe('Task Detail Entrypoint', () => {
       expect(screen.getByText(/Blocked on prerequisites/i)).toBeTruthy();
       expect(screen.getByText('Build shared schema')).toBeTruthy();
       expect(screen.getByText('Run UI smoke tests')).toBeTruthy();
+    });
+  });
+
+  it('signals a manual dependency wait bypass from the dependency panel', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const signalBodies: unknown[] = [];
+    const mockExecution = {
+      taskId: 'mm:dependent-1',
+      workflowId: 'mm:dependent-1',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Dependent task',
+      summary: 'Waiting on upstream work',
+      status: 'waiting',
+      state: 'waiting_on_dependencies',
+      rawState: 'waiting_on_dependencies',
+      temporalStatus: 'running',
+      dependsOn: ['mm:dep-1'],
+      hasDependencies: true,
+      blockedOnDependencies: true,
+      dependencyResolution: 'not_applicable',
+      prerequisites: [
+        {
+          workflowId: 'mm:dep-1',
+          title: 'Build shared schema',
+          summary: 'Finishing migrations',
+          state: 'executing',
+          closeStatus: null,
+          workflowType: 'MoonMind.Run',
+        },
+      ],
+      dependents: [],
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: { canBypassDependencies: true },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      if (url.endsWith('/api/executions/mm%3Adependent-1/signal')) {
+        signalBodies.push(JSON.parse(String(init?.body || '{}')));
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ ...mockExecution, blockedOnDependencies: false }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    window.history.pushState({}, 'Test', '/tasks/mm%3Adependent-1?source=temporal');
+    renderWithClient(<TaskDetailPage payload={actionsPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Bypass Dependency Wait' }));
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith('Bypass dependency waiting for this task?');
+      expect(signalBodies).toEqual([
+        {
+          signalName: 'BypassDependencies',
+          payload: { reason: 'Dependency wait bypassed by operator from Mission Control.' },
+        },
+      ]);
     });
   });
 

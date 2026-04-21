@@ -3572,9 +3572,33 @@ def test_describe_execution_includes_actions_and_debug_fields(
     assert body["actions"]["canApprove"] is True
     assert body["actions"]["canResume"] is True
     assert body["actions"]["canCancel"] is True
+    assert body["actions"]["canBypassDependencies"] is False
     assert body["actions"]["canUpdateInputs"] is False
     assert body["debugFields"]["workflowId"] == "mm:wf-1"
     assert body["redirectPath"] == "/tasks/mm:wf-1?source=temporal"
+
+
+def test_describe_execution_exposes_dependency_bypass_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record(
+        state=MoonMindWorkflowState.WAITING_ON_DEPENDENCIES
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["actions"]["canBypassDependencies"] is True
+    assert "canBypassDependencies" not in body["actions"]["disabledReasons"]
 
 
 def test_describe_execution_exposes_temporal_task_editing_contract(

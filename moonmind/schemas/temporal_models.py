@@ -40,6 +40,7 @@ SUPPORTED_SIGNAL_NAMES = (
     "SkipDependencyWait",
     "SendMessage",
     "DependencyResolved",
+    "BypassDependencies",
 )
 TASK_RUN_ID_MEMO_KEYS = ("taskRunId", "task_run_id")
 TASK_RUN_ID_SEARCH_ATTR_KEYS = ("mm_task_run_id",)
@@ -647,6 +648,7 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_cancel: bool = Field(False, alias="canCancel")
     can_reject: bool = Field(False, alias="canReject")
     can_send_message: bool = Field(False, alias="canSendMessage")
+    can_bypass_dependencies: bool = Field(False, alias="canBypassDependencies")
     can_skip_dependency_wait: bool = Field(False, alias="canSkipDependencyWait")
     disabled_reasons: dict[str, str] = Field(
         default_factory=dict, alias="disabledReasons"
