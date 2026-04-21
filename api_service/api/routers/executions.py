@@ -2918,8 +2918,12 @@ async def _create_execution_from_task_request(
     if story_output_payload:
         normalized_task_for_planner["storyOutput"] = dict(story_output_payload)
     remediation_payload = task_payload.get("remediation")
-    if isinstance(remediation_payload, Mapping):
-        normalized_task_for_planner["remediation"] = dict(remediation_payload)
+    if remediation_payload is not None:
+        normalized_task_for_planner["remediation"] = (
+            dict(remediation_payload)
+            if isinstance(remediation_payload, Mapping)
+            else remediation_payload
+        )
     git_payload = (
         task_payload.get("git") if isinstance(task_payload.get("git"), dict) else {}
     )

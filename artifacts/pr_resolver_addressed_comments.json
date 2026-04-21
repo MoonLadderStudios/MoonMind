@@ -1,27 +1,32 @@
 [
   {
-    "id": 3120172516,
+    "id": 4150938132,
     "disposition": "addressed",
-    "rationale": "Included the resolved push_head_sha in the no_commits result path and added focused unit coverage."
+    "rationale": "Top-level review summary called out malformed remediation handling; router now preserves present non-object remediation payloads for service validation, with regression coverage."
   },
   {
-    "id": 3120172519,
+    "id": 3120468287,
     "disposition": "addressed",
-    "rationale": "Updated _resolve_workspace_head_sha to kill and reap the rev-parse subprocess on timeout and added focused unit coverage."
+    "rationale": "Updated task-shaped create normalization to pass through any present remediation payload and added a malformed-payload router regression test."
   },
   {
-    "id": 4150632918,
-    "disposition": "not-applicable",
-    "rationale": "Review summary comment only; its two concrete findings are tracked and addressed by comments 3120172516 and 3120172519."
-  },
-  {
-    "id": 3120179522,
+    "id": 3120470540,
     "disposition": "addressed",
-    "rationale": "Duplicate timeout-resource-leak finding; fixed by killing and awaiting the timed-out rev-parse subprocess."
+    "rationale": "Exported Alembic revision metadata through __all__ to mark it as intentionally consumed by Alembic."
   },
   {
-    "id": 4150640657,
-    "disposition": "not-applicable",
-    "rationale": "Automated review wrapper/informational comment; the concrete actionable suggestion is tracked separately as comment 3120179522."
+    "id": 3120470551,
+    "disposition": "addressed",
+    "rationale": "Exported Alembic down_revision metadata through __all__ to mark it as intentionally consumed by Alembic."
+  },
+  {
+    "id": 3120470564,
+    "disposition": "addressed",
+    "rationale": "Exported Alembic branch_labels metadata through __all__ to mark it as intentionally consumed by Alembic."
+  },
+  {
+    "id": 3120470575,
+    "disposition": "addressed",
+    "rationale": "Exported Alembic depends_on metadata through __all__ to mark it as intentionally consumed by Alembic."
   }
 ]
