@@ -1,6 +1,6 @@
 # Tasks: Surface Hierarchy and liquidGL Fallback Contract
 
-**Input**: Design documents from `/specs/217-surface-hierarchy-liquidgl/`  
+**Input**: Design documents from `/specs/217-surface-hierarchy-liquidgl/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Unit tests and integration-style frontend tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.

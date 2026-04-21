@@ -1,7 +1,7 @@
 # Specification Quality Checklist: Surface Hierarchy and liquidGL Fallback Contract
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning  
-**Created**: 2026-04-21  
+**Purpose**: Validate specification completeness and quality before proceeding to planning
+**Created**: 2026-04-21
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality

@@ -1,6 +1,6 @@
 # Implementation Plan: Surface Hierarchy and liquidGL Fallback Contract
 
-**Branch**: `217-surface-hierarchy-liquidgl` | **Date**: 2026-04-21 | **Spec**: `specs/217-surface-hierarchy-liquidgl/spec.md`  
+**Branch**: `217-surface-hierarchy-liquidgl` | **Date**: 2026-04-21 | **Spec**: `specs/217-surface-hierarchy-liquidgl/spec.md`
 **Input**: Single-story feature specification from `specs/217-surface-hierarchy-liquidgl/spec.md`
 
 ## Summary
@@ -32,15 +32,15 @@ Implement MM-425 by making Mission Control's shared surface hierarchy explicit i
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control tests; CSS for shared Mission Control styling; Python 3.12 remains present but is not expected in this story  
-**Primary Dependencies**: React, Vitest, Testing Library, existing Mission Control entrypoints, shared stylesheet  
-**Storage**: No new persistent storage; visual and interaction state only  
-**Unit Testing**: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/tasks-list.test.tsx`  
-**Integration Testing**: Focused frontend integration-style tests in the same Vitest suites; no compose-backed service integration is required for this CSS/UI contract story  
-**Target Platform**: Mission Control browser UI served by FastAPI  
-**Project Type**: Web UI  
-**Performance Goals**: Preserve immediate UI interaction; use CSS-only fallback rules and existing liquidGL initialization behavior without new network work  
-**Constraints**: Preserve task submission, routing, task-list requests, accessibility labels, responsive stability, and dense content readability  
+**Language/Version**: TypeScript/React for Mission Control tests; CSS for shared Mission Control styling; Python 3.12 remains present but is not expected in this story
+**Primary Dependencies**: React, Vitest, Testing Library, existing Mission Control entrypoints, shared stylesheet
+**Storage**: No new persistent storage; visual and interaction state only
+**Unit Testing**: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/tasks-list.test.tsx`
+**Integration Testing**: Focused frontend integration-style tests in the same Vitest suites; no compose-backed service integration is required for this CSS/UI contract story
+**Target Platform**: Mission Control browser UI served by FastAPI
+**Project Type**: Web UI
+**Performance Goals**: Preserve immediate UI interaction; use CSS-only fallback rules and existing liquidGL initialization behavior without new network work
+**Constraints**: Preserve task submission, routing, task-list requests, accessibility labels, responsive stability, and dense content readability
 **Scale/Scope**: Shared Mission Control stylesheet plus focused tests for representative task-list and Create page surfaces
 
 ## Constitution Check

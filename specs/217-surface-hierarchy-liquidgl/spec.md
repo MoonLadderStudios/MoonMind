@@ -1,8 +1,8 @@
 # Feature Specification: Surface Hierarchy and liquidGL Fallback Contract
 
-**Feature Branch**: `217-surface-hierarchy-liquidgl`  
-**Created**: 2026-04-21  
-**Status**: Draft  
+**Feature Branch**: `217-surface-hierarchy-liquidgl`
+**Created**: 2026-04-21
+**Status**: Draft
 **Input**: User description: "Use the Jira preset brief for MM-425 as the canonical Moon Spec orchestration input."
 
 ```text
