@@ -2042,7 +2042,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   bottom: 1.1rem;
   transform: translateX(-50%);
   z-index: 40;
-  width: min(100% - 1.5rem, 64rem);
+  width: min(100% - 1.5rem, 72rem);
   padding: 0.55rem 0.7rem;
   border-radius: 1.5rem;
   background: var(--mm-glass-fill);
@@ -2065,7 +2065,11 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 .queue-floating-bar-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  grid-template-columns:
+    minmax(0, 1.35fr)
+    minmax(0, 1.35fr)
+    minmax(9.5rem, 0.8fr)
+    auto;
   gap: 0.5rem;
   align-items: center;
 }
@@ -2103,7 +2107,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 @media (max-width: 640px) {
   .queue-floating-bar-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) minmax(9.5rem, 0.8fr) auto;
   }
 
   .queue-floating-bar-row .queue-inline-selector--repo {
