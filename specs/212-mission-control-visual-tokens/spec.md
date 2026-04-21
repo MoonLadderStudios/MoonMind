@@ -3,13 +3,31 @@
 **Feature Branch**: `run-jira-orchestrate-for-mm-424-establis-342df6cf`  
 **Created**: 2026-04-20  
 **Status**: Draft  
-**Input**: Jira Orchestrate for MM-424. Source story: STORY-001. Source summary: "Establish Mission Control visual tokens and atmosphere." Source Jira issue: unknown. Original brief reference: not provided.
+**Input**: Trusted Jira preset brief for MM-424. Summary: "Establish Mission Control visual tokens and atmosphere." Source document: `docs/UI/MissionControlDesignSystem.md` sections 1, 2, 5, 6, 10.11, and 14. Coverage IDs: DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-011, DESIGN-REQ-027.
 
 ## Original Jira Preset Brief
 
 Jira issue: MM-424
 
-Source story: STORY-001. Source summary: Establish Mission Control visual tokens and atmosphere. Source Jira issue: unknown. Original brief reference: not provided.
+Source document: `docs/UI/MissionControlDesignSystem.md`
+Source title: Mission Control Design System
+Source sections:
+- 1. Purpose
+- 2. Product expression
+- 5. Color system and token contract
+- 6. Typography and iconography
+- 10.11 Background separators and horizon lines
+- 14. Summary
+
+Coverage IDs:
+- DESIGN-REQ-001
+- DESIGN-REQ-002
+- DESIGN-REQ-009
+- DESIGN-REQ-010
+- DESIGN-REQ-011
+- DESIGN-REQ-027
+
+As a Mission Control operator, I want the UI foundation to use the documented tokenized color, typography, atmosphere, and product-expression rules so every route feels coherent, readable, and unmistakably MoonMind.
 
 Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve this Jira issue reference in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
 
@@ -45,7 +63,7 @@ Single-story runtime feature request. The brief contains one independently testa
 - "Mission Control visual tokens and atmosphere" refers to the shared browser UI styling layer and desired-state design-system contract.
 - Existing Create page liquid glass work remains separate; this story establishes the reusable foundation that elevated effects consume.
 - No backend persistence or API contract change is required.
-- The trusted Jira issue fetch is unavailable in this local managed runtime, so the supplied MM-424 task text is preserved as the canonical brief.
+- The trusted Jira issue response did not expose `recommendedImports.presetInstructions`, `normalizedPresetBrief`, `presetBrief`, or `presetInstructions`; the canonical brief is synthesized from the trusted MM-424 issue key, summary, description, acceptance criteria, coverage IDs, and implementation notes.
 
 ## Requirements *(mandatory)*
 
@@ -56,7 +74,7 @@ Single-story runtime feature request. The brief contains one independently testa
 - **FR-005**: The token contract MUST preserve readability by keeping primary text, muted text, borders, and focusable surfaces based on existing semantic tokens.
 - **FR-006**: The implementation MUST NOT change Mission Control route selection, task creation payloads, data fetching, or runtime behavior.
 - **FR-007**: Automated verification MUST cover the token contract, body atmosphere usage, shared chrome token usage, and unchanged app-shell behavior.
-- **FR-008**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve MM-424 and the original supplied brief.
+- **FR-008**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve MM-424 and the trusted Jira preset brief.
 
 ## Key Entities
 
@@ -70,4 +88,4 @@ Single-story runtime feature request. The brief contains one independently testa
 - **SC-002**: CSS verification confirms the body background consumes the named atmosphere tokens and preserves a violet, cyan, and warm layered atmosphere.
 - **SC-003**: CSS verification confirms shared masthead and panel chrome consume shared surface/elevation tokens.
 - **SC-004**: Existing shared Mission Control app-shell tests continue to pass.
-- **SC-005**: Traceability verification confirms MM-424 and the supplied source summary are preserved in MoonSpec artifacts and final evidence.
+- **SC-005**: Traceability verification confirms MM-424 and the trusted Jira preset brief are preserved in MoonSpec artifacts and final evidence.

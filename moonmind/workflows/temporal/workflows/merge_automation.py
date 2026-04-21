@@ -31,6 +31,7 @@ with workflow.unsafe.imports_passed_through():
         build_resolver_run_request,
         classify_readiness,
         deterministic_resolver_idempotency_key,
+        legacy_resolver_idempotency_key,
     )
 
 
@@ -447,7 +448,12 @@ class MoonMindMergeAutomationWorkflow:
                     merge_method=self._input.config.resolver.merge_method,
                     resolver_template=self._input.resolver_template,
                 )
-                resolver_workflow_id = deterministic_resolver_idempotency_key(
+                resolver_workflow_id_factory = (
+                    deterministic_resolver_idempotency_key
+                    if workflow.patched("merge-automation-hashed-resolver-child-id")
+                    else legacy_resolver_idempotency_key
+                )
+                resolver_workflow_id = resolver_workflow_id_factory(
                     parent_workflow_id=self._input.parent_workflow_id,
                     repo=self._input.pull_request.repo,
                     pr_number=self._input.pull_request.number,
