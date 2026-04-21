@@ -239,6 +239,18 @@ def test_task_create_route_uses_canonical_boot_payload(client: TestClient) -> No
     )
 
 
+def test_oauth_terminal_route_uses_terminal_boot_payload(client: TestClient) -> None:
+    response = client.get("/oauth-terminal?session_id=oas_route_shell")
+
+    assert response.status_code == 200
+    assert "moonmind-ui-boot" in response.text
+    boot_payload = _extract_boot_payload(response.text)
+    assert boot_payload["page"] == "oauth-terminal"
+    assert boot_payload["initialData"]["sessionId"] == "oas_route_shell"
+    assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == "/oauth-terminal"
+    assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
+
+
 def test_alias_routes_redirect_to_canonical_paths(client: TestClient) -> None:
     """GET /tasks/create and /tasks/tasks-list must return 307 redirects to canonical routes."""
     create_resp = client.get("/tasks/create", follow_redirects=False)

@@ -1696,6 +1696,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/oauth-terminal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oauth Terminal Route
+         * @description Serve the OAuth terminal shell launched from Settings.
+         */
+        get: operations["oauth_terminal_route_oauth_terminal_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tasks/new": {
         parameters: {
             query?: never;
@@ -9804,6 +9824,37 @@ export interface operations {
                 };
                 content: {
                     "text/html": string;
+                };
+            };
+        };
+    };
+    oauth_terminal_route_oauth_terminal_get: {
+        parameters: {
+            query?: {
+                session_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

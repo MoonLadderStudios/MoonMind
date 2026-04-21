@@ -411,6 +411,23 @@ async def task_settings_route(
     )
 
 
+@router.get("/oauth-terminal", response_class=HTMLResponse)
+async def oauth_terminal_route(
+    request: Request,
+    session_id: str = Query("", alias="session_id"),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the OAuth terminal shell launched from Settings."""
+    current_path = "/oauth-terminal"
+    return _render_react_page(
+        request,
+        "oauth-terminal",
+        current_path,
+        initial_data={"sessionId": session_id},
+        data_wide_panel=True,
+    )
+
+
 @router.get("/tasks/new", response_class=HTMLResponse)
 async def task_create_route(
     request: Request,

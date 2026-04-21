@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.workflows.temporal.artifacts import ExecutionRef
@@ -98,6 +99,29 @@ async def test_publish_artifacts_handles_write_failure_gracefully():
     # Should return the original result even if write fails
     assert isinstance(result, AgentRunResult)
     assert result.summary == "test"
+
+
+class _OAuthPayloadModel(BaseModel):
+    session_id: str
+    runtime_id: str
+
+
+@pytest.mark.asyncio
+async def test_oauth_session_start_auth_runner_coerces_pydantic_request_payload():
+    activities = TemporalAgentRuntimeActivities()
+
+    with patch(
+        "moonmind.workflows.temporal.activities.oauth_session_activities.oauth_session_start_auth_runner",
+        new=AsyncMock(return_value={"ok": True}),
+    ) as mock_start:
+        result = await activities.oauth_session_start_auth_runner(
+            _OAuthPayloadModel(session_id="oas_123", runtime_id="codex_cli")
+        )
+
+    assert result == {"ok": True}
+    mock_start.assert_awaited_once_with(
+        {"session_id": "oas_123", "runtime_id": "codex_cli"}
+    )
 
 
 @pytest.mark.asyncio
