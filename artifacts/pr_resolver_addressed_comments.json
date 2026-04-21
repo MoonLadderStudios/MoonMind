@@ -28,5 +28,10 @@
     "id": 3120470575,
     "disposition": "addressed",
     "rationale": "Exported Alembic depends_on metadata through __all__ to mark it as intentionally consumed by Alembic."
+  },
+  {
+    "id": 3120483038,
+    "disposition": "addressed",
+    "rationale": "Pinned the resolved remediation target workflowId and runId back into stored task parameters and the workflow start payload, with service-level regression coverage."
   }
 ]

@@ -692,6 +692,19 @@ class TemporalExecutionService:
                 params["task"] = task_params
             else:
                 params.pop("task", None)
+        if remediation_link is not None:
+            remediation_params = task_params.get("remediation")
+            if isinstance(remediation_params, Mapping):
+                pinned_remediation = dict(remediation_params)
+                target_params = pinned_remediation.get("target")
+                pinned_target = (
+                    dict(target_params) if isinstance(target_params, Mapping) else {}
+                )
+                pinned_target["workflowId"] = remediation_link.target_workflow_id
+                pinned_target["runId"] = remediation_link.target_run_id
+                pinned_remediation["target"] = pinned_target
+                task_params["remediation"] = pinned_remediation
+                params["task"] = task_params
 
         resolved_title = title or self._default_title_for_type(workflow_type_enum)
         memo = {

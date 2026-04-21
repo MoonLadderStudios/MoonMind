@@ -590,6 +590,22 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
         assert link.status == "created"
         assert link.trigger_type == "manual"
 
+        remediation_record = await session.get(
+            TemporalExecutionCanonicalRecord, remediation.workflow_id
+        )
+        assert remediation_record is not None
+        assert remediation_record.parameters["task"]["remediation"]["target"] == {
+            "workflowId": target.workflow_id,
+            "runId": target.run_id,
+        }
+        start_kwargs = mock_client_adapter.start_workflow.await_args_list[1].kwargs
+        assert start_kwargs["input_args"]["initial_parameters"]["task"][
+            "remediation"
+        ]["target"] == {
+            "workflowId": target.workflow_id,
+            "runId": target.run_id,
+        }
+
         outbound = await service.list_remediation_targets(remediation.workflow_id)
         assert [item.target_workflow_id for item in outbound] == [target.workflow_id]
 
