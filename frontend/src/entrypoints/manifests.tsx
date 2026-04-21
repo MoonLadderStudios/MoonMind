@@ -18,6 +18,7 @@ const ManifestRunSchema = z
     temporalStatus: z.string().nullable().optional(),
     currentStage: z.string().nullable().optional(),
     manifestStage: z.string().nullable().optional(),
+    phase: z.string().nullable().optional(),
     stage: z.string().nullable().optional(),
     startedAt: z.string().nullable().optional(),
     createdAt: z.string().nullable().optional(),
@@ -66,7 +67,7 @@ function runAction(run: ManifestRun): string {
 }
 
 function runStage(run: ManifestRun): string {
-  return String(run.currentStage || run.manifestStage || run.stage || '').trim();
+  return String(run.currentStage || run.manifestStage || run.phase || run.stage || '').trim();
 }
 
 function statusLabel(run: ManifestRun): string {
@@ -76,7 +77,7 @@ function statusLabel(run: ManifestRun): string {
     return status;
   }
   const activeStatuses = new Set(['running', 'executing', 'in progress', 'processing']);
-  return activeStatuses.has(status.toLowerCase()) ? `${status[0].toUpperCase()}${status.slice(1)} · ${stage}` : status;
+  return activeStatuses.has(status.toLowerCase()) ? `${status.charAt(0).toUpperCase()}${status.slice(1)} · ${stage}` : status;
 }
 
 function detailHref(run: ManifestRun): string {

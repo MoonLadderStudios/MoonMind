@@ -1,12 +1,22 @@
 [
   {
-    "id": 3115467916,
+    "id": 3115891581,
     "disposition": "addressed",
-    "rationale": "Replaced the raw mission-control.css regex assertions with rendered DOM getComputedStyle assertions for the shell panel, control grid, data slab, and table wrapper."
+    "rationale": "Changed status capitalization to use charAt(0), which is safe for empty strings."
   },
   {
-    "id": 4145523992,
+    "id": 4146021949,
+    "disposition": "not-applicable",
+    "rationale": "Non-actionable bot review summary; the referenced status formatting concern is covered by comment 3115891581."
+  },
+  {
+    "id": 3118644455,
     "disposition": "addressed",
-    "rationale": "Addressed the review summary by removing the brittle CSS source-file test and verifying the applied task list layout styles through rendered output."
+    "rationale": "Added phase to the manifest run schema and stage derivation, with test coverage for /api/executions phase payloads."
+  },
+  {
+    "id": 4149013747,
+    "disposition": "not-applicable",
+    "rationale": "Non-actionable automated review body; actionable Codex feedback is covered by comment 3118644455."
   }
 ]

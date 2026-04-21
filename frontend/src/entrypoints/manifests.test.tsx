@@ -42,7 +42,7 @@ describe('Manifests Entrypoint', () => {
                 manifestName: 'registry-refresh',
                 action: 'plan',
                 status: 'running',
-                currentStage: 'fetch',
+                phase: 'fetch',
                 startedAt: '2026-04-21T12:05:00Z',
                 detailHref: '/tasks/mm:running-manifest?source=temporal',
               },
