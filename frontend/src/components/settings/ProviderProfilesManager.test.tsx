@@ -330,6 +330,28 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByRole('button', { name: 'Reset form' })).toBeNull();
   });
 
+  it('exposes table cell labels for the mobile provider profile card layout', () => {
+    renderProviderProfilesManager([profile]);
+
+    const table = screen.getByRole('table');
+    expect(table.classList.contains('provider-profiles-table')).toBe(true);
+    expect(table.closest('.provider-profiles-table-wrap')).not.toBeNull();
+
+    const profileRow = table.querySelector('tbody tr');
+    const labels = Array.from(profileRow?.querySelectorAll('td') ?? []).map((cell) =>
+      cell.getAttribute('data-label'),
+    );
+    expect(labels).toEqual([
+      'Profile',
+      'Runtime',
+      'Provider',
+      'Credential',
+      'Secret refs',
+      'Status',
+      'Actions',
+    ]);
+  });
+
   it('sends runtime default changes when updating an edited profile', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
       ok: true,

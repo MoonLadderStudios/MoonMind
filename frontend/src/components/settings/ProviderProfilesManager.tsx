@@ -663,8 +663,8 @@ export function ProviderProfilesManager({
         </div>
       </div>
 
-      <div className="mt-6 overflow-x-auto">
-        <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-left text-sm">
+      <div className="provider-profiles-table-wrap mt-6 overflow-x-auto">
+        <table className="provider-profiles-table min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-left text-sm">
           <thead className="bg-slate-50 dark:bg-slate-800/50">
             <tr>
               <th className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400">Profile</th>
@@ -689,7 +689,7 @@ export function ProviderProfilesManager({
                 const canStartOAuth = isCodexOAuthCapable(profile);
                 return (
                 <tr key={profile.profile_id}>
-                  <td className="px-3 py-4">
+                  <td className="px-3 py-4" data-label="Profile">
                     <div className="font-medium text-slate-900 dark:text-white">{profile.profile_id}</div>
                     {profile.is_default ? (
                       <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
@@ -708,23 +708,23 @@ export function ProviderProfilesManager({
                       </div>
                     )}
                   </td>
-                  <td className="px-3 py-4 text-slate-700 dark:text-slate-300">{profile.runtime_id}</td>
-                  <td className="px-3 py-4">
+                  <td className="px-3 py-4 text-slate-700 dark:text-slate-300" data-label="Runtime">{profile.runtime_id}</td>
+                  <td className="px-3 py-4" data-label="Provider">
                     <div className="text-slate-700 dark:text-slate-300">{profile.provider_id}</div>
                     {profile.provider_label ? (
                       <div className="text-xs text-slate-500 dark:text-slate-400">{profile.provider_label}</div>
                     ) : null}
                   </td>
-                  <td className="px-3 py-4 text-slate-700 dark:text-slate-300">
+                  <td className="px-3 py-4 text-slate-700 dark:text-slate-300" data-label="Credential">
                     <div>{profile.credential_source}</div>
                     <div className="text-xs text-slate-500 dark:text-slate-400">
                       {profile.runtime_materialization_mode}
                     </div>
                   </td>
-                  <td className="px-3 py-4 font-mono text-xs text-slate-600 dark:text-slate-400">
+                  <td className="px-3 py-4 font-mono text-xs text-slate-600 dark:text-slate-400" data-label="Secret refs">
                     {summarizeSecretRefs(profile.secret_refs)}
                   </td>
-                  <td className="px-3 py-4">
+                  <td className="px-3 py-4" data-label="Status">
                     <span
                       className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
                         profile.enabled
@@ -745,7 +745,7 @@ export function ProviderProfilesManager({
                       </div>
                     ) : null}
                   </td>
-                  <td className="px-3 py-4">
+                  <td className="px-3 py-4" data-label="Actions">
                     <div className="flex flex-wrap gap-2">
                       {canStartOAuth ? (
                         <button

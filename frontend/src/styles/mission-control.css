@@ -785,6 +785,78 @@ tbody tr:hover {
   text-align: center;
 }
 
+@media (max-width: 720px) {
+  .provider-profiles-table-wrap {
+    overflow: visible;
+  }
+
+  .provider-profiles-table {
+    display: block;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .provider-profiles-table thead {
+    display: none;
+  }
+
+  .provider-profiles-table tbody {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .provider-profiles-table tbody tr {
+    display: grid;
+    gap: 0;
+    border: 1px solid rgb(var(--mm-border) / 0.8);
+    border-radius: 0.5rem;
+    background: rgb(var(--mm-panel) / 0.78);
+    box-shadow: 0 14px 32px -28px rgb(var(--mm-ink) / 0.55);
+    overflow: hidden;
+  }
+
+  .provider-profiles-table tbody tr:nth-child(2n),
+  .provider-profiles-table tbody tr:hover {
+    background: rgb(var(--mm-panel) / 0.78);
+  }
+
+  .provider-profiles-table td {
+    display: grid;
+    grid-template-columns: minmax(6.5rem, 34%) minmax(0, 1fr);
+    gap: 0.75rem;
+    align-items: start;
+    border-bottom: 1px solid rgb(var(--mm-border) / 0.58);
+    padding: 0.78rem 0.85rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .provider-profiles-table td::before {
+    content: attr(data-label);
+    color: rgb(var(--mm-muted));
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1.35;
+    text-transform: uppercase;
+  }
+
+  .provider-profiles-table td:last-child {
+    border-bottom: 0;
+  }
+
+  .provider-profiles-table td[colspan] {
+    display: block;
+    text-align: center;
+  }
+
+  .provider-profiles-table td[colspan]::before {
+    content: none;
+  }
+}
+
 .queue-card-list {
   list-style: none;
   margin: 0;
