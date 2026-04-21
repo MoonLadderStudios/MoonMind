@@ -2032,6 +2032,34 @@ def test_cancel_execution_passes_reject_action_to_service() -> None:
         assert response.json()["interventionAudit"][0]["action"] == "reject"
 
 
+def test_cancel_execution_authorizes_projection_only_child_target() -> None:
+    for test_client, service in _client_with_service():
+        child = _build_execution_record(state=MoonMindWorkflowState.AWAITING_SLOT)
+        child.workflow_id = (
+            "resolver:mm:parent:pr:1634:head:"
+            "5ed0c032789b901b99da93eaa4877de6609fdf35:1"
+        )
+        canceled = _build_execution_record(state=MoonMindWorkflowState.CANCELED)
+        canceled.workflow_id = child.workflow_id
+        canceled.close_status = "canceled"
+        service.describe_cancel_target_execution.return_value = child
+        service.cancel_execution.return_value = canceled
+
+        response = test_client.post(
+            f"/api/executions/{child.workflow_id}/cancel",
+            json={"graceful": True, "reason": "stop child"},
+        )
+
+        assert response.status_code == 202
+        service.describe_cancel_target_execution.assert_awaited_once_with(
+            child.workflow_id
+        )
+        called = service.cancel_execution.await_args.kwargs
+        assert called["workflow_id"] == child.workflow_id
+        assert called["reason"] == "stop child"
+        assert called["graceful"] is True
+
+
 def test_serialize_execution_treats_system_owner_id_as_system_owner_type() -> None:
     record = SimpleNamespace(
         close_status=None,
