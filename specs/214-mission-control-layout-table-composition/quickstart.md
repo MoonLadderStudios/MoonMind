@@ -19,6 +19,14 @@ Expected result:
 - table wrapper scroll and sticky header posture is covered,
 - existing task-list behavior tests still pass.
 
+For masthead source-design coverage, run:
+
+```bash
+./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/mission-control.test.tsx
+```
+
+Expected result: the desktop masthead keeps brand content left, navigation visually centered, and version/utility metadata aligned right.
+
 ## Final Unit Wrapper
 
 ```bash
@@ -26,6 +34,10 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypo
 ```
 
 Expected result: Python unit suite and targeted UI tests pass through the canonical wrapper.
+
+## Integration Strategy
+
+No compose-backed integration test is required for MM-426 because backend contracts, persistence, and Temporal behavior are unchanged. The integration-style validation is the task-list browser component boundary in `frontend/src/entrypoints/tasks-list.test.tsx`, which exercises rendered filters, request/query shape, routing links, pagination, mobile cards, active-filter chips, and table structure together.
 
 ## Manual Inspection
 
