@@ -310,14 +310,19 @@ describe('Mission Control shared entry', () => {
   });
 
   it('aligns compact controls, focus rings, disabled states, and reduced motion', async () => {
-    const compactControlBlock = cssRuleBlock(missionControlCss, '.queue-inline-toggle,\n.queue-inline-filter');
-    expect(compactControlBlock).toContain('background: var(--mm-control-shell)');
-    expect(compactControlBlock).toContain('border: 1px solid var(--mm-control-border)');
+    const inlineToggleBlock = cssRuleBlock(missionControlCss, '.queue-inline-toggle {');
+    expect(inlineToggleBlock).toContain('padding: 0');
+    expect(inlineToggleBlock).not.toContain('background: var(--mm-control-shell)');
+    expect(inlineToggleBlock).not.toContain('border: 1px solid var(--mm-control-border)');
+
+    const inlineFilterBlock = cssRuleBlock(missionControlCss, '.queue-inline-filter {');
+    expect(inlineFilterBlock).toContain('background: var(--mm-control-shell)');
+    expect(inlineFilterBlock).toContain('border: 1px solid var(--mm-control-border)');
 
     const filterChipBlock = cssRuleBlock(missionControlCss, '.task-list-filter-chip {');
     expect(filterChipBlock).toContain('background: var(--mm-control-shell)');
     expect(filterChipBlock).toContain('border: 1px solid var(--mm-control-border)');
-    expect(cssRuleBlock(missionControlCss, '.queue-inline-toggle:focus-within,\n.queue-inline-filter:focus-within')).toContain(
+    expect(cssRuleBlock(missionControlCss, '.queue-inline-filter:focus-within')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
     expect(cssRuleBlock(missionControlCss, 'button:focus-visible')).toContain(

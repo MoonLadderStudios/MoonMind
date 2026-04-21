@@ -2646,7 +2646,14 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   margin-bottom: 0.5rem;
 }
 
-.queue-inline-toggle,
+.queue-inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+}
+
 .queue-inline-filter {
   display: inline-flex;
   align-items: center;
@@ -2660,7 +2667,6 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   transition: var(--mm-control-transition);
 }
 
-.queue-inline-toggle:hover,
 .queue-inline-filter:hover {
   background: var(--mm-control-shell-hover);
   border-color: rgb(var(--mm-accent) / 0.72);
@@ -2668,18 +2674,20 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   transform: scale(var(--mm-control-hover-scale));
 }
 
-.queue-inline-toggle:focus-within,
 .queue-inline-filter:focus-within {
   border-color: rgb(var(--mm-accent-2) / 0.9);
   box-shadow: var(--mm-control-focus-ring);
 }
 
-.queue-inline-toggle:has(input:disabled),
 .queue-inline-filter:has(select:disabled) {
   opacity: var(--mm-control-disabled-opacity);
   transform: none;
   filter: none;
   box-shadow: none;
+}
+
+.queue-inline-toggle:has(input:disabled) {
+  opacity: var(--mm-control-disabled-opacity);
 }
 
 .queue-live-output {
