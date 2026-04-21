@@ -70,6 +70,42 @@ def test_build_merge_gate_start_payload_from_published_pr() -> None:
     assert payload["resolverTemplate"]["repository"] == "MoonLadderStudios/MoonMind"
 
 
+def test_build_merge_gate_start_payload_preserves_parent_runtime_profile() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters={
+            "publishMode": "pr",
+            "targetRuntime": "codex_cli",
+            "profileId": "codex_default",
+            "model": "gpt-5.4",
+            "effort": "high",
+            "task": {
+                "publish": {
+                    "mergeAutomation": {
+                        "enabled": True,
+                        "mergeMethod": "squash",
+                    }
+                }
+            },
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/341",
+        head_sha="abc123",
+        parent_workflow_id="mm:parent",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    resolver_template = payload["resolverTemplate"]
+    assert resolver_template["targetRuntime"] == "codex_cli"
+    assert resolver_template["executionProfileRef"] == "codex_default"
+    assert resolver_template["model"] == "gpt-5.4"
+    assert resolver_template["effort"] == "high"
+    assert "profileId" not in resolver_template
+    assert "providerProfile" not in resolver_template
+
+
 def test_build_merge_gate_start_payload_normalizes_timeout_values() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._repo = "MoonLadderStudios/MoonMind"

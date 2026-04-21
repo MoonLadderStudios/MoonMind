@@ -48,6 +48,11 @@ _TOKEN_ASSIGNMENT_PATTERN = re.compile(
 )
 
 
+def _compact_text(value: object) -> str | None:
+    candidate = str(value or "").strip()
+    return candidate or None
+
+
 def sanitize_blocker_summary(value: str | None) -> str:
     """Return a compact blocker summary safe for workflow state and UI."""
 
@@ -227,12 +232,23 @@ def build_resolver_run_request(
     pull_request: Mapping[str, Any] | PullRequestRefModel,
     jira_issue_key: str | None,
     merge_method: str,
+    resolver_template: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     pr = (
         pull_request
         if isinstance(pull_request, PullRequestRefModel)
         else PullRequestRefModel.model_validate(pull_request)
     )
+    template = resolver_template if isinstance(resolver_template, Mapping) else {}
+    target_runtime = _compact_text(template.get("targetRuntime")) or "codex"
+    provider_profile = _compact_text(template.get("executionProfileRef"))
+    runtime_model = _compact_text(template.get("model"))
+    runtime_effort = _compact_text(template.get("effort"))
+    required_capabilities = [
+        str(item).strip()
+        for item in (template.get("requiredCapabilities") or [])
+        if str(item).strip()
+    ]
     args = {
         "repo": pr.repo,
         "pr": str(pr.number),
@@ -243,34 +259,46 @@ def build_resolver_run_request(
     if jira_issue_key:
         args["jiraIssueKey"] = jira_issue_key
     title = f"Resolve PR #{pr.number}"
+    runtime_payload: dict[str, Any] = {"mode": target_runtime}
+    if provider_profile:
+        runtime_payload["executionProfileRef"] = provider_profile
+    if runtime_model:
+        runtime_payload["model"] = runtime_model
+    if runtime_effort:
+        runtime_payload["effort"] = runtime_effort
+    initial_parameters: dict[str, Any] = {
+        "repo": pr.repo,
+        "repository": pr.repo,
+        "publishMode": "none",
+        "targetRuntime": target_runtime,
+        "task": {
+            "instructions": (
+                f"Resolve and merge pull request {pr.url}. "
+                "Use pr-resolver and do not create another pull request."
+            ),
+            "tool": {"type": "skill", "name": "pr-resolver", "version": "1.0"},
+            "skill": {"id": "pr-resolver", "args": args},
+            "runtime": runtime_payload,
+            "publish": {"mode": "none"},
+        },
+        "workspaceSpec": {
+            "repository": pr.repo,
+            "branch": pr.head_branch,
+            "startingBranch": pr.base_branch,
+            "targetBranch": pr.head_branch,
+        },
+        "mergeGate": {
+            "parentWorkflowId": parent_workflow_id,
+            "pullRequestUrl": pr.url,
+            "headSha": pr.head_sha,
+        },
+    }
+    if required_capabilities:
+        initial_parameters["requiredCapabilities"] = required_capabilities
     return {
         "workflow_type": "MoonMind.Run",
         "title": title,
-        "initial_parameters": {
-            "repo": pr.repo,
-            "repository": pr.repo,
-            "publishMode": "none",
-            "task": {
-                "instructions": (
-                    f"Resolve and merge pull request {pr.url}. "
-                    "Use pr-resolver and do not create another pull request."
-                ),
-                "tool": {"type": "skill", "name": "pr-resolver", "version": "1.0"},
-                "skill": {"id": "pr-resolver", "args": args},
-                "publish": {"mode": "none"},
-            },
-            "workspaceSpec": {
-                "repository": pr.repo,
-                "branch": pr.head_branch,
-                "startingBranch": pr.base_branch,
-                "targetBranch": pr.head_branch,
-            },
-            "mergeGate": {
-                "parentWorkflowId": parent_workflow_id,
-                "pullRequestUrl": pr.url,
-                "headSha": pr.head_sha,
-            },
-        },
+        "initial_parameters": initial_parameters,
     }
 
 
