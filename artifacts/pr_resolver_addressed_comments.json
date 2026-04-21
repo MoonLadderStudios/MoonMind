@@ -1,27 +1,27 @@
 [
   {
-    "id": 3114948062,
+    "id": 3115399905,
     "disposition": "addressed",
-    "rationale": "Changed the provider profiles table divider utility to md:divide-y so the hidden mobile header does not leave an extra top border above the card list."
+    "rationale": "Secret validation now checks only fields submitted by the active source mode."
   },
   {
-    "id": 3114948072,
-    "disposition": "addressed",
-    "rationale": "Added explicit table, rowgroup, row, columnheader, and cell roles plus stable header associations for the responsive table/card layout."
-  },
-  {
-    "id": 4144944042,
-    "disposition": "addressed",
-    "rationale": "Review summary covered the same divider and accessibility feedback, both of which were addressed in this change."
-  },
-  {
-    "id": 3114948151,
-    "disposition": "addressed",
-    "rationale": "Replaced display:none on the mobile table header with visually-hidden styling and added headers mappings so header context remains available to assistive technologies."
-  },
-  {
-    "id": 4144944133,
+    "id": 4145431398,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper text only; it contained no separate actionable request beyond the linked review comments."
+    "rationale": "Review summary; its single actionable point is tracked by review comments 3115399905 and 3115404834."
+  },
+  {
+    "id": 3115404834,
+    "disposition": "addressed",
+    "rationale": "Registry submissions now ignore stale inactive inline YAML while preserving validation for active registry input."
+  },
+  {
+    "id": 3115404837,
+    "disposition": "addressed",
+    "rationale": "Max Docs validation now rejects non-safe or non-finite numeric conversions before request payload construction."
+  },
+  {
+    "id": 4145436869,
+    "disposition": "not-applicable",
+    "rationale": "Automated review wrapper with no separate actionable feedback beyond the inline comments already addressed."
   }
 ]

@@ -243,6 +243,63 @@ describe('Manifests Entrypoint', () => {
     });
   });
 
+  it('ignores inactive inline secrets when running a registry manifest', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions?entry=manifest&limit=200') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      }
+      if (url === '/api/manifests/docs-registry/runs') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            execution: {
+              workflowId: 'mm:manifest-123',
+            },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    fireEvent.change(screen.getByLabelText('Source Kind'), {
+      target: { value: 'inline' },
+    });
+    fireEvent.change(screen.getByLabelText('Manifest Name'), {
+      target: { value: 'inline-draft' },
+    });
+    fireEvent.change(screen.getByLabelText('Inline YAML'), {
+      target: { value: 'kind: docs\nauth:\n  token=stale-draft\n' },
+    });
+    fireEvent.change(screen.getByLabelText('Source Kind'), {
+      target: { value: 'registry' },
+    });
+    fireEvent.change(screen.getByLabelText('Registry Manifest Name'), {
+      target: { value: 'docs-registry' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Manifest' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/manifests/docs-registry/runs',
+        expect.objectContaining({
+          method: 'POST',
+        }),
+      );
+    });
+    expect(screen.queryByText('Raw secret-like values are not allowed. Use env or Vault references instead.')).toBeNull();
+  });
+
   it('rejects invalid max docs before calling manifest APIs', async () => {
     renderWithClient(<ManifestsPage payload={mockPayload} />);
 
@@ -252,6 +309,25 @@ describe('Manifests Entrypoint', () => {
     fireEvent.click(screen.getByText('Advanced options'));
     fireEvent.change(screen.getByLabelText('Max Docs'), {
       target: { value: '1.5' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Manifest' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Max Docs must be a positive whole number.')).toBeTruthy();
+    });
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/api/manifests/docs-registry'))).toBe(false);
+  });
+
+  it('rejects overflowed max docs before building a request body', async () => {
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    fireEvent.change(screen.getByLabelText('Registry Manifest Name'), {
+      target: { value: 'docs-registry' },
+    });
+    fireEvent.click(screen.getByText('Advanced options'));
+    fireEvent.change(screen.getByLabelText('Max Docs'), {
+      target: { value: '9'.repeat(400) },
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Run Manifest' }));

@@ -80,13 +80,9 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
       setNotice({ level: 'error', text: 'Manifest YAML is required.' });
       return;
     }
-    if (
-      hasRawSecretLikeValue([
-        trimmedManifestName,
-        trimmedRegistryName,
-        manifestContent,
-      ])
-    ) {
+    const secretCheckValues =
+      sourceKind === 'registry' ? [trimmedRegistryName] : [trimmedManifestName, manifestContent];
+    if (hasRawSecretLikeValue(secretCheckValues)) {
       setNotice({
         level: 'error',
         text: 'Raw secret-like values are not allowed. Use env or Vault references instead.',
@@ -94,7 +90,13 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
       return;
     }
     const trimmedMaxDocs = maxDocs.trim();
-    if (trimmedMaxDocs && !/^[1-9]\d*$/.test(trimmedMaxDocs)) {
+    const parsedMaxDocs = trimmedMaxDocs ? Number(trimmedMaxDocs) : undefined;
+    if (
+      trimmedMaxDocs &&
+      (!/^[1-9]\d*$/.test(trimmedMaxDocs) ||
+        !Number.isSafeInteger(parsedMaxDocs) ||
+        parsedMaxDocs <= 0)
+    ) {
       setNotice({ level: 'error', text: 'Max Docs must be a positive whole number.' });
       return;
     }
@@ -108,8 +110,8 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
     if (forceFull) {
       options.forceFull = true;
     }
-    if (trimmedMaxDocs) {
-      options.maxDocs = Number(trimmedMaxDocs);
+    if (parsedMaxDocs !== undefined) {
+      options.maxDocs = parsedMaxDocs;
     }
 
     try {
