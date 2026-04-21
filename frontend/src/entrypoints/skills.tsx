@@ -163,6 +163,7 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
   const [isCreating, setIsCreating] = useState(false);
   const [name, setName] = useState('');
   const [markdown, setMarkdown] = useState('');
+  const [zipFile, setZipFile] = useState<File | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const skillsQuery = useQuery({
@@ -214,6 +215,38 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
     },
     onError: (error) => {
       setMessage(error instanceof Error ? error.message : 'Failed to create skill.');
+    },
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!zipFile) {
+        throw new Error('Choose a skill zip file to upload.');
+      }
+      const body = new FormData();
+      body.append('file', zipFile);
+      const response = await fetch('/api/tasks/skills/upload', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+        },
+        body,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to upload skill zip.');
+      }
+      return response.json() as Promise<{ skill?: string }>;
+    },
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ['skills', 'detail'] });
+      setSelectedSkillId(result.skill || zipFile?.name.replace(/\.zip$/i, '') || '');
+      setIsCreating(false);
+      setZipFile(null);
+      setMessage(null);
+    },
+    onError: (error) => {
+      setMessage(error instanceof Error ? error.message : 'Failed to upload skill zip.');
     },
   });
 
@@ -310,6 +343,30 @@ export function SkillsPage({ payload: _payload }: { payload: BootPayload }) {
                   >
                     Cancel
                   </button>
+                </div>
+                <div className="mt-6 border-t border-mm-border/80 pt-5">
+                  <h4 className="text-base font-semibold text-slate-900 dark:text-white">Upload Skill Zip</h4>
+                  <label>
+                    Skill Zip
+                    <input
+                      type="file"
+                      accept=".zip,application/zip"
+                      onChange={(event) => {
+                        setZipFile(event.target.files?.[0] || null);
+                        setMessage(null);
+                      }}
+                    />
+                  </label>
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={uploadMutation.isPending}
+                      onClick={() => uploadMutation.mutate()}
+                    >
+                      {uploadMutation.isPending ? 'Uploading...' : 'Upload Zip'}
+                    </button>
+                  </div>
                 </div>
                 <p className={`queue-submit-message${message ? ' notice error' : ''}`}>
                   {message || ''}
