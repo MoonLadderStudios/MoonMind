@@ -2265,6 +2265,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   -webkit-backdrop-filter: blur(26px) saturate(1.65);
   display: grid;
   gap: 0.4rem;
+  justify-content: stretch;
   isolation: isolate;
 }
 
