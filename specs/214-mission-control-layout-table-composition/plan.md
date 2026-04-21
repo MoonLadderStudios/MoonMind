@@ -21,7 +21,7 @@ Implement MM-426 by making Mission Control's task-list composition match the des
 | FR-008 | implemented_verified | `tasks-list.test.tsx` includes MM-426-focused composition, filter-chip, and sticky-header assertions. | no new implementation | UI unit |
 | FR-009 | implemented_verified | `spec.md`, `verification.md`, and `docs/tmp/jira-orchestration-inputs/MM-426-moonspec-orchestration-input.md` preserve MM-426, the trusted Jira preset brief, and source design coverage IDs. | no new implementation | final verify |
 | DESIGN-REQ-012 | implemented_verified | `spec.md` maps MM-426 to the Mission Control layout system; `tasks-list.tsx` uses control and data surfaces that support data-wide route composition. | no new implementation | UI unit |
-| DESIGN-REQ-013 | implemented_verified | Masthead/navigation architecture is out of direct task-list scope, and this story preserves route composition without changing masthead ownership. | no new implementation | final verify |
+| DESIGN-REQ-013 | implemented_verified | `frontend/src/styles/mission-control.css` uses a three-zone masthead grid, and `frontend/src/entrypoints/mission-control.test.tsx` verifies brand-left, nav-centered, version-right desktop alignment. | no new implementation | UI unit |
 | DESIGN-REQ-014 | implemented_verified | Control deck/filter cluster requirements are implemented by `.task-list-control-deck`, `.task-list-control-grid`, utility cluster, chips, and clear action. | no new implementation | UI unit |
 | DESIGN-REQ-019 | implemented_verified | `/tasks/list` uses the control deck + data slab structure, sticky table header, attached pagination/page-size controls, and table-first desktop posture. | no new implementation | UI unit |
 
@@ -30,7 +30,7 @@ Implement MM-426 by making Mission Control's task-list composition match the des
 **Language/Version**: TypeScript/React for Mission Control UI; CSS for shared Mission Control styling  
 **Primary Dependencies**: React, TanStack Query, Vite/Vitest, existing Mission Control shared stylesheet  
 **Storage**: No new persistent storage  
-**Unit Testing**: `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx`; direct `./node_modules/.bin/vitest` if the npm script cannot resolve `vitest` in the managed container; final wrapper via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx`  
+**Unit Testing**: `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/mission-control.test.tsx`; direct `./node_modules/.bin/vitest` if the npm script cannot resolve `vitest` in the managed container; final wrapper via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx`
 **Integration Testing**: Existing task-list UI render tests exercise API request shape, route links, and user-level filter/pagination flows in an integration-style browser component boundary; no compose-backed integration is required because backend contracts are unchanged
 **Target Platform**: Browser-hosted Mission Control UI served by FastAPI  
 **Project Type**: Web UI composition/design-system story  

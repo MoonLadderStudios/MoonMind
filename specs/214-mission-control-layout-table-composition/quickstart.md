@@ -19,6 +19,14 @@ Expected result:
 - table wrapper scroll and sticky header posture is covered,
 - existing task-list behavior tests still pass.
 
+For masthead source-design coverage, run:
+
+```bash
+./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/mission-control.test.tsx
+```
+
+Expected result: the desktop masthead keeps brand content left, navigation visually centered, and version/utility metadata aligned right.
+
 ## Final Unit Wrapper
 
 ```bash

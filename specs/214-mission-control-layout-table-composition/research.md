@@ -32,10 +32,10 @@ Test implications: No backend or compose-backed integration test is required; bu
 
 Decision: Treat DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, and DESIGN-REQ-019 from the trusted MM-426 preset brief as in-scope runtime requirements.
 
-Evidence: `specs/214-mission-control-layout-table-composition/spec.md` preserves the source design coverage IDs; `frontend/src/entrypoints/tasks-list.tsx` renders the control deck, utility cluster, active chips, clear action, and data slab; `frontend/src/styles/mission-control.css` defines sticky table headers and dense table slab styles; `frontend/src/components/tables/DataTable.tsx` emits shared data-table classes.
+Evidence: `specs/214-mission-control-layout-table-composition/spec.md` preserves the source design coverage IDs; `frontend/src/entrypoints/tasks-list.tsx` renders the control deck, utility cluster, active chips, clear action, and data slab; `frontend/src/styles/mission-control.css` defines sticky table headers, dense table slab styles, and the three-zone masthead grid; `frontend/src/entrypoints/mission-control.test.tsx` verifies brand-left, nav-centered, version-right masthead alignment; `frontend/src/components/tables/DataTable.tsx` emits shared data-table classes.
 
-Rationale: The Jira brief points at `docs/UI/MissionControlDesignSystem.md` as source requirements. The scoped story implements the `/tasks/list` layout/table composition portions while keeping masthead ownership outside the task-list route.
+Rationale: The Jira brief points at `docs/UI/MissionControlDesignSystem.md` as source requirements. The scoped story implements the `/tasks/list` layout/table composition portions and relies on the existing shared Mission Control masthead contract for DESIGN-REQ-013.
 
 Alternatives considered: Regenerating broad design breakdown output was rejected because MM-426 is already a single-story preset brief. Adding a data model was rejected because the story adds no persisted data, schema, or state machine.
 
-Test implications: Unit tests cover the rendered UI class contract and sticky header posture. Integration strategy remains the existing task-list browser component boundary because backend API contracts are unchanged.
+Test implications: Unit tests cover the rendered UI class contract, sticky header posture, and masthead grid alignment. Integration strategy remains the existing task-list browser component boundary because backend API contracts are unchanged.

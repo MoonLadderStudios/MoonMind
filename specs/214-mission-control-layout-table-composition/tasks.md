@@ -5,7 +5,7 @@
 **Story**: Exactly one story, "Layout and Table Composition"
 **Independent Test**: Render the task list with Temporal rows and verify the control deck, data slab, active filter chips, sticky table header posture, existing request/sorting/pagination behavior, and mobile-card behavior.
 **Source Traceability**: FR-001 through FR-009, SC-001 through SC-005, acceptance scenarios 1-5, and DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-019 from the trusted MM-426 Jira preset brief.
-**Unit Test Plan**: Use focused Vitest coverage in `frontend/src/entrypoints/tasks-list.test.tsx` for semantic UI structure, active-filter chips, clear behavior, sticky header posture, and existing task-list behavior.
+**Unit Test Plan**: Use focused Vitest coverage in `frontend/src/entrypoints/tasks-list.test.tsx` for semantic UI structure, active-filter chips, clear behavior, sticky header posture, and existing task-list behavior; use `frontend/src/entrypoints/mission-control.test.tsx` for masthead grid alignment.
 **Integration Test Plan**: Use the task-list browser component boundary in `frontend/src/entrypoints/tasks-list.test.tsx` as integration-style coverage for rendered filters, request/query shape, routing links, pagination, mobile cards, active-filter chips, and table structure. No compose-backed integration test is required because backend contracts, persistence, and Temporal behavior are unchanged.
 
 ## Phase 1: Setup
@@ -17,7 +17,7 @@
 
 - [X] T003 Add red-first focused unit tests in `frontend/src/entrypoints/tasks-list.test.tsx` proving `.task-list-control-deck.panel--controls` and `.task-list-data-slab.panel--data` are present and contain the expected controls/results. (FR-001, FR-002, SC-001, DESIGN-REQ-012, DESIGN-REQ-019)
 - [X] T004 Add red-first focused unit tests in `frontend/src/entrypoints/tasks-list.test.tsx` proving active filter chips render and the clear-filters action resets filter state. (FR-003, SC-002, DESIGN-REQ-014)
-- [X] T005 Add integration-style task-list render coverage in `frontend/src/entrypoints/tasks-list.test.tsx` for request/query shape, routing links, pagination, mobile cards, table-first desktop structure, and sticky header posture. (FR-004, FR-005, FR-007, FR-008, SC-003, SC-004, DESIGN-REQ-019)
+- [X] T005 Add integration-style task-list render coverage in `frontend/src/entrypoints/tasks-list.test.tsx` for request/query shape, routing links, pagination, mobile cards, table-first desktop structure, and sticky header posture; preserve existing masthead unit coverage in `frontend/src/entrypoints/mission-control.test.tsx`. (FR-004, FR-005, FR-007, FR-008, SC-003, SC-004, DESIGN-REQ-013, DESIGN-REQ-019)
 - [X] T006 Confirm red-first evidence by running the focused task-list tests before production changes; record the initial failure and repair notes. The first direct run failed on new composition assertions because of an unsupported matcher and ambiguous chip text query, then passed after test repair. (FR-008)
 
 ## Phase 3: Implementation
@@ -29,7 +29,7 @@
 
 ## Phase 4: Story Validation
 
-- [X] T011 Run `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx`, then run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx` after the npm script cannot resolve `vitest` in this container. (FR-001 through FR-008, SC-001 through SC-004)
+- [X] T011 Run `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx`, then run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/tasks-list.test.tsx` after the npm script cannot resolve `vitest` in this container; run `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/mission-control.test.tsx` for masthead source-design coverage. (FR-001 through FR-008, SC-001 through SC-004, DESIGN-REQ-013)
 - [X] T012 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx` to validate the canonical unit wrapper and targeted UI coverage. (FR-001 through FR-008, SC-001 through SC-004)
 - [X] T013 Run build/manifest validation with `npm run ui:build:check`, `./node_modules/.bin/vite build --config frontend/vite.config.ts`, and `bash tools/run_repo_python.sh tools/verify_vite_manifest.py`, documenting npm script binary-resolution blockers when present. (FR-006, FR-007)
 
