@@ -28,7 +28,6 @@ const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
-const SPECKIT_ORCHESTRATE_PRESET_SLUG = "speckit-orchestrate";
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.task-create.propose-tasks";
 const JIRA_LAST_PROJECT_SESSION_KEY =
   "moonmind.task-create.jira.last-project-key";
@@ -1135,7 +1134,6 @@ export function preferredTemplate(items: TemplateOption[]): TemplateOption | nul
   const preferredSlugs = [
     JIRA_ORCHESTRATE_PRESET_SLUG,
     MOONSPEC_ORCHESTRATE_PRESET_SLUG,
-    SPECKIT_ORCHESTRATE_PRESET_SLUG,
   ];
 
   for (const slug of preferredSlugs) {

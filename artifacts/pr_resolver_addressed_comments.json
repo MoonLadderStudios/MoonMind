@@ -1,0 +1,12 @@
+[
+  {
+    "id": 3114361904,
+    "disposition": "addressed",
+    "rationale": "Updated deactivate_templates telemetry to increment the delete metric by the number of templates deactivated, with unit coverage for the bulk path."
+  },
+  {
+    "id": 4144292983,
+    "disposition": "not-applicable",
+    "rationale": "Top-level review summary only; the only concrete feedback item it referenced was addressed separately."
+  }
+]

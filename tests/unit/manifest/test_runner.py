@@ -93,3 +93,30 @@ spec:
         results = runner.run()
 
     assert results["ParentReader"][0] == ["hello"]
+
+
+def test_runner_falls_back_when_download_loader_is_unavailable(monkeypatch):
+    import sys
+    import types
+
+    manifest = Manifest.model_validate_yaml(yaml_str)
+
+    fake_core = types.ModuleType("llama_index.core")
+    fake_core.__path__ = []
+    fake_readers_pkg = types.ModuleType("llama_index.core.readers")
+    fake_readers_pkg.__path__ = []
+    fake_download_module = types.ModuleType("llama_index.core.readers.download")
+    fake_download_module.download_loader = lambda _type_name: DummyReader
+
+    monkeypatch.setitem(sys.modules, "llama_index.core", fake_core)
+    monkeypatch.setitem(sys.modules, "llama_index.core.readers", fake_readers_pkg)
+    monkeypatch.setitem(
+        sys.modules,
+        "llama_index.core.readers.download",
+        fake_download_module,
+    )
+
+    runner = ManifestRunner(manifest, logger=logging.getLogger("test"))
+    results = runner.run()
+
+    assert results["DummyReader"][0] == ["123-bar"]

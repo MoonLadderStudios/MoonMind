@@ -169,3 +169,52 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "mode": "{{ inputs.publish_mode }}",
             "mergeAutomation": {"enabled": True},
         }
+
+
+@pytest.mark.asyncio
+async def test_startup_deactivates_legacy_speckit_orchestrate_template(
+    disabled_env_keys, tmp_path
+):
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
+    db_base.DATABASE_URL = db_url
+    db_base.engine = create_async_engine(db_url, future=True)
+    db_base.async_session_maker = sessionmaker(
+        db_base.engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with db_base.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async with db_base.async_session_maker() as session:
+        legacy_template = TaskStepTemplate(
+            slug="speckit-orchestrate",
+            scope_type=TaskTemplateScopeType.GLOBAL,
+            scope_ref=None,
+            title="SpecKit Orchestrate",
+            description="Legacy preset",
+            tags=[],
+            required_capabilities=[],
+            is_active=True,
+        )
+        session.add(legacy_template)
+        await session.commit()
+
+    with (
+        patch("api_service.main._initialize_embedding_model"),
+        patch("api_service.main._initialize_vector_store"),
+        patch("api_service.main._initialize_contexts"),
+        patch("api_service.main._load_or_create_vector_index"),
+        patch("api_service.main._initialize_oidc_provider"),
+    ):
+        await startup_event()
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(TaskStepTemplate).where(
+                TaskStepTemplate.slug == "speckit-orchestrate",
+                TaskStepTemplate.scope_type == TaskTemplateScopeType.GLOBAL,
+                TaskStepTemplate.scope_ref.is_(None),
+            )
+        )
+        template = result.scalar_one_or_none()
+        assert template is not None
+        assert template.is_active is False

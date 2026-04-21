@@ -1854,17 +1854,8 @@ describe("Task Create Entrypoint", () => {
     expect(preferred?.scope).toBe("global");
   });
 
-  it("falls back to the legacy SpecKit orchestrate template when MoonSpec is absent", () => {
+  it("does not prefer the legacy SpecKit orchestrate template when newer presets are absent", () => {
     const preferred = preferredTemplate([
-      {
-        key: "global::::speckit-orchestrate",
-        slug: "speckit-orchestrate",
-        scope: "global",
-        title: "SpecKit Orchestrate",
-        description: "Legacy preset.",
-        latestVersion: "1.0.0",
-        version: "1.0.0",
-      },
       {
         key: "global::::other-template",
         slug: "other-template",
@@ -1874,9 +1865,18 @@ describe("Task Create Entrypoint", () => {
         latestVersion: "1.0.0",
         version: "1.0.0",
       },
+      {
+        key: "global::::speckit-orchestrate",
+        slug: "speckit-orchestrate",
+        scope: "global",
+        title: "SpecKit Orchestrate",
+        description: "Legacy preset.",
+        latestVersion: "1.0.0",
+        version: "1.0.0",
+      },
     ]);
 
-    expect(preferred?.slug).toBe("speckit-orchestrate");
+    expect(preferred?.slug).toBe("other-template");
   });
 
   afterEach(() => {
