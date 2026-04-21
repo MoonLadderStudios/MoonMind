@@ -1148,7 +1148,7 @@ class MoonMindRunWorkflow:
             reason = "Dependency wait bypassed by operator."
 
         self._update_dependency_wait_duration()
-        bypassed_at = workflow.now().isoformat()
+        bypassed_at = workflow.now().isoformat().replace("+00:00", "Z")
         for prerequisite_workflow_id in list(self._unresolved_dependency_ids):
             self._dependency_outcomes_by_id[prerequisite_workflow_id] = {
                 "workflowId": prerequisite_workflow_id,

@@ -1226,17 +1226,24 @@ class TemporalExecutionService:
 
         signal_payload = dict(payload or {})
         if signal_name == "BypassDependencies":
-            self._append_intervention_audit(
-                record,
-                action="bypass_dependencies",
-                transport="temporal_signal",
-                summary="Dependency wait bypass requested.",
-                detail=str(signal_payload.get("reason") or "").strip() or None,
-            )
-            self._clear_waiting_metadata(record)
-            self._clear_wait_metadata(record)
-            self._set_state(record, MoonMindWorkflowState.INITIALIZING)
-            self._update_summary(record, "Dependency wait bypass requested.")
+            bypass_reason = str(signal_payload.get("reason") or "").strip() or None
+            if record.state == MoonMindWorkflowState.WAITING_ON_DEPENDENCIES:
+                self._append_intervention_audit(
+                    record,
+                    action="bypass_dependencies",
+                    transport="temporal_signal",
+                    summary="Dependency wait bypass requested.",
+                    detail=bypass_reason,
+                )
+                self._update_summary(record, "Dependency wait bypass requested.")
+            else:
+                self._append_intervention_audit(
+                    record,
+                    action="bypass_dependencies",
+                    transport="temporal_signal",
+                    summary="Dependency wait bypass ignored outside dependency wait.",
+                    detail=bypass_reason,
+                )
         elif signal_name == "ExternalEvent":
             source_raw = signal_payload.get("source")
             event_type_raw = signal_payload.get("event_type")

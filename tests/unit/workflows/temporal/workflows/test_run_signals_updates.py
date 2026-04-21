@@ -549,6 +549,10 @@ async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypa
             "message": "No longer needed.",
         },
     ]
+    assert all(
+        workflow_instance._dependency_outcomes_by_id[dependency_id]["resolvedAt"].endswith("Z")
+        for dependency_id in ("dep-1", "dep-2")
+    )
     assert any(
         (memo.get("dependencies") or {}).get("resolution") == "bypassed"
         for memo in memo_updates

@@ -1513,7 +1513,8 @@ async def test_signal_bypass_dependencies_records_operator_audit(
             initial_parameters={"task": {"dependsOn": []}},
             idempotency_key=None,
         )
-        service._set_state(created, MoonMindWorkflowState.WAITING_ON_DEPENDENCIES)
+        source = await service._require_source_execution(created.workflow_id)
+        service._set_state(source, MoonMindWorkflowState.WAITING_ON_DEPENDENCIES)
         await session.commit()
 
         await service.signal_execution(
@@ -1532,11 +1533,53 @@ async def test_signal_bypass_dependencies_records_operator_audit(
             },
         )
         refreshed = await service.describe_execution(created.workflow_id)
-        assert refreshed.state is MoonMindWorkflowState.INITIALIZING
+        assert refreshed.state is MoonMindWorkflowState.WAITING_ON_DEPENDENCIES
+        assert refreshed.memo["summary"] == "Dependency wait bypass requested."
         assert refreshed.memo["intervention_audit"][-1]["action"] == "bypass_dependencies"
         assert (
             refreshed.memo["intervention_audit"][-1]["detail"]
             == "No longer needs the upstream task."
+        )
+
+
+@pytest.mark.asyncio
+async def test_signal_bypass_dependencies_outside_wait_does_not_mutate_projection(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"task": {"dependsOn": []}},
+            idempotency_key=None,
+        )
+        source = await service._require_source_execution(created.workflow_id)
+        service._set_state(source, MoonMindWorkflowState.EXECUTING)
+        service._update_summary(source, "Execution in progress.")
+        await session.commit()
+
+        await service.signal_execution(
+            workflow_id=created.workflow_id,
+            signal_name="BypassDependencies",
+            payload={"reason": "Operator clicked bypass from stale UI."},
+            payload_artifact_ref=None,
+        )
+
+        refreshed = await service.describe_execution(created.workflow_id)
+        assert refreshed.state is MoonMindWorkflowState.EXECUTING
+        assert refreshed.memo["summary"] == "Execution in progress."
+        assert refreshed.memo["intervention_audit"][-1]["action"] == "bypass_dependencies"
+        assert (
+            refreshed.memo["intervention_audit"][-1]["summary"]
+            == "Dependency wait bypass ignored outside dependency wait."
         )
 
 
