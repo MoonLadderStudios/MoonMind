@@ -1,17 +1,32 @@
 [
   {
-    "id": 3114803761,
+    "id": 3114878011,
     "disposition": "addressed",
-    "rationale": "Memoized activeFilters in frontend/src/entrypoints/tasks-list.tsx with dependencies on the filter state values."
+    "rationale": "Caught SkillResolutionError for zip-derived skill names and return HTTP 400 instead of surfacing a server error."
   },
   {
-    "id": 4144793623,
+    "id": 4144869522,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable items are tracked by the two inline review comments."
+    "rationale": "Top-level automated review summary; actionable inline comments are tracked separately."
   },
   {
-    "id": 3114803770,
+    "id": 3114882451,
     "disposition": "addressed",
-    "rationale": "Wrapped clearFilters in useCallback and stabilized resetToFirstPage with useCallback for a stable dependency."
+    "rationale": "Root SKILL.md uploads now convert invalid fallback filenames to HTTP 400 with regression coverage."
+  },
+  {
+    "id": 3114882461,
+    "disposition": "addressed",
+    "rationale": "Nested skill directory uploads now convert invalid root prefixes to HTTP 400 with regression coverage."
+  },
+  {
+    "id": 3114882463,
+    "disposition": "addressed",
+    "rationale": "Zip extraction now uses mkdtemp with explicit cleanup and shutil.move, avoiding TemporaryDirectory cleanup after moving the source path."
+  },
+  {
+    "id": 4144873847,
+    "disposition": "not-applicable",
+    "rationale": "Top-level review summary; actionable inline comments are tracked separately."
   }
 ]
