@@ -1,5 +1,4 @@
 import logging
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from moonmind.manifest.runner import ManifestRunner
@@ -97,20 +96,27 @@ spec:
 
 
 def test_runner_falls_back_when_download_loader_is_unavailable(monkeypatch):
+    import sys
+    import types
+
     manifest = Manifest.model_validate_yaml(yaml_str)
 
-    monkeypatch.setattr(
-        "moonmind.manifest.runner.download_loader",
-        lambda _type_name: (_ for _ in ()).throw(ImportError("missing")),
+    fake_core = types.ModuleType("llama_index.core")
+    fake_core.__path__ = []
+    fake_readers_pkg = types.ModuleType("llama_index.core.readers")
+    fake_readers_pkg.__path__ = []
+    fake_download_module = types.ModuleType("llama_index.core.readers.download")
+    fake_download_module.download_loader = lambda _type_name: DummyReader
+
+    monkeypatch.setitem(sys.modules, "llama_index.core", fake_core)
+    monkeypatch.setitem(sys.modules, "llama_index.core.readers", fake_readers_pkg)
+    monkeypatch.setitem(
+        sys.modules,
+        "llama_index.core.readers.download",
+        fake_download_module,
     )
 
-    def fake_import_module(name: str):
-        if name == "llama_index.readers.dummyreader":
-            return SimpleNamespace(DummyReader=DummyReader)
-        raise AssertionError(f"unexpected import: {name}")
-
-    with patch("moonmind.manifest.runner.import_module", side_effect=fake_import_module):
-        runner = ManifestRunner(manifest, logger=logging.getLogger("test"))
-        results = runner.run()
+    runner = ManifestRunner(manifest, logger=logging.getLogger("test"))
+    results = runner.run()
 
     assert results["DummyReader"][0] == ["123-bar"]
