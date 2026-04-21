@@ -221,6 +221,53 @@ describe('Tasks List Entrypoint', () => {
     expect(getComputedStyle(scheduledHeader as HTMLElement).position).toBe('sticky');
   });
 
+  it('keeps the task list surfaces to one control deck and one data slab', async () => {
+    renderWithClient(
+      <section className="panel" aria-live="polite">
+        <TasksListPage payload={mockPayload} />
+      </section>,
+    );
+
+    await screen.findAllByText('Example task');
+
+    const shellPanel = document.querySelector<HTMLElement>('.panel');
+    const controlDecks = document.querySelectorAll<HTMLElement>('.task-list-control-deck.panel--controls');
+    const dataSlabs = document.querySelectorAll<HTMLElement>('.task-list-data-slab.panel--data');
+
+    expect(controlDecks).toHaveLength(1);
+    expect(dataSlabs).toHaveLength(1);
+
+    const controlDeck = controlDecks[0] as HTMLElement;
+    const dataSlab = dataSlabs[0] as HTMLElement;
+    const controlGrid = controlDeck.querySelector<HTMLElement>('.task-list-control-grid');
+    const tableWrapper = dataSlab.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
+
+    expect(controlGrid).toBeTruthy();
+    expect(tableWrapper).toBeTruthy();
+
+    const shellPanelStyles = getComputedStyle(shellPanel as HTMLElement);
+    expect(shellPanelStyles.borderTopWidth).toBe('0px');
+    expect(shellPanelStyles.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(shellPanelStyles.boxShadow).toBe('none');
+    expect(shellPanelStyles.paddingTop).toBe('0px');
+    expect(shellPanelStyles.minHeight).toBe('0px');
+
+    const controlGridStyles = getComputedStyle(controlGrid as HTMLElement);
+    expect(controlGridStyles.width).toBe('100%');
+    expect(controlGridStyles.maxWidth).toBe('none');
+    expect(controlGridStyles.gridTemplateColumns).toBe('repeat(4, minmax(12rem, 1fr))');
+
+    const dataSlabStyles = getComputedStyle(dataSlab);
+    expect(dataSlabStyles.gap).toBe('0px');
+    expect(dataSlabStyles.overflow).toBe('hidden');
+    expect(dataSlabStyles.paddingTop).toBe('0px');
+
+    const tableWrapperStyles = getComputedStyle(tableWrapper as HTMLElement);
+    expect(tableWrapperStyles.borderTopWidth).toBe('0px');
+    expect(tableWrapperStyles.borderRadius).toBe('0px');
+    expect(tableWrapperStyles.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+  });
+
   it('shows active filter chips and clears filters from the control deck', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 

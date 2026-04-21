@@ -511,6 +511,72 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
     assert "commit your work" not in node["inputs"]["instructions"]
 
 
+def test_runtime_planner_does_not_require_pr_branch_for_jira_verify():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Verify KANDY-3607 against this branch.",
+                "tool": {"type": "skill", "name": "jira-verify"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+    assert node["tool"] == {
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
+    }
+    assert node["inputs"]["selectedSkill"] == "jira-verify"
+    assert node["inputs"]["publishMode"] == "none"
+    assert node["inputs"]["instructions"].startswith("Use $jira-verify.")
+    assert "targetBranch" not in node["inputs"]
+    assert "commit your work" not in node["inputs"]["instructions"]
+
+
+def test_runtime_planner_does_not_require_pr_branch_for_jira_pr_verify():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Verify KANDY-3607 against PR #1640.",
+                "tool": {"type": "skill", "name": "jira-pr-verify"},
+                "runtime": {"mode": "codex_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node = plan["nodes"][0]
+    assert node["tool"] == {
+        "type": "agent_runtime",
+        "name": "codex_cli",
+        "version": "1.0",
+    }
+    assert node["inputs"]["selectedSkill"] == "jira-pr-verify"
+    assert node["inputs"]["publishMode"] == "none"
+    assert node["inputs"]["instructions"].startswith("Use $jira-pr-verify.")
+    assert "targetBranch" not in node["inputs"]
+    assert "commit your work" not in node["inputs"]["instructions"]
+
+
 def test_runtime_planner_inherits_top_level_jira_skill_for_multi_step_publish():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

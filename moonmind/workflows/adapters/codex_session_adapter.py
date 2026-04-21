@@ -135,7 +135,7 @@ def _jira_skill_blocker_summary(
     assistant_text: str,
 ) -> str | None:
     selected_skill = selected_agent_skill(parameters)
-    if selected_skill not in {"jira-issue-creator", "jira-pr-verify"}:
+    if selected_skill not in {"jira-issue-creator", "jira-pr-verify", "jira-verify"}:
         return None
     normalized = " ".join(str(assistant_text or "").lower().split())
     if not normalized:
@@ -148,12 +148,13 @@ def _jira_skill_blocker_summary(
             "could not create the jira",
             "could not create jira",
             "jira access is not configured",
+            "jira_auth_failed",
             "jira tools are not enabled",
             "jira tool calls are unavailable",
             "no jira mcp connector/tool is available",
         )
         default_summary = "Jira issue creation was blocked."
-    else:
+    elif selected_skill == "jira-pr-verify":
         blocker_markers = (
             "could not read the jira issue body",
             "could not fetch the jira issue",
@@ -164,11 +165,32 @@ def _jira_skill_blocker_summary(
             "without an authenticated jira session",
             "trusted jira content is unavailable",
             "jira access is not configured",
+            "jira_auth_failed",
             "jira tools are not enabled",
             "jira tool calls are unavailable",
             "no jira mcp connector/tool is available",
         )
         default_summary = "Jira PR verification was blocked."
+    else:
+        blocker_markers = (
+            "could not read the jira issue body",
+            "could not fetch the jira issue",
+            "could not access jira",
+            "could not post the jira comment",
+            "could not add the jira comment",
+            "jira.add_comment failed",
+            "jira comment cannot be posted",
+            "jira issue body is unavailable",
+            "no authenticated jira session",
+            "without an authenticated jira session",
+            "trusted jira content is unavailable",
+            "jira access is not configured",
+            "jira_auth_failed",
+            "jira tools are not enabled",
+            "jira tool calls are unavailable",
+            "no jira mcp connector/tool is available",
+        )
+        default_summary = "Jira verification was blocked."
     if any(marker in normalized for marker in blocker_markers):
         return _clamp_agent_run_result_summary(
             assistant_text,
