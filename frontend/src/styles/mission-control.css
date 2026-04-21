@@ -546,7 +546,6 @@ h1 {
 
 .panel--controls {
   border-radius: 0.95rem;
-  background: var(--mm-glass-fill);
   padding: 0.9rem;
 }
 
@@ -569,7 +568,7 @@ h1 {
 
 .panel--data {
   border-radius: 0.8rem;
-  background: rgb(var(--mm-panel) / 0.9);
+  background: rgb(var(--mm-panel) / 0.92);
   padding: 0.85rem;
 }
 

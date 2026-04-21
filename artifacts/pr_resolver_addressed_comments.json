@@ -1,27 +1,17 @@
 [
   {
-    "id": 3115399905,
+    "id": 3115713023,
     "disposition": "addressed",
-    "rationale": "Secret validation now checks only fields submitted by the active source mode."
+    "rationale": "Removed the redundant .panel--controls background declaration so the shared glass-control group remains the single source for that fill."
   },
   {
-    "id": 4145431398,
+    "id": 3115713032,
+    "disposition": "addressed",
+    "rationale": "Aligned .panel--data to the matte data surface opacity of rgb(var(--mm-panel) / 0.92) and added a CSS contract assertion."
+  },
+  {
+    "id": 4145824587,
     "disposition": "not-applicable",
-    "rationale": "Review summary; its single actionable point is tracked by review comments 3115399905 and 3115404834."
-  },
-  {
-    "id": 3115404834,
-    "disposition": "addressed",
-    "rationale": "Registry submissions now ignore stale inactive inline YAML while preserving validation for active registry input."
-  },
-  {
-    "id": 3115404837,
-    "disposition": "addressed",
-    "rationale": "Max Docs validation now rejects non-safe or non-finite numeric conversions before request payload construction."
-  },
-  {
-    "id": 4145436869,
-    "disposition": "not-applicable",
-    "rationale": "Automated review wrapper with no separate actionable feedback beyond the inline comments already addressed."
+    "rationale": "Summary review comment only; its two actionable findings are tracked and addressed by the linked inline review comments."
   }
 ]

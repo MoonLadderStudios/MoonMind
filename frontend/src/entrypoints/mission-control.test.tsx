@@ -208,6 +208,9 @@ describe('Mission Control shared entry', () => {
     const nestedDenseBlock = cssRuleBlock(missionControlCss, '.surface--nested-dense');
 
     expect(matteBlock).toContain('background: rgb(var(--mm-panel) / 0.92)');
+    expect(missionControlCss).toMatch(
+      /\.panel--data\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.92\);/s,
+    );
     expect(satinBlock).toContain('background: var(--mm-input-well)');
     expect(glassBlock).toContain('background: var(--mm-glass-fill)');
     expect(glassBlock).toContain('border: 1px solid var(--mm-glass-border)');
