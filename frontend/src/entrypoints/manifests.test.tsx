@@ -26,7 +26,25 @@ describe('Manifests Entrypoint', () => {
                 taskId: 'mm:existing-manifest',
                 source: 'temporal',
                 sourceLabel: 'Temporal',
+                title: 'Nightly Docs Manifest',
+                manifestName: 'nightly-docs',
+                action: 'run',
                 status: 'completed',
+                startedAt: '2026-04-21T12:00:00Z',
+                durationSeconds: 42,
+                detailHref: '/tasks/mm:existing-manifest?source=temporal',
+              },
+              {
+                taskId: 'mm:running-manifest',
+                source: 'temporal',
+                sourceLabel: 'Temporal',
+                title: 'Registry Refresh',
+                manifestName: 'registry-refresh',
+                action: 'plan',
+                status: 'running',
+                phase: 'fetch',
+                startedAt: '2026-04-21T12:05:00Z',
+                detailHref: '/tasks/mm:running-manifest?source=temporal',
               },
             ],
           }),
@@ -75,6 +93,54 @@ describe('Manifests Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('mm:existing-manifest')).toBeTruthy();
     });
+  });
+
+  it('shows manifest run details, stage-aware status, timing, and accessible row actions', async () => {
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Open run mm:existing-manifest' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'View details for mm:running-manifest' })).toBeTruthy();
+    });
+
+    expect(screen.getByText('nightly-docs')).toBeTruthy();
+    expect(screen.getByText('registry-refresh')).toBeTruthy();
+    expect(screen.getAllByText('run').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('plan').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Running · fetch')).toBeTruthy();
+    expect(screen.getByText('42s')).toBeTruthy();
+  });
+
+  it('filters recent manifest runs by status, manifest name, and free-text search', async () => {
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('nightly-docs')).toBeTruthy();
+      expect(screen.getByText('registry-refresh')).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText('Filter by status'), {
+      target: { value: 'running' },
+    });
+    expect(screen.queryByText('nightly-docs')).toBeNull();
+    expect(screen.getByText('registry-refresh')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Filter by status'), {
+      target: { value: 'all' },
+    });
+    fireEvent.change(screen.getByLabelText('Filter by manifest'), {
+      target: { value: 'nightly' },
+    });
+    expect(screen.getByText('nightly-docs')).toBeTruthy();
+    expect(screen.queryByText('registry-refresh')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Filter by manifest'), {
+      target: { value: '' },
+    });
+    fireEvent.change(screen.getByLabelText('Search recent runs'), {
+      target: { value: 'missing-run' },
+    });
+    expect(screen.getByText('No manifest runs exist yet. Run a registry manifest or submit inline YAML above.')).toBeTruthy();
   });
 
   it('upserts inline manifests through the supported manifest API and refreshes recent runs in place', async () => {
