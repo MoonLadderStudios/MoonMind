@@ -571,7 +571,10 @@ class GitHubService:
         status_failed = status_state in {"failure", "error"} and (
             has_commit_statuses or not has_check_runs
         )
-        if status_pending or pending_runs:
+        has_running_checks = status_pending or bool(pending_runs)
+        has_failed_checks = status_failed or bool(failed_runs)
+
+        if has_running_checks:
             blockers.append(
                 {
                     "kind": "checks_running",
@@ -580,19 +583,10 @@ class GitHubService:
                     "source": "github",
                 }
             )
-        elif status_failed or failed_runs:
-            blockers.append(
-                {
-                    "kind": "checks_failed",
-                    "summary": "Required checks are failing.",
-                    "retryable": True,
-                    "source": "github",
-                }
-            )
 
         return {
-            "complete": not any(b["kind"] == "checks_running" for b in blockers),
-            "passing": not blockers,
+            "complete": not has_running_checks,
+            "passing": not has_running_checks and not has_failed_checks,
             "blockers": blockers,
         }
 

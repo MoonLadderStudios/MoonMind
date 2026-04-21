@@ -12,7 +12,12 @@ def download_loader(type_name: str):
     try:
         from llama_index.core import download_loader as core_download_loader
     except ImportError:
-        core_download_loader = None
+        try:
+            from llama_index.core.readers.download import (
+                download_loader as core_download_loader,
+            )
+        except ImportError:
+            core_download_loader = None
 
     if core_download_loader is not None:
         return core_download_loader(type_name)
@@ -72,16 +77,7 @@ class ManifestRunner:
 
     def _load_reader_class(self, type_name: str):
         """Return the reader class for the given type name."""
-        try:
-            return download_loader(type_name)
-        except Exception:
-            # Fallback to importing from llama_index.readers package
-            try:
-                module = import_module(f"llama_index.readers.{type_name.lower()}")
-                return getattr(module, type_name)
-            except Exception:
-                module = import_module("llama_index.readers")
-                return getattr(module, type_name)
+        return download_loader(type_name)
 
     def _load_class(self, fq_name: str):
         """Import and return a class from its fully qualified name."""

@@ -406,9 +406,17 @@ The gate evaluates at least:
 - whether configured external review providers have completed for the current head SHA
 - optional Jira issue status
 
+Completed-but-failing checks do not keep the gate closed by themselves. Once
+required checks have reported and are no longer running, the gate may launch
+`pr-resolver` so resolver-owned CI remediation can proceed.
+
 ### 12.2 Gate semantics
 
 The gate opens when the configured external merge-readiness signal is complete for the **current head SHA**.
+
+For GitHub checks, "complete" means the relevant check state has reported for
+the current head SHA and is no longer running. A red check result is resolver
+input, not a wait-only blocker.
 
 That means the gate is **head-SHA-sensitive**. Any new push invalidates prior review/check completion for merge-automation purposes.
 
