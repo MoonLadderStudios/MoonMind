@@ -43,6 +43,7 @@ VERIFY_PENDING_REQUESTS_PATCH = "provider-profile-manager-verify-pending-request
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
+_VERIFY_WORKFLOW_STATUS_BATCH_SIZE = 100
 
 logger = logging.getLogger(__name__)
 
@@ -483,10 +484,8 @@ class MoonMindProviderProfileManagerWorkflow:
                             pass
                         continue
 
-            # Drain pending requests against available profiles.
-            if workflow.patched(VERIFY_PENDING_REQUESTS_PATCH):
-                await self._verify_pending_requesters()
-
+            # Drain pending requests against available profiles before any
+            # best-effort terminal-workflow verification activity.
             await self._drain_queue()
 
             # Clear expired cooldowns.
@@ -498,11 +497,15 @@ class MoonMindProviderProfileManagerWorkflow:
             if evicted_count > 0 and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
                 await self._sync_leases_to_db()
 
-            if workflow.patched(VERIFY_LEASE_HOLDERS_PATCH):
-                # Verify lease holders are still running, reclaiming slots from
-                # workflows in terminal states without waiting for lease timeout.
-                await self._verify_lease_holders()
+            verify_lease_holders = workflow.patched(VERIFY_LEASE_HOLDERS_PATCH)
+            verify_pending_requesters = workflow.patched(VERIFY_PENDING_REQUESTS_PATCH)
+            if verify_lease_holders or verify_pending_requesters:
+                await self._verify_active_workflows(
+                    verify_lease_holders=verify_lease_holders,
+                    verify_pending_requesters=verify_pending_requesters,
+                )
 
+            if verify_lease_holders:
                 # Immediately offer any reclaimed slots to waiting requests.
                 await self._drain_queue()
 
@@ -908,47 +911,66 @@ class MoonMindProviderProfileManagerWorkflow:
                 )
         return total_evicted
 
-    async def _verify_lease_holders(self) -> None:
-        """Remove leases held by workflows that are in a terminal state.
-
-        Uses the verify_lease_holders activity to check whether each lease-holding
-        workflow is still running. This allows faster reclaim of slots from
-        cancelled/terminated workflows without waiting for the lease duration timeout.
-        """
-        # Collect all workflow IDs that hold leases across all profiles.
+    def _lease_holder_workflow_ids(self) -> list[str]:
+        """Return unique workflow IDs that currently hold profile leases."""
         all_wf_ids: list[str] = []
         for profile in self._profiles.values():
             all_wf_ids.extend(profile.current_leases)
+        return list(dict.fromkeys(all_wf_ids))
 
-        if not all_wf_ids:
-            return
+    def _pending_requester_workflow_ids(self) -> list[str]:
+        """Return unique workflow IDs with pending slot requests."""
+        return list(
+            dict.fromkeys(req.requester_workflow_id for req in self._pending_requests)
+        )
 
-        try:
-            result = await workflow.execute_activity(
-                "provider_profile.verify_lease_holders",
-                {"workflow_ids": all_wf_ids},
-                task_queue=ACTIVITY_TASK_QUEUE,
-                start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=RetryPolicy(
-                    initial_interval=timedelta(seconds=2),
-                    backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=30),
-                    maximum_attempts=3,
-                ),
-            )
-        except Exception:
-            # If verification fails, skip this cycle rather than leaking slots.
-            self._get_logger().warning(
-                "verify_lease_holders activity failed, skipping verification cycle"
-            )
-            return
+    async def _verify_workflow_statuses(
+        self, workflow_ids: list[str]
+    ) -> dict[str, dict[str, Any]] | None:
+        """Fetch workflow running status in bounded batches."""
+        unique_workflow_ids = list(dict.fromkeys(workflow_ids))
+        if not unique_workflow_ids:
+            return {}
 
-        lease_statuses: dict[str, dict[str, Any]] = result or {}
+        statuses: dict[str, dict[str, Any]] = {}
+        for start in range(
+            0,
+            len(unique_workflow_ids),
+            _VERIFY_WORKFLOW_STATUS_BATCH_SIZE,
+        ):
+            batch = unique_workflow_ids[
+                start : start + _VERIFY_WORKFLOW_STATUS_BATCH_SIZE
+            ]
+            try:
+                result = await workflow.execute_activity(
+                    "provider_profile.verify_lease_holders",
+                    {"workflow_ids": batch},
+                    task_queue=ACTIVITY_TASK_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=2),
+                        backoff_coefficient=2.0,
+                        maximum_interval=timedelta(seconds=30),
+                        maximum_attempts=3,
+                    ),
+                )
+            except Exception:
+                self._get_logger().warning(
+                    "verify_lease_holders activity failed, skipping verification cycle"
+                )
+                return None
+            statuses.update(result or {})
+        return statuses
+
+    def _reclaim_terminal_leases(
+        self, workflow_statuses: dict[str, dict[str, Any]]
+    ) -> bool:
+        """Remove leases held by workflows that are in a terminal state."""
         reclaimed = False
 
         for profile in list(self._profiles.values()):
             for wf_id in list(profile.current_leases):
-                status_info = lease_statuses.get(wf_id, {})
+                status_info = workflow_statuses.get(wf_id, {})
                 if not status_info.get("running", True):
                     profile.release(wf_id)
                     reclaimed = True
@@ -959,37 +981,12 @@ class MoonMindProviderProfileManagerWorkflow:
                         status_info.get("status", "UNKNOWN"),
                     )
 
-        if reclaimed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
-            await self._sync_leases_to_db()
+        return reclaimed
 
-    async def _verify_pending_requesters(self) -> int:
+    def _prune_terminal_pending_requesters(
+        self, workflow_statuses: dict[str, dict[str, Any]]
+    ) -> int:
         """Remove pending slot requests whose requester workflows are terminal."""
-        workflow_ids = list(
-            dict.fromkeys(req.requester_workflow_id for req in self._pending_requests)
-        )
-        if not workflow_ids:
-            return 0
-
-        try:
-            result = await workflow.execute_activity(
-                "provider_profile.verify_lease_holders",
-                {"workflow_ids": workflow_ids},
-                task_queue=ACTIVITY_TASK_QUEUE,
-                start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=RetryPolicy(
-                    initial_interval=timedelta(seconds=2),
-                    backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=30),
-                    maximum_attempts=3,
-                ),
-            )
-        except Exception:
-            self._get_logger().warning(
-                "verify_lease_holders activity failed, skipping pending request verification"
-            )
-            return 0
-
-        workflow_statuses: dict[str, dict[str, Any]] = result or {}
         remaining: list[PendingRequest] = []
         removed_count = 0
         for request in self._pending_requests:
@@ -1007,6 +1004,59 @@ class MoonMindProviderProfileManagerWorkflow:
         if removed_count:
             self._pending_requests = remaining
         return removed_count
+
+    async def _verify_active_workflows(
+        self,
+        *,
+        verify_lease_holders: bool,
+        verify_pending_requesters: bool,
+    ) -> None:
+        """Verify lease holders and pending requesters with one status pass."""
+        workflow_ids: list[str] = []
+        if verify_lease_holders:
+            workflow_ids.extend(self._lease_holder_workflow_ids())
+        if verify_pending_requesters:
+            workflow_ids.extend(self._pending_requester_workflow_ids())
+
+        workflow_statuses = await self._verify_workflow_statuses(workflow_ids)
+        if workflow_statuses is None:
+            return
+
+        reclaimed = False
+        if verify_lease_holders:
+            reclaimed = self._reclaim_terminal_leases(workflow_statuses)
+        if verify_pending_requesters:
+            self._prune_terminal_pending_requesters(workflow_statuses)
+
+        if reclaimed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+            await self._sync_leases_to_db()
+
+    async def _verify_lease_holders(self) -> None:
+        """Remove leases held by workflows that are in a terminal state.
+
+        Uses the verify_lease_holders activity to check whether each lease-holding
+        workflow is still running. This allows faster reclaim of slots from
+        cancelled/terminated workflows without waiting for the lease duration timeout.
+        """
+        workflow_statuses = await self._verify_workflow_statuses(
+            self._lease_holder_workflow_ids()
+        )
+        if workflow_statuses is None:
+            return
+
+        reclaimed = self._reclaim_terminal_leases(workflow_statuses)
+        if reclaimed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+            await self._sync_leases_to_db()
+
+    async def _verify_pending_requesters(self) -> int:
+        """Remove pending slot requests whose requester workflows are terminal."""
+        workflow_statuses = await self._verify_workflow_statuses(
+            self._pending_requester_workflow_ids()
+        )
+        if workflow_statuses is None:
+            return 0
+
+        return self._prune_terminal_pending_requesters(workflow_statuses)
 
     def _clear_expired_cooldowns(self) -> None:
         """Remove cooldown markers that have expired."""
