@@ -1008,6 +1008,46 @@ class TemporalExecutionDependency(Base):
     )
 
 
+class TemporalExecutionRemediationLink(Base):
+    """Durable directed relationship from a remediation run to its target."""
+
+    __tablename__ = "execution_remediation_links"
+    __table_args__ = (
+        Index(
+            "ix_execution_remediation_links_target_workflow_id",
+            "target_workflow_id",
+        ),
+    )
+
+    remediation_workflow_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    remediation_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_workflow_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    authority_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="created", server_default="created"
+    )
+    trigger_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class TemporalExecutionRecord(Base):
     """Temporal execution projection used for lifecycle APIs and filtering."""
 
