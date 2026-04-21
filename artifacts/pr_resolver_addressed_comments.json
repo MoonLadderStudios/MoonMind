@@ -1,22 +1,37 @@
 [
   {
-    "id": 4150774709,
-    "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary; the specific actionable review comments were handled individually."
+    "id": 4150938132,
+    "disposition": "addressed",
+    "rationale": "Top-level review summary called out malformed remediation handling; router now preserves present non-object remediation payloads for service validation, with regression coverage."
   },
   {
-    "id": 3120307347,
+    "id": 3120468287,
     "disposition": "addressed",
-    "rationale": "Renamed the feature directory to specs/219-mission-control-interaction-language and updated .specify/feature.json plus internal references to follow global max+1 spec numbering after merging current main."
+    "rationale": "Updated task-shaped create normalization to pass through any present remediation payload and added a malformed-payload router regression test."
   },
   {
-    "id": 3120307352,
+    "id": 3120470540,
     "disposition": "addressed",
-    "rationale": "Updated FR-011 in the implementation plan from implemented_unverified to verified."
+    "rationale": "Exported Alembic revision metadata through __all__ to mark it as intentionally consumed by Alembic."
   },
   {
-    "id": 3120307361,
+    "id": 3120470551,
     "disposition": "addressed",
-    "rationale": "Updated the feature specification status from Draft to Implemented."
+    "rationale": "Exported Alembic down_revision metadata through __all__ to mark it as intentionally consumed by Alembic."
+  },
+  {
+    "id": 3120470564,
+    "disposition": "addressed",
+    "rationale": "Exported Alembic branch_labels metadata through __all__ to mark it as intentionally consumed by Alembic."
+  },
+  {
+    "id": 3120470575,
+    "disposition": "addressed",
+    "rationale": "Exported Alembic depends_on metadata through __all__ to mark it as intentionally consumed by Alembic."
+  },
+  {
+    "id": 3120483038,
+    "disposition": "addressed",
+    "rationale": "Pinned the resolved remediation target workflowId and runId back into stored task parameters and the workflow start payload, with service-level regression coverage."
   }
 ]
