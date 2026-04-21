@@ -9,6 +9,7 @@ import re
 import socket
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1395,6 +1396,45 @@ class TaskTemplateCatalogService:
             },
         )
         _METRICS.increment("delete")
+
+    async def deactivate_templates(
+        self,
+        *,
+        slugs: Sequence[str],
+        scope: str,
+        scope_ref: str | None,
+    ) -> int:
+        scope_type = _normalize_scope(scope)
+        normalized_scope_ref = _normalize_scope_ref(scope_type, scope_ref)
+        normalized_slugs = [
+            _normalize_slug(slug) for slug in slugs if str(slug or "").strip()
+        ]
+        if not normalized_slugs:
+            return 0
+
+        result = await self._session.execute(
+            select(TaskStepTemplate).where(
+                TaskStepTemplate.slug.in_(normalized_slugs),
+                TaskStepTemplate.scope_type == scope_type,
+                TaskStepTemplate.scope_ref == normalized_scope_ref,
+                TaskStepTemplate.is_active.is_(True),
+            )
+        )
+        templates = result.scalars().all()
+        for template in templates:
+            template.is_active = False
+
+        if templates:
+            await self._session.commit()
+            logger.info(
+                "task_template_catalog.deactivate",
+                extra={
+                    "slugs": [template.slug for template in templates],
+                    "scope": scope_type.value,
+                },
+            )
+            _METRICS.increment("delete")
+        return len(templates)
 
     async def set_release_status(
         self,

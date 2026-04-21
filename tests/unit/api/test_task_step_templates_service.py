@@ -820,6 +820,66 @@ async def test_soft_delete_template_not_found(tmp_path):
                 )
 
 
+async def test_deactivate_templates_marks_matching_rows_inactive(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="speckit-orchestrate",
+                title="SpecKit Orchestrate",
+                description="Legacy preset",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"instructions": "Legacy orchestration"}],
+                created_by=None,
+            )
+            await service.create_template(
+                slug="moonspec-orchestrate",
+                title="MoonSpec Orchestrate",
+                description="Current preset",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"instructions": "Current orchestration"}],
+                created_by=None,
+            )
+
+            deactivated = await service.deactivate_templates(
+                slugs=["speckit-orchestrate"],
+                scope="global",
+                scope_ref=None,
+            )
+
+            assert deactivated == 1
+
+            with pytest.raises(TaskTemplateNotFoundError, match="Template not found."):
+                await service._get_template_for_scope(
+                    slug="speckit-orchestrate",
+                    scope=TaskTemplateScopeType.GLOBAL,
+                    scope_ref=None,
+                    include_inactive=False,
+                )
+
+            legacy_template = await service._get_template_for_scope(
+                slug="speckit-orchestrate",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+                include_inactive=True,
+            )
+            assert legacy_template.is_active is False
+
+            current_template = await service._get_template_for_scope(
+                slug="moonspec-orchestrate",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+                include_inactive=False,
+            )
+            assert current_template.is_active is True
+
+
 async def test_import_seed_templates_success(tmp_path):
     seed_dir = tmp_path / "seeds"
     seed_data = {

@@ -92,6 +92,7 @@ logger.info("Starting FastAPI...")
 _TASK_TEMPLATE_SEED_DIR = (
     Path(__file__).resolve().parent / "data" / "task_step_templates"
 )
+_LEGACY_TASK_TEMPLATE_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
 
 
 def _initialize_embedding_model(app_state, app_settings):
@@ -1107,6 +1108,11 @@ async def _sync_task_template_seed_catalog() -> None:
         async with get_async_session_context() as session:
             service = TaskTemplateCatalogService(session)
             result = await service.sync_seed_templates(seed_dir=_TASK_TEMPLATE_SEED_DIR)
+            deactivated = await service.deactivate_templates(
+                slugs=_LEGACY_TASK_TEMPLATE_SLUGS_TO_DEACTIVATE,
+                scope="global",
+                scope_ref=None,
+            )
     except (OperationalError, ProgrammingError) as exc:
         logger.warning(
             "Task template seed sync skipped because preset tables are unavailable: %s",
@@ -1117,10 +1123,11 @@ async def _sync_task_template_seed_catalog() -> None:
         logger.warning("Task template seed sync failed: %s", exc, exc_info=True)
         return
 
-    if result.created or result.updated:
+    if result.created or result.updated or deactivated:
         logger.info(
-            "Task template seeds synchronized from %s (created=%s updated=%s).",
+            "Task template seeds synchronized from %s (created=%s updated=%s deactivated=%s).",
             _TASK_TEMPLATE_SEED_DIR,
             result.created,
             result.updated,
+            deactivated,
         )
