@@ -37,6 +37,12 @@ type OAuthSessionResponse = {
   failure_reason?: string | null;
 };
 
+type TerminalContextMenuState = {
+  selectedText: string;
+  x: number;
+  y: number;
+};
+
 const TERMINAL_ATTACHABLE_STATUSES: readonly OAuthSessionStatus[] = [
   'bridge_ready',
   'awaiting_user',
@@ -50,21 +56,44 @@ const TERMINAL_FINAL_STATUSES: readonly OAuthSessionStatus[] = [
 ];
 const TERMINAL_READY_POLL_MS = 1000;
 
+function copyTextWithLegacyCommand(text: string): void {
+  if (typeof document === 'undefined' || !document.body) {
+    return;
+  }
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.setAttribute('readonly', '');
+  textArea.style.left = '-9999px';
+  textArea.style.position = 'fixed';
+  textArea.style.top = '0';
+  document.body.appendChild(textArea);
+  textArea.select();
+  try {
+    document.execCommand('copy');
+  } catch {
+    // Some browsers block programmatic copy; the visible selection remains intact.
+  } finally {
+    document.body.removeChild(textArea);
+  }
+}
+
 function copyTextToClipboard(text: string): void {
   if (
     typeof navigator === 'undefined' ||
     !navigator.clipboard ||
     typeof navigator.clipboard.writeText !== 'function'
   ) {
+    copyTextWithLegacyCommand(text);
     return;
   }
   try {
     const maybePromise = navigator.clipboard.writeText(text);
     if (typeof maybePromise?.catch === 'function') {
-      maybePromise.catch(() => undefined);
+      maybePromise.catch(() => copyTextWithLegacyCommand(text));
     }
   } catch {
     // Clipboard permissions can vary by browser/context; keep terminal input stable.
+    copyTextWithLegacyCommand(text);
   }
 }
 
@@ -99,6 +128,23 @@ function isTerminalAttachable(session: OAuthSessionResponse): boolean {
   );
 }
 
+function contextMenuPositionForEvent(
+  event: MouseEvent,
+  fallbackElement: HTMLElement,
+): Pick<TerminalContextMenuState, 'x' | 'y'> {
+  if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+    if (event.clientX !== 0 || event.clientY !== 0) {
+      return { x: event.clientX, y: event.clientY };
+    }
+  }
+
+  const rect = fallbackElement.getBoundingClientRect();
+  return {
+    x: rect.left + Math.min(24, Math.max(rect.width / 2, 0)),
+    y: rect.top + Math.min(24, Math.max(rect.height / 2, 0)),
+  };
+}
+
 async function readErrorDetail(response: Response, fallback: string): Promise<string> {
   const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
   return typeof payload?.detail === 'string' ? payload.detail : fallback;
@@ -107,7 +153,9 @@ async function readErrorDetail(response: Response, fallback: string): Promise<st
 export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const sessionId = useMemo(() => readSessionId(payload), [payload]);
   const [status, setStatus] = useState('Preparing terminal');
+  const [contextMenu, setContextMenu] = useState<TerminalContextMenuState | null>(null);
   const terminalElementRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuItemRef = useRef<HTMLButtonElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -118,6 +166,31 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       copyTextToClipboard(selectedText);
     }
   };
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return undefined;
+    }
+    const closeContextMenu = () => {
+      setContextMenu(null);
+    };
+    const closeContextMenuOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeContextMenu();
+      }
+    };
+    contextMenuItemRef.current?.focus({ preventScroll: true });
+    window.addEventListener('click', closeContextMenu);
+    window.addEventListener('contextmenu', closeContextMenu, true);
+    window.addEventListener('keydown', closeContextMenuOnEscape);
+    window.addEventListener('resize', closeContextMenu);
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('contextmenu', closeContextMenu, true);
+      window.removeEventListener('keydown', closeContextMenuOnEscape);
+      window.removeEventListener('resize', closeContextMenu);
+    };
+  }, [contextMenu]);
 
   useEffect(() => {
     const terminalElement = terminalElementRef.current;
@@ -152,6 +225,21 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       event.clipboardData.setData('text/plain', selectedText);
     };
     terminalElement.addEventListener('copy', copySelectionListener);
+    const contextMenuListener = (event: MouseEvent) => {
+      const selectedText = terminal.getSelection();
+      if (!selectedText) {
+        setContextMenu(null);
+        return;
+      }
+      event.preventDefault();
+      const position = contextMenuPositionForEvent(event, terminalElement);
+      setContextMenu({
+        selectedText,
+        x: position.x,
+        y: position.y,
+      });
+    };
+    terminalElement.addEventListener('contextmenu', contextMenuListener);
 
     const sendResize = () => {
       const socket = socketRef.current;
@@ -173,6 +261,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       return () => {
         window.removeEventListener('resize', resizeListener);
         terminalElement.removeEventListener('copy', copySelectionListener);
+        terminalElement.removeEventListener('contextmenu', contextMenuListener);
         terminal.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;
@@ -279,6 +368,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       closed = true;
       window.removeEventListener('resize', resizeListener);
       terminalElement.removeEventListener('copy', copySelectionListener);
+      terminalElement.removeEventListener('contextmenu', contextMenuListener);
       inputDisposable.dispose();
       socketRef.current?.close();
       socketRef.current = null;
@@ -305,6 +395,26 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       <section className="oauth-terminal-surface" aria-label="OAuth terminal output">
         <div ref={terminalElementRef} className="oauth-terminal-xterm" />
       </section>
+      {contextMenu ? (
+        <div
+          className="oauth-terminal-context-menu"
+          role="menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <button
+            ref={contextMenuItemRef}
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              copyTextToClipboard(contextMenu.selectedText);
+              setContextMenu(null);
+            }}
+          >
+            Copy selection
+          </button>
+        </div>
+      ) : null}
     </main>
   );
 }

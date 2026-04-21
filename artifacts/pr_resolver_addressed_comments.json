@@ -1,32 +1,22 @@
 [
   {
-    "id": 3119651338,
+    "id": 3119672179,
     "disposition": "addressed",
-    "rationale": "Moved pending-request verification after the initial queue drain so best-effort cleanup activity delays cannot block healthy slot assignment."
+    "rationale": "Added a capture-phase window contextmenu listener so stale OAuth terminal copy menus close before external right-clicks or replacement terminal menus are handled."
   },
   {
-    "id": 3119651341,
+    "id": 3119672181,
     "disposition": "addressed",
-    "rationale": "Added bounded workflow-status activity batches so large pending queues are not sent in one unbounded verification call."
+    "rationale": "Added coordinate fallback for zero/invalid contextmenu client coordinates using the terminal element bounds."
   },
   {
-    "id": 4150084160,
+    "id": 4150105434,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary comment; the actionable inline feedback from the review was handled separately."
+    "rationale": "Bot review summary only; the specific actionable child review comments were addressed separately."
   },
   {
-    "id": 3119681735,
+    "id": 3119672189,
     "disposition": "addressed",
-    "rationale": "Consolidated lease-holder and pending-requester verification in the main loop into one shared status pass."
-  },
-  {
-    "id": 3119681739,
-    "disposition": "addressed",
-    "rationale": "Refactored duplicate activity invocation and status-application logic into shared private helpers."
-  },
-  {
-    "id": 4150114952,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary comment; its consolidation and refactoring recommendations were addressed through the inline comments."
+    "rationale": "Focused the copy menu item when the context menu opens to support keyboard and assistive-technology navigation."
   }
 ]

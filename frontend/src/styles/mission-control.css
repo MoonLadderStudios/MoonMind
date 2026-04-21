@@ -2397,6 +2397,36 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   height: 100%;
 }
 
+.oauth-terminal-context-menu {
+  background: rgb(var(--mm-panel, 255 255 255));
+  border: 1px solid rgb(var(--mm-border, 203 213 225));
+  border-radius: 8px;
+  box-shadow: 0 16px 32px rgb(15 23 42 / 0.18);
+  min-width: 144px;
+  padding: 4px;
+  position: fixed;
+  z-index: 80;
+}
+
+.oauth-terminal-context-menu button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: rgb(var(--mm-text, 15 23 42));
+  cursor: pointer;
+  display: block;
+  font: inherit;
+  padding: 8px 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.oauth-terminal-context-menu button:hover,
+.oauth-terminal-context-menu button:focus-visible {
+  background: rgb(var(--mm-hover, 241 245 249));
+  outline: none;
+}
+
 .jira-provenance-chip {
   display: inline-flex;
   align-items: center;
