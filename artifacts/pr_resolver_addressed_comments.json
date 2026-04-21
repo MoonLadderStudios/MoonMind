@@ -1,22 +1,17 @@
 [
   {
-    "id": 3114795326,
+    "id": 3114803761,
     "disposition": "addressed",
-    "rationale": "Updated the Branch tooltip to report branch loading explicitly and reuse the existing branch status message for disabled states instead of always implying an invalid repository."
+    "rationale": "Memoized activeFilters in frontend/src/entrypoints/tasks-list.tsx with dependencies on the filter state values."
   },
   {
-    "id": 4144783396,
+    "id": 4144793623,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary container; the actionable line feedback is tracked separately."
+    "rationale": "Review summary only; its actionable items are tracked by the two inline review comments."
   },
   {
-    "id": 3114795465,
+    "id": 3114803770,
     "disposition": "addressed",
-    "rationale": "Added loading-specific Branch tooltip text and test coverage that asserts the loading tooltip on both the input and wrapper."
-  },
-  {
-    "id": 4144783500,
-    "disposition": "not-applicable",
-    "rationale": "Review summary repeats the actionable Branch loading tooltip concern, which is addressed by the associated line comments."
+    "rationale": "Wrapped clearFilters in useCallback and stabilized resetToFirstPage with useCallback for a stable dependency."
   }
 ]

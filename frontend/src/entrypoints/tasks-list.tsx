@@ -255,10 +255,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const countSummary = displayTemporalCount(data?.count, data?.countMode);
   const hasPaginationContext = cursorStack.length > 0 || Boolean(listCursor);
 
-  const resetToFirstPage = () => {
+  const resetToFirstPage = useCallback(() => {
     setListCursor(null);
     setCursorStack([]);
-  };
+  }, []);
 
   const onHeaderClick = (field: string) => {
     if (sortField === field) {
@@ -313,37 +313,55 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   ]
     .filter(Boolean)
     .join(' · ');
+  const activeFilters = useMemo(
+    () =>
+      [
+        workflowType ? ['Workflow', workflowType] : null,
+        temporalState ? ['Status', temporalState] : null,
+        entry ? ['Entry', entry] : null,
+        normalizedRepository ? ['Repository', normalizedRepository] : null,
+      ].filter((filter): filter is [string, string] => Boolean(filter)),
+    [workflowType, temporalState, entry, normalizedRepository],
+  );
+  const hasActiveFilters = activeFilters.length > 0;
+  const clearFilters = useCallback(() => {
+    setWorkflowType('');
+    setTemporalState('');
+    setEntry('');
+    setRepository('');
+    resetToFirstPage();
+  }, [resetToFirstPage]);
 
   return (
     <div className="stack">
-      <div className="toolbar">
-        <div>
-          <h2 className="page-title">Tasks List</h2>
+      <section className="task-list-control-deck panel--controls" aria-labelledby="task-list-title">
+        <div className="toolbar">
+          <div>
+            <h2 className="page-title" id="task-list-title">Tasks List</h2>
+          </div>
+          <div className="toolbar-controls task-list-utility-cluster">
+            <label className="queue-inline-toggle toolbar-live-toggle">
+              <input
+                type="checkbox"
+                checked={liveUpdates}
+                disabled={!listEnabled}
+                onChange={(event) => setLiveUpdates(event.target.checked)}
+              />
+              Live updates
+            </label>
+            <span className="small">
+              {liveUpdates && listEnabled
+                ? `Polling every ${Math.round(listPollMs / 1000)}s`
+                : 'Updates paused to keep selections stable.'}
+            </span>
+          </div>
         </div>
-        <div className="toolbar-controls">
-          <label className="queue-inline-toggle toolbar-live-toggle">
-            <input
-              type="checkbox"
-              checked={liveUpdates}
-              disabled={!listEnabled}
-              onChange={(event) => setLiveUpdates(event.target.checked)}
-            />
-            Live updates
-          </label>
-          <span className="small">
-            {liveUpdates && listEnabled
-              ? `Polling every ${Math.round(listPollMs / 1000)}s`
-              : 'Updates paused to keep selections stable.'}
-          </span>
-        </div>
-      </div>
 
-      {!listEnabled ? (
-        <div className="notice error">Temporal task list is disabled in server configuration.</div>
-      ) : null}
+        {!listEnabled ? (
+          <div className="notice error">Temporal task list is disabled in server configuration.</div>
+        ) : null}
 
-      <form className="stack" onSubmit={(event) => event.preventDefault()}>
-        <div className="grid-2">
+        <form className="task-list-control-grid" onSubmit={(event) => event.preventDefault()}>
           <label>
             Workflow Type
             <select
@@ -380,8 +398,6 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               ))}
             </select>
           </label>
-        </div>
-        <div className="grid-2">
           <label>
             Entry
             <select
@@ -413,8 +429,31 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               }}
             />
           </label>
+        </form>
+
+        <div className="task-list-filter-row" aria-live="polite">
+          {hasActiveFilters ? (
+            <div className="task-list-filter-chips" aria-label="Active filters">
+              {activeFilters.map(([label, value]) => (
+                <span className="task-list-filter-chip" key={`${label}:${value}`}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span className="small">Showing all task executions.</span>
+          )}
+          <button
+            type="button"
+            className="secondary task-list-clear-filters"
+            disabled={!listEnabled || !hasActiveFilters}
+            onClick={clearFilters}
+          >
+            Clear filters
+          </button>
         </div>
-      </form>
+      </section>
 
       {isLoading ? (
         <p className="loading">Loading tasks...</p>
@@ -423,7 +462,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
       ) : sortedItems.length === 0 && !hasPaginationContext ? (
         <p className="small">No tasks found for the current filters.</p>
       ) : (
-        <div className="queue-layouts">
+        <section className="queue-layouts panel--data task-list-data-slab" aria-label="Task results">
           <div className="queue-results-toolbar">
             <span className="small">{pageSummary}</span>
             <div className="queue-pagination">
@@ -611,7 +650,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
               </ul>
             </>
           )}
-        </div>
+        </section>
       )}
     </div>
   );
