@@ -4136,6 +4136,7 @@ async def cancel_execution(
         service=service,
         workflow_id=workflow_id,
         user=user,
+        include_orphaned_projection=True,
         use_cancel_target_fallback=True,
     )
 

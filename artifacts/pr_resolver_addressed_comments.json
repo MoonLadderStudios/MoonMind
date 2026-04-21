@@ -1,17 +1,12 @@
 [
   {
-    "id": 3115713023,
-    "disposition": "addressed",
-    "rationale": "Removed the redundant .panel--controls background declaration so the shared glass-control group remains the single source for that fill."
-  },
-  {
-    "id": 3115713032,
-    "disposition": "addressed",
-    "rationale": "Aligned .panel--data to the matte data surface opacity of rgb(var(--mm-panel) / 0.92) and added a CSS contract assertion."
-  },
-  {
-    "id": 4145824587,
+    "id": 4149445122,
     "disposition": "not-applicable",
-    "rationale": "Summary review comment only; its two actionable findings are tracked and addressed by the linked inline review comments."
+    "rationale": "Bot review summary only; no separate requested change beyond inline comment 3119057531."
+  },
+  {
+    "id": 3119057531,
+    "disposition": "addressed",
+    "rationale": "cancel_execution now passes include_orphaned_projection=True for cancel-target authorization, with regression coverage for a projection-only nested parent fallback."
   }
 ]

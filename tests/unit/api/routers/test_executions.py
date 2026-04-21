@@ -2060,6 +2060,44 @@ def test_cancel_execution_authorizes_projection_only_child_target() -> None:
         assert called["graceful"] is True
 
 
+def test_cancel_execution_authorizes_projection_only_nested_parent(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    child = _build_execution_record(
+        state=MoonMindWorkflowState.AWAITING_SLOT,
+        owner_id="",
+    )
+    child.workflow_id = "mm:parent:agent:child-1"
+    child.search_attributes = {}
+    child.owner_type = None
+
+    parent = _build_execution_record(owner_id=str(user.id))
+    parent.workflow_id = "mm:parent"
+
+    canceled = _build_execution_record(state=MoonMindWorkflowState.CANCELED)
+    canceled.workflow_id = child.workflow_id
+    canceled.close_status = "canceled"
+
+    service.describe_cancel_target_execution.return_value = child
+    service.describe_execution.return_value = parent
+    service.cancel_execution.return_value = canceled
+
+    response = test_client.post(
+        f"/api/executions/{child.workflow_id}/cancel",
+        json={"graceful": True, "reason": "stop nested child"},
+    )
+
+    assert response.status_code == 202
+    service.describe_execution.assert_awaited_once_with(
+        "mm:parent",
+        include_orphaned=True,
+    )
+    called = service.cancel_execution.await_args.kwargs
+    assert called["workflow_id"] == child.workflow_id
+    assert called["reason"] == "stop nested child"
+
+
 def test_serialize_execution_treats_system_owner_id_as_system_owner_type() -> None:
     record = SimpleNamespace(
         close_status=None,
