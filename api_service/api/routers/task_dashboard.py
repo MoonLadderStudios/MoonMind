@@ -414,7 +414,11 @@ def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkill
                     detail="Skill zip must contain only one SKILL.md file.",
                 )
             fallback_name = Path(filename or "skill").stem
-            return _ValidatedSkillZip(skill_name=validate_skill_name(fallback_name))
+            try:
+                skill_name = validate_skill_name(fallback_name)
+            except SkillResolutionError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return _ValidatedSkillZip(skill_name=skill_name)
 
         if (
             len(top_level_names) != 1
@@ -427,8 +431,12 @@ def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkill
             )
 
         root_prefix = next(iter(top_level_names))
+        try:
+            skill_name = validate_skill_name(root_prefix)
+        except SkillResolutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _ValidatedSkillZip(
-            skill_name=validate_skill_name(root_prefix),
+            skill_name=skill_name,
             root_prefix=root_prefix,
         )
 
@@ -440,8 +448,8 @@ def _write_skill_zip(
 ) -> None:
     parent = skill_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".skill-upload-", dir=parent) as temp_dir_name:
-        temp_dir = Path(temp_dir_name)
+    temp_dir = Path(tempfile.mkdtemp(prefix=".skill-upload-", dir=parent))
+    try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             for info in archive.infolist():
                 if info.is_dir():
@@ -470,7 +478,10 @@ def _write_skill_zip(
                 status_code=409,
                 detail=f"Skill '{validated.skill_name}' already exists locally.",
             )
-        temp_dir.rename(skill_dir)
+        shutil.move(str(temp_dir), str(skill_dir))
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
 
 
 @router.get("/tasks/secrets")

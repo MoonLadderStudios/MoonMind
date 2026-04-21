@@ -626,6 +626,55 @@ def test_upload_dashboard_skill_zip_saves_valid_bundle(
     )
     assert (tmp_path / "zip-skill" / "scripts" / "check.sh").is_file()
     assert (tmp_path / "zip-skill" / "references" / "context.md").is_file()
+    assert not list(tmp_path.glob(".skill-upload-*"))
+
+
+def test_upload_dashboard_skill_zip_rejects_invalid_root_skill_filename(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    response = client.post(
+        "/api/tasks/skills/upload",
+        files={
+            "file": (
+                "my skill.zip",
+                _skill_zip({"SKILL.md": "# Invalid inferred name\n"}),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid skill name" in response.json()["detail"]
+    assert not list(tmp_path.iterdir())
+
+
+def test_upload_dashboard_skill_zip_rejects_invalid_top_level_directory(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    response = client.post(
+        "/api/tasks/skills/upload",
+        files={
+            "file": (
+                "bundle.zip",
+                _skill_zip({"my skill/SKILL.md": "# Invalid directory name\n"}),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid skill name" in response.json()["detail"]
+    assert not list(tmp_path.iterdir())
 
 
 def test_upload_dashboard_skill_zip_rejects_missing_skill_markdown(

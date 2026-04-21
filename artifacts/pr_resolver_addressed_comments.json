@@ -1,22 +1,32 @@
 [
   {
-    "id": 3114795326,
+    "id": 3114878011,
     "disposition": "addressed",
-    "rationale": "Updated the Branch tooltip to report branch loading explicitly and reuse the existing branch status message for disabled states instead of always implying an invalid repository."
+    "rationale": "Caught SkillResolutionError for zip-derived skill names and return HTTP 400 instead of surfacing a server error."
   },
   {
-    "id": 4144783396,
+    "id": 4144869522,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary container; the actionable line feedback is tracked separately."
+    "rationale": "Top-level automated review summary; actionable inline comments are tracked separately."
   },
   {
-    "id": 3114795465,
+    "id": 3114882451,
     "disposition": "addressed",
-    "rationale": "Added loading-specific Branch tooltip text and test coverage that asserts the loading tooltip on both the input and wrapper."
+    "rationale": "Root SKILL.md uploads now convert invalid fallback filenames to HTTP 400 with regression coverage."
   },
   {
-    "id": 4144783500,
+    "id": 3114882461,
+    "disposition": "addressed",
+    "rationale": "Nested skill directory uploads now convert invalid root prefixes to HTTP 400 with regression coverage."
+  },
+  {
+    "id": 3114882463,
+    "disposition": "addressed",
+    "rationale": "Zip extraction now uses mkdtemp with explicit cleanup and shutil.move, avoiding TemporaryDirectory cleanup after moving the source path."
+  },
+  {
+    "id": 4144873847,
     "disposition": "not-applicable",
-    "rationale": "Review summary repeats the actionable Branch loading tooltip concern, which is addressed by the associated line comments."
+    "rationale": "Top-level review summary; actionable inline comments are tracked separately."
   }
 ]
