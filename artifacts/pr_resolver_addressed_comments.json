@@ -1,22 +1,17 @@
 [
   {
-    "id": 3119672179,
-    "disposition": "addressed",
-    "rationale": "Added a capture-phase window contextmenu listener so stale OAuth terminal copy menus close before external right-clicks or replacement terminal menus are handled."
-  },
-  {
-    "id": 3119672181,
-    "disposition": "addressed",
-    "rationale": "Added coordinate fallback for zero/invalid contextmenu client coordinates using the terminal element bounds."
-  },
-  {
-    "id": 4150105434,
+    "id": 4150304390,
     "disposition": "not-applicable",
-    "rationale": "Bot review summary only; the specific actionable child review comments were addressed separately."
+    "rationale": "Review summary states there is no feedback to provide."
   },
   {
-    "id": 3119672189,
+    "id": 3119871562,
     "disposition": "addressed",
-    "rationale": "Focused the copy menu item when the context menu opens to support keyboard and assistive-technology navigation."
+    "rationale": "The manifest parser now requires the opening YAML frontmatter delimiter line to equal '---', with regression coverage for malformed delimiters."
+  },
+  {
+    "id": 4150315601,
+    "disposition": "not-applicable",
+    "rationale": "Automated review wrapper comment with no separate actionable feedback beyond the inline review comment."
   }
 ]
