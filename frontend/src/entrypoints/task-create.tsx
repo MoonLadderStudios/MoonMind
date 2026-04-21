@@ -5288,6 +5288,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
       : pageMode.mode === "rerun"
         ? "Start a new run from this task draft"
         : "Create this task";
+  const repositoryTooltip = "Select the GitHub repository for this task";
+  const branchTooltip = branchOptionsQuery.isLoading
+    ? "Loading branches for the selected repository..."
+    : branchControlDisabled
+      ? branchStatusMessage ||
+        "Choose a valid GitHub repository before selecting a branch"
+      : "Select the branch to check out before the task starts";
+  const publishModeTooltip = "Select how MoonMind publishes task changes";
   const applyPresetTooltip = presetReapplyNeeded
     ? "Reapply the selected preset to update preset-derived steps"
     : "Apply the selected preset to the task draft";
@@ -6567,22 +6575,30 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
             </p>
           ) : null}
           <div className="queue-floating-bar-row">
-            <div className="queue-inline-selector queue-inline-selector--repo">
+            <div
+              className="queue-inline-selector queue-inline-selector--repo"
+              title={repositoryTooltip}
+            >
               <RepoIcon />
               <input
                 name="repository"
                 aria-label="GitHub Repo"
+                title={repositoryTooltip}
                 list={REPOSITORY_OPTIONS_DATALIST_ID}
                 value={repository}
                 placeholder="owner/repo"
                 onChange={(event) => setRepository(event.target.value)}
               />
             </div>
-            <div className="queue-inline-selector queue-inline-selector--branch">
+            <div
+              className="queue-inline-selector queue-inline-selector--branch"
+              title={branchTooltip}
+            >
               <BranchIcon />
               <input
                 name="branch"
                 aria-label="Branch"
+                title={branchTooltip}
                 list={BRANCH_OPTIONS_DATALIST_ID}
                 value={branch}
                 placeholder={
@@ -6592,11 +6608,15 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
                 onChange={(event) => setBranch(event.target.value)}
               />
             </div>
-            <div className="queue-inline-selector queue-inline-selector--publish">
+            <div
+              className="queue-inline-selector queue-inline-selector--publish"
+              title={publishModeTooltip}
+            >
               <PublishIcon />
               <select
                 name="publishMode"
                 aria-label="Publish Mode"
+                title={publishModeTooltip}
                 value={publishMode}
                 onChange={(event) => setPublishMode(event.target.value)}
               >

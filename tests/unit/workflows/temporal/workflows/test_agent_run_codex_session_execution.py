@@ -214,6 +214,7 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
 
     async def fake_sync_manager_profiles(
         *,
+        manager_id: str,
         manager_handle: object,
         runtime_id: str,
     ) -> int:
@@ -355,6 +356,7 @@ async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(
 
     async def fake_sync_manager_profiles(
         *,
+        manager_id: str,
         manager_handle: object,
         runtime_id: str,
     ) -> int:
@@ -474,6 +476,7 @@ async def test_agent_run_managed_session_passes_publish_branch_context_to_fetch_
 
     async def fake_sync_manager_profiles(
         *,
+        manager_id: str,
         manager_handle: object,
         runtime_id: str,
     ) -> int:
@@ -606,6 +609,7 @@ async def test_agent_run_managed_session_start_runtime_error_returns_failed_resu
 
     async def fake_sync_manager_profiles(
         *,
+        manager_id: str,
         manager_handle: object,
         runtime_id: str,
     ) -> int:
@@ -715,6 +719,7 @@ async def test_agent_run_managed_session_start_runtime_error_truncates_summary(
 
     async def fake_sync_manager_profiles(
         *,
+        manager_id: str,
         manager_handle: object,
         runtime_id: str,
     ) -> int:
@@ -812,17 +817,19 @@ async def test_agent_run_clears_auto_profile_after_provider_cooldown_retry(
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
     ) -> _FakeManagerHandle:
-        ensure_profile_refs.append(execution_profile_ref)
-        run.slot_assigned_event.set()
-        run._assigned_profile_id = (
-            "codex_openrouter_qwen36_plus"
-            if len(ensure_profile_refs) == 1
-            else "codex-default"
-        )
+        if request_slot:
+            ensure_profile_refs.append(execution_profile_ref)
+            run.slot_assigned_event.set()
+            run._assigned_profile_id = (
+                "codex_openrouter_qwen36_plus"
+                if len(ensure_profile_refs) == 1
+                else "codex-default"
+            )
         return _FakeManagerHandle()
 
     async def fake_sync_manager_profiles(
         *,
+        manager_id: str,
         manager_handle: object,
         runtime_id: str,
     ) -> int:
@@ -951,6 +958,7 @@ async def test_agent_run_keeps_legacy_session_fetch_path_when_patch_unset(
 
     async def fake_sync_manager_profiles(
         *,
+        manager_id: str,
         manager_handle: object,
         runtime_id: str,
     ) -> int:
@@ -1049,6 +1057,7 @@ async def test_agent_run_keeps_legacy_instruction_preparation_for_pre_patch_hist
 
     async def fake_sync_manager_profiles(
         *,
+        manager_id: str,
         manager_handle: object,
         runtime_id: str,
     ) -> int:

@@ -445,6 +445,7 @@ class MoonMindMergeAutomationWorkflow:
                     pull_request=self._input.pull_request,
                     jira_issue_key=self._input.jira_issue_key,
                     merge_method=self._input.config.resolver.merge_method,
+                    resolver_template=self._input.resolver_template,
                 )
                 resolver_workflow_id = deterministic_resolver_idempotency_key(
                     parent_workflow_id=self._input.parent_workflow_id,
