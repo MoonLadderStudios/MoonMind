@@ -1,4 +1,11 @@
 {
   "jira_issue_key": "MM-424",
-  "pull_request_url": "https://github.com/MoonLadderStudios/MoonMind/pull/1642"
+  "pull_request_url": "https://github.com/MoonLadderStudios/MoonMind/pull/1642",
+  "code_review_transition": {
+    "previous_status": "In Progress",
+    "confirmed_status": "Code Review",
+    "transition_id": "51",
+    "transition_name": "Code Review",
+    "jira_comment_added": true
+  }
 }
