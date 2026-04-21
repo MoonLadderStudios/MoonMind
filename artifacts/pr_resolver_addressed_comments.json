@@ -1,12 +1,37 @@
 [
   {
-    "id": 3114793791,
+    "id": 3114917657,
     "disposition": "addressed",
-    "rationale": "Updated the mobile floating bar grid to preserve the publish-mode minimum width while the repository control spans the full row, and added CSS regression coverage."
+    "rationale": "Replaced the fragile indexOf-based CSS block helper with PostCSS rule parsing and exact/grouped selector matching."
   },
   {
-    "id": 4144781567,
+    "id": 3114917663,
     "disposition": "addressed",
-    "rationale": "The review summary identified the same mobile grid issue as the inline comment; the CSS fix and regression test address it."
+    "rationale": "Removed the redundant outline-offset from the base button focus-visible rule where outline remains none."
+  },
+  {
+    "id": 3114917665,
+    "disposition": "addressed",
+    "rationale": "Changed reduced-motion transition and animation durations from 0.01ms to 0s."
+  },
+  {
+    "id": 4144912415,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary; the actionable findings from this review are tracked by their individual inline comments."
+  },
+  {
+    "id": 3114921221,
+    "disposition": "addressed",
+    "rationale": "Added forced-colors focus-visible outlines for button-like controls that otherwise rely on box-shadow focus rings."
+  },
+  {
+    "id": 4144915736,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary with no standalone action beyond its linked inline suggestion."
+  },
+  {
+    "id": 3114921224,
+    "disposition": "addressed",
+    "rationale": "Strengthened disabled button and link-button selectors so disabled styles override hover glow and transform states."
   }
 ]
