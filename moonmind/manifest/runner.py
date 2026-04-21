@@ -4,9 +4,24 @@ import logging
 from importlib import import_module
 from typing import Any, Dict, List, Optional
 
-from llama_index.core import download_loader
 
 from moonmind.schemas import Manifest
+
+
+def download_loader(type_name: str):
+    """Resolve llama-index reader loaders lazily for version compatibility."""
+    try:
+        from llama_index import core as llama_index_core
+    except ImportError as exc:  # pragma: no cover - dependency import failure
+        raise ImportError("llama_index.core is required to load manifest readers") from exc
+
+    loader = getattr(llama_index_core, "download_loader", None)
+    if loader is None:
+        raise ImportError(
+            "llama_index.core.download_loader is unavailable in this version"
+        )
+    return loader(type_name)
+
 
 
 class ManifestRunner:
