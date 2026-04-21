@@ -1203,7 +1203,6 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 button:focus-visible {
   outline: none;
-  outline-offset: 3px;
   box-shadow: var(--mm-control-focus-ring);
 }
 
@@ -1303,7 +1302,16 @@ button.secondary:hover {
 
 button:disabled,
 button:disabled:hover,
-.button[aria-disabled="true"] {
+button.secondary:disabled,
+button.secondary:disabled:hover,
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):disabled,
+button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):disabled:hover,
+.button[aria-disabled="true"],
+.button[aria-disabled="true"]:hover,
+.button.secondary[aria-disabled="true"],
+.button.secondary[aria-disabled="true"]:hover,
+.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"],
+.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"]:hover {
   cursor: not-allowed;
   opacity: var(--mm-control-disabled-opacity);
   transform: none;
@@ -2484,9 +2492,19 @@ button:disabled:hover,
   .queue-step-extension-button,
   .queue-inline-toggle,
   .queue-inline-filter {
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
     transform: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  button:focus-visible,
+  .button:focus-visible,
+  .queue-action:focus-visible,
+  .queue-submit-primary:focus-visible {
+    outline: 2px solid ButtonText;
+    outline-offset: 2px;
   }
 }
 

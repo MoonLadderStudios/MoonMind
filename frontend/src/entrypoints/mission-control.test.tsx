@@ -8,18 +8,36 @@ import {
   vi,
   type MockInstance,
 } from 'vitest';
+import postcss from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { MissionControlApp } from './mission-control-app';
 
+function normalizeCssSelector(selector: string): string {
+  return selector
+    .replace(/\s*\{\s*$/, '')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 function cssRuleBlock(css: string, selector: string): string {
-  const index = css.indexOf(selector);
-  if (index < 0) return '';
-  const start = css.indexOf('{', index);
-  if (start < 0) return '';
-  const end = css.indexOf('}', start);
-  return end < 0 ? '' : css.slice(start + 1, end);
+  const expectedSelector = normalizeCssSelector(selector);
+  const expectedSelectors = selector.split(',').map(normalizeCssSelector);
+  let block = '';
+  postcss.parse(css).walkRules((rule) => {
+    const ruleSelector = normalizeCssSelector(rule.selector);
+    const ruleSelectors = rule.selector.split(',').map(normalizeCssSelector);
+    if (
+      !block &&
+      (ruleSelector === expectedSelector ||
+        ruleSelectors.includes(expectedSelector) ||
+        expectedSelectors.every((expected) => ruleSelectors.includes(expected)))
+    ) {
+      block = rule.nodes.map((node) => `${node.toString()};`).join('\n');
+    }
+  });
+  return block;
 }
 
 vi.mock('@xterm/xterm', () => {
@@ -255,11 +273,14 @@ describe('Mission Control shared entry', () => {
     expect(cssRuleBlock(missionControlCss, 'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
-    expect(cssRuleBlock(missionControlCss, 'button:disabled,\nbutton:disabled:hover,\n.button[aria-disabled="true"]')).toMatch(
+    expect(cssRuleBlock(missionControlCss, 'button:disabled,\nbutton:disabled:hover,\nbutton.secondary:disabled,\nbutton.secondary:disabled:hover,\nbutton:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):disabled,\nbutton:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):disabled:hover,\n.button[aria-disabled="true"],\n.button[aria-disabled="true"]:hover,\n.button.secondary[aria-disabled="true"],\n.button.secondary[aria-disabled="true"]:hover,\n.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"],\n.button:not(.secondary):not(.queue-action):not(.queue-submit-primary)[aria-disabled="true"]:hover')).toMatch(
       /opacity:\s*var\(--mm-control-disabled-opacity\);[^}]*transform:\s*none;[^}]*box-shadow:\s*none;/s,
     );
     expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*button,[^}]*\.button,[^}]*\.queue-action,[^}]*\.queue-submit-primary,[^}]*\.queue-step-icon-button,[^}]*\.queue-step-extension-button,[^}]*\.queue-inline-toggle,[^}]*\.queue-inline-filter\s*\{[^}]*transform:\s*none !important;/s,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*button,[^}]*\.button,[^}]*\.queue-action,[^}]*\.queue-submit-primary,[^}]*\.queue-step-icon-button,[^}]*\.queue-step-extension-button,[^}]*\.queue-inline-toggle,[^}]*\.queue-inline-filter\s*\{[^}]*transition-duration:\s*0s !important;[^}]*animation-duration:\s*0s !important;[^}]*transform:\s*none !important;/s,
+    );
+    expect(missionControlCss).toMatch(
+      /@media \(forced-colors: active\)\s*\{[^}]*button:focus-visible,[^}]*\.button:focus-visible,[^}]*\.queue-action:focus-visible,[^}]*\.queue-submit-primary:focus-visible\s*\{[^}]*outline:\s*2px solid ButtonText;[^}]*outline-offset:\s*2px;/s,
     );
   });
 
