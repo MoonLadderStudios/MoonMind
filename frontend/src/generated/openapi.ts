@@ -1840,6 +1840,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/skills/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Skill Import
+         * @description Create a new local skill from an uploaded zip bundle.
+         */
+        post: operations["create_skill_import_api_skills_imports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/skills/upload": {
         parameters: {
             query?: never;
@@ -2671,6 +2691,17 @@ export interface components {
              * Format: password
              */
             client_secret?: string | null;
+        };
+        /** Body_create_skill_import_api_skills_imports_post */
+        Body_create_skill_import_api_skills_imports_post: {
+            /** File */
+            file: string;
+            /**
+             * Collision Policy
+             * @default reject
+             * @enum {string}
+             */
+            collision_policy: "reject" | "new_version";
         };
         /** Body_reset_forgot_password_api_v1_auth_forgot_password_post */
         Body_reset_forgot_password_api_v1_auth_forgot_password_post: {
@@ -5221,6 +5252,33 @@ export interface components {
             };
             /** Payloadartifactref */
             payloadArtifactRef?: string | null;
+        };
+        /**
+         * SkillImportResponse
+         * @description Skill import result returned by the canonical upload contract.
+         */
+        SkillImportResponse: {
+            /** Import Id */
+            import_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "saved";
+            /** Skill Id */
+            skill_id: string;
+            /** Version Id */
+            version_id: string;
+            /** Version Number */
+            version_number: number;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Warnings */
+            warnings?: {
+                [key: string]: string;
+            }[];
         };
         /**
          * StepLedgerArtifactsModel
@@ -10059,6 +10117,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardBranchListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_skill_import_api_skills_imports_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_skill_import_api_skills_imports_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillImportResponse"];
                 };
             };
             /** @description Validation Error */

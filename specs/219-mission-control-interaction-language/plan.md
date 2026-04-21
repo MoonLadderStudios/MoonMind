@@ -1,7 +1,7 @@
 # Implementation Plan: Mission Control Shared Interaction Language
 
-**Branch**: `run-jira-orchestrate-for-mm-427-align-mi-00e0a46d` | **Date**: 2026-04-21 | **Spec**: `specs/218-mission-control-interaction-language/spec.md`  
-**Input**: Single-story feature specification from `specs/218-mission-control-interaction-language/spec.md`
+**Branch**: `run-jira-orchestrate-for-mm-427-align-mi-00e0a46d` | **Date**: 2026-04-21 | **Spec**: `specs/219-mission-control-interaction-language/spec.md`  
+**Input**: Single-story feature specification from `specs/219-mission-control-interaction-language/spec.md`
 
 ## Summary
 
@@ -56,7 +56,7 @@ Implement MM-427 by aligning Mission Control's routine controls with the interac
 ## Project Structure
 
 ```text
-specs/218-mission-control-interaction-language/
+specs/219-mission-control-interaction-language/
 ├── spec.md
 ├── plan.md
 ├── research.md

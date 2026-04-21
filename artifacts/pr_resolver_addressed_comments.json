@@ -7,7 +7,7 @@
   {
     "id": 3120307347,
     "disposition": "addressed",
-    "rationale": "Renamed the feature directory to specs/218-mission-control-interaction-language and updated .specify/feature.json plus internal references to follow global max+1 spec numbering."
+    "rationale": "Renamed the feature directory to specs/219-mission-control-interaction-language and updated .specify/feature.json plus internal references to follow global max+1 spec numbering after merging current main."
   },
   {
     "id": 3120307352,
