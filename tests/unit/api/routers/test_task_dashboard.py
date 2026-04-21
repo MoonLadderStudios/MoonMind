@@ -702,6 +702,43 @@ def test_skill_import_api_rejects_missing_frontmatter(
     assert not (tmp_path / "zip-skill").exists()
 
 
+@pytest.mark.parametrize("opening_delimiter", ["----", "---yaml"])
+def test_skill_import_api_rejects_malformed_frontmatter_opening_delimiter(
+    opening_delimiter: str,
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    response = client.post(
+        "/api/skills/imports",
+        files={
+            "file": (
+                "zip-skill.zip",
+                _skill_zip(
+                    {
+                        "zip-skill/SKILL.md": f"""{opening_delimiter}
+name: zip-skill
+description: Uploaded from a zip.
+---
+# Zip Skill
+"""
+                    }
+                ),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "YAML frontmatter" in response.json()["detail"]
+    assert not (tmp_path / "zip-skill").exists()
+
+
 def test_skill_import_api_rejects_manifest_name_mismatch(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

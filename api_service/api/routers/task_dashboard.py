@@ -392,13 +392,13 @@ def _validate_imported_skill_name(skill_name: str) -> str:
 
 
 def _parse_skill_manifest_metadata(markdown: str, parent_name: str) -> tuple[str, str]:
-    if not markdown.startswith("---"):
+    lines = markdown.splitlines()
+    if not lines or lines[0] != "---":
         raise HTTPException(
             status_code=400,
             detail="Skill manifest must be Markdown with YAML frontmatter.",
         )
 
-    lines = markdown.splitlines()
     try:
         end_index = lines[1:].index("---") + 1
     except ValueError as exc:
