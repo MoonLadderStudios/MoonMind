@@ -113,15 +113,14 @@ class TestEnsureManagerAutoStart:
             "manager assignments."
         )
 
-    def test_ensure_manager_without_slot_starts_manager_activity(self):
-        """The helper must auto-start the manager before the pre-slot sync signal."""
+    def test_ensure_manager_without_slot_does_not_start_manager_activity(self):
+        """The pre-slot path must not start the singleton manager unconditionally."""
         source = textwrap.dedent(
             inspect.getsource(MoonMindAgentRun._ensure_manager_and_signal)
         )
         tree = ast.parse(source)
 
         found_no_slot_branch = False
-        found_ensure_activity = False
         for node in ast.walk(tree):
             if not isinstance(node, ast.If):
                 continue
@@ -138,15 +137,59 @@ class TestEnsureManagerAutoStart:
                 if not isinstance(child, ast.Constant):
                     continue
                 if child.value == "provider_profile.ensure_manager":
-                    found_ensure_activity = True
-                    break
+                    raise AssertionError(
+                        "request_slot=False must not call provider_profile.ensure_manager "
+                        "unless a later signal observes ExternalWorkflowExecutionNotFound."
+                    )
 
         assert found_no_slot_branch, (
             "_ensure_manager_and_signal must handle request_slot=False"
         )
+
+    def test_profile_sync_auto_starts_manager_only_after_not_found(self):
+        """Profile sync must use signal-with-start fallback without hard startup dependency."""
+        source = textwrap.dedent(
+            inspect.getsource(MoonMindAgentRun._sync_manager_profiles)
+        )
+        tree = ast.parse(source)
+
+        found_sync_signal = False
+        found_not_found_guard = False
+        found_ensure_activity = False
+        found_retry_handle = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if (
+                    node.func.attr == "signal"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "sync_profiles"
+                ):
+                    found_sync_signal = True
+                if (
+                    node.func.attr == "get_external_workflow_handle"
+                    and node.args
+                    and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == "manager_id"
+                ):
+                    found_retry_handle = True
+            if isinstance(node, ast.Constant):
+                if node.value == "ExternalWorkflowExecutionNotFound":
+                    found_not_found_guard = True
+                if node.value == "provider_profile.ensure_manager":
+                    found_ensure_activity = True
+
+        assert found_sync_signal, "_sync_manager_profiles must signal sync_profiles"
+        assert found_not_found_guard, (
+            "_sync_manager_profiles must only start the manager after "
+            "ExternalWorkflowExecutionNotFound."
+        )
         assert found_ensure_activity, (
-            "request_slot=False must call provider_profile.ensure_manager before "
-            "returning a manager handle."
+            "_sync_manager_profiles must auto-start the manager before retrying "
+            "a missing-manager sync signal."
+        )
+        assert found_retry_handle, (
+            "_sync_manager_profiles must reacquire the manager handle before retrying."
         )
 
     def test_no_bare_request_slot_signal_after_ensure_manager(self):

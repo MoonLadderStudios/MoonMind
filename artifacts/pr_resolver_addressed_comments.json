@@ -1,12 +1,22 @@
 [
   {
-    "id": 3114361904,
+    "id": 3115257689,
     "disposition": "addressed",
-    "rationale": "Updated deactivate_templates telemetry to increment the delete metric by the number of templates deactivated, with unit coverage for the bulk path."
+    "rationale": "Removed the unconditional provider_profile.ensure_manager activity from the request_slot=false path and moved auto-start to the sync_profiles signal retry only when ExternalWorkflowExecutionNotFound is observed."
   },
   {
-    "id": 4144292983,
+    "id": 4145277063,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; the only concrete feedback item it referenced was addressed separately."
+    "rationale": "Automated review summary; the actionable optimization it summarized is tracked by review comment 3115257689."
+  },
+  {
+    "id": 3115269139,
+    "disposition": "addressed",
+    "rationale": "Pre-slot manager startup is no longer a hard dependency; sync_profiles failures, including ensure_manager retry failures, remain best-effort and allow the run to continue to slot request."
+  },
+  {
+    "id": 4145288894,
+    "disposition": "not-applicable",
+    "rationale": "Automated review container/comment metadata; the actionable P1 item is tracked by review comment 3115269139."
   }
 ]

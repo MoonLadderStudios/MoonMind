@@ -276,6 +276,7 @@ async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
 
     async def fake_sync_manager_profiles(
         *,
+        manager_id: str,
         manager_handle: object,
         runtime_id: str,
     ) -> int:
@@ -416,6 +417,7 @@ async def test_agent_run_managed_preserves_task_scoped_session_metadata(
 
     async def fake_sync_manager_profiles(
         *,
+        manager_id: str,
         manager_handle: object,
         runtime_id: str,
     ) -> int:
