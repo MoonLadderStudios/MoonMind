@@ -243,6 +243,77 @@ describe('Manifests Entrypoint', () => {
     });
   });
 
+  it('rejects invalid max docs before calling manifest APIs', async () => {
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    fireEvent.change(screen.getByLabelText('Registry Manifest Name'), {
+      target: { value: 'docs-registry' },
+    });
+    fireEvent.click(screen.getByText('Advanced options'));
+    fireEvent.change(screen.getByLabelText('Max Docs'), {
+      target: { value: '1.5' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Manifest' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Max Docs must be a positive whole number.')).toBeTruthy();
+    });
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/api/manifests/docs-registry'))).toBe(false);
+  });
+
+  it('rejects raw secret-shaped values before calling manifest APIs', async () => {
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    fireEvent.change(screen.getByLabelText('Source Kind'), {
+      target: { value: 'inline' },
+    });
+    fireEvent.change(screen.getByLabelText('Manifest Name'), {
+      target: { value: 'nightly-docs' },
+    });
+    fireEvent.change(screen.getByLabelText('Inline YAML'), {
+      target: { value: 'kind: docs\nauth:\n  token=example\n' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Manifest' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Raw secret-like values are not allowed. Use env or Vault references instead.')).toBeTruthy();
+    });
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/api/manifests/nightly-docs'))).toBe(false);
+  });
+
+  it('allows env-style secret references in inline YAML', async () => {
+    renderWithClient(<ManifestsPage payload={mockPayload} />);
+
+    fireEvent.change(screen.getByLabelText('Source Kind'), {
+      target: { value: 'inline' },
+    });
+    fireEvent.change(screen.getByLabelText('Manifest Name'), {
+      target: { value: 'nightly-docs' },
+    });
+    fireEvent.change(screen.getByLabelText('Inline YAML'), {
+      target: { value: 'kind: docs\nauth:\n  token: ${GITHUB_TOKEN}\n' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run Manifest' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/manifests/nightly-docs',
+        expect.objectContaining({
+          method: 'PUT',
+        }),
+      );
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/manifests/nightly-docs/runs',
+        expect.objectContaining({
+          method: 'POST',
+        }),
+      );
+    });
+  });
+
   it('styles submit failures as errors', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
