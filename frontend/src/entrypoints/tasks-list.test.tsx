@@ -38,6 +38,8 @@ describe('Tasks List Entrypoint', () => {
   it('announces the current sort state on table headers', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
+    await screen.findAllByText('Example task');
+
     const scheduledHeaderButton = await screen.findByRole('button', {
       name: /Scheduled\. Sorted descending\. Activate to sort ascending\./i,
     });
@@ -194,6 +196,50 @@ describe('Tasks List Entrypoint', () => {
     expect(await screen.findByText('Page 1 · 1-1 · 21')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Next page' })).toBeTruthy();
+  });
+
+  it('uses the Mission Control control deck and data slab composition', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    const controlDeck = document.querySelector<HTMLElement>('.task-list-control-deck.panel--controls');
+    const dataSlab = document.querySelector<HTMLElement>('.task-list-data-slab.panel--data');
+    const tableWrapper = dataSlab?.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
+    const scheduledHeader = tableWrapper?.querySelector<HTMLElement>('th');
+
+    expect(controlDeck).toBeTruthy();
+    expect(controlDeck?.querySelector('form.task-list-control-grid')).toBeTruthy();
+    expect(
+      controlDeck?.querySelector('.task-list-utility-cluster')?.contains(screen.getByLabelText('Live updates')),
+    ).toBe(true);
+    expect(screen.getByText('Showing all task executions.')).toBeTruthy();
+    expect(dataSlab).toBeTruthy();
+    expect(dataSlab?.querySelector('.queue-results-toolbar')).toBeTruthy();
+    expect(tableWrapper).toBeTruthy();
+    expect(getComputedStyle(tableWrapper as HTMLElement).overflow).toBe('auto');
+    expect(getComputedStyle(scheduledHeader as HTMLElement).position).toBe('sticky');
+  });
+
+  it('shows active filter chips and clears filters from the control deck', async () => {
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'completed' } });
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'owner/repo' } });
+
+    await waitFor(() => {
+      const activeFilterText = document.querySelector('.task-list-filter-chips')?.textContent || '';
+      expect(activeFilterText).toContain('completed');
+      expect(activeFilterText).toContain('owner/repo');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    await waitFor(() => {
+      expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('');
+      expect((screen.getByLabelText('Repository') as HTMLInputElement).value).toBe('');
+    });
   });
 
   it('marks mobile card details links as the only full-width card action', async () => {

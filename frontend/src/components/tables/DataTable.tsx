@@ -11,27 +11,34 @@ export interface DataTableProps<T> {
   columns: Column<T>[];
   emptyMessage?: string;
   getRowKey: (item: T) => React.Key;
+  ariaLabel?: string;
 }
 
-export function DataTable<T>({ data, columns, emptyMessage = 'No data found.', getRowKey }: DataTableProps<T>) {
+export function DataTable<T>({
+  data,
+  columns,
+  emptyMessage = 'No data found.',
+  getRowKey,
+  ariaLabel = 'Data table',
+}: DataTableProps<T>) {
   return (
-    <div className="overflow-x-auto w-full rounded shadow-sm border border-gray-200">
-      <table className="min-w-full text-left text-sm whitespace-nowrap">
-        <thead className="bg-gray-50 border-b border-gray-200">
+    <div className="data-table-slab" data-layout="table">
+      <table className="data-table" aria-label={ariaLabel}>
+        <thead>
           <tr>
             {columns.map((col) => (
-              <th key={col.key as string} className="px-4 py-3 font-medium text-gray-900">
+              <th key={col.key as string}>
                 {col.header}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-200">
+        <tbody>
           {data && data.length > 0 ? (
             data.map((item) => (
-              <tr key={getRowKey(item)} className="hover:bg-gray-50 transition-colors">
+              <tr key={getRowKey(item)}>
                 {columns.map((col) => (
-                  <td key={col.key as string} className="px-4 py-3">
+                  <td key={col.key as string}>
                     {col.render ? col.render(item) : String(item[col.key as keyof T] ?? '')}
                   </td>
                 ))}
@@ -39,7 +46,7 @@ export function DataTable<T>({ data, columns, emptyMessage = 'No data found.', g
             ))
           ) : (
             <tr>
-              <td colSpan={columns.length} className="px-4 py-8 text-center text-gray-500">
+              <td colSpan={columns.length} className="data-table-empty">
                 {emptyMessage}
               </td>
             </tr>
