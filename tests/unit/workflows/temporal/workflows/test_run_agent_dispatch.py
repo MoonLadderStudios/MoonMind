@@ -335,6 +335,16 @@ class TestJiraAgentPublishHelpers(unittest.TestCase):
 
         self.assertTrue(MoonMindRunWorkflow._pr_publish_optional_for_plan(nodes))
 
+    def test_jira_verify_agent_plan_makes_pr_publish_optional(self) -> None:
+        nodes = [
+            {
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                "inputs": {"selectedSkill": "jira-verify"},
+            }
+        ]
+
+        self.assertTrue(MoonMindRunWorkflow._pr_publish_optional_for_plan(nodes))
+
     def test_runtime_metadata_skill_does_not_affect_plan_publish_classification(
         self,
     ) -> None:

@@ -856,7 +856,7 @@ def _iter_requested_registry_tools(
         ).strip()
         if not tool_name:
             continue
-        if tool_name.lower() == "jira-issue-creator":
+        if tool_name.lower() in {"jira-issue-creator", "jira-verify"}:
             continue
         tool_version = str(selected_payload.get("version") or "").strip() or "1.0"
         key = (tool_name, tool_version)
@@ -3498,7 +3498,7 @@ class TemporalAgentRuntimeActivities:
     ) -> str:
         params = parameters if isinstance(parameters, Mapping) else {}
         selected_skill = selected_agent_skill(params)
-        if selected_skill not in {"jira-issue-creator", "jira-pr-verify"}:
+        if selected_skill not in {"jira-issue-creator", "jira-pr-verify", "jira-verify"}:
             return instructions
         if "MoonMind trusted Jira tools" in instructions:
             return instructions
@@ -3528,7 +3528,7 @@ class TemporalAgentRuntimeActivities:
                     "or no Jira issue key is returned.",
                 ]
             )
-        else:
+        elif selected_skill == "jira-pr-verify":
             tool_lines.extend(
                 [
                     "- Fetch the Jira issue body through `jira.get_issue` before "
@@ -3538,6 +3538,28 @@ class TemporalAgentRuntimeActivities:
                     '"arguments":{"issueKey":"<ISSUE_KEY>"}}`.',
                     "- Treat the task as blocked if trusted Jira tool calls are "
                     "unavailable or the issue fetch is denied.",
+                ]
+            )
+        else:
+            tool_lines.extend(
+                [
+                    "- Fetch the Jira issue body through `jira.get_issue` before "
+                    "verifying branch coverage.",
+                    "- Example issue fetch call: "
+                    '`{"tool":"jira.get_issue",'
+                    '"arguments":{"issueKey":"<ISSUE_KEY>"}}`.',
+                    "- Inspect the current branch against its base, classify the "
+                    "result as PASS, PARTIAL, FAIL, or BLOCKED, and summarize "
+                    "the branch evidence without pasting long private Jira text.",
+                    "- Post the verification result through `jira.add_comment` "
+                    "after scanning the comment body for secrets.",
+                    "- Example comment call: "
+                    '`{"tool":"jira.add_comment",'
+                    '"arguments":{"issueKey":"<ISSUE_KEY>",'
+                    '"body":"<COMMENT_TEXT>"}}`.',
+                    "- Treat the task as blocked if trusted Jira tool calls are "
+                    "unavailable, the issue fetch is denied, or comment posting "
+                    "fails.",
                 ]
             )
         return (

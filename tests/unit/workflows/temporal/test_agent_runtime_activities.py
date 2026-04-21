@@ -2311,6 +2311,40 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_pr_verify_tool_
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_adds_jira_verify_tool_hint() -> None:
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {
+                    "instructions": "Verify KANDY-3607 against this branch.",
+                    "publishMode": "none",
+                    "metadata": {
+                        "moonmind": {
+                            "selectedSkill": "jira-verify",
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+    assert "MoonMind trusted Jira tools:" in result
+    assert "`$MOONMIND_URL`" in result
+    assert "POST $MOONMIND_URL/mcp/tools/call" in result
+    assert "jira.get_issue" in result
+    assert "jira.add_comment" in result
+    assert "PASS, PARTIAL, FAIL, or BLOCKED" in result
+    assert "Verify KANDY-3607 against this branch." in result
+    assert "Managed Codex CLI note:" in result
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_requires_workspace_for_instruction_ref() -> None:
     activities = TemporalAgentRuntimeActivities()
 

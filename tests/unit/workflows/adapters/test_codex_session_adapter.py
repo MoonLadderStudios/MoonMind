@@ -28,6 +28,7 @@ from moonmind.workflows.codex_session_timeouts import (
 from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionAdapter,
     CodexSessionRunFailedError,
+    _jira_skill_blocker_summary,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
@@ -853,6 +854,21 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
     assert persisted_record is not None
     assert persisted_record.status == "failed"
     assert persisted_record.failure_class == "execution_error"
+
+
+async def test_jira_verify_blocker_summary_detects_comment_posting_failure() -> None:
+    summary = _jira_skill_blocker_summary(
+        parameters={
+            "metadata": {
+                "moonmind": {
+                    "selectedSkill": "jira-verify",
+                },
+            },
+        },
+        assistant_text="jira.add_comment failed with HTTP 403: policy denied",
+    )
+
+    assert summary == "jira.add_comment failed with HTTP 403: policy denied"
 
 
 async def test_start_allows_jira_issue_creator_mixed_output_with_created_issue_keys(

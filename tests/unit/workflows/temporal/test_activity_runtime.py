@@ -477,13 +477,16 @@ async def test_default_skill_registry_payload_auto_placeholder_filtered():
     assert ("auto", "1.0") not in keyset
 
 
-async def test_default_skill_registry_payload_excludes_agent_only_jira_skill():
+@pytest.mark.parametrize("skill_name", ["jira-issue-creator", "jira-verify"])
+async def test_default_skill_registry_payload_excludes_agent_only_jira_skill(
+    skill_name: str,
+):
     payload = _default_skill_registry_payload(
         parameters={
             "task": {
                 "tool": {
                     "type": "skill",
-                    "name": "jira-issue-creator",
+                    "name": skill_name,
                     "version": "1.0",
                 }
             }
