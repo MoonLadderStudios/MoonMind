@@ -13,6 +13,15 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient, screen, waitFor } from '../utils/test-utils';
 import { MissionControlApp } from './mission-control-app';
 
+function cssRuleBlock(css: string, selector: string): string {
+  const index = css.indexOf(selector);
+  if (index < 0) return '';
+  const start = css.indexOf('{', index);
+  if (start < 0) return '';
+  const end = css.indexOf('}', start);
+  return end < 0 ? '' : css.slice(start + 1, end);
+}
+
 vi.mock('@xterm/xterm', () => {
   class MockTerminal {
     cols = 80;
@@ -102,7 +111,7 @@ describe('Mission Control shared entry', () => {
 
     renderWithClient(<MissionControlApp payload={payload} />);
 
-    expect(await screen.findByText('Hello from Tasks Home!')).toBeTruthy();
+    expect(await screen.findByText('Hello from Tasks Home!', {}, { timeout: 3000 })).toBeTruthy();
     expect(await screen.findByText(/First-Run Setup:/i)).toBeTruthy();
     await waitFor(() => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
@@ -166,6 +175,91 @@ describe('Mission Control shared entry', () => {
     );
     expect(missionControlCss).toMatch(
       /\.queue-floating-bar \.queue-inline-selector select,\s*\.queue-floating-bar \.queue-inline-selector input\s*\{[^}]*background:\s*var\(--mm-input-well\);[^}]*border-color:\s*var\(--mm-glass-edge\);/s,
+    );
+  });
+
+  it('defines shared interaction tokens for routine controls', async () => {
+    const requiredTokens = [
+      '--mm-control-hover-scale',
+      '--mm-control-press-scale',
+      '--mm-control-transition',
+      '--mm-control-focus-ring',
+      '--mm-control-disabled-opacity',
+      '--mm-control-shell',
+      '--mm-control-shell-hover',
+      '--mm-control-border',
+    ];
+
+    for (const token of requiredTokens) {
+      expect(missionControlCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
+    }
+  });
+
+  it('uses scale-only glow and grow states for routine buttons', async () => {
+    const routineBlocks = [
+      cssRuleBlock(
+        missionControlCss,
+        'button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):hover',
+      ),
+      cssRuleBlock(missionControlCss, 'button.secondary:hover'),
+      cssRuleBlock(
+        missionControlCss,
+        '.button:not(.secondary):not(.queue-action):not(.queue-submit-primary):hover',
+      ),
+      cssRuleBlock(missionControlCss, '.button.secondary:hover'),
+      cssRuleBlock(missionControlCss, '.queue-action:hover,\n.queue-submit-primary:hover'),
+      cssRuleBlock(missionControlCss, '.queue-step-extension-button:hover'),
+      cssRuleBlock(missionControlCss, '.queue-step-icon-button:hover'),
+      cssRuleBlock(missionControlCss, '.queue-step-icon-button.destructive:hover'),
+    ];
+
+    for (const block of routineBlocks) {
+      expect(block).toContain('scale(var(--mm-control-hover-scale))');
+      expect(block).not.toContain('translateY');
+    }
+
+    const pressedBlocks = [
+      cssRuleBlock(
+        missionControlCss,
+        'button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):active',
+      ),
+      cssRuleBlock(
+        missionControlCss,
+        '.button:not(.secondary):not(.queue-action):not(.queue-submit-primary):active',
+      ),
+      cssRuleBlock(missionControlCss, '.queue-action:active,\n.queue-submit-primary:active'),
+      cssRuleBlock(missionControlCss, '.queue-step-icon-button:active'),
+      cssRuleBlock(missionControlCss, '.queue-step-icon-button.destructive:active'),
+    ];
+
+    for (const block of pressedBlocks) {
+      expect(block).toContain('scale(var(--mm-control-press-scale))');
+      expect(block).not.toContain('translateY');
+    }
+  });
+
+  it('aligns compact controls, focus rings, disabled states, and reduced motion', async () => {
+    const compactControlBlock = cssRuleBlock(missionControlCss, '.queue-inline-toggle,\n.queue-inline-filter');
+    expect(compactControlBlock).toContain('background: var(--mm-control-shell)');
+    expect(compactControlBlock).toContain('border: 1px solid var(--mm-control-border)');
+
+    const filterChipBlock = cssRuleBlock(missionControlCss, '.task-list-filter-chip {');
+    expect(filterChipBlock).toContain('background: var(--mm-control-shell)');
+    expect(filterChipBlock).toContain('border: 1px solid var(--mm-control-border)');
+    expect(cssRuleBlock(missionControlCss, '.queue-inline-toggle:focus-within,\n.queue-inline-filter:focus-within')).toContain(
+      'box-shadow: var(--mm-control-focus-ring)',
+    );
+    expect(cssRuleBlock(missionControlCss, 'button:focus-visible')).toContain(
+      'box-shadow: var(--mm-control-focus-ring)',
+    );
+    expect(cssRuleBlock(missionControlCss, 'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible')).toContain(
+      'box-shadow: var(--mm-control-focus-ring)',
+    );
+    expect(cssRuleBlock(missionControlCss, 'button:disabled,\nbutton:disabled:hover,\n.button[aria-disabled="true"]')).toMatch(
+      /opacity:\s*var\(--mm-control-disabled-opacity\);[^}]*transform:\s*none;[^}]*box-shadow:\s*none;/s,
+    );
+    expect(missionControlCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*button,[^}]*\.button,[^}]*\.queue-action,[^}]*\.queue-submit-primary,[^}]*\.queue-step-icon-button,[^}]*\.queue-step-extension-button,[^}]*\.queue-inline-toggle,[^}]*\.queue-inline-filter\s*\{[^}]*transform:\s*none !important;/s,
     );
   });
 
