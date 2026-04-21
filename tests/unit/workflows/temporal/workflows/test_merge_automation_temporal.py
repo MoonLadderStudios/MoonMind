@@ -12,6 +12,9 @@ from moonmind.workflows.temporal.workflows import merge_automation as merge_auto
 from moonmind.workflows.temporal.workflows.merge_automation import (
     MoonMindMergeAutomationWorkflow,
 )
+from moonmind.workflows.temporal.workflows.merge_gate import (
+    deterministic_resolver_idempotency_key,
+)
 
 
 def _payload() -> dict[str, Any]:
@@ -220,9 +223,21 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
     assert readiness_calls == 2
     assert result["status"] == "merged"
     assert result["cycles"] == 2
+    first_resolver_id = deterministic_resolver_idempotency_key(
+        parent_workflow_id="wf-parent",
+        repo="MoonLadderStudios/MoonMind",
+        pr_number=350,
+        head_sha="abc123",
+    )
+    second_resolver_id = deterministic_resolver_idempotency_key(
+        parent_workflow_id="wf-parent",
+        repo="MoonLadderStudios/MoonMind",
+        pr_number=350,
+        head_sha="def456",
+    )
     assert child_workflow_ids == [
-        "resolver:wf-parent:pr:350:head:abc123:1",
-        "resolver:wf-parent:pr:350:head:def456:2",
+        f"{first_resolver_id}:1",
+        f"{second_resolver_id}:2",
     ]
     assert child_payloads[0]["workflow_type"] == "MoonMind.Run"
     assert child_payloads[0]["initial_parameters"]["publishMode"] == "none"

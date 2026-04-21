@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from typing import Any
 
 from temporalio import workflow
@@ -221,9 +222,22 @@ def deterministic_resolver_idempotency_key(
     pr_number: int,
     head_sha: str,
 ) -> str:
-    # Keep repository identity in payload/search attributes, not workflow ids.
-    # Raw repo names contain "/" and make API/UI routing fragile.
-    return f"resolver:{parent_workflow_id}:pr:{pr_number}:head:{head_sha}"
+    # Keep full parent/repo/SHA identity in payload/search attributes and use a
+    # bounded digest in the workflow id to avoid projection and UI path limits.
+    identity = "\x1f".join(
+        [
+            str(parent_workflow_id).strip(),
+            str(repo).strip(),
+            str(pr_number).strip(),
+            str(head_sha).strip(),
+        ]
+    )
+    digest = sha256(identity.encode("utf-8")).hexdigest()[:16]
+    pr_prefix = re.sub(r"[^a-zA-Z0-9_.-]", "-", str(pr_number).strip())[:12] or "pr"
+    head_prefix = (
+        re.sub(r"[^a-zA-Z0-9_.-]", "-", str(head_sha).strip())[:12] or "head"
+    )
+    return f"resolver:pr:{pr_prefix}:head:{head_prefix}:h:{digest}"
 
 
 def build_resolver_run_request(

@@ -1817,6 +1817,46 @@ def test_describe_execution_source_temporal_uses_projection_fallback_when_sync_f
     assert service.describe_execution.await_args.kwargs["include_orphaned"] is True
 
 
+def test_describe_execution_rolls_back_session_when_temporal_sync_commit_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    user = _override_user_dependencies(app, is_superuser=False)
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+    service.list_dependents.return_value = []
+    service.enrich_dependency_summaries.return_value = []
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_query_client(app, progress={"total": 0})
+
+    session = AsyncMock()
+    session.commit.side_effect = RuntimeError("db flush failed")
+
+    async def _override_session():
+        yield session
+
+    async def _sync_success(*_args, **_kwargs):
+        return None
+
+    app.dependency_overrides[get_async_session] = _override_session
+    monkeypatch.setattr(
+        "api_service.core.sync.fetch_and_sync_execution",
+        _sync_success,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions/mm:wf-1", params={"source": "temporal"}
+        )
+
+    assert response.status_code == 200
+    session.rollback.assert_awaited_once()
+    assert service.describe_execution.await_args.kwargs["include_orphaned"] is True
+
+
 def test_describe_execution_source_temporal_returns_503_when_no_fallback_record(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,

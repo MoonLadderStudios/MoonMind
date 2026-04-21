@@ -163,7 +163,10 @@ def test_deterministic_resolver_idempotency_key_is_revision_scoped() -> None:
     )
 
     assert first != second
-    assert first == "resolver:mm:parent:pr:341:head:abc123"
+    assert first.startswith("resolver:pr:341:head:abc123:h:")
+    assert len(first) <= 64
+    assert "mm:parent" not in first
+    assert "MoonLadderStudios" not in first
     assert "/" not in first
 
 
