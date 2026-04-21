@@ -19,6 +19,7 @@ from api_service.db.models import (
     TemporalExecutionRemediationLink,
 )
 from moonmind.workflows.temporal import (
+    ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -26,6 +27,13 @@ from moonmind.workflows.temporal import (
 from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationContextError,
+)
+from moonmind.workflows.temporal.remediation_tools import (
+    RemediationEvidenceToolError,
+    RemediationEvidenceToolService,
+    RemediationLiveFollowEvent,
+    RemediationLiveFollowResult,
+    RemediationLogReadResult,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
@@ -294,6 +302,306 @@ async def test_remediation_context_builder_rejects_non_remediation_workflow(
             )
         ).scalars().all()
         assert links == []
+
+
+class RecordingLogReader:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def read_logs(
+        self,
+        *,
+        task_run_id,
+        stream,
+        cursor=None,
+        tail_lines=None,
+    ):
+        self.calls.append(
+            {
+                "task_run_id": task_run_id,
+                "stream": stream,
+                "cursor": cursor,
+                "tail_lines": tail_lines,
+            }
+        )
+        return RemediationLogReadResult(
+            task_run_id=task_run_id,
+            stream=stream,
+            lines=("line 1", "line 2"),
+            next_cursor="cursor-2",
+        )
+
+
+class RecordingLiveFollower:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def follow_logs(self, *, task_run_id, from_sequence=None):
+        self.calls.append(
+            {"task_run_id": task_run_id, "from_sequence": from_sequence}
+        )
+        return RemediationLiveFollowResult(
+            task_run_id=task_run_id,
+            events=(
+                RemediationLiveFollowEvent(
+                    sequence=43,
+                    stream="stdout",
+                    text="live line",
+                    timestamp="2026-04-21T20:00:00Z",
+                ),
+            ),
+            resume_cursor={"sequence": 43},
+        )
+
+
+@pytest.mark.asyncio
+async def test_remediation_evidence_tools_read_only_context_declared_evidence(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        mock_client_adapter.start_workflow.side_effect = [
+            SimpleNamespace(run_id="target-run"),
+            SimpleNamespace(run_id="remediation-run"),
+        ]
+        execution_service = TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+
+        target = await execution_service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        target_artifact, _upload = await artifact_service.create(
+            principal="service:test",
+            content_type="text/plain",
+            size_bytes=len(b"target artifact"),
+            link=ExecutionRef(
+                namespace="default",
+                workflow_id=target.workflow_id,
+                run_id=target.run_id,
+                link_type="target.evidence",
+                label="target.txt",
+            ),
+            metadata_json={"artifact_type": "target.evidence"},
+        )
+        target_artifact = await artifact_service.write_complete(
+            artifact_id=target_artifact.artifact_id,
+            principal="service:test",
+            payload=b"target artifact",
+            content_type="text/plain",
+        )
+        target_source = await session.get(
+            TemporalExecutionCanonicalRecord, target.workflow_id
+        )
+        assert target_source is not None
+        target_source.artifact_refs = [target_artifact.artifact_id]
+        await session.commit()
+
+        remediation = await execution_service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "remediation": {
+                        "target": {
+                            "workflowId": target.workflow_id,
+                            "taskRunIds": ["tr_allowed"],
+                        },
+                        "evidencePolicy": {"tailLines": 9999},
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+        builder = RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        )
+        await builder.build_context(remediation_workflow_id=remediation.workflow_id)
+
+        reader = RecordingLogReader()
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            log_reader=reader,
+        )
+        context = await tools.get_context(remediation_workflow_id=remediation.workflow_id)
+        assert context["target"]["workflowId"] == target.workflow_id
+
+        payload = await tools.read_target_artifact(
+            remediation_workflow_id=remediation.workflow_id,
+            artifact_ref={"artifact_id": target_artifact.artifact_id},
+        )
+        assert payload == b"target artifact"
+
+        logs = await tools.read_target_logs(
+            remediation_workflow_id=remediation.workflow_id,
+            task_run_id="tr_allowed",
+            stream="merged",
+            tail_lines=999999,
+        )
+        assert logs.lines == ("line 1", "line 2")
+        assert reader.calls == [
+            {
+                "task_run_id": "tr_allowed",
+                "stream": "merged",
+                "cursor": None,
+                "tail_lines": 2000,
+            }
+        ]
+
+        with pytest.raises(RemediationEvidenceToolError, match="not listed"):
+            await tools.read_target_artifact(
+                remediation_workflow_id=remediation.workflow_id,
+                artifact_ref="art_not_in_context",
+            )
+        with pytest.raises(RemediationEvidenceToolError, match="not listed"):
+            await tools.read_target_logs(
+                remediation_workflow_id=remediation.workflow_id,
+                task_run_id="tr_blocked",
+                stream="stdout",
+            )
+
+
+@pytest.mark.asyncio
+async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        mock_client_adapter.start_workflow.side_effect = [
+            SimpleNamespace(run_id="target-run"),
+            SimpleNamespace(run_id="remediation-run"),
+        ]
+        execution_service = TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        target = await execution_service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        remediation = await execution_service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "remediation": {
+                        "target": {
+                            "workflowId": target.workflow_id,
+                            "taskRunIds": ["tr_live"],
+                        },
+                        "mode": "snapshot_then_follow",
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+        builder = RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        )
+        result = await builder.build_context(
+            remediation_workflow_id=remediation.workflow_id
+        )
+
+        follower = RecordingLiveFollower()
+        recorded_cursors = []
+
+        async def record_cursor(workflow_id, cursor):
+            recorded_cursors.append((workflow_id, cursor))
+
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            live_follower=follower,
+            cursor_recorder=record_cursor,
+        )
+        with pytest.raises(RemediationEvidenceToolError, match="not supported"):
+            await tools.follow_target_logs(
+                remediation_workflow_id=remediation.workflow_id,
+                task_run_id="tr_live",
+            )
+
+        context = dict(result.payload)
+        context["liveFollow"] = {
+            "mode": "snapshot_then_follow",
+            "supported": True,
+            "taskRunId": "tr_live",
+            "resumeCursor": {"sequence": 42},
+        }
+        live_context_artifact, _upload = await artifact_service.create(
+            principal="service:test",
+            content_type="application/json",
+            size_bytes=len(json.dumps(context).encode("utf-8")),
+            link=ExecutionRef(
+                namespace="default",
+                workflow_id=remediation.workflow_id,
+                run_id=remediation.run_id,
+                link_type="remediation.context",
+                label="reports/remediation_context.json",
+            ),
+            metadata_json={
+                "artifact_type": "remediation.context",
+                "name": "reports/remediation_context.json",
+            },
+        )
+        live_context_artifact = await artifact_service.write_complete(
+            artifact_id=live_context_artifact.artifact_id,
+            principal="service:test",
+            payload=json.dumps(context).encode("utf-8"),
+            content_type="application/json",
+        )
+        result.link.context_artifact_ref = live_context_artifact.artifact_id
+        await session.commit()
+
+        live = await tools.follow_target_logs(
+            remediation_workflow_id=remediation.workflow_id,
+            task_run_id="tr_live",
+        )
+        assert live.events[0].text == "live line"
+        assert follower.calls == [{"task_run_id": "tr_live", "from_sequence": 42}]
+        assert recorded_cursors == [
+            (remediation.workflow_id, {"sequence": 43}),
+        ]
+
+        with pytest.raises(RemediationEvidenceToolError, match="not listed"):
+            await tools.follow_target_logs(
+                remediation_workflow_id=remediation.workflow_id,
+                task_run_id="tr_other",
+            )
 
 
 @pytest.mark.asyncio
