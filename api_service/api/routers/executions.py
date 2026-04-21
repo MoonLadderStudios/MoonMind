@@ -3720,6 +3720,7 @@ async def describe_execution(
             use_projection_read = True
         except RPCError as exc:
             temporal_sync_unavailable = True
+            await session.rollback()
             logger.warning(
                 "Failed to sync execution %s from Temporal: %s",
                 canonical_workflow_id,
@@ -3727,6 +3728,7 @@ async def describe_execution(
                 exc_info=True,
             )
         except Exception as exc:
+            await session.rollback()
             logger.warning(
                 "Failed to sync execution %s from Temporal: %s",
                 canonical_workflow_id,
