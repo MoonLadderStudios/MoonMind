@@ -255,10 +255,10 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   const countSummary = displayTemporalCount(data?.count, data?.countMode);
   const hasPaginationContext = cursorStack.length > 0 || Boolean(listCursor);
 
-  const resetToFirstPage = () => {
+  const resetToFirstPage = useCallback(() => {
     setListCursor(null);
     setCursorStack([]);
-  };
+  }, []);
 
   const onHeaderClick = (field: string) => {
     if (sortField === field) {
@@ -313,20 +313,24 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
   ]
     .filter(Boolean)
     .join(' · ');
-  const activeFilters = [
-    workflowType ? ['Workflow', workflowType] : null,
-    temporalState ? ['Status', temporalState] : null,
-    entry ? ['Entry', entry] : null,
-    normalizedRepository ? ['Repository', normalizedRepository] : null,
-  ].filter((filter): filter is [string, string] => Boolean(filter));
+  const activeFilters = useMemo(
+    () =>
+      [
+        workflowType ? ['Workflow', workflowType] : null,
+        temporalState ? ['Status', temporalState] : null,
+        entry ? ['Entry', entry] : null,
+        normalizedRepository ? ['Repository', normalizedRepository] : null,
+      ].filter((filter): filter is [string, string] => Boolean(filter)),
+    [workflowType, temporalState, entry, normalizedRepository],
+  );
   const hasActiveFilters = activeFilters.length > 0;
-  const clearFilters = () => {
+  const clearFilters = useCallback(() => {
     setWorkflowType('');
     setTemporalState('');
     setEntry('');
     setRepository('');
     resetToFirstPage();
-  };
+  }, [resetToFirstPage]);
 
   return (
     <div className="stack">
