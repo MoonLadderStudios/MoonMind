@@ -126,6 +126,9 @@ MANAGED_SESSION_PREPARE_TURN_INSTRUCTIONS_ACTIVITY_PATCH_ID = (
 )
 MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID = "agent-run-slot-wait-manager-inspection-v1"
 SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
+SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
+    "agent-run-sync-profiles-before-slot-request-v1"
+)
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.Run (run.py:50).
@@ -638,10 +641,13 @@ class MoonMindAgentRun:
         execution_profile_ref: str | None = None,
         profile_selector: dict | None = None,
     ) -> workflow.ExternalWorkflowHandle:
-        """Signal the ProviderProfileManager; auto-start it on first failure.
+        """Signal the ProviderProfileManager for slot requests; auto-start it on first failure.
 
         Tries the signal. If the manager workflow doesn't exist, starts it
         via the ``provider_profile.ensure_manager`` activity and retries once.
+        When ``request_slot`` is false this only returns the external handle;
+        pre-slot profile sync owns its own signal-with-start retry so an
+        already-running singleton does not pay an unconditional activity hop.
         
         Note: The Temporal Python SDK does not provide a `signal_with_start`
         method on `workflow.ExternalWorkflowHandle` objects for use inside a
@@ -738,9 +744,24 @@ class MoonMindAgentRun:
             profile_selector=profile_selector,
         )
 
+    async def _ensure_manager_started(
+        self,
+        manager_id: str,
+        runtime_id: str,
+    ) -> workflow.ExternalWorkflowHandle:
+        """Return a provider-profile manager handle without requesting a slot."""
+        return await self._ensure_manager_and_signal(
+            manager_id,
+            runtime_id,
+            request_slot=False,
+            execution_profile_ref=None,
+            profile_selector=None,
+        )
+
     async def _sync_manager_profiles(
         self,
         *,
+        manager_id: str,
         manager_handle: workflow.ExternalWorkflowHandle,
         runtime_id: str,
     ) -> int:
@@ -761,7 +782,28 @@ class MoonMindAgentRun:
                 for profile in profiles
                 if isinstance(profile, dict) and str(profile.get("profile_id", "")).strip()
             }
-            await manager_handle.signal("sync_profiles", {"profiles": profiles})
+            signal_payload = {"profiles": profiles}
+            for attempt in range(2):
+                try:
+                    await manager_handle.signal("sync_profiles", signal_payload)
+                    break
+                except ApplicationError as exc:
+                    if "ExternalWorkflowExecutionNotFound" not in (
+                        getattr(exc, "type", None) or str(exc)
+                    ):
+                        raise
+                    if attempt > 0:
+                        raise
+                self._get_logger().warning(
+                    "ProviderProfileManager %s not found, auto-starting before profile sync",
+                    manager_id,
+                )
+                await self._execute_routed_activity(
+                    "provider_profile.ensure_manager",
+                    {"runtime_id": runtime_id},
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                )
+                manager_handle = workflow.get_external_workflow_handle(manager_id)
             return len(profiles)
         except Exception:
             self._get_logger().warning(
@@ -1058,17 +1100,40 @@ class MoonMindAgentRun:
                     manager_id = self._manager_workflow_id(runtime_id)
 
                     self.slot_assigned_event.clear()
-                    manager_handle = await self._ensure_manager_and_signal(
-                        manager_id,
-                        runtime_id,
-                        request_slot=True,
-                        execution_profile_ref=request.execution_profile_ref,
-                        profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True),
+                    selector_payload = request.profile_selector.model_dump(
+                        by_alias=True,
+                        exclude_none=True,
                     )
-                    profile_count = await self._sync_manager_profiles(
-                        manager_handle=manager_handle,
-                        runtime_id=runtime_id,
-                    )
+                    if workflow.patched(SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID):
+                        manager_handle = await self._ensure_manager_started(
+                            manager_id,
+                            runtime_id,
+                        )
+                        profile_count = await self._sync_manager_profiles(
+                            manager_id=manager_id,
+                            manager_handle=manager_handle,
+                            runtime_id=runtime_id,
+                        )
+                        manager_handle = await self._ensure_manager_and_signal(
+                            manager_id,
+                            runtime_id,
+                            request_slot=True,
+                            execution_profile_ref=request.execution_profile_ref,
+                            profile_selector=selector_payload,
+                        )
+                    else:
+                        manager_handle = await self._ensure_manager_and_signal(
+                            manager_id,
+                            runtime_id,
+                            request_slot=True,
+                            execution_profile_ref=request.execution_profile_ref,
+                            profile_selector=selector_payload,
+                        )
+                        profile_count = await self._sync_manager_profiles(
+                            manager_id=manager_id,
+                            manager_handle=manager_handle,
+                            runtime_id=runtime_id,
+                        )
                     if profile_count == 0:
                         raise ApplicationError(
                             f"No enabled provider profiles found for runtime_id='{runtime_id}'",
@@ -1168,6 +1233,7 @@ class MoonMindAgentRun:
                                                 manager_id
                                             )
                                             await self._sync_manager_profiles(
+                                                manager_id=manager_id,
                                                 manager_handle=manager_handle,
                                                 runtime_id=runtime_id,
                                             )
@@ -1185,6 +1251,7 @@ class MoonMindAgentRun:
                                             profile_selector=selector_payload,
                                         )
                                         await self._sync_manager_profiles(
+                                            manager_id=manager_id,
                                             manager_handle=manager_handle,
                                             runtime_id=runtime_id,
                                         )
@@ -1197,6 +1264,7 @@ class MoonMindAgentRun:
                                     profile_selector=selector_payload,
                                 )
                                 await self._sync_manager_profiles(
+                                    manager_id=manager_id,
                                     manager_handle=manager_handle,
                                     runtime_id=runtime_id,
                                 )
