@@ -221,6 +221,27 @@ describe('Tasks List Entrypoint', () => {
     expect(getComputedStyle(scheduledHeader as HTMLElement).position).toBe('sticky');
   });
 
+  it('keeps the task list surfaces to one control deck and one data slab', async () => {
+    const { readFileSync } = await import('node:fs');
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      'utf8',
+    );
+
+    expect(missionControlCss).toMatch(
+      /\.panel:has\(\.task-list-control-deck\)\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;[^}]*padding:\s*0;[^}]*min-height:\s*0;/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.task-list-control-grid\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*none;[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(12rem,\s*1fr\)\)/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.task-list-data-slab\s*\{[^}]*gap:\s*0;[^}]*overflow:\s*hidden;[^}]*padding:\s*0;[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.96\)/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.task-list-data-slab \.queue-table-wrapper\s*\{[^}]*border:\s*0;[^}]*border-radius:\s*0;[^}]*background:\s*transparent/s,
+    );
+  });
+
   it('shows active filter chips and clears filters from the control deck', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 
