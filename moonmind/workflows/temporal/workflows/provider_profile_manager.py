@@ -39,6 +39,7 @@ REFRESH_RESTORED_PROFILES_PATCH = "provider-profile-manager-refresh-restored-pro
 DB_AUTHORITATIVE_PROFILE_SYNC_PATCH = (
     "provider-profile-manager-db-authoritative-profile-sync-v1"
 )
+VERIFY_PENDING_REQUESTS_PATCH = "provider-profile-manager-verify-pending-requests-v1"
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -483,6 +484,9 @@ class MoonMindProviderProfileManagerWorkflow:
                         continue
 
             # Drain pending requests against available profiles.
+            if workflow.patched(VERIFY_PENDING_REQUESTS_PATCH):
+                await self._verify_pending_requesters()
+
             await self._drain_queue()
 
             # Clear expired cooldowns.
@@ -957,6 +961,52 @@ class MoonMindProviderProfileManagerWorkflow:
 
         if reclaimed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
             await self._sync_leases_to_db()
+
+    async def _verify_pending_requesters(self) -> int:
+        """Remove pending slot requests whose requester workflows are terminal."""
+        workflow_ids = list(
+            dict.fromkeys(req.requester_workflow_id for req in self._pending_requests)
+        )
+        if not workflow_ids:
+            return 0
+
+        try:
+            result = await workflow.execute_activity(
+                "provider_profile.verify_lease_holders",
+                {"workflow_ids": workflow_ids},
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=2),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=30),
+                    maximum_attempts=3,
+                ),
+            )
+        except Exception:
+            self._get_logger().warning(
+                "verify_lease_holders activity failed, skipping pending request verification"
+            )
+            return 0
+
+        workflow_statuses: dict[str, dict[str, Any]] = result or {}
+        remaining: list[PendingRequest] = []
+        removed_count = 0
+        for request in self._pending_requests:
+            status_info = workflow_statuses.get(request.requester_workflow_id, {})
+            if status_info.get("running", True):
+                remaining.append(request)
+                continue
+            removed_count += 1
+            self._get_logger().warning(
+                "Pruned pending slot request for terminal workflow %s (status=%s)",
+                request.requester_workflow_id,
+                status_info.get("status", "UNKNOWN"),
+            )
+
+        if removed_count:
+            self._pending_requests = remaining
+        return removed_count
 
     def _clear_expired_cooldowns(self) -> None:
         """Remove cooldown markers that have expired."""
