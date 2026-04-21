@@ -1,12 +1,62 @@
 [
   {
-    "id": 3114361904,
+    "id": 3115538327,
     "disposition": "addressed",
-    "rationale": "Updated deactivate_templates telemetry to increment the delete metric by the number of templates deactivated, with unit coverage for the bulk path."
+    "rationale": "Added jira-pr-verify to the agent-only Jira skill registry exclusion in activity_runtime.py."
   },
   {
-    "id": 4144292983,
+    "id": 3115538341,
+    "disposition": "addressed",
+    "rationale": "Added jira-pr-verify to _JIRA_AGENT_SKILLS in worker_runtime.py."
+  },
+  {
+    "id": 3115538350,
+    "disposition": "addressed",
+    "rationale": "Added jira-pr-verify to _PR_OPTIONAL_AGENT_SKILLS in workflows/run.py."
+  },
+  {
+    "id": 4145629251,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; the only concrete feedback item it referenced was addressed separately."
+    "rationale": "Review summary comment with no standalone actionable request beyond the inline comments."
+  },
+  {
+    "id": 3115548163,
+    "disposition": "addressed",
+    "rationale": "Made the jira-pr-verify issue-fetch example string concatenation explicit in activity_runtime.py."
+  },
+  {
+    "id": 3115548165,
+    "disposition": "addressed",
+    "rationale": "Made the adjacent issue-fetch string literals explicit in the same activity_runtime.py block."
+  },
+  {
+    "id": 3115548171,
+    "disposition": "addressed",
+    "rationale": "Made the jira-verify issue-fetch example string concatenation explicit in activity_runtime.py."
+  },
+  {
+    "id": 3115548178,
+    "disposition": "addressed",
+    "rationale": "Made the jira-verify comment-posting example string concatenation explicit in activity_runtime.py."
+  },
+  {
+    "id": 3115548182,
+    "disposition": "addressed",
+    "rationale": "Made the jira.add_comment example JSON string concatenation explicit in activity_runtime.py."
+  },
+  {
+    "id": 3115548184,
+    "disposition": "addressed",
+    "rationale": "Made the trailing jira.add_comment example string literal boundaries explicit in activity_runtime.py."
+  },
+  {
+    "id": 3115555454,
+    "disposition": "addressed",
+    "rationale": "Added jira_auth_failed to Jira skill blocker detection and covered it with a unit test."
+  },
+  {
+    "id": 4145654917,
+    "disposition": "not-applicable",
+    "rationale": "Automated review header/about text with no standalone actionable request."
   }
 ]

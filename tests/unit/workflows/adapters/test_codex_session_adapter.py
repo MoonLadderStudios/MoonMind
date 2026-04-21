@@ -871,6 +871,21 @@ async def test_jira_verify_blocker_summary_detects_comment_posting_failure() -> 
     assert summary == "jira.add_comment failed with HTTP 403: policy denied"
 
 
+async def test_jira_verify_blocker_summary_detects_auth_error_code() -> None:
+    summary = _jira_skill_blocker_summary(
+        parameters={
+            "metadata": {
+                "moonmind": {
+                    "selectedSkill": "jira-verify",
+                },
+            },
+        },
+        assistant_text="jira_auth_failed",
+    )
+
+    assert summary == "jira_auth_failed"
+
+
 async def test_start_allows_jira_issue_creator_mixed_output_with_created_issue_keys(
     tmp_path: Path,
 ) -> None:

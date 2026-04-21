@@ -93,7 +93,7 @@ DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
 _TERMINAL_LAST_ERROR_UNSET = object()
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
-_PR_OPTIONAL_AGENT_SKILLS = frozenset({"jira-issue-creator", "jira-verify"})
+_PR_OPTIONAL_AGENT_SKILLS = frozenset({"jira-issue-creator", "jira-pr-verify", "jira-verify"})
 
 
 class RunWorkflowInput(TypedDict, total=False):
