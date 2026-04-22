@@ -9,6 +9,7 @@ import {
   type MockInstance,
 } from 'vitest';
 import postcss from 'postcss';
+import type { Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
@@ -34,6 +35,16 @@ function cssRuleBlock(css: string, selector: string): string {
         ruleSelectors.includes(expectedSelector) ||
         expectedSelectors.every((expected) => ruleSelectors.includes(expected)))
     ) {
+      block = rule.nodes.map((node) => `${node.toString()};`).join('\n');
+    }
+  });
+  return block;
+}
+
+function cssRuleBlockMatching(css: string, matches: (rule: Rule) => boolean): string {
+  let block = '';
+  postcss.parse(css).walkRules((rule) => {
+    if (!block && matches(rule)) {
       block = rule.nodes.map((node) => `${node.toString()};`).join('\n');
     }
   });
@@ -249,6 +260,95 @@ describe('Mission Control shared entry', () => {
     expect(liquidBlock).toContain('backdrop-filter: blur(26px) saturate(1.65)');
   });
 
+  it('enforces MM-429 readable contrast tokens across common Mission Control surfaces', async () => {
+    expect(cssRuleBlock(missionControlCss, 'label')).toContain('color: rgb(var(--mm-ink))');
+    expect(cssRuleBlock(missionControlCss, '.data-table th,\n.data-table td')).toContain(
+      'color: rgb(var(--mm-ink))',
+    );
+    expect(cssRuleBlock(missionControlCss, 'input::placeholder,\ntextarea::placeholder')).toContain(
+      'color: rgb(var(--mm-muted))',
+    );
+    expect(cssRuleBlock(missionControlCss, '.task-list-filter-chip')).toContain(
+      'color: rgb(var(--mm-ink))',
+    );
+    const primaryButtonBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+      const selectors = rule.selector.split(',').map(normalizeCssSelector);
+      return (
+        selectors.some((selector) => selector.startsWith('button:not(')) &&
+        rule.nodes.some((node) => node.type === 'decl' && node.prop === 'color' && node.value === '#fff')
+      );
+    });
+    expect(primaryButtonBlock).toContain('color: #fff');
+    expect(cssRuleBlock(missionControlCss, '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility')).toContain(
+      'background: var(--mm-glass-fill)',
+    );
+  });
+
+  it('enforces MM-429 focus visibility across representative interactive surfaces', async () => {
+    const focusSelectors = [
+      'button:focus-visible',
+      '.button:focus-visible',
+      'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible',
+      '.route-nav a:focus-visible',
+      '.table-sort-button:focus-visible',
+      '.queue-action:focus-visible,\n.queue-submit-primary:focus-visible',
+      '.queue-step-attachment-add-button:focus-visible',
+      '.live-logs-artifact-link:focus-visible',
+      '.td-instructions-toggle:focus-visible',
+    ];
+
+    for (const selector of focusSelectors) {
+      const block = cssRuleBlock(missionControlCss, selector);
+      expect(block).toContain('box-shadow: var(--mm-control-focus-ring)');
+    }
+  });
+
+  it('enforces MM-429 reduced-motion suppression for live and premium effects', async () => {
+    const runningIconBlock = cssRuleBlockMatching(
+      missionControlCss,
+      (rule) =>
+        normalizeCssSelector(rule.selector) === '.step-tl-icon.step-icon-running' &&
+        rule.nodes.some((node) => node.type === 'decl' && node.toString() === 'animation: none !important'),
+    );
+    expect(runningIconBlock).toContain('animation: none !important');
+    expect(runningIconBlock).toContain('opacity: 1');
+
+    const premiumEffectBlock = cssRuleBlockMatching(
+      missionControlCss,
+      (rule) =>
+        rule.selector
+          .split(',')
+          .map(normalizeCssSelector)
+          .includes('.surface--liquidgl-hero') &&
+        rule.nodes.some(
+          (node) =>
+            node.type === 'decl' && node.toString() === 'transition-duration: 0s !important',
+        ),
+    );
+    expect(premiumEffectBlock).toContain('transition-duration: 0s !important');
+    expect(premiumEffectBlock).toContain('animation-duration: 0s !important');
+  });
+
+  it('enforces MM-429 fallback shells and premium-effect limits', async () => {
+    expect(missionControlCss).toMatch(
+      /@supports not \(\(backdrop-filter:\s*blur\(2px\)\) or \(-webkit-backdrop-filter:\s*blur\(2px\)\)\)\s*\{[^}]*\.surface--glass-control,[^}]*\.panel--controls,[^}]*\.panel--floating,[^}]*\.panel--utility,[^}]*\.surface--liquidgl-hero,[^}]*\.queue-floating-bar\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.94\);[^}]*border-color:\s*rgb\(var\(--mm-border\) \/ 0\.84\);/s,
+    );
+
+    for (const selector of [
+      '.surface--matte-data',
+      '.surface--nested-dense',
+      '.data-table-slab',
+      '.td-evidence-region',
+      '.td-evidence-slab',
+      'textarea',
+    ]) {
+      const block = cssRuleBlock(missionControlCss, selector);
+      expect(block).not.toContain('liquid');
+      expect(block).not.toContain('backdrop-filter');
+      expect(block).not.toContain('blur(26px)');
+    }
+  });
+
   it('defines shared interaction tokens for routine controls', async () => {
     const requiredTokens = [
       '--mm-control-hover-scale',
@@ -338,7 +438,7 @@ describe('Mission Control shared entry', () => {
       /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*button,[^}]*\.button,[^}]*\.queue-action,[^}]*\.queue-submit-primary,[^}]*\.queue-step-icon-button,[^}]*\.queue-step-extension-button,[^}]*\.queue-inline-toggle,[^}]*\.queue-inline-filter\s*\{[^}]*transition-duration:\s*0s !important;[^}]*animation-duration:\s*0s !important;[^}]*transform:\s*none !important;/s,
     );
     expect(missionControlCss).toMatch(
-      /@media \(forced-colors: active\)\s*\{[^}]*button:focus-visible,[^}]*\.button:focus-visible,[^}]*\.queue-action:focus-visible,[^}]*\.queue-submit-primary:focus-visible\s*\{[^}]*outline:\s*2px solid ButtonText;[^}]*outline-offset:\s*2px;/s,
+      /@media \(forced-colors: active\)\s*\{[^}]*button:focus-visible,[^}]*\.button:focus-visible,[^}]*\.route-nav a:focus-visible,[^}]*\.live-logs-artifact-link:focus-visible,[^}]*\.queue-action:focus-visible,[^}]*\.queue-submit-primary:focus-visible\s*\{[^}]*outline:\s*2px solid ButtonText;[^}]*outline-offset:\s*2px;/s,
     );
   });
 

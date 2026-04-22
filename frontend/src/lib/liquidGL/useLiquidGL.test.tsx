@@ -76,4 +76,46 @@ describe("useLiquidGL", () => {
     expect(firstDestroy).toHaveBeenCalledTimes(1);
     expect(secondDestroy).toHaveBeenCalledTimes(1);
   });
+
+  it("leaves the CSS fallback shell untouched when liquidGL is unavailable", async () => {
+    vi.mocked(getLiquidGL).mockReturnValue(undefined);
+
+    render(<LiquidGLHarness />);
+
+    await waitFor(() => {
+      expect(getLiquidGL).toHaveBeenCalledTimes(1);
+    });
+
+    const element = document.querySelector(".liquid-glass-panel");
+    expect(element?.hasAttribute("data-liquid-gl-initialized")).toBe(false);
+  });
+
+  it("leaves the CSS fallback shell untouched when liquidGL initialization fails", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const liquidGL = Object.assign(
+      vi.fn(() => {
+        throw new Error("liquidGL unavailable");
+      }),
+      {
+        registerDynamic: vi.fn(),
+        syncWith: vi.fn(),
+      },
+    );
+    vi.mocked(getLiquidGL).mockReturnValue(liquidGL);
+
+    render(<LiquidGLHarness />);
+
+    await waitFor(() => {
+      expect(liquidGL).toHaveBeenCalledTimes(1);
+    });
+
+    const element = document.querySelector(".liquid-glass-panel");
+    expect(element?.hasAttribute("data-liquid-gl-initialized")).toBe(false);
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "liquidGL initialization failed",
+      expect.any(Error),
+    );
+
+    consoleWarn.mockRestore();
+  });
 });
