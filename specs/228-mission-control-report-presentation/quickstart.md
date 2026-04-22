@@ -3,7 +3,7 @@
 ## Focused Frontend Validation
 
 ```bash
-npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx
+./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx
 ```
 
 Expected coverage:
@@ -31,13 +31,13 @@ Expected coverage:
 ./tools/test_unit.sh
 ```
 
-## Optional Required Integration Suite
+## Hermetic Integration Strategy
 
 ```bash
 ./tools/test_integration.sh
 ```
 
-Run when backend artifact behavior changes beyond contract serialization or when local Docker/compose is available.
+Run only if backend artifact behavior changes beyond the existing read-only query/serialization contract or when validating the broader required integration suite in an environment with Docker/compose available.
 
 ## Traceability Check
 

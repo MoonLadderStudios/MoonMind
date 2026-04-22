@@ -31,8 +31,8 @@ Implement MM-462 by extending Mission Control's task detail surface to query the
 **Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for API contract regression  
 **Primary Dependencies**: React, TanStack Query, Zod, existing FastAPI artifact routes, Pydantic v2 response models  
 **Storage**: Existing temporal artifact tables and artifact store only; no new persistent storage  
-**Unit Testing**: `npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx` during iteration; final `./tools/test_unit.sh`  
-**Integration Testing**: Existing required integration runner `./tools/test_integration.sh`; this story plans frontend unit plus API contract coverage and no compose-backed integration unless implementation exposes a new backend seam  
+**Unit Testing**: Focused frontend unit coverage through `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx`; API contract coverage through `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py`; final full unit verification through `./tools/test_unit.sh`  
+**Integration Testing**: Existing required hermetic integration runner `./tools/test_integration.sh`; no compose-backed integration is required for this story because the planned backend coverage is a contract regression over an existing read-only endpoint, but the integration runner remains the escalation path if artifact service behavior changes beyond serialization/query plumbing  
 **Target Platform**: Mission Control browser UI backed by MoonMind API service  
 **Project Type**: Frontend application with existing backend API read model  
 **Performance Goals**: Add one focused latest-report artifact request and reuse the existing artifact list request; avoid client-side sorting over arbitrary artifact collections  
