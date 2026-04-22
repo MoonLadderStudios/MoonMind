@@ -1,32 +1,22 @@
 [
   {
-    "id": 3121885533,
+    "id": 3122381615,
     "disposition": "addressed",
-    "rationale": "Cached the parsed PostCSS root so cssRuleBlock and matching helpers no longer parse the full Mission Control stylesheet on every lookup."
+    "rationale": "Updated Claude manual auth classification to require the canonical claude_code runtime and covered it in ProviderProfilesManager tests."
   },
   {
-    "id": 3121885539,
-    "disposition": "addressed",
-    "rationale": "Expanded token-first color assertions to cover shorthand border, outline, and box-shadow declarations."
-  },
-  {
-    "id": 4152392996,
+    "id": 4152931396,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary; its actionable inline comments are tracked separately in this ledger."
+    "rationale": "Automated review summary with no separate actionable request."
   },
   {
-    "id": 4152397163,
+    "id": 3122381622,
+    "disposition": "addressed",
+    "rationale": "Preserved Claude manual auth status rendering even when no lifecycle actions are currently exposed, with a status-only test case."
+  },
+  {
+    "id": 4152938547,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review wrapper with no separate actionable request."
-  },
-  {
-    "id": 3121889590,
-    "disposition": "addressed",
-    "rationale": "Normalized resolved paths to forward slashes before regex assertions so the boundary test is separator-agnostic."
-  },
-  {
-    "id": 3121889592,
-    "disposition": "addressed",
-    "rationale": "Added cssRuleBlocks and updated token-first validation to check every matching rule block for each semantic selector."
+    "rationale": "Review summary only; it did not request a code change."
   }
 ]

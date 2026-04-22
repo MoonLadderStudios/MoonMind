@@ -306,6 +306,34 @@ describe('ProviderProfilesManager form controls', () => {
     account_label: 'Codex account',
   };
 
+  const claudeManualProfile: ProviderProfile = {
+    ...profile,
+    profile_id: 'claude-anthropic',
+    runtime_id: 'claude_code',
+    provider_id: 'anthropic',
+    credential_source: 'secret_ref',
+    runtime_materialization_mode: 'api_key_env',
+    secret_refs: {},
+    command_behavior: {
+      auth_strategy: 'claude_manual_token',
+      auth_state: 'not_connected',
+      auth_actions: ['connect'],
+      auth_status_label: 'Claude token not connected',
+    },
+  };
+
+  const connectedClaudeManualProfile: ProviderProfile = {
+    ...claudeManualProfile,
+    profile_id: 'claude-anthropic-connected',
+    secret_refs: { ANTHROPIC_AUTH_TOKEN: 'db://claude-token' },
+    command_behavior: {
+      auth_strategy: 'claude_manual_token',
+      auth_state: 'connected',
+      auth_actions: ['replace_token', 'validate', 'disconnect'],
+      auth_status_label: 'Claude token ready',
+    },
+  };
+
   it('labels secret refs and resets create-form values', () => {
     renderProviderProfilesManager();
 
@@ -549,5 +577,61 @@ describe('ProviderProfilesManager form controls', () => {
         expect.objectContaining({ method: 'POST' }),
       );
     });
+  });
+
+  it('shows a Claude-specific connect action for disconnected claude_anthropic rows', () => {
+    renderProviderProfilesManager([claudeManualProfile]);
+
+    expect(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Auth claude-anthropic' })).toBeNull();
+    expect(screen.getByText('Claude token not connected')).toBeTruthy();
+  });
+
+  it('shows supported Claude lifecycle actions for connected claude_anthropic rows', () => {
+    renderProviderProfilesManager([connectedClaudeManualProfile]);
+
+    expect(
+      screen.getByRole('button', { name: 'Replace token claude-anthropic-connected' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Validate claude-anthropic-connected' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Disconnect claude-anthropic-connected' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Auth claude-anthropic-connected' })).toBeNull();
+    expect(screen.getByText('Claude token ready')).toBeTruthy();
+  });
+
+  it('does not show Claude auth actions without trusted Claude metadata', () => {
+    renderProviderProfilesManager([
+      {
+        ...claudeManualProfile,
+        profile_id: 'claude-without-metadata',
+        command_behavior: {},
+      },
+    ]);
+
+    expect(screen.queryByRole('button', { name: /Connect Claude/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Replace token/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Validate/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Disconnect/ })).toBeNull();
+  });
+
+  it('shows Claude status without lifecycle actions when metadata has no actions', () => {
+    renderProviderProfilesManager([
+      {
+        ...claudeManualProfile,
+        profile_id: 'claude-status-only',
+        command_behavior: {
+          auth_strategy: 'claude_manual_token',
+          auth_state: 'enrollment_pending',
+          auth_actions: [],
+          auth_status_label: 'Claude enrollment pending',
+        },
+      },
+    ]);
+
+    expect(screen.getByText('Claude enrollment pending')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Connect Claude/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Replace token/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Validate/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Disconnect/ })).toBeNull();
   });
 });
