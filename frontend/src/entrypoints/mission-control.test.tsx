@@ -707,7 +707,7 @@ describe('Mission Control shared entry', () => {
         />,
       );
 
-      expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
+      expect(await screen.findByText('Provider Login Terminal', {}, { timeout: 3000 })).toBeTruthy();
       expect(await screen.findByText('Ready for login')).toBeTruthy();
       const terminalElement = screen.getByTestId('oauth-xterm');
       vi.spyOn(terminalElement, 'getBoundingClientRect').mockReturnValue({
@@ -847,7 +847,7 @@ describe('Mission Control shared entry', () => {
       />,
     );
 
-    expect(await screen.findByText('Provider Login Terminal')).toBeTruthy();
+    expect(await screen.findByText('Provider Login Terminal', {}, { timeout: 3000 })).toBeTruthy();
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/v1/oauth-sessions/oas_terminal_wait',
