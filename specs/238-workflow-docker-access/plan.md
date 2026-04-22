@@ -1,7 +1,7 @@
 # Implementation Plan: Workflow Docker Access Setting
 
-**Branch**: `237-workflow-docker-access` | **Date**: 2026-04-22 | **Spec**: `specs/237-workflow-docker-access/spec.md`  
-**Input**: Single-story feature specification from `specs/237-workflow-docker-access/spec.md`
+**Branch**: `238-workflow-docker-access` | **Date**: 2026-04-22 | **Spec**: `specs/238-workflow-docker-access/spec.md`  
+**Input**: Single-story feature specification from `specs/238-workflow-docker-access/spec.md`
 
 ## Summary
 
@@ -63,7 +63,7 @@ Implement MM-476 by adding a workflow-level Docker access setting, enforcing it 
 ### Documentation (this feature)
 
 ```text
-specs/237-workflow-docker-access/
+specs/238-workflow-docker-access/
 ├── spec.md
 ├── plan.md
 ├── research.md

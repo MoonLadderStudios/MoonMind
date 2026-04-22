@@ -1,6 +1,6 @@
 # Tasks: Workflow Docker Access Setting
 
-**Input**: Design documents from `specs/237-workflow-docker-access/`  
+**Input**: Design documents from `specs/238-workflow-docker-access/`  
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Unit tests and integration/activity-boundary tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
@@ -36,8 +36,8 @@
 
 **Purpose**: Establish the shared policy and curated tool contract before story code.
 
-- [X] T004 Record the setting and curated tool contracts in `specs/237-workflow-docker-access/contracts/workflow-docker-access-tool-contract.md` for FR-001-FR-009
-- [X] T005 Record the implementation target and validation commands in `specs/237-workflow-docker-access/plan.md`, `research.md`, `data-model.md`, and `quickstart.md`
+- [X] T004 Record the setting and curated tool contracts in `specs/238-workflow-docker-access/contracts/workflow-docker-access-tool-contract.md` for FR-001-FR-009
+- [X] T005 Record the implementation target and validation commands in `specs/238-workflow-docker-access/plan.md`, `research.md`, `data-model.md`, and `quickstart.md`
 
 **Checkpoint**: Foundation ready - story test and implementation work can now begin.
 
@@ -89,8 +89,8 @@
 
 **Purpose**: Strengthen the completed story without expanding scope.
 
-- [X] T021 [P] Check traceability for MM-476 in `docs/tmp/jira-orchestration-inputs/MM-476-moonspec-orchestration-input.md` and `specs/237-workflow-docker-access/`
-- [X] T022 Run quickstart unit and integration-boundary validation commands from `specs/237-workflow-docker-access/quickstart.md`
+- [X] T021 [P] Check traceability for MM-476 in `docs/tmp/jira-orchestration-inputs/MM-476-moonspec-orchestration-input.md` and `specs/238-workflow-docker-access/`
+- [X] T022 Run quickstart unit and integration-boundary validation commands from `specs/238-workflow-docker-access/quickstart.md`
 - [X] T023 Run full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - [X] T024 Run full hermetic integration verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_integration.sh` when Docker is available, or record the Docker-socket blocker in final verification evidence
 - [X] T025 Run `/moonspec-verify` to validate the final implementation against the original MM-476 feature request
