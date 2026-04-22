@@ -111,6 +111,26 @@ def test_generic_output_only_artifacts_classify_as_rollout_fallback() -> None:
     assert invalid["report_link_types"] == ("report.evidence",)
 
 
+def test_report_workflow_generic_fallback_rejects_non_generic_links() -> None:
+    """MM-464: fallback validation only accepts generic output classes."""
+
+    validate_report_workflow_artifact_classes(
+        "unit_test",
+        ("output.primary", "output.summary"),
+        allow_generic_fallback=True,
+    )
+
+    with pytest.raises(
+        TemporalArtifactValidationError,
+        match="unsupported generic fallback link type runtime.stdout",
+    ):
+        validate_report_workflow_artifact_classes(
+            "unit_test",
+            ("output.primary", "runtime.stdout"),
+            allow_generic_fallback=True,
+        )
+
+
 def test_report_rollout_phases_are_ordered() -> None:
     """MM-464: incremental migration phases are available to runtime helpers."""
 

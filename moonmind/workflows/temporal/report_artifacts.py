@@ -282,8 +282,19 @@ def validate_report_workflow_artifact_classes(
 
     mapping = get_report_workflow_mapping(workflow_family)
     classification = classify_report_rollout_artifacts(link_types)
+    normalized = {str(link_type or "").strip() for link_type in link_types}
     if classification["mode"] == "generic_fallback":
         if allow_generic_fallback:
+            unsupported_generic_links = sorted(
+                link_type
+                for link_type in normalized
+                if link_type and link_type not in GENERIC_OUTPUT_LINK_TYPES
+            )
+            if unsupported_generic_links:
+                raise TemporalArtifactValidationError(
+                    "unsupported generic fallback link type "
+                    f"{', '.join(unsupported_generic_links)}"
+                )
             return
         raise TemporalArtifactValidationError(
             "report-producing workflows must publish report.primary; "
@@ -294,7 +305,6 @@ def validate_report_workflow_artifact_classes(
             "report-producing workflows must publish report.primary"
         )
 
-    normalized = {str(link_type or "").strip() for link_type in link_types}
     allowed = set(mapping.report_link_types) | set(mapping.observability_link_types)
     unsupported_report_links = sorted(
         link_type
@@ -303,12 +313,7 @@ def validate_report_workflow_artifact_classes(
     )
     if unsupported_report_links:
         raise TemporalArtifactValidationError(
-            "unsupported report workflow link type "
-            + ", ".join(unsupported_report_links)
-        )
-    if "report.primary" not in normalized:
-        raise TemporalArtifactValidationError(
-            "report-producing workflows must publish report.primary"
+            f"unsupported report workflow link type {', '.join(unsupported_report_links)}"
         )
     unexpected_observability = sorted(
         link_type
@@ -318,7 +323,7 @@ def validate_report_workflow_artifact_classes(
     if unexpected_observability:
         raise TemporalArtifactValidationError(
             "unsupported report workflow observability link type "
-            + ", ".join(unexpected_observability)
+            f"{', '.join(unexpected_observability)}"
         )
 
 
@@ -365,12 +370,6 @@ def build_report_projection_summary(
     """Build a report convenience projection over compact artifact refs only."""
 
     validate_report_bundle_result(bundle)
-    for key in bundle:
-        normalized_key = str(key or "").strip()
-        if normalized_key not in REPORT_BUNDLE_ALLOWED_KEYS:
-            raise TemporalArtifactValidationError(
-                f"unsupported projection key '{normalized_key}'"
-            )
 
     safe_metadata = dict(metadata or {})
     for key, value in safe_metadata.items():

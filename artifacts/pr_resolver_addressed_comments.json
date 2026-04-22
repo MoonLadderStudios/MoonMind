@@ -1,12 +1,32 @@
 [
   {
-    "id": 3123466318,
+    "id": 3123698888,
     "disposition": "addressed",
-    "rationale": "Changed _strongest_retention_class to rank the provided values directly and added an EPHEMERAL unpin regression test."
+    "rationale": "Removed the redundant report.primary check after report-mode classification and switched the unsupported report link error to f-string formatting."
   },
   {
-    "id": 4154120748,
+    "id": 3123698898,
     "disposition": "addressed",
-    "rationale": "Duplicate summary review for the same _strongest_retention_class issue; addressed by the helper fix and regression test."
+    "rationale": "Switched the unsupported observability link error to f-string formatting."
+  },
+  {
+    "id": 3123698904,
+    "disposition": "addressed",
+    "rationale": "Removed the redundant projection key loop because validate_report_bundle_result already enforces allowed bundle keys."
+  },
+  {
+    "id": 4154383632,
+    "disposition": "not-applicable",
+    "rationale": "Review summary only; the specific inline feedback from this review was addressed separately."
+  },
+  {
+    "id": 3123703552,
+    "disposition": "addressed",
+    "rationale": "Added fallback validation that rejects any non-generic link type when allow_generic_fallback=True, with unit coverage for runtime.stdout rejection."
+  },
+  {
+    "id": 4154389563,
+    "disposition": "not-applicable",
+    "rationale": "Informational Codex review body; the actionable inline comment from this review was addressed separately."
   }
 ]
