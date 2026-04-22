@@ -276,6 +276,7 @@ async def test_merge_automation_tracks_current_head_when_checks_are_still_runnin
     readiness_calls = 0
     child_workflow_ids: list[str] = []
     child_payloads: list[dict[str, Any]] = []
+    wait_calls = 0
 
     async def fake_execute_activity(
         activity_type: str,
@@ -327,7 +328,8 @@ async def test_merge_automation_tracks_current_head_when_checks_are_still_runnin
         return {"status": "success", "mergeAutomationDisposition": "merged"}
 
     async def fake_wait_condition(*_args: Any, **_kwargs: Any) -> None:
-        return None
+        nonlocal wait_calls
+        wait_calls += 1
 
     monkeypatch.setattr(
         merge_automation_module.workflow,
@@ -369,6 +371,7 @@ async def test_merge_automation_tracks_current_head_when_checks_are_still_runnin
         head_sha="def456",
     )
     assert readiness_calls == 2
+    assert wait_calls == 1
     assert result["status"] == "merged"
     assert result["latestHeadSha"] == "def456"
     assert result["blockers"] == []

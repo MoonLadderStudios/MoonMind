@@ -1,57 +1,27 @@
 [
   {
-    "id": 3120762036,
+    "id": 3120694528,
     "disposition": "addressed",
-    "rationale": "Replaced the protocol ellipsis body with an explicit NotImplementedError so the statement is no longer a no-op."
+    "rationale": "Re-indented the FactGroup block inside td-facts-region so children match the new nesting level."
   },
   {
-    "id": 3120762042,
+    "id": 3120694532,
     "disposition": "addressed",
-    "rationale": "Replaced the protocol ellipsis body with an explicit NotImplementedError so the statement is no longer a no-op."
+    "rationale": "Added .td-facts-region to the overflow-wrap:anywhere rule for long workflow and run metadata."
   },
   {
-    "id": 3120762046,
-    "disposition": "addressed",
-    "rationale": "Added an explanatory comment to the tolerant maxTailLines parse fallback."
-  },
-  {
-    "id": 3120762392,
-    "disposition": "addressed",
-    "rationale": "Exported RemediationLiveFollower from remediation_tools.__all__."
-  },
-  {
-    "id": 3120762405,
-    "disposition": "addressed",
-    "rationale": "Changed maxTailLines parsing to preserve an explicit zero instead of replacing it with the default."
-  },
-  {
-    "id": 3120762409,
-    "disposition": "addressed",
-    "rationale": "Cached parsed remediation context payloads by workflow ID and context artifact ref within the service instance."
-  },
-  {
-    "id": 3120762414,
-    "disposition": "addressed",
-    "rationale": "Imported RemediationLiveFollower in moonmind.workflows.temporal.__init__."
-  },
-  {
-    "id": 3120762415,
-    "disposition": "addressed",
-    "rationale": "Added RemediationLiveFollower to the package root __all__ list."
-  },
-  {
-    "id": 4151239835,
+    "id": 4151166434,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary; its actionable inline comments were handled individually."
+    "rationale": "Summary review; its two actionable findings are tracked by review comments 3120694528 and 3120694532."
   },
   {
-    "id": 3120768401,
-    "disposition": "addressed",
-    "rationale": "Updated _bounded_tail_lines so explicit tail_lines are clamped by both boundedness.maxTailLines and policies.evidencePolicy.tailLines."
-  },
-  {
-    "id": 4151247216,
+    "id": 4292917999,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review wrapper; its actionable inline comment was handled individually."
+    "rationale": "Review trigger comment only; no requested code change."
+  },
+  {
+    "id": 4292927279,
+    "disposition": "not-applicable",
+    "rationale": "Informational Codex review result with no actionable finding."
   }
 ]

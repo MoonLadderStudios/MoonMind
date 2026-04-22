@@ -152,7 +152,9 @@ steps:
 
       This preset owns pull request creation before the Jira Code Review transition. It must be run with task.publish.mode=none so the pull request is created in this step, not by a later MoonMind publish stage. If the runtime instructions, task parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Code Review and report the exact blocker.
 
-      First confirm the working tree contains only intentional changes for this issue and no raw credentials. Commit the work with a concise message that includes {{ inputs.jira_issue_key }}. Push the current non-protected work branch and create a pull request with the available authenticated GitHub tooling.
+      First confirm the working tree contains only intentional changes for this issue and no raw credentials. Commit the work with a concise message that includes {{ inputs.jira_issue_key }}. Push the current non-protected work branch and create a non-draft pull request with the available authenticated GitHub tooling.
+
+      The pull request must be ready for review, not a draft. Do not pass draft flags when creating it. If the available tool or repository default creates a draft pull request, immediately mark it ready for review (for example, with the authenticated GitHub tooling's ready-for-review command) and verify the final pull request isDraft value is false before continuing.
 
       The pull request title must include {{ inputs.jira_issue_key }}. The pull request body must include:
       - the Jira issue key
@@ -161,7 +163,7 @@ steps:
       - tests run
       - remaining risks
 
-      After creation, record the confirmed pull request URL in the step result and in a local handoff artifact at artifacts/jira-orchestrate-pr.json with keys jira_issue_key and pull_request_url. Do not continue unless the pull_request_url is a GitHub pull request URL for the current work branch.
+      After creation and non-draft verification, record the confirmed pull request URL in the step result and in a local handoff artifact at artifacts/jira-orchestrate-pr.json with keys jira_issue_key and pull_request_url. Do not continue unless the pull_request_url is a GitHub pull request URL for the current work branch and the pull request is confirmed non-draft.
     skill:
       id: auto
       args: {}

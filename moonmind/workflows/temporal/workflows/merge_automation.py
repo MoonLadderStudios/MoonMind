@@ -323,6 +323,25 @@ class MoonMindMergeAutomationWorkflow:
             tracked_head_sha=self._input.pull_request.head_sha,
         )
 
+    def _should_refresh_pre_resolver_head(
+        self,
+        *,
+        evaluation: Any,
+        blockers: list[ReadinessBlockerModel],
+    ) -> bool:
+        if (
+            self._input is None
+            or self._resolver_child_workflow_ids
+            or not isinstance(evaluation, Mapping)
+        ):
+            return False
+        observed_head_sha = self._head_sha_from_mapping(evaluation)
+        if not observed_head_sha:
+            return False
+        if observed_head_sha == self._input.pull_request.head_sha:
+            return False
+        return any(blocker.kind == "stale_revision" for blocker in blockers)
+
     async def _failed_resolver_summary(
         self,
         *,
@@ -469,6 +488,17 @@ class MoonMindMergeAutomationWorkflow:
                 evidence = self._refresh_current_head_for_stale_wait(
                     evaluation=evaluation,
                     evidence=evidence,
+                )
+            elif workflow.patched(
+                "merge-automation-pre-resolver-head-refresh-v1"
+            ) and self._should_refresh_pre_resolver_head(
+                evaluation=evaluation,
+                blockers=list(evidence.blockers),
+            ):
+                self._refresh_tracked_head_sha(evaluation)
+                evidence = classify_readiness(
+                    evaluation if isinstance(evaluation, Mapping) else {},
+                    tracked_head_sha=self._input.pull_request.head_sha,
                 )
             self._blockers = list(evidence.blockers)
             await self._write_gate_snapshot(evidence_ready=evidence.ready)
