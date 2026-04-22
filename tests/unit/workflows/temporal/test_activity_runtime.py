@@ -721,6 +721,74 @@ async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_f
     )
 
 
+def _approved_pentest_scope() -> dict[str, object]:
+    return {
+        "scope_id": "scope-123",
+        "title": "Lab validation",
+        "owner_user_id": "user-security",
+        "created_at": "2026-04-22T00:00:00Z",
+        "expires_at": "2026-04-23T00:00:00Z",
+        "target_class": "lab",
+        "targets": [{"kind": "url", "value": "https://lab.example.test"}],
+        "allowed_actions": [
+            "auth_testing",
+            "vuln_validation",
+            "exploit_validation",
+        ],
+        "prohibited_actions": [],
+        "requires_manual_approval": False,
+        "approval_recorded": False,
+        "allowed_runner_profiles": ["pentestgpt-safe"],
+        "required_network_attachment_type": None,
+        "authorized_principals": ["user-security"],
+        "metadata": {"jira": "MM-470"},
+    }
+
+
+def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
+    request: dict[str, object] = {
+        "task_run_id": "run-123",
+        "step_id": "step-pentest",
+        "attempt": 1,
+        "target": "https://lab.example.test",
+        "operation_mode": "validate_hypothesis",
+        "objective": "Validate auth bypass hypothesis.",
+        "scope_artifact_ref": "art:sha256:scope",
+        "runner_profile_id": "pentestgpt-safe",
+        "execution_profile_ref": "profile:pipeline",
+        "time_budget_minutes": 60,
+        "evidence_level": "standard",
+        "artifacts_dir": "/tmp/artifacts",
+        "principal_id": "user-security",
+        "approved_scope": _approved_pentest_scope(),
+    }
+    request.update(overrides)
+    return {"request": request}
+
+
+async def test_security_pentest_execute_fails_closed_before_runner_without_scope():
+    activities = TemporalAgentRuntimeActivities()
+
+    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
+        await activities.security_pentest_execute(
+            _pentest_activity_payload(approved_scope=None)
+        )
+
+    message = str(exc_info.value)
+    assert "INVALID_SCOPE" in message
+    assert "missing_approved_scope" in message
+    assert "runner is not implemented" not in message
+
+
+async def test_security_pentest_execute_reaches_runner_boundary_after_scope_validation():
+    activities = TemporalAgentRuntimeActivities()
+
+    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
+        await activities.security_pentest_execute(_pentest_activity_payload())
+
+    assert "security.pentest.execute runner is not implemented" in str(exc_info.value)
+
+
 async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
     tmp_path: Path,
 ):
