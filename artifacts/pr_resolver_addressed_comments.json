@@ -1,37 +1,32 @@
 [
   {
-    "id": 3122759438,
+    "id": 3123186074,
     "disposition": "addressed",
-    "rationale": "Changed remediation action idempotency caching to include request-shaping fields so a reused key with a different action kind or dry-run flag is evaluated independently."
+    "rationale": "Dry-run results now suppress verificationRequired and verificationHint even when the policy decision is allowed."
   },
   {
-    "id": 3122759452,
-    "disposition": "addressed",
-    "rationale": "Added explicit supported authority mode validation so stale or unknown stored authority modes are denied before any allow path."
-  },
-  {
-    "id": 4153367196,
+    "id": 4153825059,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the actionable child review comments are classified separately."
+    "rationale": "Top-level bot review summary only; its actionable dry-run feedback is covered by inline comments 3123186074 and 3123186102."
   },
   {
-    "id": 3122774747,
+    "id": 3123186102,
     "disposition": "addressed",
-    "rationale": "Guarded the admin-auto risk comparison so malformed catalog entries with null risk do not raise KeyError."
+    "rationale": "Result status mapping now returns no_op for dry_run reason before allowed/rejected decision mapping."
   },
   {
-    "id": 3122774771,
+    "id": 3123194064,
     "disposition": "addressed",
-    "rationale": "Updated the absolute-path redaction regex to cover single-segment absolute paths and removed the redundant optional segment."
+    "rationale": "Admin-auto dry-run decisions now serialize result.status as no_op instead of applied."
   },
   {
-    "id": 4153386617,
+    "id": 3123194071,
+    "disposition": "addressed",
+    "rationale": "Allowed action inputMetadata is now deep-copied before being returned to callers."
+  },
+  {
+    "id": 4153832883,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the actionable child review comments are classified separately."
-  },
-  {
-    "id": 3122774796,
-    "disposition": "addressed",
-    "rationale": "Added a defensive null guard after sensitive-text redaction before applying regex substitutions."
+    "rationale": "Top-level bot review boilerplate only; its actionable deep-copy and dry-run comments are covered by inline comments 3123194064 and 3123194071."
   }
 ]
