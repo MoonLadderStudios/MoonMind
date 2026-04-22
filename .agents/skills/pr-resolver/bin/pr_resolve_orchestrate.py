@@ -80,6 +80,10 @@ def _is_safe_reason_transition(previous: str, current: str) -> bool:
         return True
     if prev in FINALIZE_ONLY_RETRY_REASONS and curr in FINALIZE_ONLY_RETRY_REASONS:
         return True
+    if prev == "merge_not_ready" and (
+        curr in FULL_REMEDIATION_REASONS or curr in FINALIZE_ONLY_RETRY_REASONS
+    ):
+        return True
     if curr == "merge_not_ready" and prev in FINALIZE_ONLY_RETRY_REASONS:
         return True
     return False
