@@ -264,6 +264,60 @@ async def test_artifact_create_binding_accepts_legacy_name_payload(
             assert artifact.metadata_json["artifact_kind"] == "summary"
 
 
+async def test_artifact_publish_report_bundle_binding_routes_to_artifacts_queue(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalArtifactActivities(service)
+            catalog = build_default_activity_catalog()
+            bindings = {
+                binding.activity_type: binding
+                for binding in build_activity_bindings(
+                    catalog,
+                    artifact_activities=activities,
+                    manifest_activities=TemporalManifestActivities(
+                        artifact_service=service,
+                    ),
+                    proposal_activities=TemporalProposalActivities(
+                        artifact_service=service
+                    ),
+                    agent_skills_activities=AgentSkillsActivities(),
+                    fleets=(ARTIFACTS_FLEET,),
+                )
+            }
+
+            binding = bindings["artifact.publish_report_bundle"]
+            assert (
+                catalog.resolve_activity(
+                    "artifact.publish_report_bundle"
+                ).retries.max_attempts
+                == 1
+            )
+            result = await binding.handler(
+                {
+                    "principal": "workflow-producer",
+                    "namespace": "moonmind",
+                    "workflow_id": "wf-report",
+                    "run_id": "run-report",
+                    "report_type": "unit_test_report",
+                    "report_scope": "final",
+                    "primary": {
+                        "payload": "# Final report",
+                        "content_type": "text/markdown",
+                    },
+                }
+            )
+
+            assert binding.task_queue == "mm.activity.artifacts"
+            assert result["report_bundle_v"] == 1
+            assert result["primary_report_ref"]["artifact_id"].startswith("art_")
+
+
 async def test_plan_validate_accepts_temporal_registry_artifact_ids(tmp_path: Path):
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:

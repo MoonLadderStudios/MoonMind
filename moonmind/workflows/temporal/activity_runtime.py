@@ -383,6 +383,7 @@ class TemporalActivityBinding:
 _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "artifact.create": ("artifacts", "artifact_create"),
     "artifact.write_complete": ("artifacts", "artifact_write_complete"),
+    "artifact.publish_report_bundle": ("artifacts", "artifact_publish_report_bundle"),
     "artifact.read": ("artifacts", "artifact_read"),
     "execution.dependency_status_snapshot": (
         "artifacts",
