@@ -991,7 +991,7 @@ export function ProviderProfilesManager({
       );
       const payload: unknown = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(redactClaudeSecretText(extractErrorMessage(payload)));
+        throw new Error(redactClaudeSecretText(extractErrorMessage(payload)) ?? 'Claude OAuth action failed.');
       }
       return { profileId, actionId };
     },
