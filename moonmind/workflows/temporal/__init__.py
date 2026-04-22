@@ -93,6 +93,14 @@ from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationContextError,
 )
+from moonmind.workflows.temporal.remediation_actions import (
+    RemediationActionAuthorityResult,
+    RemediationActionAuthorityService,
+    RemediationActionDecision,
+    RemediationActionRisk,
+    RemediationPermissionSet,
+    RemediationSecurityProfile,
+)
 from moonmind.workflows.temporal.remediation_tools import (
     RemediationActionRequestPreparation,
     RemediationEvidenceToolError,
@@ -151,7 +159,11 @@ __all__ = [
     "REMEDIATION_CONTEXT_ARTIFACT_NAME",
     "REMEDIATION_CONTEXT_LINK_TYPE",
     "REMEDIATION_CONTEXT_SCHEMA_VERSION",
+    "RemediationActionAuthorityResult",
+    "RemediationActionAuthorityService",
+    "RemediationActionDecision",
     "RemediationActionRequestPreparation",
+    "RemediationActionRisk",
     "RemediationContextBuildResult",
     "RemediationContextBuilder",
     "RemediationContextError",
@@ -163,6 +175,8 @@ __all__ = [
     "RemediationLogReadResult",
     "RemediationLogReader",
     "RemediationLogStream",
+    "RemediationPermissionSet",
+    "RemediationSecurityProfile",
     "RemediationTargetHealthSnapshot",
     "SANDBOX_FLEET",
     "SANDBOX_TASK_QUEUE",

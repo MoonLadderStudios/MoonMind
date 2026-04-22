@@ -1,32 +1,37 @@
 [
   {
-    "id": 3122783997,
+    "id": 3122759438,
     "disposition": "addressed",
-    "rationale": "Disabled automatic retries for artifact.publish_report_bundle until the publication path has an idempotency key, avoiding duplicate final report artifacts on retry."
+    "rationale": "Changed remediation action idempotency caching to include request-shaping fields so a reused key with a different action kind or dry-run flag is evaluated independently."
   },
   {
-    "id": 3122784001,
+    "id": 3122759452,
     "disposition": "addressed",
-    "rationale": "Normalized report_scope before final-bundle validation so Final/FINAL cannot bypass final-report guards."
+    "rationale": "Added explicit supported authority mode validation so stale or unknown stored authority modes are denied before any allow path."
   },
   {
-    "id": 4153397514,
+    "id": 4153367196,
     "disposition": "not-applicable",
-    "rationale": "Bot review summary only; individual review comments were evaluated separately."
+    "rationale": "Automated review summary only; the actionable child review comments are classified separately."
   },
   {
-    "id": 3122808168,
+    "id": 3122774747,
     "disposition": "addressed",
-    "rationale": "Report component payloads now encode JSON-serializable mappings and lists with json.dumps instead of bytes(payload)."
+    "rationale": "Guarded the admin-auto risk comparison so malformed catalog entries with null risk do not raise KeyError."
   },
   {
-    "id": 3122808181,
-    "disposition": "not-applicable",
-    "rationale": "Supporting artifacts intentionally retain the bundle report_scope; the canonical final report remains uniquely identified by report.primary plus metadata.is_final_report=true."
+    "id": 3122774771,
+    "disposition": "addressed",
+    "rationale": "Updated the absolute-path redaction regex to cover single-segment absolute paths and removed the redundant optional segment."
   },
   {
-    "id": 4153425391,
+    "id": 4153386617,
     "disposition": "not-applicable",
-    "rationale": "Gemini review summary only; individual review comments were evaluated separately."
+    "rationale": "Automated review summary only; the actionable child review comments are classified separately."
+  },
+  {
+    "id": 3122774796,
+    "disposition": "addressed",
+    "rationale": "Added a defensive null guard after sensitive-text redaction before applying regex substitutions."
   }
 ]
