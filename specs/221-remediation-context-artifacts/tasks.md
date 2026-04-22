@@ -25,7 +25,7 @@
 
 **Independent Test**: Create a target execution and remediation execution, run the context builder, then assert the generated artifact is linked, complete, bounded, and ref-only.
 
-**Traceability IDs**: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003.
+**Traceability IDs**: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, DESIGN-REQ-006, DESIGN-REQ-011, DESIGN-REQ-019, DESIGN-REQ-022, DESIGN-REQ-023.
 
 - [X] T003 Add failing unit tests for valid context artifact generation, execution linkage, remediation link context ref, target identity, selectors, refs, policies, and boundedness in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-001 through FR-006.
 - [X] T004 Add a failing unit test for non-remediation workflow IDs failing before artifact creation in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-007.

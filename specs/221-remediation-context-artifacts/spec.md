@@ -115,10 +115,12 @@ Dependencies
 
 ## Source Design Requirements
 
-- **DESIGN-REQ-001** (`docs/Tasks/TaskRemediation.md` section 9.2): A Remediation Context Builder must create `reports/remediation_context.json` with artifact type `remediation.context`. Scope: in scope, mapped to FR-001 and FR-002.
-- **DESIGN-REQ-002** (`docs/Tasks/TaskRemediation.md` sections 9.3 and 13.6): The context artifact must contain target identity, selected steps, evidence refs, policy snapshots, and live-follow cursor state when available. Scope: in scope, mapped to FR-003 and FR-004.
-- **DESIGN-REQ-003** (`docs/Tasks/TaskRemediation.md` sections 6, 9.4, 10.4, and 10.5): Context artifacts must remain bounded and must not include raw secrets, presigned URLs, storage keys, absolute local paths, or unbounded log bodies. Scope: in scope, mapped to FR-005 and FR-006.
-- **DESIGN-REQ-004** (`docs/Tasks/TaskRemediation.md` sections 9.5 through 11): Remediation evidence read tools, live-follow behavior, and typed action execution surfaces are later-stage capabilities. Scope: out of scope for this artifact-generation slice.
+- **DESIGN-REQ-006** (`docs/Tasks/TaskRemediation.md` section 9.2): A Remediation Context Builder must create `reports/remediation_context.json` with artifact type `remediation.context` as the remediation task's stable evidence entrypoint. Scope: in scope, mapped to FR-001 and FR-002.
+- **DESIGN-REQ-011** (`docs/Tasks/TaskRemediation.md` sections 9.2 and 9.3): The context artifact must contain target identity, selected steps, observability refs, bounded summaries, diagnosis hints, policy snapshots, lock policy snapshot, and live-follow cursor state when available. Scope: in scope, mapped to FR-003 and FR-004.
+- **DESIGN-REQ-019** (`docs/Tasks/TaskRemediation.md` sections 9.4, 10.4, 10.5, and 14.1): Context artifacts and required remediation artifacts must stay bounded and must not include raw secrets, presigned URLs, storage keys, absolute local paths, or unbounded log bodies. Scope: in scope, mapped to FR-005 and FR-006.
+- **DESIGN-REQ-022** (`docs/Tasks/TaskRemediation.md` section 14.1): The remediation context artifact must obey the normal artifact presentation contract by storing safe metadata, artifact refs rather than URLs, correct preview/redaction handling, and no secrets in metadata or bodies. Scope: in scope, mapped to FR-002, FR-004, and FR-006.
+- **DESIGN-REQ-023** (`docs/Tasks/TaskRemediation.md` sections 16.1 through 16.5): Missing target visibility, partial artifact refs, historical merged-log-only evidence, and unavailable live follow must produce fail-fast validation or explicit bounded degraded evidence rather than deadlocking context generation. Scope: in scope, mapped to FR-001, FR-004, and FR-007.
+- **DESIGN-REQ-024** (`docs/Tasks/TaskRemediation.md` sections 9.5 through 11 and 16.6 through 16.11): Remediation evidence read tools, lock handling, typed action execution, and remediation failure summaries are later-stage capabilities. Scope: out of scope for this artifact-generation slice.
 
 ## Requirements *(mandatory)*
 
