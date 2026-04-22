@@ -1,27 +1,22 @@
 [
   {
-    "id": 3120172516,
+    "id": 3121152169,
     "disposition": "addressed",
-    "rationale": "Included the resolved push_head_sha in the no_commits result path and added focused unit coverage."
+    "rationale": "Aligned the Pentest tool maximum 480-minute budget with activity start-to-close timeout, runner profile timeouts, and provider profile lease durations."
   },
   {
-    "id": 3120172519,
-    "disposition": "addressed",
-    "rationale": "Updated _resolve_workspace_head_sha to kill and reap the rev-parse subprocess on timeout and added focused unit coverage."
-  },
-  {
-    "id": 4150632918,
+    "id": 4151632093,
     "disposition": "not-applicable",
-    "rationale": "Review summary comment only; its two concrete findings are tracked and addressed by comments 3120172516 and 3120172519."
+    "rationale": "Bot review summary only; the actionable Pentest timeout discrepancy is tracked by review comment 3121152169."
   },
   {
-    "id": 3120179522,
+    "id": 3121158039,
     "disposition": "addressed",
-    "rationale": "Duplicate timeout-resource-leak finding; fixed by killing and awaiting the timed-out rev-parse subprocess."
+    "rationale": "Captured the dependency workflow id before rollback, reloads the stale record after rollback, and added a regression test for terminal sync failure returning a best-effort snapshot."
   },
   {
-    "id": 4150640657,
+    "id": 4151638987,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper/informational comment; the concrete actionable suggestion is tracked separately as comment 3120179522."
+    "rationale": "Codex review wrapper text only; the actionable rollback concern is tracked by review comment 3121158039."
   }
 ]

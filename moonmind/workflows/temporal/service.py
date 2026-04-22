@@ -451,18 +451,19 @@ class TemporalExecutionService:
         refreshed_records: list[TemporalExecutionCanonicalRecord] = []
 
         for record in records:
+            record_workflow_id = record.workflow_id
             if record.state in TERMINAL_STATES:
                 refreshed_records.append(record)
                 continue
 
             try:
                 description = await self._client_adapter.describe_workflow(
-                    record.workflow_id
+                    record_workflow_id
                 )
             except Exception as exc:
                 logger.debug(
                     "Dependency target %s Temporal describe failed during status snapshot: %s",
-                    record.workflow_id,
+                    record_workflow_id,
                     exc,
                 )
                 refreshed_records.append(record)
@@ -477,17 +478,22 @@ class TemporalExecutionService:
                 await self._session.commit()
                 refreshed = await self._session.get(
                     TemporalExecutionCanonicalRecord,
-                    record.workflow_id,
+                    record_workflow_id,
                 )
             except Exception as exc:
                 await self._session.rollback()
                 logger.warning(
                     "Dependency target %s terminal Temporal sync failed: %s",
-                    record.workflow_id,
+                    record_workflow_id,
                     exc,
                     exc_info=True,
                 )
-                refreshed_records.append(record)
+                refreshed = await self._session.get(
+                    TemporalExecutionCanonicalRecord,
+                    record_workflow_id,
+                )
+                if refreshed is not None:
+                    refreshed_records.append(refreshed)
                 continue
 
             if refreshed is None:

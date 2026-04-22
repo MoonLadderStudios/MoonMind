@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, Mock, call
+from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -763,6 +763,45 @@ async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
         payload = mock_client_adapter.signal_workflow.await_args.args[2]
         assert payload["prerequisiteWorkflowId"] == prerequisite.workflow_id
         assert payload["terminalState"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_dependency_status_snapshot_returns_stale_record_when_terminal_sync_fails(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        prerequisite = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Prerequisite",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        prerequisite_workflow_id = prerequisite.workflow_id
+
+        description = Mock(spec=WorkflowExecutionDescription)
+        description.status = WorkflowExecutionStatus.COMPLETED
+        mock_client_adapter.describe_workflow.return_value = description
+        mock_client_adapter.signal_workflow.reset_mock()
+
+        with patch(
+            "api_service.core.sync.sync_execution_projection",
+            new=AsyncMock(side_effect=RuntimeError("sync failed")),
+        ):
+            snapshot = await service.get_dependency_status_snapshot(
+                [prerequisite_workflow_id]
+            )
+
+        assert snapshot[prerequisite_workflow_id].state == "initializing"
+        assert snapshot[prerequisite_workflow_id].close_status is None
+        mock_client_adapter.signal_workflow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
