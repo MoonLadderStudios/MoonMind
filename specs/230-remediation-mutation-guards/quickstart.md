@@ -2,15 +2,15 @@
 
 Validate MM-455 in runtime mode. The implementation must prevent conflicting, duplicate, repeated, nested, or stale remediation mutations before any side-effecting action executes.
 
-## Targeted Red-First Tests
+## Targeted Red-First Coverage
 
-Run the focused remediation test module while iterating:
+Run the focused remediation test module while iterating or when re-validating the completed guard behavior:
 
 ```bash
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py
 ```
 
-Expected red-first coverage before implementation:
+Required red-first coverage recorded by `tasks.md`:
 
 - concurrent mutation attempts allow only one exclusive `target_execution` lock holder;
 - idempotent lock acquisition returns the same decision for the same holder and target;
