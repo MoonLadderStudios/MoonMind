@@ -25,6 +25,19 @@
 
 ## Final Unit Verification
 
+Run the focused backend provider-profile route tests:
+
+```bash
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py
+```
+
+Validate the backend test output covers:
+
+- Anthropic API keys are stored through Managed Secrets.
+- Profile metadata reports `claude_credential_methods`.
+- Runtime materialization uses `ANTHROPIC_API_KEY`.
+- Raw submitted API keys are not returned in API responses.
+
 Run the required unit test wrapper:
 
 ```bash
