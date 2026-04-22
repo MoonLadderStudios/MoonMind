@@ -15,11 +15,11 @@ Implement MM-468 by tightening reduced-motion, accessibility, and performance gu
 | FR-002 | implemented_verified | CSS tests verify minimal mode hides beam/glow/companion layers and brightens the static border ring | complete | focused unit passed |
 | FR-003 | implemented_verified | CSS non-goal tests verify rapid-pulse replacement is absent | complete | focused unit passed |
 | FR-004 | implemented_verified | component tests verify default `Executing` label, custom label, label suppression, and inactive omission | complete | focused unit passed |
-| FR-005 | implemented_verified | existing tests verify decorative beam and glow layers are `aria-hidden` | preserve and extend to companion layer/status label coverage | unit |
+| FR-005 | implemented_verified | existing and MM-468 tests verify decorative beam, glow, and companion layers are `aria-hidden` | complete | focused unit passed |
 | FR-006 | implemented_verified | CSS tests verify modest opacity/glow tokens and absence of red/orange warning pulse terms | complete | focused unit passed |
 | FR-007 | implemented_verified | CSS tests verify linear infinite orbit uses transform keyframes and animated declarations avoid layout-triggering properties | complete | focused unit passed |
 | FR-008 | implemented_verified | CSS tests verify auto reduced-motion hides glow/companion before removing the primary static cue | complete | focused unit passed |
-| FR-009 | implemented_verified | existing border-ring mask/content tests verify content separation | keep evidence and add reduced-motion mode coverage | component integration |
+| FR-009 | implemented_verified | existing border-ring mask/content tests and MM-468 reduced-motion tests verify content separation | complete | focused unit passed |
 | FR-010 | implemented_verified | CSS non-goal tests reject shimmer, spinner, completion pulse, success burst, rapid pulse, warning pulse, and content-area mask terms | complete | focused unit passed |
 | FR-011 | implemented_verified | traceability test verifies MM-468 and DESIGN-REQ-013/014/015 are exported | complete | focused unit passed |
 | SC-001 | implemented_verified | status-label component test covers default, custom, suppressed, inactive, and decorative `aria-hidden` behavior | complete | focused unit passed |
@@ -27,7 +27,7 @@ Implement MM-468 by tightening reduced-motion, accessibility, and performance gu
 | SC-003 | implemented_verified | minimal CSS test covers hidden visual layers and brighter static border ring | complete | focused unit passed |
 | SC-004 | implemented_verified | performance CSS test covers transform keyframes and no layout-triggering animated declarations | complete | focused unit passed |
 | SC-005 | implemented_verified | non-goal CSS test covers warning/pulse/shimmer/spinner/completion exclusions | complete | focused unit passed |
-| SC-006 | implemented_verified | existing component integration tests verify content separation | preserve and run focused validation | component integration |
+| SC-006 | implemented_verified | existing component integration tests and MM-468 focused validation verify content separation | complete | focused unit passed |
 | SC-007 | implemented_verified | spec, plan, tasks, traceability export, and verification artifact preserve MM-468 | complete | focused unit passed |
 | DESIGN-REQ-013 | implemented_verified | auto/minimal reduced-motion CSS tests verify static cue and border-ring-only minimal mode | complete | focused unit passed |
 | DESIGN-REQ-014 | implemented_verified | component and CSS tests verify non-visual status label, decorative layers, calm treatment, and warning-pulse exclusions | complete | focused unit passed |
