@@ -9,7 +9,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py`
 - Integration tests: Not required for this bounded service/artifact slice; no compose-backed boundary is introduced.
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -36,4 +36,4 @@
 ## Final Phase: Polish And Verification
 
 - [X] T008 Run relevant unit verification from `specs/221-remediation-context-artifacts/quickstart.md`.
-- [X] T009 Run `/speckit.verify` by auditing implementation against `specs/221-remediation-context-artifacts/spec.md` and recording the result.
+- [X] T009 Run `/moonspec-verify` by auditing implementation against `specs/221-remediation-context-artifacts/spec.md` and recording the result.
