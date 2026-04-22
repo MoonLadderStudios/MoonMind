@@ -653,6 +653,7 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
         "maximum": 480,
         "default": 60,
     }
+    assert input_schema["properties"]["artifacts_dir"]["type"] == "string"
     assert input_schema["properties"]["evidence_level"]["enum"] == [
         "minimal",
         "standard",
@@ -700,6 +701,24 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
         ("security.pentest.run", "1.0.0")
     ]
     assert parsed[0].executor.activity_type == "security.pentest.execute"
+
+
+async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_fleet():
+    bindings = build_activity_bindings(
+        build_default_activity_catalog(),
+        agent_runtime_activities=TemporalAgentRuntimeActivities(),
+        agent_skills_activities=AgentSkillsActivities(),
+        fleets=[AGENT_RUNTIME_FLEET],
+    )
+
+    binding = next(
+        item for item in bindings if item.activity_type == "security.pentest.execute"
+    )
+    assert binding.fleet == AGENT_RUNTIME_FLEET
+    assert binding.task_queue == "mm.activity.agent_runtime"
+    assert binding.handler.__temporal_activity_definition.name == (
+        "security.pentest.execute"
+    )
 
 
 async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(

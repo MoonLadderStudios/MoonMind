@@ -1,37 +1,27 @@
 [
   {
-    "id": 3122683153,
+    "id": 3125840616,
     "disposition": "addressed",
-    "rationale": "Claude enrollment progress now uses asynchronous transitions through saving_secret and updating_profile before ready, so the lifecycle states can render visibly."
+    "rationale": "Registered security.pentest.execute in the Temporal catalog and worker binding metadata so the curated pentest tool resolves to a supported agent-runtime activity route."
   },
   {
-    "id": 3122683164,
-    "disposition": "addressed",
-    "rationale": "Manual Claude token submission now uses a TanStack useMutation with mutation callbacks for loading, success, and error state management."
-  },
-  {
-    "id": 3122683174,
-    "disposition": "addressed",
-    "rationale": "The Claude enrollment surface now renders as a fixed drawer overlay with dialog semantics, modal backdrop behavior, initial focus, and Escape/backdrop close handling."
-  },
-  {
-    "id": 3122702328,
-    "disposition": "addressed",
-    "rationale": "Enrollment mutation callbacks are scoped to the submitting profile and ignore stale responses after another profile drawer is opened."
-  },
-  {
-    "id": 3122702335,
-    "disposition": "addressed",
-    "rationale": "Submitted tokens are cleared when submission starts and remain cleared on failed retry entry."
-  },
-  {
-    "id": 4153274362,
+    "id": 4156750665,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the referenced actionable items are tracked by their individual review comments."
+    "rationale": "Top-level automated Codex review summary; actionable feedback is tracked by inline comment 3125840616."
   },
   {
-    "id": 4153297608,
+    "id": 4156766456,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the actionable Codex comments are tracked by their individual review comments."
+    "rationale": "Top-level automated review summary; actionable findings are tracked by inline comments 3125854787 and 3125854793."
+  },
+  {
+    "id": 3125854787,
+    "disposition": "addressed",
+    "rationale": "Added security.pentest.execute to _ACTIVITY_HANDLER_ATTRS and implemented the TemporalAgentRuntimeActivities handler boundary so worker binding recognizes the curated activity."
+  },
+  {
+    "id": 3125854793,
+    "disposition": "addressed",
+    "rationale": "Added artifacts_dir to the security.pentest.run input schema so the registry-visible contract aligns with the typed PentestWorkloadRequest activity payload."
   }
 ]

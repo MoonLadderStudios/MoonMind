@@ -22,6 +22,7 @@ from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequen
 from pydantic import BaseModel, ValidationError
 
 from moonmind.config.settings import settings
+from moonmind.integrations.pentest.models import PentestWorkloadRequest
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.schemas.temporal_activity_models import (
@@ -509,6 +510,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
     "workload.run": ("agent_runtime", "workload_run"),
+    "security.pentest.execute": ("agent_runtime", "security_pentest_execute"),
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
     "step.review": ("reviews", "step_review"),
@@ -793,6 +795,14 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                             "default": 60,
                         },
                         "repo_dir": {"type": "string"},
+                        "artifacts_dir": {
+                            "type": "string",
+                            "description": (
+                                "Task artifact directory for PentestGPT evidence "
+                                "outputs. Supplied by the runtime when not "
+                                "provided by a trusted caller."
+                            ),
+                        },
                         "evidence_level": {
                             "type": "string",
                             "enum": ["minimal", "standard", "full"],
@@ -3099,6 +3109,25 @@ class TemporalAgentRuntimeActivities:
         if not isinstance(result, WorkloadResult):
             result = WorkloadResult.model_validate(result)
         return result.model_dump(mode="json", by_alias=True)
+
+    async def security_pentest_execute(
+        self,
+        payload: Mapping[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Validate the curated PentestGPT activity boundary.
+
+        The full PentestGPT runner is intentionally implemented separately from
+        the registry contract. Keeping this activity registered lets workflow
+        validation and worker startup recognize the curated route without
+        silently falling back to the generic tool executor.
+        """
+
+        request_payload = dict(payload.get("request", payload))
+        PentestWorkloadRequest.model_validate(request_payload)
+        raise TemporalActivityRuntimeError(
+            "security.pentest.execute runner is not implemented"
+        )
 
     async def agent_runtime_publish_artifacts(
         self,
