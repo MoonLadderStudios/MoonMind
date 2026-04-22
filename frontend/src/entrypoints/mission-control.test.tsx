@@ -584,6 +584,21 @@ describe('Mission Control shared entry', () => {
     );
   });
 
+  it('keeps the mobile navigation layer above route content panels', async () => {
+    const { readFileSync } = await import('node:fs');
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      'utf8',
+    );
+
+    expect(missionControlCss).toMatch(
+      /\.masthead\s*\{[^}]*position:\s*relative;[^}]*z-index:\s*50;[^}]*isolation:\s*isolate;/s,
+    );
+    expect(missionControlCss).toMatch(
+      /@media \(max-width:\s*1180px\)\s*\{[\s\S]*\.route-nav\s*\{[^}]*position:\s*absolute;[^}]*z-index:\s*30;/s,
+    );
+  });
+
   it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
     const { readFileSync } = await import('node:fs');
     const missionControlCss = readFileSync(
