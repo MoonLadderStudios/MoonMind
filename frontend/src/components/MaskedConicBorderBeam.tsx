@@ -6,6 +6,7 @@ export type MaskedConicBorderBeamTheme = 'neutral' | 'brand' | 'success' | 'cust
 export type MaskedConicBorderBeamDirection = 'clockwise' | 'counterclockwise';
 export type MaskedConicBorderBeamTrail = 'none' | 'soft' | 'defined';
 export type MaskedConicBorderBeamGlow = 'off' | 'low' | 'medium';
+export type MaskedConicBorderBeamVariant = 'precision' | 'energized' | 'dualPhase';
 export type MaskedConicBorderBeamReducedMotion = 'auto' | 'off' | 'minimal';
 
 export interface MaskedConicBorderBeamProps extends HTMLAttributes<HTMLDivElement> {
@@ -18,12 +19,13 @@ export interface MaskedConicBorderBeamProps extends HTMLAttributes<HTMLDivElemen
   direction?: MaskedConicBorderBeamDirection;
   trail?: MaskedConicBorderBeamTrail;
   glow?: MaskedConicBorderBeamGlow;
+  variant?: MaskedConicBorderBeamVariant;
   reducedMotion?: MaskedConicBorderBeamReducedMotion;
   children?: ReactNode;
 }
 
 export const MASKED_CONIC_BORDER_BEAM_TRACEABILITY = {
-  jiraIssueKeys: ['MM-465', 'MM-466'],
+  jiraIssueKeys: ['MM-465', 'MM-466', 'MM-467'],
   designRequirements: [
     'DESIGN-REQ-001',
     'DESIGN-REQ-002',
@@ -31,8 +33,12 @@ export const MASKED_CONIC_BORDER_BEAM_TRACEABILITY = {
     'DESIGN-REQ-004',
     'DESIGN-REQ-005',
     'DESIGN-REQ-006',
+    'DESIGN-REQ-007',
+    'DESIGN-REQ-008',
+    'DESIGN-REQ-009',
     'DESIGN-REQ-010',
     'DESIGN-REQ-011',
+    'DESIGN-REQ-012',
     'DESIGN-REQ-016',
   ],
 } as const;
@@ -65,6 +71,7 @@ export function MaskedConicBorderBeam({
   direction = 'clockwise',
   trail = 'soft',
   glow = 'low',
+  variant = 'precision',
   reducedMotion = 'auto',
   className = '',
   style,
@@ -95,6 +102,7 @@ export function MaskedConicBorderBeam({
       data-direction={direction}
       data-trail={trail}
       data-glow={glow}
+      data-variant={variant}
       data-reduced-motion={reducedMotion}
       style={beamStyle}
     >
@@ -103,6 +111,13 @@ export function MaskedConicBorderBeam({
           aria-hidden="true"
           className="masked-conic-border-beam__layer"
           data-testid="masked-conic-border-beam-layer"
+        />
+      ) : null}
+      {active && variant === 'dualPhase' ? (
+        <span
+          aria-hidden="true"
+          className="masked-conic-border-beam__companion"
+          data-testid="masked-conic-border-beam-companion"
         />
       ) : null}
       {showGlow ? (
