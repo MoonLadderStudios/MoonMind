@@ -1,22 +1,32 @@
 [
   {
-    "id": 3122397775,
+    "id": 3122783997,
     "disposition": "addressed",
-    "rationale": "Allowed known service-managed preview_artifact_id metadata during report link validation and added a regression for linking restricted report artifacts after preview creation."
+    "rationale": "Disabled automatic retries for artifact.publish_report_bundle until the publication path has an idempotency key, avoiding duplicate final report artifacts on retry."
   },
   {
-    "id": 4152948692,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary without a distinct actionable request."
-  },
-  {
-    "id": 3122402310,
+    "id": 3122784001,
     "disposition": "addressed",
-    "rationale": "Simplified top-level report metadata validation by removing the redundant post-whitelist secret-key check while preserving unsafe unknown-key rejection."
+    "rationale": "Normalized report_scope before final-bundle validation so Final/FINAL cannot bypass final-report guards."
   },
   {
-    "id": 4152954022,
+    "id": 4153397514,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary; its single actionable item is tracked by comment 3122402310."
+    "rationale": "Bot review summary only; individual review comments were evaluated separately."
+  },
+  {
+    "id": 3122808168,
+    "disposition": "addressed",
+    "rationale": "Report component payloads now encode JSON-serializable mappings and lists with json.dumps instead of bytes(payload)."
+  },
+  {
+    "id": 3122808181,
+    "disposition": "not-applicable",
+    "rationale": "Supporting artifacts intentionally retain the bundle report_scope; the canonical final report remains uniquely identified by report.primary plus metadata.is_final_report=true."
+  },
+  {
+    "id": 4153425391,
+    "disposition": "not-applicable",
+    "rationale": "Gemini review summary only; individual review comments were evaluated separately."
   }
 ]

@@ -2107,6 +2107,191 @@ class TemporalArtifactService:
             metadata_json={"artifact_kind": "integration_failure"},
         )
 
+    async def publish_report_bundle(
+        self,
+        *,
+        principal: str,
+        namespace: str,
+        workflow_id: str,
+        run_id: str,
+        report_type: str,
+        report_scope: str,
+        primary: Mapping[str, Any] | None = None,
+        summary: Mapping[str, Any] | None = None,
+        structured: Mapping[str, Any] | None = None,
+        evidence: Iterable[Mapping[str, Any]] = (),
+        sensitivity: str | None = None,
+        counts: Mapping[str, Any] | None = None,
+        step_id: str | None = None,
+        attempt: int | None = None,
+        scope: str | None = None,
+    ) -> dict[str, Any]:
+        """Publish an MM-461 compact artifact-backed report bundle."""
+
+        from moonmind.workflows.temporal.report_artifacts import (
+            build_report_bundle_result,
+        )
+
+        normalized_report_scope = str(report_scope or "").strip().lower()
+        evidence_components = tuple(evidence or ())
+        if normalized_report_scope == "final":
+            if primary is None:
+                raise TemporalArtifactValidationError(
+                    "final report bundles require a primary report"
+                )
+            extra_final_markers = sum(
+                1
+                for component in (
+                    tuple(item for item in (summary, structured) if item is not None)
+                    + evidence_components
+                )
+                if bool((component.get("metadata") or {}).get("is_final_report"))
+            )
+            if extra_final_markers:
+                raise TemporalArtifactValidationError(
+                    "final report bundles must identify exactly one final report"
+                )
+
+        common_metadata: dict[str, Any] = {
+            "report_type": str(report_type),
+            "report_scope": normalized_report_scope or str(report_scope),
+        }
+        if sensitivity is not None:
+            common_metadata["sensitivity"] = str(sensitivity)
+        if counts is not None:
+            common_metadata["counts"] = dict(counts)
+        if step_id is not None:
+            common_metadata["step_id"] = str(step_id)
+        if attempt is not None:
+            common_metadata["attempt"] = int(attempt)
+        if scope is not None:
+            common_metadata["scope"] = str(scope)
+
+        primary_ref = None
+        summary_ref = None
+        structured_ref = None
+        evidence_refs: list[dict[str, Any]] = []
+
+        if primary is not None:
+            metadata = dict(common_metadata)
+            metadata.update(dict(primary.get("metadata") or {}))
+            if normalized_report_scope == "final":
+                metadata["is_final_report"] = True
+                metadata["report_scope"] = "final"
+            primary_ref = await self._publish_report_bundle_component(
+                principal=principal,
+                namespace=namespace,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type="report.primary",
+                component=primary,
+                metadata=metadata,
+            )
+        if summary is not None:
+            summary_ref = await self._publish_report_bundle_component(
+                principal=principal,
+                namespace=namespace,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type="report.summary",
+                component=summary,
+                metadata={
+                    **common_metadata,
+                    **dict(summary.get("metadata") or {}),
+                },
+            )
+        if structured is not None:
+            structured_ref = await self._publish_report_bundle_component(
+                principal=principal,
+                namespace=namespace,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type="report.structured",
+                component=structured,
+                metadata={
+                    **common_metadata,
+                    **dict(structured.get("metadata") or {}),
+                },
+            )
+        for component in evidence_components:
+            evidence_refs.append(
+                await self._publish_report_bundle_component(
+                    principal=principal,
+                    namespace=namespace,
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    link_type="report.evidence",
+                    component=component,
+                    metadata={
+                        **common_metadata,
+                        **dict(component.get("metadata") or {}),
+                    },
+                )
+            )
+
+        return build_report_bundle_result(
+            primary_report_ref=primary_ref,
+            summary_ref=summary_ref,
+            structured_ref=structured_ref,
+            evidence_refs=evidence_refs,
+            report_type=report_type,
+            report_scope=normalized_report_scope or str(report_scope),
+            sensitivity=sensitivity,
+            counts=counts,
+        )
+
+    async def _publish_report_bundle_component(
+        self,
+        *,
+        principal: str,
+        namespace: str,
+        workflow_id: str,
+        run_id: str,
+        link_type: str,
+        component: Mapping[str, Any],
+        metadata: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        payload = component.get("payload")
+        if payload is None:
+            raise TemporalArtifactValidationError("report component payload is required")
+        if isinstance(payload, str):
+            encoded = payload.encode("utf-8")
+        elif isinstance(payload, bytes):
+            encoded = payload
+        elif isinstance(payload, Mapping | list):
+            try:
+                encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                raise TemporalArtifactValidationError(
+                    "report component payload must be bytes, text, or JSON-serializable"
+                ) from exc
+        else:
+            encoded = bytes(payload)
+
+        content_type = component.get("content_type") or "application/octet-stream"
+        artifact, _upload = await self.create(
+            principal=principal,
+            content_type=str(content_type),
+            size_bytes=len(encoded),
+            link=ExecutionRef(
+                namespace=namespace,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type=link_type,
+                label=component.get("label"),
+            ),
+            metadata_json=dict(metadata),
+            redaction_level=db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+        )
+        completed = await self.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            payload=encoded,
+            content_type=str(content_type),
+        )
+        ref = build_artifact_ref(completed)
+        return {"artifact_ref_v": ref.artifact_ref_v, "artifact_id": ref.artifact_id}
+
 
 class TemporalArtifactActivities:
     """Activity-friendly facade used by Temporal workflow/activity code."""
@@ -2261,6 +2446,16 @@ class TemporalArtifactActivities:
             content_type=content_type,
         )
         return build_artifact_ref(artifact)
+
+    async def artifact_publish_report_bundle(
+        self,
+        request: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(request, Mapping):
+            raise TemporalArtifactValidationError(
+                "report bundle publication request is required"
+            )
+        return await self._service.publish_report_bundle(**dict(request))
 
     async def execution_dependency_status_snapshot(
         self,
