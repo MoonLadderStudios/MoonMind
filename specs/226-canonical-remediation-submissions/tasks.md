@@ -3,7 +3,7 @@
 **Input**: Design documents from `/specs/226-canonical-remediation-submissions/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md
 
-**Tests**: The MM-451 behavior is classified as `implemented_verified`; tasks preserve traceability and rerun the focused router/service verification that already covers the runtime behavior. No new production implementation is planned unless verification fails.
+**Tests**: The MM-451 behavior is classified as `implemented_verified`; tasks preserve traceability and rerun the focused router/service verification that already covers the runtime behavior. Conditional fallback implementation tasks are included for gate completeness, but no production implementation is planned unless verification fails.
 
 **Test Commands**:
 
@@ -39,20 +39,25 @@
 
 - [X] T007 Map existing router tests in `tests/unit/api/routers/test_executions.py` to FR-001, FR-007, SC-001, and SC-006.
 - [X] T008 Map existing service tests in `tests/unit/workflows/temporal/test_temporal_service.py` to FR-002, FR-003, FR-004, FR-005, FR-006, FR-008, SC-002, SC-003, SC-004, and SC-005.
-- [X] T009 Confirm red-first history exists in the completed remediation create/link slice and no new missing/partial requirement requires new failing tests for MM-451.
-- [X] T010 Run focused unit verification from `specs/226-canonical-remediation-submissions/quickstart.md`.
-- [X] T011 Record final MoonSpec verification in `specs/226-canonical-remediation-submissions/verification.md`.
+- [X] T009 Confirm red-first unit test history exists in the completed remediation create/link slice and no new missing/partial requirement requires new failing tests for MM-451.
+- [X] T010 Confirm integration-boundary test coverage exists in `tests/unit/api/routers/test_executions.py` and `tests/unit/workflows/temporal/test_temporal_service.py` for API normalization, service validation, persistence, and lookup behavior.
+- [X] T011 Run focused unit and integration-boundary verification from `specs/226-canonical-remediation-submissions/quickstart.md`.
+- [X] T012 Conditional fallback implementation task: if FR-001, FR-007, SC-001, or SC-006 verification fails, update `api_service/api/routers/executions.py` after adding/confirming failing router tests.
+- [X] T013 Conditional fallback implementation task: if FR-002, FR-003, FR-004, FR-005, FR-006, FR-008, SC-002, SC-003, SC-004, or SC-005 verification fails, update `moonmind/workflows/temporal/service.py` and `api_service/db/models.py` after adding/confirming failing service tests.
+- [X] T014 Story validation: verify MM-451 acceptance scenarios, FR-001 through FR-008, SC-001 through SC-006, and DESIGN-REQ-001 through DESIGN-REQ-005 against the focused test results and `specs/226-canonical-remediation-submissions/verification.md`.
+- [X] T015 Record final MoonSpec verification in `specs/226-canonical-remediation-submissions/verification.md`.
 
 ## Final Phase: Polish And Verification
 
-- [X] T012 Run final artifact alignment check for `specs/226-canonical-remediation-submissions/spec.md`, `plan.md`, and `tasks.md`.
-- [X] T013 Run `/moonspec-verify` by auditing implementation against `specs/226-canonical-remediation-submissions/spec.md` and recording the result.
+- [X] T016 Run final artifact alignment check for `specs/226-canonical-remediation-submissions/spec.md`, `plan.md`, and `tasks.md`.
+- [X] T017 Run `/moonspec-verify` by auditing implementation against `specs/226-canonical-remediation-submissions/spec.md` and recording the result.
 
 ## Dependencies And Execution Order
 
 1. Setup tasks T001-T003 are complete before foundational evidence tasks.
 2. Foundational tasks T004-T006 are complete before story verification.
-3. Story verification T010 must pass before final verification T011-T013.
+3. Story verification T011 must pass before conditional fallback implementation tasks T012-T013 are considered complete.
+4. Story validation T014 and verification recording T015 must complete before final verification T016-T017.
 
 ## Implementation Strategy
 
