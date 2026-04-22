@@ -1,7 +1,7 @@
 # Implementation Plan: Mission Control Report Presentation
 
 **Branch**: `run-jira-orchestrate-for-mm-462-mission-67b1d4e7` | **Date**: 2026-04-22 | **Spec**: [spec.md](spec.md)
-**Input**: Single-story feature specification from `specs/228-mission-control-report-presentation/spec.md`
+**Input**: Single-story feature specification from `specs/229-mission-control-report-presentation/spec.md`
 
 ## Summary
 
@@ -62,7 +62,7 @@ Implement MM-462 by extending Mission Control's task detail surface to query the
 ### Documentation (this feature)
 
 ```text
-specs/228-mission-control-report-presentation/
+specs/229-mission-control-report-presentation/
 ├── spec.md
 ├── plan.md
 ├── research.md
