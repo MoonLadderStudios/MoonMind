@@ -1,17 +1,27 @@
 [
   {
-    "id": 3126723168,
+    "id": 3126903925,
     "disposition": "addressed",
-    "rationale": "workload_run now raises a Temporal non-retryable ApplicationError when MOONMIND_WORKFLOW_DOCKER_ENABLED disables Docker workloads."
+    "rationale": "Merged scope-specific prohibited actions with the baseline Pentest safety defaults so global prohibitions remain present."
   },
   {
-    "id": 3126723172,
-    "disposition": "addressed",
-    "rationale": "security_pentest_execute now uses the same non-retryable docker_workflows_disabled ApplicationError policy denial."
-  },
-  {
-    "id": 4157738650,
+    "id": 4157934270,
     "disposition": "not-applicable",
-    "rationale": "Review summary comment with no separate actionable request beyond the two inline comments."
+    "rationale": "Top-level automated review summary; the actionable child finding is tracked separately."
+  },
+  {
+    "id": 4157939366,
+    "disposition": "not-applicable",
+    "rationale": "Top-level automated Codex review summary with no requested code change."
+  },
+  {
+    "id": 3126908901,
+    "disposition": "addressed",
+    "rationale": "Removed raw objective text from wrapper environment metadata and durable activity output."
+  },
+  {
+    "id": 3126908903,
+    "disposition": "addressed",
+    "rationale": "Normalized Pentest artifact roots with path-aware joins and rejected relative, root, double-slash, and parent-traversal roots."
   }
 ]
