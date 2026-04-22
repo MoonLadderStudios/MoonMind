@@ -30,6 +30,10 @@ from moonmind.workflows.temporal.artifacts import (
     generate_artifact_id,
 )
 from moonmind.workflows.temporal import artifacts as artifact_module
+from moonmind.workflows.temporal.report_artifacts import (
+    REPORT_ARTIFACT_LINK_TYPES,
+    validate_report_artifact_contract,
+)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -264,6 +268,274 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
                 principal="user-1",
             )
             assert [item.artifact_id for item in listed] == [artifact.artifact_id]
+
+
+async def test_report_artifact_contract_accepts_supported_link_types() -> None:
+    """MM-460: Report artifact link types should be explicit and stable."""
+
+    assert REPORT_ARTIFACT_LINK_TYPES == frozenset(
+        {
+            "report.primary",
+            "report.summary",
+            "report.structured",
+            "report.evidence",
+            "report.appendix",
+            "report.findings_index",
+            "report.export",
+        }
+    )
+
+    for link_type in REPORT_ARTIFACT_LINK_TYPES:
+        validate_report_artifact_contract(
+            link_type=link_type,
+            metadata={
+                "artifact_type": "unit_test_report",
+                "report_type": "unit_test",
+                "report_scope": "final",
+                "title": "Unit test report",
+                "producer": "pytest",
+                "subject": "tests/unit",
+                "render_hint": "json",
+                "counts": {"total": 3, "failed": 0},
+                "step_id": "test",
+                "attempt": 1,
+            },
+        )
+
+
+async def test_report_artifact_contract_rejects_unsupported_report_link_type() -> None:
+    """MM-460: Unknown report link types must not create implicit semantics."""
+
+    with pytest.raises(
+        TemporalArtifactValidationError,
+        match="unsupported report artifact link_type",
+    ):
+        validate_report_artifact_contract(
+            link_type="report.raw_dump",
+            metadata={"title": "Raw dump"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ({"title": "Report", "unexpected": "value"}, "unsupported report metadata key"),
+        ({"title": "x" * 2049}, "report metadata value is too large"),
+        ({"token": "abc123"}, "unsafe report metadata key"),
+        ({"title": "token=abc123"}, "unsafe report metadata value"),
+        ({"counts": {"raw_payload": "x" * 2049}}, "report metadata value is too large"),
+    ],
+)
+async def test_report_artifact_contract_rejects_unsafe_metadata(
+    metadata: dict[str, object],
+    message: str,
+) -> None:
+    """MM-460: Report metadata should stay bounded and safe for display."""
+
+    with pytest.raises(TemporalArtifactValidationError, match=message):
+        validate_report_artifact_contract(
+            link_type="report.primary",
+            metadata=metadata,
+        )
+
+
+async def test_create_accepts_report_primary_with_bounded_metadata(
+    tmp_path: Path,
+) -> None:
+    """MM-460: Report artifacts should use the existing artifact store."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            artifact, _upload = await service.create(
+                principal="workflow-producer",
+                content_type="text/markdown",
+                link={
+                    "namespace": "moonmind",
+                    "workflow_id": "wf-report",
+                    "run_id": "run-report",
+                    "link_type": "report.primary",
+                    "label": "Final report",
+                },
+                metadata_json={
+                    "artifact_type": "unit_test_report",
+                    "report_type": "unit_test",
+                    "report_scope": "final",
+                    "title": "Final unit test report",
+                    "producer": "pytest",
+                    "subject": "tests/unit",
+                    "render_hint": "text",
+                    "is_final_report": True,
+                },
+            )
+
+            links = await repo.list_links(artifact.artifact_id)
+            assert artifact.metadata_json["report_type"] == "unit_test"
+            assert links[0].link_type == "report.primary"
+
+
+async def test_create_rejects_bad_report_link_and_metadata(tmp_path: Path) -> None:
+    """MM-460: Report publication should fail before unsafe data is stored."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            with pytest.raises(
+                TemporalArtifactValidationError,
+                match="unsupported report artifact link_type",
+            ):
+                await service.create(
+                    principal="workflow-producer",
+                    content_type="application/json",
+                    link={
+                        "namespace": "moonmind",
+                        "workflow_id": "wf-report",
+                        "run_id": "run-report",
+                        "link_type": "report.raw_dump",
+                    },
+                    metadata_json={"title": "Raw dump"},
+                )
+
+            with pytest.raises(
+                TemporalArtifactValidationError,
+                match="unsafe report metadata",
+            ):
+                await service.create(
+                    principal="workflow-producer",
+                    content_type="application/json",
+                    link={
+                        "namespace": "moonmind",
+                        "workflow_id": "wf-report",
+                        "run_id": "run-report",
+                        "link_type": "report.primary",
+                    },
+                    metadata_json={"title": "token=abc123"},
+                )
+
+
+async def test_link_artifact_rejects_unsafe_report_metadata(tmp_path: Path) -> None:
+    """MM-460: Existing artifacts must satisfy report metadata before report linking."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            artifact, _upload = await service.create(
+                principal="workflow-producer",
+                content_type="application/json",
+                metadata_json={"title": "token=abc123"},
+            )
+
+            with pytest.raises(
+                TemporalArtifactValidationError,
+                match="unsafe report metadata",
+            ):
+                await service.link_artifact(
+                    artifact_id=artifact.artifact_id,
+                    principal="workflow-producer",
+                    execution_ref={
+                        "namespace": "moonmind",
+                        "workflow_id": "wf-report",
+                        "run_id": "run-report",
+                        "link_type": "report.primary",
+                    },
+                )
+
+
+async def test_generic_output_links_remain_accepted_with_generic_metadata(
+    tmp_path: Path,
+) -> None:
+    """MM-460: Generic output flows must not require report metadata."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            for link_type in ("output.primary", "output.summary", "output.agent_result"):
+                artifact, _upload = await service.create(
+                    principal="workflow-producer",
+                    content_type="application/json",
+                    link={
+                        "namespace": "moonmind",
+                        "workflow_id": "wf-output",
+                        "run_id": "run-output",
+                        "link_type": link_type,
+                    },
+                    metadata_json={
+                        "integration_name": "jules",
+                        "raw_result_shape": {"status": "completed"},
+                    },
+                )
+                links = await repo.list_links(artifact.artifact_id)
+                assert links[0].link_type == link_type
+
+
+async def test_latest_report_primary_uses_existing_execution_linkage(
+    tmp_path: Path,
+) -> None:
+    """MM-460: Latest report lookup should use existing execution link filters."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            first, _upload = await service.create(
+                principal="workflow-producer",
+                content_type="text/markdown",
+                link={
+                    "namespace": "moonmind",
+                    "workflow_id": "wf-report",
+                    "run_id": "run-report",
+                    "link_type": "report.primary",
+                },
+                metadata_json={"title": "First report"},
+            )
+            second, _upload = await service.create(
+                principal="workflow-producer",
+                content_type="text/markdown",
+                link={
+                    "namespace": "moonmind",
+                    "workflow_id": "wf-report",
+                    "run_id": "run-report",
+                    "link_type": "report.primary",
+                },
+                metadata_json={"title": "Second report"},
+            )
+
+            latest = await service.list_for_execution(
+                namespace="moonmind",
+                workflow_id="wf-report",
+                run_id="run-report",
+                principal="workflow-producer",
+                link_type="report.primary",
+                latest_only=True,
+            )
+
+            assert [artifact.artifact_id for artifact in latest] == [
+                second.artifact_id
+            ]
+            assert first.artifact_id != second.artifact_id
 
 
 async def test_write_complete_rejects_invalid_task_image_signature(
