@@ -44,15 +44,15 @@ Implement MM-454 by completing the typed remediation action registry boundary. E
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: SQLAlchemy async ORM, existing Temporal execution/remediation services, Pydantic-adjacent schema conventions through typed dataclasses  
-**Storage**: Existing `execution_remediation_links` rows plus compact in-process idempotency cache for service evaluation; no new persistent table  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`  
-**Integration Testing**: Service-boundary flow in `tests/unit/workflows/temporal/test_remediation_context.py`; no compose-backed integration required because the story does not cross external services or credentials  
-**Target Platform**: Linux server / Docker Compose deployment  
-**Project Type**: FastAPI control plane plus Temporal workflow service boundary  
-**Performance Goals**: Action listing and evaluation remain bounded to local catalog/profile checks plus one remediation-link lookup for evaluation  
-**Constraints**: Runtime mode; preserve MM-454 traceability; no raw host shell, Docker daemon, arbitrary SQL, raw storage, secret read, or redaction bypass; do not introduce new persistent storage  
+**Language/Version**: Python 3.12
+**Primary Dependencies**: SQLAlchemy async ORM, existing Temporal execution/remediation services, Pydantic-adjacent schema conventions through typed dataclasses
+**Storage**: Existing `execution_remediation_links` rows plus compact in-process idempotency cache for service evaluation; no new persistent table
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`
+**Integration Testing**: Service-boundary flow in `tests/unit/workflows/temporal/test_remediation_context.py`; no compose-backed integration required because the story does not cross external services or credentials
+**Target Platform**: Linux server / Docker Compose deployment
+**Project Type**: FastAPI control plane plus Temporal workflow service boundary
+**Performance Goals**: Action listing and evaluation remain bounded to local catalog/profile checks plus one remediation-link lookup for evaluation
+**Constraints**: Runtime mode; preserve MM-454 traceability; no raw host shell, Docker daemon, arbitrary SQL, raw storage, secret read, or redaction bypass; do not introduce new persistent storage
 **Scale/Scope**: One remediation execution linked to one target execution; one action request decision at a time with deterministic idempotency handling
 
 ## Constitution Check

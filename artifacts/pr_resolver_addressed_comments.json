@@ -1,32 +1,22 @@
 [
   {
-    "id": 3123186074,
+    "id": 3123155677,
     "disposition": "addressed",
-    "rationale": "Dry-run results now suppress verificationRequired and verificationHint even when the policy decision is allowed."
+    "rationale": "Changed latest primary report selection to trust the server-filtered latest report response instead of re-filtering returned artifacts by their first report link."
   },
   {
-    "id": 4153825059,
+    "id": 4153793713,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary only; its actionable dry-run feedback is covered by inline comments 3123186074 and 3123186102."
+    "rationale": "Automated review summary only; the actionable inline Codex comment is classified separately."
   },
   {
-    "id": 3123186102,
+    "id": 3123174860,
     "disposition": "addressed",
-    "rationale": "Result status mapping now returns no_op for dry_run reason before allowed/rejected decision mapping."
+    "rationale": "Refactored artifact response normalization to cast each raw artifact/link once as Record<string, unknown>, reducing repeated type assertions."
   },
   {
-    "id": 3123194064,
-    "disposition": "addressed",
-    "rationale": "Admin-auto dry-run decisions now serialize result.status as no_op instead of applied."
-  },
-  {
-    "id": 3123194071,
-    "disposition": "addressed",
-    "rationale": "Allowed action inputMetadata is now deep-copied before being returned to callers."
-  },
-  {
-    "id": 4153832883,
+    "id": 4153813759,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review boilerplate only; its actionable deep-copy and dry-run comments are covered by inline comments 3123194064 and 3123194071."
+    "rationale": "Automated review summary only; the actionable inline Gemini comment is classified separately."
   }
 ]

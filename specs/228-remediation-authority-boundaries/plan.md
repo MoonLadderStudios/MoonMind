@@ -43,15 +43,15 @@ Implement MM-453 by adding the missing runtime authority boundary for remediatio
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: SQLAlchemy async ORM, Pydantic v2 style validation patterns, existing Temporal execution service, existing remediation context/evidence services  
-**Storage**: Existing `execution_remediation_links` row fields and artifact-backed action/audit payloads; no new database table for this slice  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`  
-**Integration Testing**: Service-boundary flow in `tests/unit/workflows/temporal/test_remediation_context.py`; no compose-backed integration needed because this slice does not cross external services  
-**Target Platform**: Linux server / Docker Compose deployment  
-**Project Type**: FastAPI control plane plus Temporal workflow service boundary  
-**Performance Goals**: Action authority evaluation remains bounded to one remediation link lookup, one context read when needed, and compact policy/profile checks  
-**Constraints**: Runtime mode; preserve MM-453 traceability; do not expose raw host shell, Docker daemon, SQL, presigned URLs, storage keys, local paths, or raw secrets; do not change Temporal workflow payload shapes  
+**Language/Version**: Python 3.12
+**Primary Dependencies**: SQLAlchemy async ORM, Pydantic v2 style validation patterns, existing Temporal execution service, existing remediation context/evidence services
+**Storage**: Existing `execution_remediation_links` row fields and artifact-backed action/audit payloads; no new database table for this slice
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`
+**Integration Testing**: Service-boundary flow in `tests/unit/workflows/temporal/test_remediation_context.py`; no compose-backed integration needed because this slice does not cross external services
+**Target Platform**: Linux server / Docker Compose deployment
+**Project Type**: FastAPI control plane plus Temporal workflow service boundary
+**Performance Goals**: Action authority evaluation remains bounded to one remediation link lookup, one context read when needed, and compact policy/profile checks
+**Constraints**: Runtime mode; preserve MM-453 traceability; do not expose raw host shell, Docker daemon, SQL, presigned URLs, storage keys, local paths, or raw secrets; do not change Temporal workflow payload shapes
 **Scale/Scope**: One remediation execution linked to one target execution; one action request decision at a time with deterministic idempotency key handling
 
 ## Constitution Check

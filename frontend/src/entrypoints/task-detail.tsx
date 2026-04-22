@@ -365,7 +365,25 @@ const ArtifactSummarySchema = z
     sizeBytes: z.number().nullable().optional(),
     status: z.string().optional(),
     downloadUrl: z.string().nullable().optional(),
+    defaultReadRef: z
+      .object({
+        artifactId: z.string(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+    rawAccessAllowed: z.boolean().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
+    links: z
+      .array(
+        z
+          .object({
+            linkType: z.string(),
+            label: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .default([]),
   })
   .passthrough();
 
@@ -503,18 +521,44 @@ const ArtifactListSchema = z.object({
           status: z.string().optional(),
           downloadUrl: z.string().nullable().optional(),
           download_url: z.string().nullable().optional(),
+          defaultReadRef: z.unknown().optional(),
+          default_read_ref: z.unknown().optional(),
+          rawAccessAllowed: z.boolean().nullable().optional(),
+          raw_access_allowed: z.boolean().nullable().optional(),
         })
         .passthrough()
-        .transform((artifact) =>
-          ArtifactSummarySchema.parse({
-            ...artifact,
-            artifactId: artifact.artifactId ?? artifact.artifact_id,
-            contentType: artifact.contentType ?? artifact.content_type ?? null,
-          sizeBytes: artifact.sizeBytes ?? artifact.size_bytes ?? null,
-          downloadUrl: artifact.downloadUrl ?? artifact.download_url ?? null,
-          metadata: artifact.metadata ?? {},
+        .transform((artifact) => {
+          const rawArtifact = artifact as Record<string, unknown>;
+          const defaultReadRefRaw = rawArtifact.defaultReadRef ?? rawArtifact.default_read_ref;
+          const defaultReadRef =
+            defaultReadRefRaw && typeof defaultReadRefRaw === 'object'
+              ? {
+                  ...(defaultReadRefRaw as Record<string, unknown>),
+                  artifactId:
+                    (defaultReadRefRaw as Record<string, unknown>).artifactId ??
+                    (defaultReadRefRaw as Record<string, unknown>).artifact_id,
+                }
+              : null;
+          const links = (Array.isArray(rawArtifact.links) ? rawArtifact.links : []).map((link) => {
+            const rawLink = link as Record<string, unknown>;
+            return {
+              ...rawLink,
+              linkType: rawLink.linkType ?? rawLink.link_type,
+              label: rawLink.label ?? null,
+            };
+          });
+          return ArtifactSummarySchema.parse({
+            ...rawArtifact,
+            artifactId: rawArtifact.artifactId ?? rawArtifact.artifact_id,
+            contentType: rawArtifact.contentType ?? rawArtifact.content_type ?? null,
+            sizeBytes: rawArtifact.sizeBytes ?? rawArtifact.size_bytes ?? null,
+            downloadUrl: rawArtifact.downloadUrl ?? rawArtifact.download_url ?? null,
+            defaultReadRef,
+            rawAccessAllowed: rawArtifact.rawAccessAllowed ?? rawArtifact.raw_access_allowed ?? null,
+            metadata: rawArtifact.metadata ?? {},
+            links,
+          });
         }),
-      ),
     )
     .default([]),
 });
@@ -1466,6 +1510,17 @@ function artifactDownloadHref(
   return buildArtifactDownloadHref(apiBase, artifact.artifactId);
 }
 
+function reportOpenHref(
+  apiBase: string,
+  artifact: z.infer<typeof ArtifactSummarySchema>,
+): string {
+  const defaultReadArtifactId = artifact.defaultReadRef?.artifactId;
+  if (defaultReadArtifactId) {
+    return buildArtifactDownloadHref(apiBase, defaultReadArtifactId);
+  }
+  return artifactDownloadHref(apiBase, artifact);
+}
+
 function metadataString(metadata: Record<string, unknown>, ...keys: string[]): string {
   for (const key of keys) {
     const value = metadata[key];
@@ -1477,6 +1532,49 @@ function metadataString(metadata: Record<string, unknown>, ...keys: string[]): s
     }
   }
   return '';
+}
+
+function artifactReportLinkType(
+  artifact: z.infer<typeof ArtifactSummarySchema>,
+): string | null {
+  return artifact.links.find((link) => link.linkType.startsWith('report.'))?.linkType ?? null;
+}
+
+function artifactReportLinkLabel(
+  artifact: z.infer<typeof ArtifactSummarySchema>,
+): string {
+  return artifact.links.find((link) => link.linkType.startsWith('report.'))?.label || '';
+}
+
+function reportArtifactTitle(artifact: z.infer<typeof ArtifactSummarySchema>): string {
+  return (
+    metadataString(artifact.metadata, 'title', 'name') ||
+    artifactReportLinkLabel(artifact) ||
+    artifact.artifactId
+  );
+}
+
+function reportViewerLabel(artifact: z.infer<typeof ArtifactSummarySchema>): string {
+  const renderHint = metadataString(artifact.metadata, 'render_hint', 'renderHint').toLowerCase();
+  if (renderHint) return renderHint;
+  const contentType = String(artifact.contentType || '').toLowerCase();
+  if (contentType.includes('markdown')) return 'markdown';
+  if (contentType.includes('json')) return 'json';
+  if (contentType.startsWith('text/x-diff')) return 'diff';
+  if (contentType.startsWith('text/')) return 'text';
+  if (contentType.startsWith('image/')) return 'image';
+  if (contentType.includes('pdf')) return 'pdf';
+  return 'download';
+}
+
+function relatedReportArtifacts(
+  artifacts: z.infer<typeof ArtifactSummarySchema>[],
+): z.infer<typeof ArtifactSummarySchema>[] {
+  const relatedTypes = new Set(['report.summary', 'report.structured', 'report.evidence']);
+  return artifacts.filter((artifact) => {
+    const linkType = artifactReportLinkType(artifact);
+    return linkType ? relatedTypes.has(linkType) : false;
+  });
 }
 
 type InputImageArtifact = {
@@ -1610,6 +1708,86 @@ function InputImagesSection({
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+function ReportPresentationSection({
+  primaryReport,
+  relatedArtifacts,
+  apiBase,
+}: {
+  primaryReport: z.infer<typeof ArtifactSummarySchema> | null;
+  relatedArtifacts: z.infer<typeof ArtifactSummarySchema>[];
+  apiBase: string;
+}) {
+  if (!primaryReport) {
+    return null;
+  }
+
+  const reportType = metadataString(primaryReport.metadata, 'report_type', 'reportType');
+  const reportScope = metadataString(primaryReport.metadata, 'report_scope', 'reportScope');
+
+  return (
+    <section className="stack td-report-region td-evidence-region">
+      <div>
+        <h3>Report</h3>
+        <p className="small">
+          Canonical final report selected from server report artifact linkage.
+        </p>
+      </div>
+      <div className="td-evidence-slab stack">
+        <div className="grid-2">
+          <Card label="Title">{reportArtifactTitle(primaryReport)}</Card>
+          <Card label="Viewer">{reportViewerLabel(primaryReport)}</Card>
+          {reportType ? <Card label="Report Type">{reportType}</Card> : null}
+          {reportScope ? <Card label="Report Scope">{reportScope}</Card> : null}
+        </div>
+        <div className="actions">
+          <a
+            className="button secondary"
+            href={reportOpenHref(apiBase, primaryReport)}
+            title="Open report"
+          >
+            Open report
+          </a>
+        </div>
+      </div>
+      {relatedArtifacts.length > 0 ? (
+        <div className="stack">
+          <h4>Related Report Content</h4>
+          <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Content</th>
+                  <th>Type</th>
+                  <th>Viewer</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {relatedArtifacts.map((artifact) => (
+                  <tr key={artifact.artifactId}>
+                    <td>{reportArtifactTitle(artifact)}</td>
+                    <td>{artifactReportLinkType(artifact) || 'report'}</td>
+                    <td>{reportViewerLabel(artifact)}</td>
+                    <td>
+                      <a
+                        className="button secondary"
+                        href={reportOpenHref(apiBase, artifact)}
+                        title={`Open ${artifactReportLinkLabel(artifact) || 'report content'}`}
+                      >
+                        Open {artifactReportLinkLabel(artifact) || 'content'}
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -3090,6 +3268,22 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     refetchInterval: liveUpdates && namespace && workflowId && latestRunId ? detailPoll : false,
   });
 
+  const latestReportQuery = useQuery({
+    queryKey: ['task-detail-latest-report', namespace, workflowId, latestRunId],
+    queryFn: async () => {
+      const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(latestRunId)}/artifacts?link_type=report.primary&latest_only=true`;
+      const response = await fetch(path);
+      if (!response.ok) {
+        throw new Error(`Report: ${response.statusText}`);
+      }
+      return ArtifactListSchema.parse(await response.json());
+    },
+    enabled:
+      Boolean(namespace && workflowId && latestRunId)
+      && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
+    refetchInterval: liveUpdates && namespace && workflowId && latestRunId ? detailPoll : false,
+  });
+
   const runSummaryQuery = useQuery({
     queryKey: ['task-detail-run-summary', summaryArtifactRef],
     queryFn: () => fetchRunSummaryArtifact(payload.apiBase, summaryArtifactRef),
@@ -3139,6 +3333,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     void queryClient.invalidateQueries({ queryKey: ['task-detail', encodedTaskId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-steps', workflowId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-artifacts', namespace, workflowId, latestRunId] });
+    void queryClient.invalidateQueries({ queryKey: ['task-detail-latest-report', namespace, workflowId, latestRunId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-run-summary', summaryArtifactRef] });
   };
 
@@ -3307,6 +3502,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       [logicalStepId]: !prev[logicalStepId],
     }));
   };
+  const primaryReport = latestReportQuery.data?.artifacts[0] ?? null;
+  const relatedReports = relatedReportArtifacts(artifactsQuery.data?.artifacts || []);
 
   return (
     <div className="stack task-detail-page">
@@ -3760,6 +3957,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
 
           <InputImagesSection
             artifacts={artifactsQuery.data?.artifacts || []}
+            apiBase={payload.apiBase}
+          />
+
+          <ReportPresentationSection
+            primaryReport={primaryReport}
+            relatedArtifacts={relatedReports}
             apiBase={payload.apiBase}
           />
 

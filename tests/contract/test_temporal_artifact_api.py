@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 from uuid import uuid4
 
 from fastapi import FastAPI
@@ -61,13 +61,15 @@ def _build_read_policy(artifact: SimpleNamespace) -> SimpleNamespace:
     )
 
 
-def _build_link() -> SimpleNamespace:
+def _build_link(
+    *, link_type: str = "output.primary", label: str = "Final output"
+) -> SimpleNamespace:
     return SimpleNamespace(
         namespace="moonmind",
         workflow_id="wf-1",
         run_id="run-1",
-        link_type="output.primary",
-        label="Final output",
+        link_type=link_type,
+        label=label,
         created_at=datetime.now(UTC),
         created_by_activity_type=None,
         created_by_worker=None,
@@ -167,3 +169,46 @@ def test_temporal_artifact_get_list_presign_download_contracts() -> None:
         )
         assert download_response.status_code == 200
         PresignDownloadResponse.model_validate(download_response.json())
+
+
+def test_temporal_artifact_latest_report_contract() -> None:
+    app, service = _build_app()
+    artifact = _build_artifact()
+    artifact.content_type = "text/markdown"
+    artifact.metadata_json = {
+        "title": "Final implementation report",
+        "render_hint": "markdown",
+    }
+    link = _build_link(link_type="report.primary", label="Final report")
+    service.list_for_execution.return_value = [artifact]
+    service.get_metadata.return_value = (
+        artifact,
+        [link],
+        False,
+        _build_read_policy(artifact),
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/executions/moonmind/wf-1/run-1/artifacts",
+            params={"link_type": "report.primary", "latest_only": "true"},
+        )
+
+    assert response.status_code == 200
+    payload = ArtifactListResponse.model_validate(response.json())
+    assert len(payload.artifacts) == 1
+    assert payload.artifacts[0].links[0].link_type == "report.primary"
+    assert payload.artifacts[0].links[0].label == "Final report"
+    assert payload.artifacts[0].default_read_ref is not None
+    assert (
+        payload.artifacts[0].default_read_ref.artifact_id
+        == payload.artifacts[0].artifact_id
+    )
+    service.list_for_execution.assert_awaited_once_with(
+        namespace="moonmind",
+        workflow_id="wf-1",
+        run_id="run-1",
+        principal=ANY,
+        link_type="report.primary",
+        latest_only=True,
+    )
