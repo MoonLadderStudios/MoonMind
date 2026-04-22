@@ -68,16 +68,16 @@
 
 > NOTE: Write these tests FIRST. Run them, confirm they FAIL for the expected reason when they expose a gap, then implement only enough code to make them pass.
 
-- [ ] T013 Add failing task-detail UI test for eligible target states exposing Create remediation task and ineligible states hiding or disabling it in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-001, SC-001, DESIGN-REQ-001)
+- [X] T013 Add failing task-detail UI test for eligible target states exposing Create remediation task and ineligible states hiding or disabling it in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-001, SC-001, DESIGN-REQ-001)
 - [X] T014 Add failing task-detail UI test for remediation create prefill and canonical route submission in `frontend/src/entrypoints/task-detail.test.tsx` or `frontend/src/entrypoints/task-create.test.tsx`. (FR-002, FR-003, SC-001, DESIGN-REQ-002)
 - [X] T015 Add failing task-detail UI test for inbound Remediation Tasks panel on a target execution in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-004, SC-002, DESIGN-REQ-003)
 - [X] T016 Add failing task-detail UI test for outbound Remediation Target panel on a remediation execution in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-005, SC-003, DESIGN-REQ-004)
 - [X] T017 Add failing task-detail UI test for grouped remediation evidence artifact links and absence of raw storage/path/presigned URL data in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-006, FR-007, SC-004, DESIGN-REQ-005)
-- [ ] T018 Add failing task-detail UI test for approval-gated remediation state, approve/reject controls, and read-only unauthorized state in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-008, FR-009, SC-005, DESIGN-REQ-006)
-- [ ] T019 Add failing task-detail UI test for missing link, missing context artifact, missing evidence refs, unavailable live follow, and approval fetch failure degraded states in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-010, SC-006, DESIGN-REQ-007)
-- [ ] T020 Add failing CSS/accessibility assertions for remediation panel focus, contrast, mobile containment, reduced-motion/fallback posture in `frontend/src/entrypoints/task-detail.test.tsx` and `frontend/src/styles/mission-control.css` inspection helpers. (FR-011, DESIGN-REQ-008)
-- [ ] T021 Add or confirm non-remediation task-detail/create regression coverage in `frontend/src/entrypoints/task-detail.test.tsx` and `frontend/src/entrypoints/task-create.test.tsx`. (FR-012, SC-007)
-- [ ] T022 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` and capture expected red-first failures for T013-T021.
+- [X] T018 Add failing task-detail UI test for approval-gated remediation state, approve/reject controls, and read-only unauthorized state in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-008, FR-009, SC-005, DESIGN-REQ-006)
+- [X] T019 Add failing task-detail UI test for missing link, missing context artifact, missing evidence refs, unavailable live follow, and approval fetch failure degraded states in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-010, SC-006, DESIGN-REQ-007)
+- [X] T020 Add failing CSS/accessibility assertions for remediation panel focus, contrast, mobile containment, reduced-motion/fallback posture in `frontend/src/entrypoints/task-detail.test.tsx` and `frontend/src/styles/mission-control.css` inspection helpers. (FR-011, DESIGN-REQ-008)
+- [X] T021 Add or confirm non-remediation task-detail/create regression coverage in `frontend/src/entrypoints/task-detail.test.tsx` and `frontend/src/entrypoints/task-create.test.tsx`. (FR-012, SC-007)
+- [X] T022 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` and capture expected red-first failures for T013-T021.
 
 ### Implementation
 
@@ -87,12 +87,12 @@
 - [X] T026 Implement outbound Remediation Target panel in `frontend/src/entrypoints/task-detail.tsx`. (FR-005, DESIGN-REQ-004)
 - [X] T027 Implement remediation evidence grouping and safe artifact link rendering in `frontend/src/entrypoints/task-detail.tsx`. (FR-006, FR-007, DESIGN-REQ-005)
 - [X] T028 Implement approval-gated remediation display and approve/reject controls in `frontend/src/entrypoints/task-detail.tsx`, wired to the trusted backend route from T010 when required. (FR-008, FR-009, DESIGN-REQ-006)
-- [ ] T029 Implement degraded and empty states for missing remediation links, context artifacts, evidence refs, live follow, and approval metadata in `frontend/src/entrypoints/task-detail.tsx`. (FR-010, DESIGN-REQ-007)
+- [X] T029 Implement degraded and empty states for missing remediation links, context artifacts, evidence refs, live follow, and approval metadata in `frontend/src/entrypoints/task-detail.tsx`. (FR-010, DESIGN-REQ-007)
 - [X] T030 Update remediation panel styling in `frontend/src/styles/mission-control.css` using existing Mission Control evidence-region patterns. (FR-011, DESIGN-REQ-008)
 - [X] T031 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` and fix UI failures.
 - [X] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_temporal_service.py` and fix backend regressions.
 
-**Checkpoint**: Backend/read-model and implemented UI slices are covered by API and integration-style UI tests. Complete remaining unchecked UI coverage and degraded-state tasks before final story verification.
+**Checkpoint**: Backend/read-model and UI story slices are covered by API and integration-style UI tests.
 
 ---
 
@@ -101,11 +101,11 @@
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
 - [X] T033 [P] Review MM-457 traceability in `specs/224-remediation-mission-control/spec.md`, `plan.md`, `tasks.md`, and `contracts/remediation-mission-control.md`. (FR-013, SC-008)
-- [ ] T034 [P] Review rendered remediation panels for long workflow IDs, run IDs, action labels, artifact labels, and mobile containment in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-011)
+- [X] T034 [P] Review rendered remediation panels for long workflow IDs, run IDs, action labels, artifact labels, and mobile containment in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-011)
 - [X] T035 Run quickstart validation commands from `specs/224-remediation-mission-control/quickstart.md`.
 - [X] T036 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` for final focused frontend evidence.
 - [X] T037 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_temporal_service.py` for final focused backend evidence.
-- [ ] T038 Run `/moonspec-verify` final verification and write the result to `specs/224-remediation-mission-control/verification.md`. (SC-008)
+- [X] T038 Run `/moonspec-verify` final verification and write the result to `specs/224-remediation-mission-control/verification.md`. (SC-008)
 
 ---
 

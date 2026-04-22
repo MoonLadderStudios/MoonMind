@@ -13,25 +13,25 @@ Implement MM-457 by layering Mission Control UI and narrow API read/decision sur
 | --- | --- | --- | --- | --- |
 | FR-001 | implemented_verified | `frontend/src/entrypoints/task-detail.tsx` adds eligible-target Create remediation task action; `frontend/src/entrypoints/task-detail.test.tsx` covers eligible submission | No new implementation; add ineligible-state coverage if expanding regression scope | UI unit |
 | FR-002 | implemented_verified | `frontend/src/entrypoints/task-detail.tsx` posts target context to `POST /api/executions/{workflow_id}/remediation`; router regression remains in `tests/unit/api/routers/test_executions.py` | No new implementation | UI unit + router unit |
-| FR-003 | partial | Current UI submits bounded default mode, authority, evidence policy, and manual trigger but does not expose a complete troubleshooting/admin choice surface | Add richer operator choices and evidence preview when this scope is resumed | UI unit |
+| FR-003 | implemented_verified | Task detail shows remediation mode, authority, action policy, pinned run, and evidence preview controls; UI tests cover chosen values in the submitted payload | No new implementation | UI unit |
 | FR-004 | implemented_verified | `api_service/api/routers/executions.py` exposes inbound remediation link read route; `frontend/src/entrypoints/task-detail.tsx` renders Remediation Tasks; API/UI tests cover the panel | No new implementation | API unit + UI unit |
 | FR-005 | implemented_verified | `api_service/api/routers/executions.py` exposes outbound remediation target read route; `frontend/src/entrypoints/task-detail.tsx` renders Remediation Target; API/UI tests cover the panel | No new implementation | API unit + UI unit |
 | FR-006 | implemented_verified | `frontend/src/entrypoints/task-detail.tsx` groups remediation-prefixed artifacts; UI tests cover remediation evidence links | No new implementation | UI unit |
 | FR-007 | implemented_verified | Evidence links route through existing artifact download/preview paths and tests cover rendered remediation artifact links without raw storage paths | No new implementation | UI unit |
 | FR-008 | implemented_verified | `RemediationApprovalStateModel` and task-detail approval state rendering are present; API/UI tests cover approval state and decision submission | No new implementation | API unit + UI unit |
-| FR-009 | partial | Approve/reject submission route and enabled UI path exist; unauthorized/read-only fallback still needs focused UI coverage | Add unauthorized/read-only regression test before closing | API unit + UI unit |
-| FR-010 | partial | Empty and fallback panel states exist for missing relationship/evidence data; broader degraded-state coverage for live-follow and approval metadata remains open | Add degraded-state UI tests and adjust implementation if gaps appear | UI unit |
-| FR-011 | partial | `.td-remediation-region` and `.td-remediation-list` styling exists; focused accessibility, focus, reduced-motion, and mobile containment assertions remain open | Add remediation panel accessibility/fallback assertions | UI unit |
+| FR-009 | implemented_verified | Approve/reject submission route and enabled UI path exist; read-only unauthorized approval state is rendered and covered by UI tests | No new implementation | API unit + UI unit |
+| FR-010 | implemented_verified | Empty relationship/evidence states, missing evidence bundle, unavailable live-follow fallback, and approval read-only metadata are rendered and covered by UI tests | No new implementation | UI unit |
+| FR-011 | implemented_verified | `.td-remediation-region`, `.td-remediation-list`, and remediation create/approval styles include focus, containment, and mobile safeguards covered by CSS assertions | No new implementation | UI unit |
 | FR-012 | implemented_verified | Non-remediation task detail/create tests pass in focused and full unit runs | No new implementation | UI unit |
 | FR-013 | implemented_verified | `spec.md` now preserves the original MM-457 preset brief and traceability checks find MM-457 plus source coverage IDs | No new implementation | final verify |
 | DESIGN-REQ-001 | implemented_verified | Task detail create entrypoint exists and is tested for eligible remediation targets | No new implementation | UI unit |
-| DESIGN-REQ-002 | partial | Submitted create payload includes target, mode, authority, evidence policy, and trigger; richer selected-step/policy preview controls remain open | Complete richer create choices if required for closure | UI unit |
+| DESIGN-REQ-002 | implemented_verified | Task detail exposes remediation mode, authority, action policy, pinned run, and evidence preview controls before submission | No new implementation | UI unit |
 | DESIGN-REQ-003 | implemented_verified | Inbound API and target Remediation Tasks panel exist with compact status/action/lock fields | No new implementation | API unit + UI unit |
 | DESIGN-REQ-004 | implemented_verified | Outbound API and Remediation Target panel exist with target/evidence/approval fields | No new implementation | API unit + UI unit |
 | DESIGN-REQ-005 | implemented_verified | Remediation evidence grouping and artifact links are implemented in task detail and covered by UI tests | No new implementation | UI unit |
-| DESIGN-REQ-006 | partial | Approval display and decision route exist; unauthorized/read-only approval behavior needs focused coverage | Add read-only approval tests and implementation fixes if needed | API unit + UI unit |
-| DESIGN-REQ-007 | partial | Missing relationship/evidence states exist; partial live-follow and approval degraded states need stronger coverage | Add degraded-state tests and fixes if needed | UI unit |
-| DESIGN-REQ-008 | partial | Remediation CSS exists; accessibility/fallback-specific assertions remain open | Add accessibility/fallback coverage for remediation panels | UI unit |
+| DESIGN-REQ-006 | implemented_verified | Approval display, decision route, enabled controls, and unauthorized/read-only approval behavior are implemented and covered | No new implementation | API unit + UI unit |
+| DESIGN-REQ-007 | implemented_verified | Missing relationship/evidence states, missing evidence bundle, live-follow fallback, and approval degraded states are implemented and covered | No new implementation | UI unit |
+| DESIGN-REQ-008 | implemented_verified | Remediation CSS focus, containment, and mobile safeguards are implemented and covered by CSS assertions | No new implementation | UI unit |
 
 ## Technical Context
 

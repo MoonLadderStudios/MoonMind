@@ -4557,6 +4557,14 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     }
 
     const primarySkillId = primaryValidation.value.skillId.trim() || "auto";
+    const effectiveSubmissionSkillId = resolveEffectiveSkillId(
+      primarySkillId,
+      appliedTemplates,
+    );
+    const effectivePublishMode =
+      isResolverSkill(effectiveSubmissionSkillId) && isMergeAutomationPublishMode(publishMode)
+        ? "none"
+        : normalizedPublishMode;
     const primarySkillArgsRaw = showAdvancedStepOptions
       ? String(primaryStep?.skillArgs || "").trim()
       : "";
@@ -5004,7 +5012,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
     );
     const mergedCapabilities = deriveRequiredCapabilities({
       runtimeMode: normalizedRuntime,
-      publishMode: normalizedPublishMode,
+      publishMode: effectivePublishMode,
       taskSkillRequiredCapabilities,
       stepSkillRequiredCapabilities,
       templateCapabilities,
@@ -5041,12 +5049,6 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         : cleaned;
     })();
 
-    // Determine skill: applied presets define the workflow-level primary skill.
-    const effectiveSubmissionSkillId = resolveEffectiveSkillId(
-      primarySkillId,
-      appliedTemplates,
-    );
-
     // Only include task-level agent skill selectors when we have an explicit skill or a template slug.
     const taskSkillSelectors =
       hasExplicitSkillSelection(primarySkillId) || appliedTemplates.length > 0
@@ -5063,7 +5065,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
 
     const shouldSubmitMergeAutomation =
       isMergeAutomationPublishMode(publishMode) &&
-      normalizedPublishMode === "pr" &&
+      effectivePublishMode === "pr" &&
       !isResolverSkill(effectiveSubmissionSkillId);
 
     const taskPayload: Record<string, unknown> = {
@@ -5086,7 +5088,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
         ...(providerProfile ? { profileId: providerProfile } : {}),
       },
       publish: {
-        mode: normalizedPublishMode,
+        mode: effectivePublishMode,
       },
       ...(branch.trim()
         ? {
@@ -5114,7 +5116,7 @@ export function TaskCreatePage({ payload }: { payload: BootPayload }) {
           ? { requiredCapabilities: mergedCapabilities }
           : {}),
         targetRuntime: normalizedRuntime,
-        publishMode: normalizedPublishMode,
+        publishMode: effectivePublishMode,
         ...(shouldSubmitMergeAutomation
           ? { mergeAutomation: { enabled: true } }
           : {}),

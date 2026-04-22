@@ -2938,6 +2938,46 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   padding: 0;
 }
 
+.td-remediation-region:focus-within {
+  outline: 2px solid rgb(var(--mm-accent) / 0.72);
+  outline-offset: 3px;
+}
+
+.td-remediation-list .card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.td-remediation-list code {
+  overflow-wrap: anywhere;
+}
+
+.td-remediation-approval {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.65rem;
+}
+
+.td-remediation-create-preview {
+  width: 100%;
+  min-width: 0;
+}
+
+.td-remediation-create-preview label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  color: rgb(var(--mm-muted));
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.td-remediation-create-preview select,
+.td-remediation-create-preview input {
+  width: 100%;
+  min-width: 0;
+}
+
 .td-actions-region {
   padding: 0.8rem;
   border: 1px solid rgb(var(--mm-border) / 0.62);
@@ -3138,5 +3178,15 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
   .td-group dl {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .td-remediation-region {
+    padding: 0.7rem;
+  }
+
+  .td-remediation-list {
+    gap: 0.6rem;
   }
 }

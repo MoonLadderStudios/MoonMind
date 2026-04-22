@@ -3226,6 +3226,39 @@ function remediationArtifactLabel(type: string): string {
   return labels[type] ?? type.replace(/^remediation\./, '').replaceAll('_', ' ');
 }
 
+function RemediationApprovalSummary({
+  approval,
+}: {
+  approval: z.infer<typeof RemediationApprovalStateSchema>;
+}) {
+  const hasDetails = Boolean(
+    approval.actionKind ||
+      approval.riskTier ||
+      approval.preconditions ||
+      approval.blastRadius ||
+      approval.auditRef ||
+      approval.decision,
+  );
+
+  if (!hasDetails) return null;
+
+  return (
+    <div className="td-remediation-approval">
+      <div className="grid-2">
+        <Card label="Action">{approval.actionKind || '—'}</Card>
+        <Card label="Risk">{approval.riskTier || '—'}</Card>
+        <Card label="Decision">{approval.decision || 'not_required'}</Card>
+        <Card label="Audit">{approval.auditRef || '—'}</Card>
+        <Card label="Preconditions">{approval.preconditions || '—'}</Card>
+        <Card label="Blast Radius">{approval.blastRadius || '—'}</Card>
+      </div>
+      {approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
+        <p className="notice subtle">Approval is read-only for this operator.</p>
+      ) : null}
+    </div>
+  );
+}
+
 function RemediationRelationshipsPanel({
   inbound,
   outbound,
@@ -3233,6 +3266,7 @@ function RemediationRelationshipsPanel({
   outboundError,
   onApprovalDecision,
   approvalBusy,
+  showEmpty,
 }: {
   inbound: z.infer<typeof RemediationLinksSchema> | undefined;
   outbound: z.infer<typeof RemediationLinksSchema> | undefined;
@@ -3240,12 +3274,13 @@ function RemediationRelationshipsPanel({
   outboundError: Error | null;
   onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected') => void;
   approvalBusy: boolean;
+  showEmpty: boolean;
 }) {
   const inboundItems = inbound?.items ?? [];
   const outboundItems = outbound?.items ?? [];
   const hasData = inboundItems.length > 0 || outboundItems.length > 0;
 
-  if (!hasData && !inboundError && !outboundError) return null;
+  if (!hasData && !inboundError && !outboundError && !showEmpty) return null;
 
   return (
     <section className="stack td-remediation-region td-evidence-region">
@@ -3265,7 +3300,7 @@ function RemediationRelationshipsPanel({
             {inboundItems.map((item) => (
               <li key={item.remediationWorkflowId} className="card">
                 <a href={dependencyHref(item.remediationWorkflowId)}>
-                  <strong>{item.remediationWorkflowId}</strong>
+                  <code className="text-xs break-all">{item.remediationWorkflowId}</code>
                 </a>
                 <div className="grid-2">
                   <Card label="Status">{item.status || '—'}</Card>
@@ -3275,6 +3310,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
                 </div>
+                {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
                   <div className="actions">
                     <button
@@ -3299,6 +3335,8 @@ function RemediationRelationshipsPanel({
             ))}
           </ul>
         </div>
+      ) : showEmpty && !inboundError ? (
+        <p className="notice subtle">No inbound remediation tasks linked yet.</p>
       ) : null}
       {outboundItems.length > 0 ? (
         <div className="stack">
@@ -3307,7 +3345,7 @@ function RemediationRelationshipsPanel({
             {outboundItems.map((item) => (
               <li key={item.targetWorkflowId} className="card">
                 <a href={dependencyHref(item.targetWorkflowId)}>
-                  <strong>{item.targetWorkflowId}</strong>
+                  <code className="text-xs break-all">{item.targetWorkflowId}</code>
                 </a>
                 <div className="grid-2">
                   <Card label="Pinned Run"><code className="text-xs break-all">{item.targetRunId || '—'}</code></Card>
@@ -3317,6 +3355,15 @@ function RemediationRelationshipsPanel({
                   <Card label="Evidence Bundle">{item.contextArtifactRef || 'Missing'}</Card>
                   <Card label="Approval">{item.approvalState?.decision || 'not_required'}</Card>
                 </div>
+                {!item.contextArtifactRef ? (
+                  <p className="notice subtle">Evidence bundle is missing.</p>
+                ) : null}
+                {item.mode?.includes('follow') && !item.contextArtifactRef ? (
+                  <p className="notice subtle">
+                    Live follow is unavailable; durable remediation artifacts remain authoritative.
+                  </p>
+                ) : null}
+                {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
                 {item.approvalState?.canDecide && item.approvalState.requestId ? (
                   <div className="actions">
                     <button
@@ -3341,6 +3388,8 @@ function RemediationRelationshipsPanel({
             ))}
           </ul>
         </div>
+      ) : showEmpty && !outboundError ? (
+        <p className="notice subtle">No outbound remediation target linked yet.</p>
       ) : null}
     </section>
   );
@@ -3349,15 +3398,25 @@ function RemediationRelationshipsPanel({
 function RemediationEvidencePanel({
   artifacts,
   apiBase,
+  showEmpty,
 }: {
   artifacts: z.infer<typeof ArtifactSummarySchema>[];
   apiBase: string;
+  showEmpty: boolean;
 }) {
   const remediationArtifacts = artifacts
     .map((artifact) => ({ artifact, type: remediationArtifactType(artifact) }))
     .filter((item): item is { artifact: z.infer<typeof ArtifactSummarySchema>; type: string } => Boolean(item.type));
 
-  if (remediationArtifacts.length === 0) return null;
+  if (remediationArtifacts.length === 0) {
+    if (!showEmpty) return null;
+    return (
+      <section className="stack td-remediation-region td-evidence-region">
+        <h3>Remediation Evidence</h3>
+        <p className="notice subtle">No remediation evidence artifacts linked yet.</p>
+      </section>
+    );
+  }
 
   return (
     <section className="stack td-remediation-region td-evidence-region">
@@ -3426,6 +3485,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const [liveUpdates, setLiveUpdates] = useState(true);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
+  const [remediationMode, setRemediationMode] = useState('snapshot_then_follow');
+  const [remediationAuthority, setRemediationAuthority] = useState('approval_gated');
+  const [remediationActionPolicy, setRemediationActionPolicy] = useState('admin_healer_default');
 
   const detailQuery = useQuery({
     queryKey: ['task-detail', encodedTaskId, sourceTemporal],
@@ -3685,11 +3747,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           repository: execution?.repository ?? null,
           instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
           remediation: {
-            mode: 'snapshot_then_follow',
-            authorityMode: 'approval_gated',
+            mode: remediationMode,
+            authorityMode: remediationAuthority,
             target: {
               runId: latestRunId || runId || undefined,
             },
+            actionPolicyRef: remediationActionPolicy.trim() || undefined,
             evidencePolicy: {
               includeStepLedger: true,
               includeDiagnostics: true,
@@ -4238,6 +4301,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             inboundError={inboundRemediationsQuery.isError ? (inboundRemediationsQuery.error as Error) : null}
             outboundError={outboundRemediationsQuery.isError ? (outboundRemediationsQuery.error as Error) : null}
             approvalBusy={remediationApprovalMutation.isPending}
+            showEmpty={shouldFetchRemediationLinks && (inboundRemediationsQuery.isSuccess || outboundRemediationsQuery.isSuccess)}
             onApprovalDecision={(remediationWorkflowId, requestId, decision) => {
               setActionError(null);
               remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision });
@@ -4252,17 +4316,55 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
               </div>
               <div className="actions">
                 {canCreateRemediation ? (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() => {
-                      setActionError(null);
-                      createRemediationMutation.mutate();
-                    }}
-                  >
-                    Create remediation task
-                  </button>
+                  <div className="stack td-remediation-create-preview">
+                    <h4>Remediation create preview</h4>
+                    <div className="grid-2">
+                      <label>
+                        Remediation mode
+                        <select
+                          value={remediationMode}
+                          onChange={(event) => setRemediationMode(event.target.value)}
+                        >
+                          <option value="snapshot_then_follow">Snapshot then follow</option>
+                          <option value="snapshot">Snapshot only</option>
+                          <option value="live_follow">Live follow</option>
+                        </select>
+                      </label>
+                      <label>
+                        Remediation authority
+                        <select
+                          value={remediationAuthority}
+                          onChange={(event) => setRemediationAuthority(event.target.value)}
+                        >
+                          <option value="approval_gated">Approval-gated admin remediation</option>
+                          <option value="observe_only">Troubleshooting only</option>
+                          <option value="admin_auto">Admin remediation</option>
+                        </select>
+                      </label>
+                      <label>
+                        Remediation action policy
+                        <input
+                          value={remediationActionPolicy}
+                          onChange={(event) => setRemediationActionPolicy(event.target.value)}
+                        />
+                      </label>
+                      <Card label="Pinned Run"><code className="text-xs break-all">{latestRunId || runId || '—'}</code></Card>
+                    </div>
+                    <p className="small">
+                      Evidence preview: step ledger, diagnostics, and 2000 log lines.
+                    </p>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() => {
+                        setActionError(null);
+                        createRemediationMutation.mutate();
+                      }}
+                    >
+                      Create remediation task
+                    </button>
+                  </div>
                 ) : null}
                 {actions.canSetTitle ? (
                   <button type="button" disabled={busy} className="secondary" onClick={onRename}>
@@ -4334,6 +4436,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           <RemediationEvidencePanel
             artifacts={artifactsQuery.data?.artifacts || []}
             apiBase={payload.apiBase}
+            showEmpty={shouldFetchRemediationLinks && artifactsQuery.isSuccess}
           />
 
           <section className="stack td-timeline-region td-evidence-region">
