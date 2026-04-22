@@ -1,32 +1,17 @@
 [
   {
-    "id": 4157627574,
+    "id": 3126723168,
+    "disposition": "addressed",
+    "rationale": "workload_run now raises a Temporal non-retryable ApplicationError when MOONMIND_WORKFLOW_DOCKER_ENABLED disables Docker workloads."
+  },
+  {
+    "id": 3126723172,
+    "disposition": "addressed",
+    "rationale": "security_pentest_execute now uses the same non-retryable docker_workflows_disabled ApplicationError policy denial."
+  },
+  {
+    "id": 4157738650,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary only; no actionable code request."
-  },
-  {
-    "id": 3126629913,
-    "disposition": "addressed",
-    "rationale": "Manual-auth secret slugs now include a stable SHA-256 digest of the original profile_id, preventing normalized profile ID collisions."
-  },
-  {
-    "id": 3126632260,
-    "disposition": "addressed",
-    "rationale": "Manual auth commit now merges Anthropic secret_refs, clear_env_keys, and env_template entries into existing profile configuration."
-  },
-  {
-    "id": 3126632277,
-    "disposition": "addressed",
-    "rationale": "Claude manual token validation now reuses a cached httpx.AsyncClient instead of constructing one per request."
-  },
-  {
-    "id": 3126632281,
-    "disposition": "addressed",
-    "rationale": "auth_readiness and authreadiness are now treated as non-secret metadata keys by payload redaction."
-  },
-  {
-    "id": 4157630619,
-    "disposition": "not-applicable",
-    "rationale": "Automated review body summarizing the actionable line comments; no separate code request."
+    "rationale": "Review summary comment with no separate actionable request beyond the two inline comments."
   }
 ]

@@ -772,6 +772,26 @@ class TestWorkflowSettings:
 
         monkeypatch.delenv("MOONMIND_LOG_STREAMING_ENABLED", raising=False)
 
+    def test_workflow_docker_enabled_defaults_to_true(self, monkeypatch):
+        """Workflow Docker access should be enabled unless explicitly disabled."""
+
+        monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_ENABLED", raising=False)
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.workflow_docker_enabled is True
+
+    def test_workflow_docker_enabled_env_override(self, monkeypatch):
+        """Workflow Docker access should honor MOONMIND_WORKFLOW_DOCKER_ENABLED."""
+
+        monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_ENABLED", "false")
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.workflow_docker_enabled is False
+
+        monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_ENABLED", raising=False)
+
     def test_app_settings_accepts_task_proposals_env(
         self, app_settings_defaults, monkeypatch
     ):
