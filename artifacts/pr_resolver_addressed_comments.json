@@ -1,27 +1,47 @@
 [
   {
-    "id": 3125840616,
-    "disposition": "addressed",
-    "rationale": "Registered security.pentest.execute in the Temporal catalog and worker binding metadata so the curated pentest tool resolves to a supported agent-runtime activity route."
-  },
-  {
-    "id": 4156750665,
+    "id": 4157053310,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated Codex review summary; actionable feedback is tracked by inline comment 3125840616."
+    "rationale": "Review summary describing the actionable inline comments; the specific inline findings are tracked separately in this ledger."
   },
   {
-    "id": 4156766456,
+    "id": 3126107327,
+    "disposition": "addressed",
+    "rationale": "Expanded full_authorized to require the full PentestScopeAction set before that mode can run."
+  },
+  {
+    "id": 3126107338,
+    "disposition": "addressed",
+    "rationale": "Changed mode authorization from any-action intersection to all-actions subset validation and added prohibited action rejection."
+  },
+  {
+    "id": 3126107340,
+    "disposition": "addressed",
+    "rationale": "Changed prohibited_actions to use the PentestScopeAction literal tuple type."
+  },
+  {
+    "id": 3126107359,
+    "disposition": "addressed",
+    "rationale": "Added allowed_actions to the tuple normalization validator so whitespace is normalized before literal validation."
+  },
+  {
+    "id": 3126107368,
+    "disposition": "addressed",
+    "rationale": "Added CIDR-aware target matching for approved cidr scope targets using ipaddress network membership."
+  },
+  {
+    "id": 3126112334,
+    "disposition": "addressed",
+    "rationale": "Added fail-closed rejection for network_attachment_ref when the approved scope has no required network attachment policy."
+  },
+  {
+    "id": 3126112342,
+    "disposition": "addressed",
+    "rationale": "Changed naive expires_at handling to fail closed with scope_expiry_timezone_required instead of assuming UTC."
+  },
+  {
+    "id": 4157060290,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; actionable findings are tracked by inline comments 3125854787 and 3125854793."
-  },
-  {
-    "id": 3125854787,
-    "disposition": "addressed",
-    "rationale": "Added security.pentest.execute to _ACTIVITY_HANDLER_ATTRS and implemented the TemporalAgentRuntimeActivities handler boundary so worker binding recognizes the curated activity."
-  },
-  {
-    "id": 3125854793,
-    "disposition": "addressed",
-    "rationale": "Added artifacts_dir to the security.pentest.run input schema so the registry-visible contract aligns with the typed PentestWorkloadRequest activity payload."
+    "rationale": "Automated Codex review wrapper without separate actionable feedback beyond the inline comments already tracked."
   }
 ]
