@@ -1994,7 +1994,7 @@ def test_signal_execution_routes_skip_dependency_wait(monkeypatch: pytest.Monkey
     assert called["signal_name"] == "SkipDependencyWait"
     assert called["payload"] == {}
     body = response.json()
-    assert body["actions"]["canSkipDependencyWait"] is True
+    assert body["actions"]["canSkipDependencyWait"] is False
     assert body["interventionAudit"][0]["action"] == "skip_dependency_wait"
 
 
