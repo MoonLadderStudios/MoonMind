@@ -89,7 +89,7 @@
 - [ ] T033 Review `specs/232-remediation-lifecycle-audit/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/remediation-lifecycle-audit.md`, and `quickstart.md` for MM-456 and DESIGN-REQ traceability
 - [ ] T034 Run full unit verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - [ ] T035 Run hermetic integration verification if artifact lifecycle/API routes changed: `./tools/test_integration.sh`
-- [ ] T036 Run `/moonspec-verify` equivalent read-only verification for `specs/232-remediation-lifecycle-audit/spec.md`
+- [ ] T036 Run `/moonspec-verify` read-only verification for `specs/232-remediation-lifecycle-audit/spec.md`
 
 ## Dependencies And Order
 
