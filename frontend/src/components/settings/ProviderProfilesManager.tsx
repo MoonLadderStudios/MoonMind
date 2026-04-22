@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
 export interface ProviderProfile {
@@ -231,10 +231,51 @@ interface ClaudeAuthAction {
   label: ProviderAuthActionLabel;
 }
 
+type ClaudeEnrollmentStep =
+  | 'not_connected'
+  | 'awaiting_external_step'
+  | 'awaiting_token_paste'
+  | 'validating_token'
+  | 'saving_secret'
+  | 'updating_profile'
+  | 'ready'
+  | 'failed';
+
+interface ClaudeReadinessMetadata {
+  connected?: boolean;
+  lastValidatedAt?: string;
+  failureReason?: string;
+  backingSecretExists?: boolean;
+  launchReady?: boolean;
+}
+
 type ProviderAuthModel =
   | { kind: 'codex_oauth' }
-  | { kind: 'claude_manual'; statusLabel: string | null; actions: ClaudeAuthAction[] }
+  | {
+      kind: 'claude_manual';
+      statusLabel: string | null;
+      actions: ClaudeAuthAction[];
+      readiness: ClaudeReadinessMetadata | null;
+    }
   | { kind: 'none' };
+
+interface ClaudeEnrollmentState {
+  profile: ProviderProfile;
+  step: ClaudeEnrollmentStep;
+  token: string;
+  failureReason: string | null;
+  statusLabel: string | null;
+  readiness: ClaudeReadinessMetadata | null;
+}
+
+interface ClaudeManualAuthResult {
+  status?: string;
+  status_label?: string;
+  statusLabel?: string;
+  readiness?: Record<string, unknown> | null;
+  failure_reason?: string | null;
+  failureReason?: string | null;
+}
 
 const CLAUDE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
   connect: 'Connect Claude',
@@ -242,6 +283,25 @@ const CLAUDE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
   validate: 'Validate',
   disconnect: 'Disconnect',
 };
+
+const CLAUDE_ENROLLMENT_STEPS: ClaudeEnrollmentStep[] = [
+  'not_connected',
+  'awaiting_external_step',
+  'awaiting_token_paste',
+  'validating_token',
+  'saving_secret',
+  'updating_profile',
+  'ready',
+  'failed',
+];
+
+const CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS = 350;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
 
 function commandBehaviorValue(profile: ProviderProfile, key: string): unknown {
   const commandBehavior = profile.command_behavior;
@@ -260,6 +320,73 @@ function commandBehaviorStringArray(profile: ProviderProfile, key: string): stri
   const value = commandBehaviorValue(profile, key);
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
+}
+
+function normalizeBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function normalizeReadinessMetadata(value: unknown): ClaudeReadinessMetadata | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const readiness: ClaudeReadinessMetadata = {};
+  const connected = normalizeBoolean(record.connected);
+  const lastValidatedAt =
+    typeof record.last_validated_at === 'string'
+      ? record.last_validated_at
+      : typeof record.lastValidatedAt === 'string'
+        ? record.lastValidatedAt
+        : undefined;
+  const failureReason =
+    typeof record.failure_reason === 'string'
+      ? record.failure_reason
+      : typeof record.failureReason === 'string'
+        ? record.failureReason
+        : undefined;
+  const backingSecretExists =
+    normalizeBoolean(record.backing_secret_exists) ?? normalizeBoolean(record.backingSecretExists);
+  const launchReady = normalizeBoolean(record.launch_ready) ?? normalizeBoolean(record.launchReady);
+
+  if (connected !== undefined) readiness.connected = connected;
+  if (lastValidatedAt !== undefined) readiness.lastValidatedAt = lastValidatedAt;
+  if (failureReason !== undefined) readiness.failureReason = failureReason;
+  if (backingSecretExists !== undefined) readiness.backingSecretExists = backingSecretExists;
+  if (launchReady !== undefined) readiness.launchReady = launchReady;
+
+  return Object.values(readiness).some((field) => field !== undefined) ? readiness : null;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function redactClaudeSecretText(value: string | null | undefined, submittedToken?: string): string | null {
+  if (!value) return null;
+  let redacted = value;
+  const trimmedToken = submittedToken?.trim();
+  if (trimmedToken) {
+    redacted = redacted.replace(new RegExp(escapeRegExp(trimmedToken), 'g'), '[REDACTED]');
+  }
+  redacted = redacted.replace(/sk-ant-[A-Za-z0-9._-]+/g, '[REDACTED]');
+  redacted = redacted.replace(/(token|api[_-]?key|password)=\S+/gi, '$1=[REDACTED]');
+  return redacted;
+}
+
+function extractErrorMessage(payload: unknown): string {
+  if (typeof payload === 'string') return payload;
+  if (!payload || typeof payload !== 'object') return 'Claude token validation failed.';
+  const record = payload as Record<string, unknown>;
+  if (typeof record.message === 'string') return record.message;
+  if (typeof record.detail === 'string') return record.detail;
+  if (record.detail && typeof record.detail === 'object') {
+    const detail = record.detail as Record<string, unknown>;
+    if (typeof detail.message === 'string') return detail.message;
+    if (typeof detail.error === 'string') return detail.error;
+  }
+  if (typeof record.error === 'string') return record.error;
+  return 'Claude token validation failed.';
 }
 
 function isCodexOAuthProfile(profile: ProviderProfile): boolean {
@@ -299,6 +426,7 @@ function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
     kind: 'claude_manual',
     statusLabel: commandBehaviorString(profile, 'auth_status_label'),
     actions,
+    readiness: normalizeReadinessMetadata(commandBehaviorValue(profile, 'auth_readiness')),
   };
 }
 
@@ -368,15 +496,172 @@ export function ProviderProfilesManager({
   const [form, setForm] = useState<ProviderProfileFormState>(() => defaultFormState());
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [oauthSessions, setOauthSessions] = useState<Record<string, OAuthSessionState>>({});
+  const [claudeEnrollment, setClaudeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
+  const claudeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
+  const claudeEnrollmentProfileIdRef = useRef<string | null>(null);
 
   const isEditing = editingProfileId !== null;
   const defaultFormValues = defaultFormState();
+
+  const updateClaudeEnrollmentForProfile = (
+    profileId: string,
+    updater: (current: ClaudeEnrollmentState) => ClaudeEnrollmentState,
+  ) => {
+    setClaudeEnrollment((current) => {
+      if (!current || current.profile.profile_id !== profileId) {
+        return current;
+      }
+      return updater(current);
+    });
+  };
+
+  useEffect(() => {
+    claudeEnrollmentProfileIdRef.current = claudeEnrollment?.profile.profile_id ?? null;
+  }, [claudeEnrollment?.profile.profile_id]);
 
   const resetForm = () => {
     setEditingProfileId(null);
     setForm(defaultFormState());
     onNotice(null);
   };
+
+  const closeClaudeEnrollment = () => {
+    claudeEnrollmentProfileIdRef.current = null;
+    setClaudeEnrollment(null);
+  };
+
+  const openClaudeEnrollment = (profile: ProviderProfile) => {
+    const authModel = providerAuthModel(profile);
+    claudeEnrollmentProfileIdRef.current = profile.profile_id;
+    setClaudeEnrollment({
+      profile,
+      step: 'not_connected',
+      token: '',
+      failureReason: null,
+      statusLabel: authModel.kind === 'claude_manual' ? authModel.statusLabel : null,
+      readiness: authModel.kind === 'claude_manual' ? authModel.readiness : null,
+    });
+    onNotice(null);
+  };
+
+  const updateClaudeEnrollmentToken = (token: string) => {
+    setClaudeEnrollment((current) => (current ? { ...current, token } : current));
+  };
+
+  const continueClaudeEnrollment = () => {
+    setClaudeEnrollment((current) =>
+      current ? { ...current, step: 'awaiting_token_paste', failureReason: null } : current,
+    );
+  };
+
+  const claudeEnrollmentMutation = useMutation({
+    mutationFn: async ({
+      profileId,
+      submittedToken,
+    }: {
+      profileId: string;
+      submittedToken: string;
+    }) => {
+      const response = await fetch(
+        `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/manual-auth/commit`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: submittedToken }),
+        },
+      );
+      const payload: unknown = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ?? 'Claude token validation failed.');
+      }
+
+      return payload as ClaudeManualAuthResult;
+    },
+    onMutate: ({ profileId }) => {
+      updateClaudeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'validating_token',
+        token: '',
+        failureReason: null,
+      }));
+    },
+    onSuccess: async (result, { profileId }) => {
+      updateClaudeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'saving_secret',
+        token: '',
+      }));
+      await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
+      updateClaudeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'updating_profile',
+        token: '',
+      }));
+      await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
+      if (claudeEnrollmentProfileIdRef.current !== profileId) {
+        return;
+      }
+      updateClaudeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'ready',
+        token: '',
+        failureReason: null,
+        statusLabel: result.status_label ?? result.statusLabel ?? current.statusLabel,
+        readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
+      }));
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      onNotice({
+        level: 'ok',
+        text: `Claude token enrollment completed for "${profileId}".`,
+      });
+    },
+    onError: (error, { profileId, submittedToken }) => {
+      if (claudeEnrollmentProfileIdRef.current !== profileId) {
+        return;
+      }
+      const failureReason =
+        error instanceof Error
+          ? redactClaudeSecretText(error.message, submittedToken)
+          : 'Claude token validation failed.';
+      updateClaudeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'failed',
+        token: '',
+        failureReason: failureReason ?? 'Claude token validation failed.',
+      }));
+    },
+  });
+
+  const submitClaudeEnrollment = () => {
+    if (!claudeEnrollment) return;
+    const profileId = claudeEnrollment.profile.profile_id;
+    const submittedToken = claudeEnrollment.token.trim();
+    if (!submittedToken) {
+      onNotice({ level: 'error', text: 'Returned Claude token is required.' });
+      return;
+    }
+
+    claudeEnrollmentMutation.mutate({ profileId, submittedToken });
+  };
+
+  useEffect(() => {
+    if (!claudeEnrollment) return;
+    claudeEnrollmentDrawerRef.current?.focus();
+  }, [claudeEnrollment?.profile.profile_id]);
+
+  useEffect(() => {
+    if (!claudeEnrollment) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeClaudeEnrollment();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [claudeEnrollment]);
 
   const saveMutation = useMutation({
     mutationFn: async (formState: ProviderProfileFormState) => {
@@ -908,6 +1193,31 @@ export function ProviderProfilesManager({
                         {authModel.statusLabel}
                       </div>
                     ) : null}
+                    {authModel.kind === 'claude_manual' && authModel.readiness?.connected !== undefined ? (
+                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Claude connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
+                      </div>
+                    ) : null}
+                    {authModel.kind === 'claude_manual' && authModel.readiness?.lastValidatedAt ? (
+                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Last validated: {authModel.readiness.lastValidatedAt}
+                      </div>
+                    ) : null}
+                    {authModel.kind === 'claude_manual' && authModel.readiness?.backingSecretExists !== undefined ? (
+                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
+                      </div>
+                    ) : null}
+                    {authModel.kind === 'claude_manual' && authModel.readiness?.launchReady !== undefined ? (
+                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
+                      </div>
+                    ) : null}
+                    {authModel.kind === 'claude_manual' && authModel.readiness?.failureReason ? (
+                      <div className="mt-1 text-xs text-rose-600 dark:text-rose-400">
+                        Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
+                      </div>
+                    ) : null}
                   </td>
                   <td
                     className="px-3 py-4"
@@ -933,12 +1243,7 @@ export function ProviderProfilesManager({
                               key={action.id}
                               type="button"
                               className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
-                              onClick={() =>
-                                onNotice({
-                                  level: 'ok',
-                                  text: `${action.label} selected for "${profile.profile_id}".`,
-                                })
-                              }
+                              onClick={() => openClaudeEnrollment(profile)}
                               aria-label={`${action.label} ${profile.profile_id}`}
                             >
                               {action.label}
@@ -1040,6 +1345,126 @@ export function ProviderProfilesManager({
           </tbody>
         </table>
       </div>
+
+      {claudeEnrollment ? (
+        <div
+          className="fixed inset-0 z-50 flex justify-end bg-slate-950/40"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeClaudeEnrollment();
+            }
+          }}
+        >
+          <div
+            ref={claudeEnrollmentDrawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="claude-enrollment-title"
+            tabIndex={-1}
+            className="h-full w-full max-w-2xl overflow-y-auto border-l border-emerald-200 dark:border-emerald-900/60 bg-white dark:bg-slate-900 p-5 shadow-2xl outline-none"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="space-y-2">
+              <h4
+                id="claude-enrollment-title"
+                className="text-base font-semibold text-slate-900 dark:text-white"
+              >
+                Claude manual token enrollment for {claudeEnrollment.profile.profile_id}
+              </h4>
+              <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
+                Claude enrollment is completed externally. Open the Claude enrollment flow, paste the returned token here, then validate and save it as a managed provider credential.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
+              onClick={closeClaudeEnrollment}
+            >
+              Cancel Claude enrollment
+            </button>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2" aria-label="Claude enrollment lifecycle states">
+            {CLAUDE_ENROLLMENT_STEPS.map((step) => (
+              <span
+                key={step}
+                className={`rounded-full px-2.5 py-1 font-mono text-xs ${
+                  step === claudeEnrollment.step
+                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
+                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                }`}
+              >
+                {step}
+              </span>
+            ))}
+          </div>
+
+          {claudeEnrollment.step === 'not_connected' ? (
+            <div className="mt-5 space-y-4">
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-700 dark:text-slate-300">
+                Complete the external Claude Anthropic enrollment step first, then continue to paste the returned token.
+              </div>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+                onClick={continueClaudeEnrollment}
+              >
+                Continue to token paste
+              </button>
+            </div>
+          ) : null}
+
+          {claudeEnrollment.step === 'awaiting_token_paste' ? (
+            <div className="mt-5 space-y-4">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Returned Claude token</span>
+                <input
+                  type="password"
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={claudeEnrollment.token}
+                  onChange={(event) => updateClaudeEnrollmentToken(event.target.value)}
+                  autoComplete="off"
+                />
+              </label>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+                onClick={() => void submitClaudeEnrollment()}
+              >
+                Validate and save Claude token
+              </button>
+            </div>
+          ) : null}
+
+          {['validating_token', 'saving_secret', 'updating_profile'].includes(claudeEnrollment.step) ? (
+            <div className="mt-5 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/30 p-4 text-sm font-medium text-sky-800 dark:text-sky-300">
+              Processing Claude manual enrollment: {claudeEnrollment.step}
+            </div>
+          ) : null}
+
+          {claudeEnrollment.step === 'ready' ? (
+            <div className="mt-5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 p-4 text-sm font-medium text-emerald-800 dark:text-emerald-300">
+              {claudeEnrollment.statusLabel ?? 'Claude token ready'}
+            </div>
+          ) : null}
+
+          {claudeEnrollment.step === 'failed' ? (
+            <div className="mt-5 space-y-4">
+              <div className="rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 p-4 text-sm font-medium text-rose-700 dark:text-rose-300">
+                {claudeEnrollment.failureReason ?? 'Claude token validation failed.'}
+              </div>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
+                onClick={continueClaudeEnrollment}
+              >
+                Return to token paste
+              </button>
+            </div>
+          ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {/* ── Form Section ── */}
       <div className="mt-8 border-t border-slate-200 dark:border-slate-700 pt-8">

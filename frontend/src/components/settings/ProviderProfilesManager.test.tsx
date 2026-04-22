@@ -334,6 +334,24 @@ describe('ProviderProfilesManager form controls', () => {
     },
   };
 
+  const readyClaudeManualProfile: ProviderProfile = {
+    ...connectedClaudeManualProfile,
+    profile_id: 'claude-anthropic-ready',
+    command_behavior: {
+      auth_strategy: 'claude_manual_token',
+      auth_state: 'connected',
+      auth_actions: ['replace_token', 'validate', 'disconnect'],
+      auth_status_label: 'Claude token ready',
+      auth_readiness: {
+        connected: true,
+        last_validated_at: '2026-04-22T08:30:00Z',
+        failure_reason: 'Previous token sk-ant-secret should be hidden',
+        backing_secret_exists: true,
+        launch_ready: true,
+      },
+    },
+  };
+
   it('labels secret refs and resets create-form values', () => {
     renderProviderProfilesManager();
 
@@ -633,5 +651,205 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByRole('button', { name: /Replace token/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Validate/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Disconnect/ })).toBeNull();
+  });
+
+  it('opens a Claude manual enrollment drawer without terminal OAuth wording', () => {
+    renderProviderProfilesManager([claudeManualProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
+
+    const dialog = screen.getByRole('dialog', {
+      name: 'Claude manual token enrollment for claude-anthropic',
+    });
+    expect(dialog).toBeTruthy();
+    expect(screen.getByText('not_connected')).toBeTruthy();
+    expect(screen.getByText('awaiting_external_step')).toBeTruthy();
+    expect(screen.getByText(/Claude enrollment is completed externally/i)).toBeTruthy();
+    expect(dialog.textContent).not.toMatch(/terminal OAuth/i);
+  });
+
+  it('advances to secure token paste and blocks empty submission', async () => {
+    const { onNotice } = renderProviderProfilesManager([claudeManualProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
+
+    expect(screen.getByText('awaiting_token_paste')).toBeTruthy();
+    expect((screen.getByLabelText('Returned Claude token') as HTMLInputElement).type).toBe('password');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Claude token' }));
+
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'error',
+        text: 'Returned Claude token is required.',
+      });
+    });
+  });
+
+  it('submits the manual token through lifecycle states and never calls Codex OAuth', async () => {
+    const submittedToken = 'sk-ant-test-token';
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: 'ready',
+        status_label: 'Claude token ready',
+        readiness: {
+          connected: true,
+          last_validated_at: '2026-04-22T08:30:00Z',
+          backing_secret_exists: true,
+          launch_ready: true,
+        },
+      }),
+    } as Response);
+
+    renderProviderProfilesManager([claudeManualProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
+    fireEvent.change(screen.getByLabelText('Returned Claude token'), {
+      target: { value: submittedToken },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Claude token' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/claude-anthropic/manual-auth/commit',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    const requestedUrls = fetchSpy.mock.calls.map(([url]) => String(url));
+    expect(requestedUrls.some((url) => url.includes('/api/v1/oauth-sessions'))).toBe(false);
+    const [, requestInit] = fetchSpy.mock.calls[0] ?? [];
+    const payload = JSON.parse(String((requestInit as RequestInit).body));
+    expect(payload).toEqual({ token: submittedToken });
+
+    expect(await screen.findByText('validating_token')).toBeTruthy();
+    expect(screen.getByText('saving_secret')).toBeTruthy();
+    expect(screen.getByText('updating_profile')).toBeTruthy();
+    expect(await screen.findByText('ready')).toBeTruthy();
+    expect(screen.queryByDisplayValue(submittedToken)).toBeNull();
+    expect(await screen.findByText('Claude token ready')).toBeTruthy();
+  });
+
+  it('ignores stale Claude enrollment responses after another profile is opened', async () => {
+    const submittedToken = 'sk-ant-stale-token';
+    let resolveCommit: (response: Response) => void = (_response: Response) => {
+      throw new Error('Claude commit resolver was not initialized.');
+    };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveCommit = resolve;
+        }),
+    );
+    const secondClaudeProfile: ProviderProfile = {
+      ...claudeManualProfile,
+      profile_id: 'claude-anthropic-secondary',
+    };
+    const { onNotice } = renderProviderProfilesManager([
+      claudeManualProfile,
+      secondClaudeProfile,
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
+    fireEvent.change(screen.getByLabelText('Returned Claude token'), {
+      target: { value: submittedToken },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Claude token' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/claude-anthropic/manual-auth/commit',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Connect Claude claude-anthropic-secondary' }),
+    );
+
+    resolveCommit({
+      ok: true,
+      json: async () => ({
+        status: 'ready',
+        status_label: 'Stale Claude token ready',
+        readiness: { connected: true },
+      }),
+    } as Response);
+
+    await new Promise((resolve) => window.setTimeout(resolve, 800));
+
+    expect(
+      screen.getByRole('dialog', {
+        name: 'Claude manual token enrollment for claude-anthropic-secondary',
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByText('Stale Claude token ready')).toBeNull();
+    expect(onNotice).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('claude-anthropic"') }),
+    );
+  });
+
+  it('clears pasted token state after cancellation', () => {
+    renderProviderProfilesManager([claudeManualProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
+    fireEvent.change(screen.getByLabelText('Returned Claude token'), {
+      target: { value: 'sk-ant-cancelled-token' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel Claude enrollment' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
+
+    expect((screen.getByLabelText('Returned Claude token') as HTMLInputElement).value).toBe('');
+  });
+
+  it('redacts validation failure text before rendering it', async () => {
+    const submittedToken = 'sk-ant-submitted-secret';
+    vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: false,
+      json: async () => ({
+        detail: {
+          message: `Validation failed for ${submittedToken} and sk-ant-provider-secret`,
+        },
+      }),
+    } as Response);
+
+    renderProviderProfilesManager([claudeManualProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
+    fireEvent.change(screen.getByLabelText('Returned Claude token'), {
+      target: { value: submittedToken },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Claude token' }));
+
+    expect(await screen.findByText(/Validation failed for/)).toBeTruthy();
+    expect(screen.getByText(/REDACTED/)).toBeTruthy();
+    expect(screen.queryByText(submittedToken)).toBeNull();
+    expect(screen.queryByText(/sk-ant-provider-secret/)).toBeNull();
+    expect(screen.getByText('failed')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Return to token paste' }));
+
+    expect((screen.getByLabelText('Returned Claude token') as HTMLInputElement).value).toBe('');
+  });
+
+  it('renders structured Claude readiness metadata in the status column', () => {
+    renderProviderProfilesManager([readyClaudeManualProfile]);
+
+    expect(screen.getByText('Claude token ready')).toBeTruthy();
+    expect(screen.getByText('Claude connection: Connected')).toBeTruthy();
+    expect(screen.getByText('Last validated: 2026-04-22T08:30:00Z')).toBeTruthy();
+    expect(screen.getByText('Backing secret: Present')).toBeTruthy();
+    expect(screen.getByText('Launch readiness: Ready')).toBeTruthy();
+    expect(screen.getByText(/Previous token/)).toBeTruthy();
+    expect(screen.queryByText(/sk-ant-secret/)).toBeNull();
   });
 });
