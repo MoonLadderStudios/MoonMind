@@ -40,6 +40,9 @@ DB_AUTHORITATIVE_PROFILE_SYNC_PATCH = (
     "provider-profile-manager-db-authoritative-profile-sync-v1"
 )
 VERIFY_PENDING_REQUESTS_PATCH = "provider-profile-manager-verify-pending-requests-v1"
+DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH = (
+    "provider-profile-manager-default-profile-exclusive-selection-v1"
+)
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -875,10 +878,20 @@ class MoonMindProviderProfileManagerWorkflow:
             default_profiles = [
                 profile for profile in eligible_profiles if profile.is_default
             ]
+            if workflow.patched(DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH):
+                if default_profiles:
+                    eligible_profiles = default_profiles
+                elif configured_default_profiles:
+                    return None
+                elif len(eligible_profiles) == 1:
+                    return eligible_profiles[0]
+                eligible_profiles.sort(
+                    key=lambda p: (p.priority, p.available_slots),
+                    reverse=True,
+                )
+                return eligible_profiles[0]
             if len(default_profiles) == 1:
                 return default_profiles[0]
-            if configured_default_profiles:
-                return None
             if len(eligible_profiles) == 1:
                 return eligible_profiles[0]
             if not default_profiles:

@@ -1,27 +1,22 @@
 [
   {
-    "id": 3126903925,
+    "id": 3127332306,
     "disposition": "addressed",
-    "rationale": "Merged scope-specific prohibited actions with the baseline Pentest safety defaults so global prohibitions remain present."
+    "rationale": "Restricted patched default-profile selection to available defaults and sorted multiple defaults by priority and slots instead of returning None."
   },
   {
-    "id": 4157934270,
+    "id": 4158369749,
+    "disposition": "addressed",
+    "rationale": "Review summary raised the same multiple-default selection concern, which is covered by the manager selection fix and regression test."
+  },
+  {
+    "id": 4158380932,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; the actionable child finding is tracked separately."
+    "rationale": "Informational automated review summary with no distinct actionable request."
   },
   {
-    "id": 4157939366,
-    "disposition": "not-applicable",
-    "rationale": "Top-level automated Codex review summary with no requested code change."
-  },
-  {
-    "id": 3126908901,
+    "id": 3127339580,
     "disposition": "addressed",
-    "rationale": "Removed raw objective text from wrapper environment metadata and durable activity output."
-  },
-  {
-    "id": 3126908903,
-    "disposition": "addressed",
-    "rationale": "Normalized Pentest artifact roots with path-aware joins and rejected relative, root, double-slash, and parent-traversal roots."
+    "rationale": "Gated the default-unavailable fallback semantic change behind provider-profile-manager-default-profile-exclusive-selection-v1 and preserved the unpatched fallback behavior in a regression test."
   }
 ]
