@@ -13,7 +13,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`
 - Integration tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -96,7 +96,7 @@
 - [X] T019 [P] Align `specs/229-remediation-action-registry/spec.md` with the MM-454 Jira brief and source design mappings (SC-008).
 - [X] T020 [P] Align `specs/229-remediation-action-registry/plan.md`, `research.md`, `data-model.md`, `contracts/remediation-action-registry.md`, and `quickstart.md` with implementation evidence (SC-008).
 - [X] T021 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py` and record result (FR-001 through FR-018).
-- [X] T022 Run `/speckit.verify`-style verification by inspecting spec, plan, tasks, code, and tests for MM-454 completion.
+- [X] T022 Run `/moonspec-verify`-style verification by inspecting spec, plan, tasks, code, and tests for MM-454 completion.
 
 ---
 
