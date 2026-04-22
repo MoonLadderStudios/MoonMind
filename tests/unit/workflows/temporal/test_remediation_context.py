@@ -499,6 +499,57 @@ def test_remediation_lifecycle_summary_audit_and_continuation_are_bounded():
     ]
 
 
+def test_remediation_summary_allows_hierarchical_target_identifiers():
+    summary = build_remediation_summary_block(
+        target_workflow_id="/tenant/workflows/target",
+        target_run_id="/runs/target-run",
+        phase="resolved",
+        mode="snapshot_then_follow",
+        authority_mode="admin_auto",
+        resolution="resolved_after_action",
+    )
+
+    assert summary["targetWorkflowId"] == "/tenant/workflows/target"
+    assert summary["targetRunId"] == "/runs/target-run"
+
+
+def test_remediation_audit_normalizes_string_timestamps():
+    audit = build_remediation_audit_event(
+        event_id="audit-1",
+        event_type="remediation.action",
+        actor_user="user:operator",
+        execution_principal="service:admin-healer",
+        remediation_workflow_id="remediation-workflow",
+        remediation_run_id="remediation-run",
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        action_kind="restart_worker",
+        risk_tier="medium",
+        approval_decision="approved",
+        timestamp="2026-04-22T01:02:03+02:00",
+    )
+
+    assert audit["timestamp"] == "2026-04-21T23:02:03Z"
+
+
+def test_remediation_audit_rejects_malformed_string_timestamps():
+    with pytest.raises(RemediationContextError, match="timestamp must be ISO8601"):
+        build_remediation_audit_event(
+            event_id="audit-1",
+            event_type="remediation.action",
+            actor_user="user:operator",
+            execution_principal="service:admin-healer",
+            remediation_workflow_id="remediation-workflow",
+            remediation_run_id="remediation-run",
+            target_workflow_id="target-workflow",
+            target_run_id="target-run",
+            action_kind="restart_worker",
+            risk_tier="medium",
+            approval_decision="approved",
+            timestamp="not-a-timestamp",
+        )
+
+
 def test_target_remediation_linkage_summary_is_compact():
     summary = build_target_remediation_linkage_summary(
         target_workflow_id="target-workflow",
@@ -644,7 +695,9 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
             artifact_id=artifacts[-1].artifact_id,
             principal="service:test",
         )
-        assert json.loads(payload_bytes)["resolution"] == "resolved_after_action"
+        published_summary = json.loads(payload_bytes)
+        assert published_summary["authorityMode"] == "admin_auto"
+        assert published_summary["resolution"] == "resolved_after_action"
 
 
 @pytest.mark.asyncio

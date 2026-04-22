@@ -1,32 +1,27 @@
 [
   {
-    "id": 3123468095,
+    "id": 3123798424,
+    "disposition": "addressed",
+    "rationale": "Identifier fields now bypass path-style unsafe string checks, and unit coverage verifies hierarchical target workflow/run IDs are preserved."
+  },
+  {
+    "id": 3123798439,
+    "disposition": "addressed",
+    "rationale": "String timestamps are now parsed and normalized to UTC Zulu format, with malformed strings rejected by regression coverage."
+  },
+  {
+    "id": 4154502370,
     "disposition": "not-applicable",
-    "rationale": "This MM-455 slice explicitly preserves the plan constraint of no new persistent storage; distributed database-backed lock persistence requires a separate schema-backed feature rather than an in-place PR feedback patch."
+    "rationale": "Top-level review summary only; its two actionable findings are tracked by inline comments 3123798424 and 3123798439."
   },
   {
-    "id": 3123468103,
+    "id": 3123798641,
     "disposition": "addressed",
-    "rationale": "Made RemediationMutationGuardService.evaluate require an explicit now value so callers provide workflow/activity-safe time instead of falling back to datetime.now()."
+    "rationale": "The lifecycle payload sanitizer now allowlists authorityMode while continuing to drop secret-like keys, and publisher coverage asserts remediation.summary retains authorityMode."
   },
   {
-    "id": 3123468109,
-    "disposition": "addressed",
-    "rationale": "Added bounded cleanup and size trimming for process-local guard locks, ledger entries, lost-holder records, cooldown attempts, and target counters."
-  },
-  {
-    "id": 3123468116,
-    "disposition": "addressed",
-    "rationale": "Added created_at to active lock records and serialized lock decisions as createdAt with unit coverage."
-  },
-  {
-    "id": 3123473808,
-    "disposition": "addressed",
-    "rationale": "Changed lock acquisition to evaluate expiration before the same-holder fast path and added regression coverage for expired same-holder recovery."
-  },
-  {
-    "id": 3123473812,
-    "disposition": "addressed",
-    "rationale": "Updated target freshness evaluation to treat pinned/current state, summary, and session identity differences as material drift, with regression coverage."
+    "id": 4154502596,
+    "disposition": "not-applicable",
+    "rationale": "Automated review wrapper with no additional actionable feedback beyond the inline comments already addressed."
   }
 ]

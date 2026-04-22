@@ -73,6 +73,7 @@ SECRET_LIKE_POLICY_KEY_PARTS = (
     "secret",
     "token",
 )
+SAFE_POLICY_KEYS = frozenset({"authorityMode"})
 
 
 class RemediationContextError(RuntimeError):
@@ -685,7 +686,7 @@ def _required_string(value: Any, field_name: str) -> str:
     normalized = _string_or_none(value)
     if not normalized:
         raise RemediationContextError(f"{field_name} is required")
-    if _is_unsafe_context_string(normalized):
+    if not _is_identifier_field(field_name) and _is_unsafe_context_string(normalized):
         raise RemediationContextError(f"{field_name} is unsafe")
     return normalized
 
@@ -704,12 +705,25 @@ def _timestamp_string(value: datetime | str) -> str:
             timestamp = timestamp.replace(tzinfo=UTC)
         return timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z")
     normalized = _required_string(value, "timestamp")
-    return normalized
+    try:
+        timestamp = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise RemediationContextError("timestamp must be ISO8601") from exc
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _is_secret_like_key(key: str) -> bool:
+    if key in SAFE_POLICY_KEYS:
+        return False
     normalized = key.strip().lower().replace("-", "_")
     return any(part in normalized for part in SECRET_LIKE_POLICY_KEY_PARTS)
+
+
+def _is_identifier_field(field_name: str) -> bool:
+    normalized = field_name.strip()
+    return normalized.endswith("_id") or normalized.endswith("Id")
 
 
 def _is_unsafe_context_string(value: str) -> bool:
