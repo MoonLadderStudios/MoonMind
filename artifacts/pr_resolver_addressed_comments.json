@@ -1,32 +1,32 @@
 [
   {
-    "id": 3121722981,
+    "id": 3121885533,
     "disposition": "addressed",
-    "rationale": "Changed remediation read contract route parameters from camelCase {workflowId} to snake_case {workflow_id}."
+    "rationale": "Cached the parsed PostCSS root so cssRuleBlock and matching helpers no longer parse the full Mission Control stylesheet on every lookup."
   },
   {
-    "id": 3121722994,
+    "id": 3121885539,
     "disposition": "addressed",
-    "rationale": "Clarified that link identity/status fields come from the persisted link/read model, while lock/action/resolution/context fields are bounded derived summaries returned as null or omitted when unavailable without adding a new persistence table."
+    "rationale": "Expanded token-first color assertions to cover shorthand border, outline, and box-shadow declarations."
   },
   {
-    "id": 3121722997,
-    "disposition": "addressed",
-    "rationale": "Changed the approval decision route to scope by {remediation_workflow_id} and {request_id}, and documented that target-scoped screens must submit the selected remediation task workflow ID."
-  },
-  {
-    "id": 4152209722,
+    "id": 4152392996,
     "disposition": "not-applicable",
-    "rationale": "Summary review body only; the three concrete child review comments were addressed individually."
+    "rationale": "Top-level bot review summary; its actionable inline comments are tracked separately in this ledger."
   },
   {
-    "id": 3121729143,
-    "disposition": "addressed",
-    "rationale": "Updated focused frontend test commands in tasks, plan, and quickstart to use --dashboard-only with --ui-args."
-  },
-  {
-    "id": 4152216624,
+    "id": 4152397163,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary/header only; no separate actionable request beyond the inline comments."
+    "rationale": "Top-level automated review wrapper with no separate actionable request."
+  },
+  {
+    "id": 3121889590,
+    "disposition": "addressed",
+    "rationale": "Normalized resolved paths to forward slashes before regex assertions so the boundary test is separator-agnostic."
+  },
+  {
+    "id": 3121889592,
+    "disposition": "addressed",
+    "rationale": "Added cssRuleBlocks and updated token-first validation to check every matching rule block for each semantic selector."
   }
 ]

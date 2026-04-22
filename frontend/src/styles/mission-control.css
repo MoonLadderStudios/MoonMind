@@ -691,7 +691,7 @@ h1 {
   color: rgb(var(--mm-ink));
   padding: 0.16rem 0.52rem;
   font-size: 0.78rem;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
+  box-shadow: inset 0 1px 0 var(--mm-glass-edge);
 }
 
 .task-list-filter-chip strong {
@@ -2723,7 +2723,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   border: 1px solid var(--mm-control-border);
   border-radius: 999px;
   background: var(--mm-control-shell);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
+  box-shadow: inset 0 1px 0 var(--mm-glass-edge);
   padding: 0.22rem 0.48rem;
   transition: var(--mm-control-transition);
 }

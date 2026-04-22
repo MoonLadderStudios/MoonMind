@@ -40,11 +40,13 @@ describe("vite.config", () => {
       process.cwd(),
       "api_service/static/task_dashboard/dist",
     );
+    const canonicalStyleSourcePath = canonicalStyleSource.replace(/\\/g, "/");
+    const generatedDistRootPath = generatedDistRoot.replace(/\\/g, "/");
 
-    expect(canonicalStyleSource).toMatch(
+    expect(canonicalStyleSourcePath).toMatch(
       /frontend\/src\/styles\/mission-control\.css$/,
     );
-    expect(generatedDistRoot).toMatch(
+    expect(generatedDistRootPath).toMatch(
       /api_service\/static\/task_dashboard\/dist$/,
     );
     expect(canonicalStyleSource.startsWith(generatedDistRoot)).toBe(false);

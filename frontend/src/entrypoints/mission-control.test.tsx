@@ -9,7 +9,7 @@ import {
   type MockInstance,
 } from 'vitest';
 import postcss from 'postcss';
-import type { Rule } from 'postcss';
+import type { Root, Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
@@ -22,28 +22,44 @@ function normalizeCssSelector(selector: string): string {
     .replace(/\s+/g, ' ');
 }
 
-function cssRuleBlock(css: string, selector: string): string {
+const parsedCssCache = new Map<string, Root>();
+
+function parsedCssRoot(css: string): Root {
+  const cachedRoot = parsedCssCache.get(css);
+  if (cachedRoot) {
+    return cachedRoot;
+  }
+
+  const root = postcss.parse(css);
+  parsedCssCache.set(css, root);
+  return root;
+}
+
+function cssRuleBlocks(css: string, selector: string): string[] {
   const expectedSelector = normalizeCssSelector(selector);
   const expectedSelectors = selector.split(',').map(normalizeCssSelector);
-  let block = '';
-  postcss.parse(css).walkRules((rule) => {
+  const blocks: string[] = [];
+  parsedCssRoot(css).walkRules((rule) => {
     const ruleSelector = normalizeCssSelector(rule.selector);
     const ruleSelectors = rule.selector.split(',').map(normalizeCssSelector);
     if (
-      !block &&
-      (ruleSelector === expectedSelector ||
+      ruleSelector === expectedSelector ||
         ruleSelectors.includes(expectedSelector) ||
-        expectedSelectors.every((expected) => ruleSelectors.includes(expected)))
+        expectedSelectors.every((expected) => ruleSelectors.includes(expected))
     ) {
-      block = rule.nodes.map((node) => `${node.toString()};`).join('\n');
+      blocks.push(rule.nodes.map((node) => `${node.toString()};`).join('\n'));
     }
   });
-  return block;
+  return blocks;
+}
+
+function cssRuleBlock(css: string, selector: string): string {
+  return cssRuleBlocks(css, selector)[0] ?? '';
 }
 
 function cssRuleBlockMatching(css: string, matches: (rule: Rule) => boolean): string {
   let block = '';
-  postcss.parse(css).walkRules((rule) => {
+  parsedCssRoot(css).walkRules((rule) => {
     if (!block && matches(rule)) {
       block = rule.nodes.map((node) => `${node.toString()};`).join('\n');
     }
@@ -407,11 +423,13 @@ describe('Mission Control shared entry', () => {
     ];
 
     for (const selector of semanticRoleSelectors) {
-      const block = cssRuleBlock(missionControlCss, selector);
-      expect(block).toContain('var(--mm-');
-      expect(block).not.toMatch(
-        /(?:^|\n)(?:color|background|border(?:-color)?):\s*(?:#[0-9a-fA-F]{3,8}\b|rgba\(|rgb\((?!var\())/,
-      );
+      const blocks = cssRuleBlocks(missionControlCss, selector);
+      expect(blocks.join('\n')).toContain('var(--mm-');
+      for (const block of blocks) {
+        expect(block).not.toMatch(
+          /(?:^|\n)(?:color|background|border|outline|box-shadow):.*?(?:#[0-9a-fA-F]{3,8}\b|rgba\(|rgb\((?!var\())/,
+        );
+      }
     }
   });
 
