@@ -1,37 +1,22 @@
 [
   {
-    "id": 3122759438,
+    "id": 3123155677,
     "disposition": "addressed",
-    "rationale": "Changed remediation action idempotency caching to include request-shaping fields so a reused key with a different action kind or dry-run flag is evaluated independently."
+    "rationale": "Changed latest primary report selection to trust the server-filtered latest report response instead of re-filtering returned artifacts by their first report link."
   },
   {
-    "id": 3122759452,
-    "disposition": "addressed",
-    "rationale": "Added explicit supported authority mode validation so stale or unknown stored authority modes are denied before any allow path."
-  },
-  {
-    "id": 4153367196,
+    "id": 4153793713,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the actionable child review comments are classified separately."
+    "rationale": "Automated review summary only; the actionable inline Codex comment is classified separately."
   },
   {
-    "id": 3122774747,
+    "id": 3123174860,
     "disposition": "addressed",
-    "rationale": "Guarded the admin-auto risk comparison so malformed catalog entries with null risk do not raise KeyError."
+    "rationale": "Refactored artifact response normalization to cast each raw artifact/link once as Record<string, unknown>, reducing repeated type assertions."
   },
   {
-    "id": 3122774771,
-    "disposition": "addressed",
-    "rationale": "Updated the absolute-path redaction regex to cover single-segment absolute paths and removed the redundant optional segment."
-  },
-  {
-    "id": 4153386617,
+    "id": 4153813759,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the actionable child review comments are classified separately."
-  },
-  {
-    "id": 3122774796,
-    "disposition": "addressed",
-    "rationale": "Added a defensive null guard after sensitive-text redaction before applying regex substitutions."
+    "rationale": "Automated review summary only; the actionable inline Gemini comment is classified separately."
   }
 ]

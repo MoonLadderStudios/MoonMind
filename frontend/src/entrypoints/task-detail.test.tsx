@@ -302,6 +302,9 @@ describe('Task Detail Entrypoint', () => {
           json: async () => latestStepsSnapshot,
         } as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -458,6 +461,9 @@ describe('Task Detail Entrypoint', () => {
       if (url.includes('/task-runs/task-run-workload/diagnostics')) {
         return Promise.resolve({ ok: true, text: async () => '{"status":"failed"}\n' } as unknown as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -607,6 +613,9 @@ describe('Task Detail Entrypoint', () => {
       if (url.includes('/task-runs/task-run-step-1/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'step scoped log line\n' } as unknown as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -707,6 +716,9 @@ describe('Task Detail Entrypoint', () => {
       if (url.includes('/task-runs/task-run-step-1/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'attached after refresh\n' } as unknown as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -779,6 +791,9 @@ describe('Task Detail Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -849,6 +864,9 @@ describe('Task Detail Entrypoint', () => {
       }
       if (url.includes('/tenant/api/task-runs/task-run-step-1/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => '' } as unknown as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -930,6 +948,9 @@ describe('Task Detail Entrypoint', () => {
       if (url.includes('/task-runs/task-run-root/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'root observation log\n' } as unknown as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -987,6 +1008,9 @@ describe('Task Detail Entrypoint', () => {
       const url = String(input);
       if (url.includes('/executions/test-123/steps')) {
         return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -1331,6 +1355,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -1416,6 +1443,9 @@ describe('Task Detail Entrypoint', () => {
           ok: true,
           json: async () => latestStepsSnapshot,
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
@@ -1505,6 +1535,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -1584,6 +1617,9 @@ describe('Task Detail Entrypoint', () => {
             }),
         } as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -1647,6 +1683,9 @@ describe('Task Detail Entrypoint', () => {
               },
             }),
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
@@ -1722,6 +1761,9 @@ describe('Task Detail Entrypoint', () => {
             }),
         } as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -1795,6 +1837,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -1853,6 +1898,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -1922,6 +1970,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -1984,6 +2035,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -2038,6 +2092,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -2112,6 +2169,14 @@ describe('Task Detail Entrypoint', () => {
                     namespace: 'default',
                     workflow_id: 'test-123',
                     run_id: '01-run',
+                    link_type: 'report.summary',
+                    label: 'Summary',
+                    created_at: '2026-03-28T00:00:04Z',
+                  },
+                  {
+                    namespace: 'default',
+                    workflow_id: 'test-123',
+                    run_id: '01-run',
                     link_type: 'report.primary',
                     label: 'Final report',
                     created_at: '2026-03-28T00:00:03Z',
@@ -2127,6 +2192,9 @@ describe('Task Detail Entrypoint', () => {
             ],
           }),
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
@@ -2215,6 +2283,9 @@ describe('Task Detail Entrypoint', () => {
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -2264,6 +2335,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -2352,6 +2426,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -2404,6 +2481,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -2528,6 +2608,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -2577,6 +2660,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -2658,6 +2744,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -2757,6 +2846,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -2836,6 +2928,9 @@ describe('Task Detail Entrypoint', () => {
             latest_reset_boundary_ref: { artifact_id: 'art-reset' },
           }),
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
@@ -2940,6 +3035,9 @@ describe('Task Detail Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
@@ -3025,6 +3123,9 @@ describe('Task Detail Entrypoint', () => {
             latest_reset_boundary_ref: null,
           }),
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
@@ -3132,6 +3233,9 @@ describe('Task Detail Entrypoint', () => {
             latest_reset_boundary_ref: null,
           }),
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({
@@ -3447,6 +3551,9 @@ describe('LiveLogsPanel', () => {
           text: async () => tailContent,
         } as unknown as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -3566,6 +3673,9 @@ describe('LiveLogsPanel', () => {
           text: async () => 'merged fallback line\n',
         } as unknown as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -3593,6 +3703,9 @@ describe('LiveLogsPanel', () => {
       }
       if (url.includes('/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => '' } as unknown as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -3782,6 +3895,9 @@ describe('LiveLogsPanel', () => {
           }),
         } as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -3846,6 +3962,9 @@ describe('LiveLogsPanel', () => {
           }),
         } as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -3903,6 +4022,9 @@ describe('LiveLogsPanel', () => {
             truncated: false,
           }),
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -3990,6 +4112,9 @@ describe('LiveLogsPanel', () => {
             truncated: false,
           }),
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -4117,6 +4242,9 @@ describe('LiveLogsPanel', () => {
           text: async () => 'empty history fallback line\n',
         } as unknown as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -4145,6 +4273,9 @@ describe('LiveLogsPanel', () => {
           ok: true,
           text: async () => 'rollback merged history\n',
         } as unknown as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -4202,6 +4333,9 @@ describe('LiveLogsPanel', () => {
             truncated: false,
           }),
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -4273,6 +4407,9 @@ describe('LiveLogsPanel', () => {
             truncated: false,
           }),
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -4441,6 +4578,9 @@ describe('LiveLogsPanel', () => {
       if (url.includes('/observability-summary')) {
         return Promise.resolve({ ok: true, json: async () => ({ summary: { status: 'completed' } }) } as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -4511,6 +4651,9 @@ describe('LiveLogsPanel', () => {
       if (url.includes('/logs/merged')) {
         return Promise.resolve({ ok: true, text: async () => 'attached tail\n' } as unknown as Response);
       }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -4544,6 +4687,9 @@ describe('LiveLogsPanel', () => {
   it('shows launch-failed copy when execution ends without a managed run binding', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -4569,6 +4715,9 @@ describe('LiveLogsPanel', () => {
   it('shows binding-missing copy when execution is still running without a managed run binding', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -4600,6 +4749,9 @@ describe('LiveLogsPanel', () => {
           status: 403,
           text: async () => 'forbidden',
         } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);

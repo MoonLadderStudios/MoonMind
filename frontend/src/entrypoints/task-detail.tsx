@@ -528,34 +528,34 @@ const ArtifactListSchema = z.object({
         })
         .passthrough()
         .transform((artifact) => {
-          const defaultReadRefRaw = artifact.defaultReadRef ?? artifact.default_read_ref;
+          const rawArtifact = artifact as Record<string, unknown>;
+          const defaultReadRefRaw = rawArtifact.defaultReadRef ?? rawArtifact.default_read_ref;
           const defaultReadRef =
             defaultReadRefRaw && typeof defaultReadRefRaw === 'object'
               ? {
-                  ...defaultReadRefRaw,
+                  ...(defaultReadRefRaw as Record<string, unknown>),
                   artifactId:
-                    (defaultReadRefRaw as { artifactId?: unknown }).artifactId ??
-                    (defaultReadRefRaw as { artifact_id?: unknown }).artifact_id,
+                    (defaultReadRefRaw as Record<string, unknown>).artifactId ??
+                    (defaultReadRefRaw as Record<string, unknown>).artifact_id,
                 }
               : null;
-          const links = Array.isArray(artifact.links)
-            ? artifact.links.map((link) => ({
-                ...link,
-                linkType:
-                  (link as { linkType?: unknown }).linkType ??
-                  (link as { link_type?: unknown }).link_type,
-                label: (link as { label?: unknown }).label ?? null,
-              }))
-            : [];
+          const links = (Array.isArray(rawArtifact.links) ? rawArtifact.links : []).map((link) => {
+            const rawLink = link as Record<string, unknown>;
+            return {
+              ...rawLink,
+              linkType: rawLink.linkType ?? rawLink.link_type,
+              label: rawLink.label ?? null,
+            };
+          });
           return ArtifactSummarySchema.parse({
-            ...artifact,
-            artifactId: artifact.artifactId ?? artifact.artifact_id,
-            contentType: artifact.contentType ?? artifact.content_type ?? null,
-            sizeBytes: artifact.sizeBytes ?? artifact.size_bytes ?? null,
-            downloadUrl: artifact.downloadUrl ?? artifact.download_url ?? null,
+            ...rawArtifact,
+            artifactId: rawArtifact.artifactId ?? rawArtifact.artifact_id,
+            contentType: rawArtifact.contentType ?? rawArtifact.content_type ?? null,
+            sizeBytes: rawArtifact.sizeBytes ?? rawArtifact.size_bytes ?? null,
+            downloadUrl: rawArtifact.downloadUrl ?? rawArtifact.download_url ?? null,
             defaultReadRef,
-            rawAccessAllowed: artifact.rawAccessAllowed ?? artifact.raw_access_allowed ?? null,
-            metadata: artifact.metadata ?? {},
+            rawAccessAllowed: rawArtifact.rawAccessAllowed ?? rawArtifact.raw_access_allowed ?? null,
+            metadata: rawArtifact.metadata ?? {},
             links,
           });
         }),
@@ -3502,10 +3502,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       [logicalStepId]: !prev[logicalStepId],
     }));
   };
-  const primaryReport =
-    latestReportQuery.data?.artifacts.find(
-      (artifact) => artifactReportLinkType(artifact) === 'report.primary',
-    ) ?? null;
+  const primaryReport = latestReportQuery.data?.artifacts[0] ?? null;
   const relatedReports = relatedReportArtifacts(artifactsQuery.data?.artifacts || []);
 
   return (
