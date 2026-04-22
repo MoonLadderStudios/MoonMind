@@ -13,7 +13,7 @@
 
 - Unit tests: `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx`
 - Integration tests: `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -95,7 +95,7 @@
 - [X] T018 [P] Review `frontend/src/components/settings/ProviderProfilesManager.tsx` for readable labels, accessible aria labels, and narrow row layout containment for SC-005
 - [X] T019 [P] Confirm no standalone Claude auth route, page, or specs directory was created outside `specs/226-route-claude-auth-actions` for FR-007 and SC-005
 - [X] T020 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit verification
-- [X] T021 Run `/speckit.verify` to validate the final implementation against MM-445 and DESIGN-REQ-001, DESIGN-REQ-003, and DESIGN-REQ-007
+- [X] T021 Run `/moonspec-verify` to validate the final implementation against MM-445 and DESIGN-REQ-001, DESIGN-REQ-003, and DESIGN-REQ-007
 
 ---
 
@@ -146,7 +146,7 @@ Task: "Add unsupported Claude fail-closed assertion in frontend/src/components/s
 5. Render Claude-specific actions and status while preserving Codex OAuth mutations.
 6. Pass focused UI tests.
 7. Run full required unit verification.
-8. Run `/speckit.verify` and preserve MM-445 in the final report.
+8. Run `/moonspec-verify` and preserve MM-445 in the final report.
 
 ---
 
