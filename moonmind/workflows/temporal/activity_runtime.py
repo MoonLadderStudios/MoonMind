@@ -2798,6 +2798,7 @@ class TemporalAgentRuntimeActivities:
         session_controller: ManagedSessionController | None = None,
         workload_launcher: Any | None = None,
         workload_registry: Any | None = None,
+        workflow_docker_enabled: bool = True,
         client_adapter: Any = None,
     ) -> None:
         self._artifact_service = artifact_service
@@ -2807,6 +2808,7 @@ class TemporalAgentRuntimeActivities:
         self._session_controller = session_controller
         self._workload_launcher = workload_launcher
         self._workload_registry = workload_registry
+        self._workflow_docker_enabled = workflow_docker_enabled
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
@@ -3134,6 +3136,10 @@ class TemporalAgentRuntimeActivities:
     ) -> dict[str, Any]:
         """Run one validated Docker workload on the agent_runtime fleet."""
 
+        if not self._workflow_docker_enabled:
+            raise TemporalActivityRuntimeError(
+                "policy_denied: docker_workflows_disabled"
+            )
         if self._workload_registry is None or self._workload_launcher is None:
             raise TemporalActivityRuntimeError(
                 "workload registry and launcher are required for workload.run"
@@ -3170,6 +3176,10 @@ class TemporalAgentRuntimeActivities:
         silently falling back to the generic tool executor.
         """
 
+        if not self._workflow_docker_enabled:
+            raise TemporalActivityRuntimeError(
+                "policy_denied: docker_workflows_disabled"
+            )
         request_payload = dict(payload.get("request", payload))
         request = PentestWorkloadRequest.model_validate(request_payload)
         try:

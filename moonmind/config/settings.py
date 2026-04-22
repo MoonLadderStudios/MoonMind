@@ -893,6 +893,14 @@ class WorkflowSettings(BaseSettings):
         description="Hard timeout for non-container worker stage commands.",
         ge=1,
     )
+    workflow_docker_enabled: bool = Field(
+        True,
+        validation_alias=AliasChoices("MOONMIND_WORKFLOW_DOCKER_ENABLED"),
+        description=(
+            "Allow workflow-requested Docker-backed workload tools to route "
+            "through the DooD worker/tool boundary."
+        ),
+    )
 
     model_config = SettingsConfigDict(
         populate_by_name=True,
