@@ -20,6 +20,11 @@ Implement MM-464 by adding runtime helpers that encode report-producing workflow
 | FR-007 | implemented_verified | `REPORT_WORKFLOW_ROLLOUT_PHASES`; rollout phase test | complete | unit passed |
 | FR-008 | implemented_verified | `build_report_projection_summary`; projection summary tests | complete | unit passed |
 | FR-009 | implemented_verified | MM-464 traceability in spec, tasks, verification, code, and tests | complete | traceability passed |
+| SC-001 | implemented_verified | Mapping tests cover all supported workflow families and required artifact classes | complete | unit passed |
+| SC-002 | implemented_verified | Validation tests reject missing `report.primary` unless fallback is explicit | complete | unit passed |
+| SC-003 | implemented_verified | Classification tests identify generic `output.primary`-only sets as fallback | complete | unit passed |
+| SC-004 | implemented_verified | Projection tests reject inline bodies, evidence payloads, logs, screenshots, transcripts, raw URLs, and unsupported storage identifiers | complete | unit passed |
+| SC-005 | implemented_verified | Traceability check covers MM-464 across spec, plan, tasks, verification, code, and tests | complete | traceability passed |
 | DESIGN-REQ-003 | implemented_verified | Supported mappings use stable `report.*` classes | complete | unit passed |
 | DESIGN-REQ-007 | implemented_verified | Mapping fields distinguish report/evidence/observability classes | complete | unit passed |
 | DESIGN-REQ-019 | implemented_verified | Mapping metadata guidance covers finding/severity/sensitivity keys | complete | unit passed |
