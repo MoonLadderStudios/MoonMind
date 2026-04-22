@@ -51,7 +51,7 @@ async def test_materializer_generates_correct_env():
 
     assert "SOME_PATH" in env
     assert "TO_BE_CLEARED" not in env
-    assert env["ANTHROPIC_API_KEY"] == "decrypted_1234"
+    assert "ANTHROPIC_API_KEY" not in env
     assert env["KEY_ECHO"] == "decrypted_1234"
     assert env["OVERRIDE_VAR"] == "new_val"
     assert cmd == ["claude", "start"]
@@ -99,6 +99,64 @@ async def test_materializer_launches_claude_anthropic_from_secret_ref_alias():
     assert "ANTHROPIC_BASE_URL" not in env
     assert "OPENAI_API_KEY" not in env
     assert cmd == ["claude", "-p", "hello"]
+
+
+@pytest.mark.asyncio
+async def test_materializer_excludes_file_template_secret_alias_from_base_env(tmp_path):
+    materializer = ProviderProfileMaterializer(
+        base_env={"PATH": "/usr/bin"},
+        secret_resolver=StaticSecretResolver({"env://provider-key": "resolved-key"}),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="file_template_secret_alias",
+        runtime_id="codex_cli",
+        provider_id="openrouter",
+        secret_refs={"provider_api_key": "env://provider-key"},
+        file_templates=[
+            {
+                "path": "codex-home/config.toml",
+                "format": "toml",
+                "contentTemplate": {
+                    "model_provider": "openrouter",
+                    "api_key": "{{provider_api_key}}",
+                },
+            }
+        ],
+        command_template=["codex", "exec"],
+    )
+
+    env, _cmd = await materializer.materialize(
+        profile,
+        runtime_support_dir=str(tmp_path / ".moonmind"),
+    )
+
+    assert "provider_api_key" not in env
+    assert (tmp_path / ".moonmind" / "codex-home" / "config.toml").read_text(
+        encoding="utf-8"
+    ) == 'model_provider = "openrouter"\napi_key = "resolved-key"\n'
+
+
+@pytest.mark.asyncio
+async def test_materializer_excludes_home_path_template_secret_alias_from_base_env():
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=StaticSecretResolver({"env://home-root": "profile-home"}),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="home_path_secret_alias",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        secret_refs={"home_root": "env://home-root"},
+        home_path_overrides={
+            "CLAUDE_CONFIG_DIR": "{{runtime_support_dir}}/{{home_root}}"
+        },
+        command_template=["claude", "-p", "hello"],
+    )
+
+    env, _cmd = await materializer.materialize(profile)
+
+    assert "home_root" not in env
+    assert env["CLAUDE_CONFIG_DIR"].endswith("/profile-home")
 
 
 @pytest.mark.asyncio

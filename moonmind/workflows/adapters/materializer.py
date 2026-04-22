@@ -68,6 +68,16 @@ class ProviderProfileMaterializer:
         template_secret_aliases = self._collect_from_secret_ref_aliases(
             profile.env_template
         )
+        template_secret_aliases.update(
+            self._collect_from_secret_ref_aliases(profile.home_path_overrides)
+        )
+        for file_template in profile.file_templates or []:
+            template_secret_aliases.update(
+                self._collect_from_secret_ref_aliases(file_template.path)
+            )
+            template_secret_aliases.update(
+                self._collect_from_secret_ref_aliases(file_template.content_template)
+            )
         env.update(
             {
                 k: str(v)
@@ -162,7 +172,10 @@ class ProviderProfileMaterializer:
 
     def _collect_from_secret_ref_aliases(self, value: Any) -> set[str]:
         aliases: set[str] = set()
-        if isinstance(value, dict):
+        if isinstance(value, str):
+            for match in _TEMPLATE_PATTERN.finditer(value):
+                aliases.add(match.group(1).strip())
+        elif isinstance(value, dict):
             if set(value.keys()) == {"from_secret_ref"}:
                 aliases.add(str(value["from_secret_ref"]).strip())
                 return aliases

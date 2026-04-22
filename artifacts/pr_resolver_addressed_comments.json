@@ -1,32 +1,17 @@
 [
   {
-    "id": 4157627574,
+    "id": 3126996678,
+    "disposition": "addressed",
+    "rationale": "Secret aliases consumed by file_templates and home_path_overrides are now collected before default environment injection, so they are not leaked as top-level environment variables."
+  },
+  {
+    "id": 3126996680,
+    "disposition": "addressed",
+    "rationale": "Alias collection now detects {{ alias }} template-string references in addition to from_secret_ref dictionaries."
+  },
+  {
+    "id": 4158029300,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary only; no actionable code request."
-  },
-  {
-    "id": 3126629913,
-    "disposition": "addressed",
-    "rationale": "Manual-auth secret slugs now include a stable SHA-256 digest of the original profile_id, preventing normalized profile ID collisions."
-  },
-  {
-    "id": 3126632260,
-    "disposition": "addressed",
-    "rationale": "Manual auth commit now merges Anthropic secret_refs, clear_env_keys, and env_template entries into existing profile configuration."
-  },
-  {
-    "id": 3126632277,
-    "disposition": "addressed",
-    "rationale": "Claude manual token validation now reuses a cached httpx.AsyncClient instead of constructing one per request."
-  },
-  {
-    "id": 3126632281,
-    "disposition": "addressed",
-    "rationale": "auth_readiness and authreadiness are now treated as non-secret metadata keys by payload redaction."
-  },
-  {
-    "id": 4157630619,
-    "disposition": "not-applicable",
-    "rationale": "Automated review body summarizing the actionable line comments; no separate code request."
+    "rationale": "Top-level bot review summary; the two actionable inline findings it summarized were addressed separately."
   }
 ]
