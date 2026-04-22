@@ -30,6 +30,13 @@ from moonmind.workflows.temporal import (
 from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationContextError,
+    RemediationLifecyclePublisher,
+    build_remediation_audit_event,
+    build_remediation_continue_as_new_state,
+    build_remediation_summary_block,
+    build_target_remediation_linkage_summary,
+    normalize_remediation_phase,
+    normalize_remediation_resolution,
 )
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
@@ -371,6 +378,273 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         assert "raw-api-key" not in serialized
         assert "password" not in serialized.lower()
         assert "token=" not in serialized.lower()
+
+
+def test_remediation_lifecycle_summary_audit_and_continuation_are_bounded():
+    assert normalize_remediation_phase("diagnosing") == "diagnosing"
+    assert normalize_remediation_phase("unknown") == "failed"
+    assert normalize_remediation_resolution("resolved_after_action") == (
+        "resolved_after_action"
+    )
+    assert normalize_remediation_resolution("mystery") == "failed"
+
+    summary = build_remediation_summary_block(
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        phase="resolved",
+        mode="snapshot_then_follow",
+        authority_mode="admin_auto",
+        actions_attempted=(
+            {
+                "kind": "provider_profile.evict_stale_lease",
+                "status": "applied",
+                "token": "raw-secret",
+            },
+        ),
+        resolution="resolved_after_action",
+        lock_conflicts=1,
+        approval_count=2,
+        evidence_degraded=True,
+        escalated=False,
+        unavailable_evidence_classes=("live_follow", "artifact_refs"),
+        fallbacks_used=("logs/merged",),
+        resulting_target_run_id="target-run-2",
+    )
+
+    assert summary == {
+        "targetWorkflowId": "target-workflow",
+        "targetRunId": "target-run",
+        "resultingTargetRunId": "target-run-2",
+        "phase": "resolved",
+        "mode": "snapshot_then_follow",
+        "authorityMode": "admin_auto",
+        "actionsAttempted": [
+            {
+                "kind": "provider_profile.evict_stale_lease",
+                "status": "applied",
+            }
+        ],
+        "resolution": "resolved_after_action",
+        "lockConflicts": 1,
+        "approvalCount": 2,
+        "evidenceDegraded": True,
+        "escalated": False,
+        "unavailableEvidenceClasses": ["live_follow", "artifact_refs"],
+        "fallbacksUsed": ["logs/merged"],
+    }
+
+    audit = build_remediation_audit_event(
+        event_id="audit-1",
+        event_type="remediation.action",
+        actor_user="user:operator",
+        execution_principal="service:admin-healer",
+        remediation_workflow_id="remediation-workflow",
+        remediation_run_id="remediation-run",
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        action_kind="provider_profile.evict_stale_lease",
+        risk_tier="medium",
+        approval_decision="approved",
+        timestamp=datetime(2026, 4, 22, tzinfo=timezone.utc),
+        metadata={
+            "resolution": "resolved_after_action",
+            "token": "raw-secret",
+            "url": "https://storage.example/object?token=raw-secret",
+        },
+    )
+    assert audit["timestamp"] == "2026-04-22T00:00:00Z"
+    assert audit["metadata"] == {"resolution": "resolved_after_action"}
+    assert "raw-secret" not in json.dumps(audit)
+
+    continuation = build_remediation_continue_as_new_state(
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        context_artifact_ref="art_context",
+        lock_identity="lock-1",
+        action_ledger_ref="ledger-1",
+        approval_state="approved",
+        retry_budget_state={"actionsAttempted": 1, "token": "raw-secret"},
+        live_follow_cursor={"sequence": 42},
+    )
+    assert continuation == {
+        "targetWorkflowId": "target-workflow",
+        "targetRunId": "target-run",
+        "contextArtifactRef": "art_context",
+        "lockIdentity": "lock-1",
+        "actionLedgerRef": "ledger-1",
+        "approvalState": "approved",
+        "retryBudgetState": {"actionsAttempted": 1},
+        "liveFollowCursor": {"sequence": 42},
+    }
+
+    failed_summary = build_remediation_summary_block(
+        target_workflow_id="target-workflow",
+        target_run_id="target-run",
+        phase="failed",
+        mode="snapshot_then_follow",
+        authority_mode="approval_gated",
+        resolution="failed",
+        evidence_degraded=True,
+        escalated=True,
+        unavailable_evidence_classes=("target_visibility",),
+        fallbacks_used=("final_summary_publication", "lock_release_attempt"),
+    )
+    assert failed_summary["phase"] == "failed"
+    assert failed_summary["resolution"] == "failed"
+    assert failed_summary["evidenceDegraded"] is True
+    assert failed_summary["escalated"] is True
+    assert failed_summary["fallbacksUsed"] == [
+        "final_summary_publication",
+        "lock_release_attempt",
+    ]
+
+
+def test_target_remediation_linkage_summary_is_compact():
+    summary = build_target_remediation_linkage_summary(
+        target_workflow_id="target-workflow",
+        active_remediation_count=2,
+        latest_remediation_title="Publish remediation lifecycle phases",
+        latest_remediation_status="acting",
+        latest_action_kind="restart_worker",
+        latest_outcome="resolved_after_action",
+        active_lock_scope="target_execution",
+        active_lock_holder="remediation-workflow",
+        last_updated_at=datetime(2026, 4, 22, 1, 2, 3, tzinfo=timezone.utc),
+        metadata={"token": "raw-secret", "safe": "value"},
+    )
+
+    assert summary == {
+        "targetWorkflowId": "target-workflow",
+        "activeRemediationCount": 2,
+        "latestRemediationTitle": "Publish remediation lifecycle phases",
+        "latestRemediationStatus": "acting",
+        "latestActionKind": "restart_worker",
+        "latestOutcome": "resolved_after_action",
+        "activeLockScope": "target_execution",
+        "activeLockHolder": "remediation-workflow",
+        "lastUpdatedAt": "2026-04-22T01:02:03Z",
+        "metadata": {"safe": "value"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_remediation_lifecycle_publisher_creates_required_artifacts(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        publisher = RemediationLifecyclePublisher(
+            session=session,
+            artifact_service=artifact_service,
+        )
+
+        summary = build_remediation_summary_block(
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            phase="resolved",
+            mode="snapshot_then_follow",
+            authority_mode="admin_auto",
+            actions_attempted=({"kind": "restart_worker", "status": "applied"},),
+            resolution="resolved_after_action",
+        )
+        artifacts = []
+        for artifact_type, name, payload in (
+            (
+                "remediation.plan",
+                "reports/remediation_plan.json",
+                {"steps": ["diagnose", "act"]},
+            ),
+            (
+                "remediation.decision_log",
+                "logs/remediation_decision_log.ndjson",
+                {"decision": "acting"},
+            ),
+            (
+                "remediation.action_request",
+                "reports/remediation_action_request-1.json",
+                {"actionKind": "restart_worker"},
+            ),
+            (
+                "remediation.action_result",
+                "reports/remediation_action_result-1.json",
+                {"status": "applied"},
+            ),
+            (
+                "remediation.verification",
+                "reports/remediation_verification-1.json",
+                {"targetHealthy": True},
+            ),
+            (
+                "remediation.summary",
+                "reports/remediation_summary.json",
+                summary,
+            ),
+        ):
+            artifacts.append(
+                await publisher.publish_json_artifact(
+                    remediation_workflow_id=remediation.workflow_id,
+                    artifact_type=artifact_type,
+                    name=name,
+                    payload=payload,
+                    target_workflow_id=target.workflow_id,
+                    target_run_id=target.run_id,
+                    principal="service:test",
+                )
+            )
+
+        links = (
+            await session.execute(
+                select(TemporalArtifactLink).where(
+                    TemporalArtifactLink.workflow_id == remediation.workflow_id,
+                    TemporalArtifactLink.link_type.in_(
+                        [
+                            "remediation.plan",
+                            "remediation.decision_log",
+                            "remediation.action_request",
+                            "remediation.action_result",
+                            "remediation.verification",
+                            "remediation.summary",
+                        ]
+                    ),
+                )
+            )
+        ).scalars().all()
+        assert [artifact.metadata_json["artifact_type"] for artifact in artifacts] == [
+            "remediation.plan",
+            "remediation.decision_log",
+            "remediation.action_request",
+            "remediation.action_result",
+            "remediation.verification",
+            "remediation.summary",
+        ]
+        assert {link.link_type for link in links} == {
+            "remediation.plan",
+            "remediation.decision_log",
+            "remediation.action_request",
+            "remediation.action_result",
+            "remediation.verification",
+            "remediation.summary",
+        }
+        remediation_record = await session.get(
+            TemporalExecutionCanonicalRecord, remediation.workflow_id
+        )
+        assert remediation_record is not None
+        for artifact in artifacts:
+            assert artifact.artifact_id in remediation_record.artifact_refs
+
+        _artifact, payload_bytes = await artifact_service.read(
+            artifact_id=artifacts[-1].artifact_id,
+            principal="service:test",
+        )
+        assert json.loads(payload_bytes)["resolution"] == "resolved_after_action"
 
 
 @pytest.mark.asyncio
