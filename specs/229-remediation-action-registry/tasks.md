@@ -9,6 +9,13 @@
 
 **Source Traceability**: Tasks reference FR-001 through FR-018, SC-001 through SC-008, and DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-023, DESIGN-REQ-024.
 
+**Traceability Inventory**:
+
+- Functional requirements: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, FR-015, FR-016, FR-017, FR-018.
+- Success criteria: SC-001, SC-002, SC-003, SC-004, SC-005, SC-006, SC-007, SC-008.
+- Source design requirements: DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-023, DESIGN-REQ-024.
+
+
 **Test Commands**:
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`
@@ -142,7 +149,7 @@ Task: "Add failing unit assertions for v1 request/result/audit serialization in 
 3. Add failing tests for the missing list and durable payload contracts.
 4. Implement only the missing service methods/serialization fields.
 5. Rerun focused tests, then the full remediation context test file.
-6. Complete final `/speckit.verify`-style verification against MM-454.
+6. Complete final `/moonspec-verify`-style verification against MM-454.
 
 ---
 
