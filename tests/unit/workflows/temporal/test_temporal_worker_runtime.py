@@ -5,7 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
+from api_service.db.models import Base
 from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
@@ -14,6 +17,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     _OPENTELEMETRY_LOG_FORMAT,
     _build_agent_runtime_deps,
     _enforce_codex_config_for_managed_fleet,
+    _expand_task_template_for_child_run,
     _build_runtime_planner,
     _build_runtime_activities,
     _configure_worker_logging,
@@ -24,6 +28,23 @@ from moonmind.workflows.temporal.worker_runtime import (
     external_adapter_execution_style,
 )
 from moonmind.workflows.temporal.workers import AGENT_RUNTIME_FLEET, SANDBOX_FLEET, WORKFLOW_FLEET
+
+
+@asynccontextmanager
+async def _template_db(tmp_path):
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/child_task_templates.db"
+    engine = create_async_engine(db_url, future=True)
+    async_session_maker = sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        yield async_session_maker
+    finally:
+        await engine.dispose()
 
 
 def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields() -> None:
@@ -424,6 +445,48 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     assert orchestrate["inputs"]["jiraOrchestration"]["traceability"] == {
         "sourceIssueKey": "MM-404"
     }
+
+
+@pytest.mark.asyncio
+async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path):
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            expanded_parameters = await _expand_task_template_for_child_run(
+                session=session,
+                initial_parameters={
+                    "requestType": "task",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                    "publishMode": "pr",
+                    "task": {
+                        "title": "Run Jira Orchestrate for MM-501: First",
+                        "instructions": "Use the existing Jira Orchestrate workflow.",
+                        "inputs": {
+                            "jira_issue_key": "MM-501",
+                            "orchestration_mode": "runtime",
+                            "source_design_path": "",
+                            "constraints": "Preserve source issue MM-404 traceability.",
+                        },
+                        "taskTemplate": {
+                            "slug": "jira-orchestrate",
+                            "version": "1.0.0",
+                        },
+                    },
+                },
+            )
+
+    task = expanded_parameters["task"]
+    assert expanded_parameters["stepCount"] == 13
+    assert len(task["steps"]) == 13
+    assert task["steps"][0]["title"] == "Move Jira issue to In Progress"
+    assert task["steps"][0]["skill"]["id"] == "jira-issue-updater"
+    assert "MM-501" in task["steps"][0]["instructions"]
+    assert task["steps"][7]["skill"]["id"] == "moonspec-tasks"
+    assert task["steps"][9]["skill"]["id"] == "moonspec-implement"
+    assert task["steps"][11]["title"] == "Create pull request"
+    assert task["steps"][12]["title"] == "Move Jira issue to Code Review"
+    assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
+    assert len(task["appliedStepTemplates"][0]["stepIds"]) == 13
 
 
 def test_runtime_planner_uses_branch_handoff_for_jira_output_when_task_publish_none():

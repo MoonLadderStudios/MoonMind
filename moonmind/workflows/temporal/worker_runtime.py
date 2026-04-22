@@ -23,6 +23,7 @@ import logging
 import os
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Mapping
 
 
@@ -110,6 +111,10 @@ from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 
 logger = logging.getLogger(__name__)
 
+_TASK_TEMPLATE_SEED_DIR = (
+    Path(__file__).resolve().parents[3] / "api_service" / "data" / "task_step_templates"
+)
+
 _MANAGED_SESSION_LOG_FIELD_MAP: tuple[tuple[str, str], ...] = (
     ("taskRunId", "managed_session_task_run_id"),
     ("runtimeId", "managed_session_runtime_id"),
@@ -142,9 +147,123 @@ _OPENTELEMETRY_LOG_FORMAT = (
 )
 
 
+def _task_template_seed_dir() -> Path:
+    return _TASK_TEMPLATE_SEED_DIR
+
+
+def _template_slug_from_task(task_payload: Mapping[str, Any]) -> str:
+    template_payload = _coerce_mapping(
+        task_payload.get("taskTemplate") or task_payload.get("task_template")
+    )
+    return str(
+        template_payload.get("slug")
+        or template_payload.get("name")
+        or template_payload.get("id")
+        or ""
+    ).strip()
+
+
+async def _expand_task_template_for_child_run(
+    *,
+    session: Any,
+    initial_parameters: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Expand stored task-template provenance into executable child-run steps.
+
+    Internal story-output tools create child executions directly, bypassing the
+    API/UI submit path that normally expands presets. The stored run contract
+    must still contain the flattened steps before ``MoonMind.Run`` plans it.
+    """
+
+    parameters = dict(initial_parameters or {})
+    task_payload = _coerce_mapping(parameters.get("task"))
+    if not task_payload:
+        return parameters
+    raw_steps = task_payload.get("steps")
+    if isinstance(raw_steps, list) and raw_steps:
+        return parameters
+
+    template_payload = _coerce_mapping(
+        task_payload.get("taskTemplate") or task_payload.get("task_template")
+    )
+    template_slug = _template_slug_from_task(task_payload)
+    if not template_slug:
+        return parameters
+
+    from api_service.services.task_templates.catalog import (
+        ExpandOptions,
+        TaskTemplateCatalogService,
+        TaskTemplateNotFoundError,
+    )
+
+    template_version = str(template_payload.get("version") or "1.0.0").strip()
+    template_scope = str(template_payload.get("scope") or "global").strip() or "global"
+    template_scope_ref = (
+        str(template_payload.get("scopeRef") or template_payload.get("scope_ref") or "")
+        .strip()
+        or None
+    )
+    template_inputs = _coerce_mapping(task_payload.get("inputs"))
+    catalog = TaskTemplateCatalogService(session)
+    try:
+        expanded = await catalog.expand_template(
+            slug=template_slug,
+            scope=template_scope,
+            scope_ref=template_scope_ref,
+            version=template_version,
+            inputs=template_inputs,
+            context={},
+            options=ExpandOptions(should_enforce_step_limit=True),
+        )
+    except TaskTemplateNotFoundError:
+        await catalog.sync_seed_templates(seed_dir=_task_template_seed_dir())
+        expanded = await catalog.expand_template(
+            slug=template_slug,
+            scope=template_scope,
+            scope_ref=template_scope_ref,
+            version=template_version,
+            inputs=template_inputs,
+            context={},
+            options=ExpandOptions(should_enforce_step_limit=True),
+        )
+
+    expanded_steps = expanded.get("steps") if isinstance(expanded, Mapping) else None
+    if not isinstance(expanded_steps, list) or not expanded_steps:
+        raise RuntimeError(
+            f"Task template '{template_slug}' expansion produced no executable steps."
+        )
+
+    applied_template = _coerce_mapping(expanded.get("appliedTemplate"))
+    task_payload["steps"] = list(expanded_steps)
+    task_payload["appliedStepTemplates"] = [
+        {
+            "slug": str(applied_template.get("slug") or template_slug),
+            "version": str(applied_template.get("version") or template_version),
+            "inputs": _coerce_mapping(applied_template.get("inputs"))
+            or template_inputs,
+            "stepIds": list(applied_template.get("stepIds") or []),
+            "appliedAt": str(applied_template.get("appliedAt") or ""),
+            "capabilities": list(expanded.get("capabilities") or []),
+        }
+    ]
+    task_payload["taskTemplate"] = {
+        **template_payload,
+        "slug": str(applied_template.get("slug") or template_slug),
+        "version": str(applied_template.get("version") or template_version),
+        "scope": template_scope,
+    }
+    parameters["task"] = task_payload
+    parameters["stepCount"] = len(expanded_steps)
+    return parameters
+
+
 def _build_jira_orchestrate_execution_creator():
     async def _create_execution(**kwargs):
         async with get_async_session_context() as session:
+            kwargs["initial_parameters"] = await _expand_task_template_for_child_run(
+                session=session,
+                initial_parameters=kwargs.get("initial_parameters"),
+            )
             service = TemporalExecutionService(session)
             record = await service.create_execution(**kwargs)
             return {
