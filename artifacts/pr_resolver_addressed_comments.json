@@ -1,5 +1,25 @@
 [
   {
+    "id": 3121152169,
+    "disposition": "addressed",
+    "rationale": "Aligned the Pentest tool maximum 480-minute budget with activity start-to-close timeout, runner profile timeouts, and provider profile lease durations."
+  },
+  {
+    "id": 4151632093,
+    "disposition": "not-applicable",
+    "rationale": "Bot review summary only; the actionable Pentest timeout discrepancy is tracked by review comment 3121152169."
+  },
+  {
+    "id": 3121158039,
+    "disposition": "addressed",
+    "rationale": "Captured the dependency workflow id before rollback, reloads the stale record after rollback, and added a regression test for terminal sync failure returning a best-effort snapshot."
+  },
+  {
+    "id": 4151638987,
+    "disposition": "not-applicable",
+    "rationale": "Codex review wrapper text only; the actionable rollback concern is tracked by review comment 3121158039."
+  },
+  {
     "id": 3121722981,
     "disposition": "addressed",
     "rationale": "Changed remediation read contract route parameters from camelCase {workflowId} to snake_case {workflow_id}."

@@ -572,6 +572,7 @@ class TemporalExecutionService:
         if not workflow_ids:
             return {}
         records = await self._load_dependency_targets(workflow_ids)
+        records = await self._sync_terminal_dependency_targets_from_temporal(records)
         return {
             record.workflow_id: ExecutionDependencySummary(
                 workflow_id=record.workflow_id,
@@ -591,6 +592,82 @@ class TemporalExecutionService:
             )
             for record in records
         }
+
+    async def _sync_terminal_dependency_targets_from_temporal(
+        self,
+        records: list[TemporalExecutionCanonicalRecord],
+    ) -> list[TemporalExecutionCanonicalRecord]:
+        if not records:
+            return []
+
+        from api_service.core.sync import sync_execution_projection
+        from temporalio.client import WorkflowExecutionStatus
+
+        terminal_statuses = {
+            WorkflowExecutionStatus.COMPLETED,
+            WorkflowExecutionStatus.FAILED,
+            WorkflowExecutionStatus.CANCELED,
+            WorkflowExecutionStatus.TERMINATED,
+            WorkflowExecutionStatus.TIMED_OUT,
+            WorkflowExecutionStatus.CONTINUED_AS_NEW,
+        }
+        refreshed_records: list[TemporalExecutionCanonicalRecord] = []
+
+        for record in records:
+            record_workflow_id = record.workflow_id
+            if record.state in TERMINAL_STATES:
+                refreshed_records.append(record)
+                continue
+
+            try:
+                description = await self._client_adapter.describe_workflow(
+                    record_workflow_id
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Dependency target %s Temporal describe failed during status snapshot: %s",
+                    record_workflow_id,
+                    exc,
+                )
+                refreshed_records.append(record)
+                continue
+
+            if getattr(description, "status", None) not in terminal_statuses:
+                refreshed_records.append(record)
+                continue
+
+            try:
+                await sync_execution_projection(self._session, description)
+                await self._session.commit()
+                refreshed = await self._session.get(
+                    TemporalExecutionCanonicalRecord,
+                    record_workflow_id,
+                )
+            except Exception as exc:
+                await self._session.rollback()
+                logger.warning(
+                    "Dependency target %s terminal Temporal sync failed: %s",
+                    record_workflow_id,
+                    exc,
+                    exc_info=True,
+                )
+                refreshed = await self._session.get(
+                    TemporalExecutionCanonicalRecord,
+                    record_workflow_id,
+                )
+                if refreshed is not None:
+                    refreshed_records.append(refreshed)
+                continue
+
+            if refreshed is None:
+                refreshed_records.append(record)
+                continue
+
+            if refreshed.state in TERMINAL_STATES:
+                await self._fan_out_dependency_resolution(refreshed)
+            refreshed_records.append(refreshed)
+
+        return refreshed_records
 
     async def enrich_dependency_summaries(
         self, workflow_ids: list[str]

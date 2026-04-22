@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
 from api_service.db.models import (
     Base,
@@ -1189,6 +1190,126 @@ async def test_mark_execution_succeeded_fans_out_dependency_resolution_signals(
         assert payload["terminalState"] == "completed"
         assert payload["closeStatus"] == "completed"
         assert payload["failureCategory"] is None
+
+
+@pytest.mark.asyncio
+async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        prerequisite = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Prerequisite",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        dependent = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Dependent",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"task": {"dependsOn": [prerequisite.workflow_id]}},
+            idempotency_key=None,
+        )
+
+        completed_at = datetime(2026, 4, 21, 22, 8, tzinfo=UTC)
+        description = Mock(spec=WorkflowExecutionDescription)
+        description.id = prerequisite.workflow_id
+        description.run_id = prerequisite.run_id
+        description.namespace = "default"
+        description.workflow_type = "MoonMind.Run"
+        description.status = WorkflowExecutionStatus.COMPLETED
+        description.start_time = prerequisite.created_at
+        description.execution_time = prerequisite.created_at
+        description.close_time = completed_at
+
+        async def memo() -> dict[str, object]:
+            return {
+                "entry": "run",
+                "title": "Prerequisite",
+                "summary": "Workflow completed successfully",
+            }
+
+        description.memo = memo
+        description.search_attributes = {}
+        mock_client_adapter.describe_workflow.return_value = description
+        mock_client_adapter.signal_workflow.reset_mock()
+
+        snapshot = await service.get_dependency_status_snapshot(
+            [prerequisite.workflow_id]
+        )
+
+        assert snapshot[prerequisite.workflow_id].state == "completed"
+        assert snapshot[prerequisite.workflow_id].close_status == "completed"
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, prerequisite.workflow_id
+        )
+        assert source is not None
+        assert source.state is MoonMindWorkflowState.COMPLETED
+        assert source.close_status is TemporalExecutionCloseStatus.COMPLETED
+        assert source.closed_at is not None
+        assert source.closed_at.replace(tzinfo=UTC) == completed_at
+        mock_client_adapter.signal_workflow.assert_awaited_once()
+        assert (
+            mock_client_adapter.signal_workflow.await_args.args[0]
+            == dependent.workflow_id
+        )
+        assert mock_client_adapter.signal_workflow.await_args.args[1] == (
+            "DependencyResolved"
+        )
+        payload = mock_client_adapter.signal_workflow.await_args.args[2]
+        assert payload["prerequisiteWorkflowId"] == prerequisite.workflow_id
+        assert payload["terminalState"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_dependency_status_snapshot_returns_stale_record_when_terminal_sync_fails(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        prerequisite = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Prerequisite",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        prerequisite_workflow_id = prerequisite.workflow_id
+
+        description = Mock(spec=WorkflowExecutionDescription)
+        description.status = WorkflowExecutionStatus.COMPLETED
+        mock_client_adapter.describe_workflow.return_value = description
+        mock_client_adapter.signal_workflow.reset_mock()
+
+        with patch(
+            "api_service.core.sync.sync_execution_projection",
+            new=AsyncMock(side_effect=RuntimeError("sync failed")),
+        ):
+            snapshot = await service.get_dependency_status_snapshot(
+                [prerequisite_workflow_id]
+            )
+
+        assert snapshot[prerequisite_workflow_id].state == "initializing"
+        assert snapshot[prerequisite_workflow_id].close_status is None
+        mock_client_adapter.signal_workflow.assert_not_awaited()
 
 
 @pytest.mark.asyncio

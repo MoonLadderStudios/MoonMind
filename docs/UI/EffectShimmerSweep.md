@@ -1,0 +1,304 @@
+# Shimmer Sweep Effect — Declarative Design
+
+## Intent
+
+Define a single reusable motion treatment for the `executing` workflow state.
+
+The effect must communicate **active progress** without implying error, urgency, or instability. It should feel closer to a premium “thinking” shimmer than to a loading skeleton.
+
+## Scope
+
+This document covers **only** the shimmer sweep effect in isolation.
+
+It does not define:
+- status color mapping for other workflow states
+- border-glint or lens-flare variants
+- task row layout changes
+- icon changes
+- polling or live-update behavior
+
+## Host Contract
+
+```yaml
+host:
+  kind: status-pill
+  semantic_state: executing
+  attachment_mode: modifier
+  trigger:
+    workflow_state_equals: executing
+    motion_preference_not: reduce
+  fallback_trigger:
+    workflow_state_equals: executing
+    motion_preference_equals: reduce
+
+hooks:
+  preferred:
+    data-state: executing
+    data-effect: shimmer-sweep
+  acceptable:
+    class: is-executing
+
+placement:
+  inside_fill: true
+  inside_border: true
+  outside_bounds: false
+
+text:
+  source: host-content
+  mutation: none
+  case: preserve
+```
+
+## Design Principles
+
+```yaml
+principles:
+  - motion_must_read_as_activity_not_alert
+  - text_legibility_must_remain_primary
+  - animation_must_be_attachable_to_existing_status_pill_markup
+  - effect_must_not_change_layout_or_pill_dimensions
+  - effect_must_use_existing_theme_tokens_before_new_tokens_are_added
+  - effect_must_degrade_to_a_static_highlight_when_motion_is_reduced
+```
+
+## Visual Model
+
+The effect is composed of three layers.
+
+```yaml
+layers:
+  base:
+    role: preserve normal executing pill appearance
+    opacity_behavior: constant
+    motion: none
+
+  sweep_band:
+    role: moving luminous diagonal band
+    shape: soft-edged stripe
+    travel: left-to-right
+    angle_deg: -18
+    blend_intent: brighten, not wash out
+
+  trailing_halo:
+    role: soft atmospheric bloom behind the sweep band
+    shape: wider and dimmer than the core band
+    travel: locked_to_sweep_band
+    emphasis: subtle
+```
+
+## Motion Profile
+
+```yaml
+motion:
+  cycle:
+    duration_ms: 1450
+    repeat: infinite
+    repeat_delay_ms: 220
+    easing: cubic-bezier(0.22, 1, 0.36, 1)
+
+  path:
+    start_x_pct: -135
+    center_x_pct: 50
+    end_x_pct: 135
+    y_behavior: fixed
+    angle_deg: -18
+
+  band:
+    width_pct: 24
+    soft_edge_pct: 38
+    core_opacity: 0.34
+    halo_opacity: 0.14
+    blur_px: 6
+
+  pacing:
+    entry: quick_but_soft
+    midpoint: brightest_at_text_centerline
+    exit: smooth_fade
+
+  continuity:
+    allow_overlap_between_cycles: false
+    idle_gap_present: true
+```
+
+## Theme Binding
+
+The shimmer should derive from the existing MoonMind theme vocabulary instead of inventing a disconnected color.
+
+```yaml
+theme_binding:
+  source_tokens:
+    - --mm-accent
+    - --mm-accent-2
+    - --mm-panel
+    - --mm-border
+    - --mm-ink
+
+  derived_roles:
+    executing_base_tint:
+      from: --mm-accent
+      intent: calm-active
+
+    shimmer_core:
+      from: --mm-accent-2
+      intent: coolest-brightest point
+
+    shimmer_halo:
+      from: [--mm-accent, --mm-accent-2]
+      intent: atmospheric blend
+
+    text_protection:
+      from: --mm-panel
+      intent: maintain local contrast beneath moving light
+```
+
+## Isolation Rules
+
+```yaml
+isolation:
+  host_overflow: hidden
+  host_positioning: relative
+  effect_pointer_events: none
+  effect_hit_testing: none
+  effect_z_index:
+    base: 0
+    shimmer: 1
+    text: 2
+  layout_shift_allowed: false
+  text_reflow_allowed: false
+  scrollbar_interaction: none
+```
+
+## Reduced Motion Behavior
+
+```yaml
+reduced_motion:
+  animation: disabled
+  replacement:
+    static_inner_highlight: true
+    subtle_border_emphasis: true
+    text_emphasis: keep
+  preserved_signals:
+    - executing_still_reads_as_active
+    - no_animation_required_for_comprehension
+```
+
+## State Matrix
+
+```yaml
+state_matrix:
+  idle:
+    shimmer_sweep: off
+
+  executing:
+    shimmer_sweep: on
+
+  paused:
+    shimmer_sweep: off
+
+  waiting_on_dependencies:
+    shimmer_sweep: off
+
+  awaiting_external:
+    shimmer_sweep: off
+
+  finalizing:
+    shimmer_sweep: optional_future_variant
+
+  succeeded:
+    shimmer_sweep: off
+
+  failed:
+    shimmer_sweep: off
+
+  canceled:
+    shimmer_sweep: off
+```
+
+## Semantic Feel
+
+```yaml
+tone:
+  emotional_read: focused, intelligent, in-progress
+  forbidden_reads:
+    - error_flash
+    - warning_pulse
+    - disco_glow
+    - scanner_beam
+    - loading-skeleton-placeholder
+
+  similarity_targets:
+    - codex-thinking-adjacent
+    - premium-terminal-ui
+    - ambient-sci-fi-control-surface
+```
+
+## Implementation Shape
+
+This section stays declarative but provides enough structure to guide implementation.
+
+```yaml
+implementation_shape:
+  host_selector:
+    any_of:
+      - [data-state="executing"][data-effect="shimmer-sweep"]
+      - .is-executing
+
+  rendering_strategy:
+    preferred: pseudo-element overlay
+    acceptable: nested span overlay
+    avoid: extra wrapper that changes layout
+
+  overlay_elements:
+    - ::before as trailing_halo
+    - ::after as sweep_band
+
+  text_strategy:
+    text_must_render_above_overlay: true
+    text_color_shift_during_pass: minimal_only
+```
+
+## Acceptance Criteria
+
+```yaml
+acceptance_criteria:
+  - the executing pill remains readable at all times during the sweep
+  - the shimmer never escapes the rounded bounds of the pill
+  - the shimmer produces no measurable layout shift
+  - one complete sweep occurs roughly every 1.6 to 1.8 seconds including delay
+  - the brightest moment occurs near the center of the pill, not at the edges
+  - the effect looks intentional in both light and dark themes
+  - reduced-motion users see a static active treatment with no animated sweep
+  - non-executing states never inherit the shimmer accidentally
+```
+
+## Suggested Token Block
+
+```yaml
+effect_tokens:
+  --mm-executing-sweep-duration: 1450ms
+  --mm-executing-sweep-delay: 220ms
+  --mm-executing-sweep-angle: -18deg
+  --mm-executing-sweep-band-width: 24%
+  --mm-executing-sweep-core-opacity: 0.34
+  --mm-executing-sweep-halo-opacity: 0.14
+  --mm-executing-sweep-blur: 6px
+  --mm-executing-sweep-start-x: -135%
+  --mm-executing-sweep-end-x: 135%
+  --mm-executing-sweep-radius-inset: 1px
+```
+
+## Non-Goals
+
+```yaml
+non_goals:
+  - spinning_indicators
+  - pulsing_whole_pill_opacity
+  - animated_border_glint
+  - multi_color_rainbow_motion
+  - progress_percentage_visualization
+  - execution_time_estimation
+```
+
+## Hand-off Note
+
+If this is implemented in MoonMind, the effect should be added as a **shared status-pill modifier** rather than a page-local animation so that list, card, and detail surfaces all read consistently.
