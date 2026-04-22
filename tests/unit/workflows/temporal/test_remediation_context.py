@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    MoonMindWorkflowState,
     TemporalArtifactLink,
     TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
@@ -614,6 +615,100 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
             await tools.follow_target_logs(
                 remediation_workflow_id=remediation.workflow_id,
                 task_run_id="tr_other",
+            )
+
+
+@pytest.mark.asyncio
+async def test_remediation_evidence_tools_prepare_action_request_rereads_target_health(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        mock_client_adapter.start_workflow.side_effect = [
+            SimpleNamespace(run_id="target-run"),
+            SimpleNamespace(run_id="remediation-run"),
+        ]
+        execution_service = TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        target = await execution_service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target before action",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+            summary="Initial target summary",
+        )
+        remediation = await execution_service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "remediation": {
+                        "target": {
+                            "workflowId": target.workflow_id,
+                            "taskRunIds": ["tr_action"],
+                        },
+                        "actionPolicyRef": "admin_healer_default",
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+        builder = RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        )
+        await builder.build_context(remediation_workflow_id=remediation.workflow_id)
+
+        target_source = await session.get(
+            TemporalExecutionCanonicalRecord, target.workflow_id
+        )
+        assert target_source is not None
+        target_source.run_id = "target-run-after-context"
+        target_source.state = MoonMindWorkflowState.EXECUTING
+        target_source.memo = {
+            **target_source.memo,
+            "summary": "Fresh target summary",
+        }
+        await session.commit()
+
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+        )
+        preparation = await tools.prepare_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="terminate_session",
+        )
+
+        assert preparation.remediation_workflow_id == remediation.workflow_id
+        assert preparation.action_kind == "terminate_session"
+        assert preparation.context_target["runId"] == "target-run"
+        assert preparation.target.workflow_id == target.workflow_id
+        assert preparation.target.pinned_run_id == "target-run"
+        assert preparation.target.current_run_id == "target-run-after-context"
+        assert preparation.target.target_run_changed is True
+        assert preparation.target.state == "executing"
+        assert preparation.target.summary == "Fresh target summary"
+
+        with pytest.raises(RemediationEvidenceToolError, match="actionKind is required"):
+            await tools.prepare_action_request(
+                remediation_workflow_id=remediation.workflow_id,
+                action_kind=" ",
             )
 
 

@@ -56,6 +56,30 @@ class RemediationLiveFollowResult:
     resume_cursor: dict[str, Any] | None
 
 
+@dataclass(frozen=True, slots=True)
+class RemediationTargetHealthSnapshot:
+    """Fresh bounded target health used to guard side-effecting action requests."""
+
+    workflow_id: str
+    pinned_run_id: str
+    current_run_id: str
+    state: str
+    close_status: str | None
+    title: str | None
+    summary: str | None
+    target_run_changed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RemediationActionRequestPreparation:
+    """Side-effect-free pre-action read of current target health."""
+
+    remediation_workflow_id: str
+    action_kind: str
+    target: RemediationTargetHealthSnapshot
+    context_target: dict[str, Any]
+
+
 class RemediationLogReader(Protocol):
     """Read bounded historical logs for a target task run."""
 
@@ -240,6 +264,59 @@ class RemediationEvidenceToolService:
             await self._cursor_recorder(link.remediation_workflow_id, result.resume_cursor)
         return result
 
+    async def prepare_action_request(
+        self,
+        *,
+        remediation_workflow_id: str,
+        action_kind: str,
+        principal: str = "service:remediation-tools",
+    ) -> RemediationActionRequestPreparation:
+        """Re-read current target health before a side-effecting action request.
+
+        This method does not execute actions. It provides the typed freshness guard
+        that action submission code must consume before invoking any future
+        side-effecting remediation action surface.
+        """
+
+        normalized_action_kind = _required_string(action_kind, "actionKind")
+        link = await self._load_link(remediation_workflow_id)
+        context = await self._read_context_payload(link=link, principal=principal)
+        target = await self._session.get(
+            db_models.TemporalExecutionCanonicalRecord,
+            link.target_workflow_id,
+        )
+        if target is None:
+            raise RemediationEvidenceToolError(
+                f"Target execution {link.target_workflow_id} was not found."
+            )
+        context_target = context.get("target")
+        context_target_mapping = (
+            dict(context_target) if isinstance(context_target, Mapping) else {}
+        )
+        return RemediationActionRequestPreparation(
+            remediation_workflow_id=link.remediation_workflow_id,
+            action_kind=normalized_action_kind,
+            target=RemediationTargetHealthSnapshot(
+                workflow_id=target.workflow_id,
+                pinned_run_id=link.target_run_id,
+                current_run_id=target.run_id,
+                state=_enum_value(target.state) or "",
+                close_status=_enum_value(target.close_status),
+                title=_string_or_none(
+                    target.memo.get("title")
+                    if isinstance(target.memo, Mapping)
+                    else None
+                ),
+                summary=_string_or_none(
+                    target.memo.get("summary")
+                    if isinstance(target.memo, Mapping)
+                    else None
+                ),
+                target_run_changed=target.run_id != link.target_run_id,
+            ),
+            context_target=context_target_mapping,
+        )
+
     async def _load_link(
         self, remediation_workflow_id: str
     ) -> db_models.TemporalExecutionRemediationLink:
@@ -420,7 +497,15 @@ def _string_or_none(value: Any) -> str | None:
     return normalized or None
 
 
+def _enum_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    enum_value = getattr(value, "value", value)
+    return _string_or_none(enum_value)
+
+
 __all__ = [
+    "RemediationActionRequestPreparation",
     "RemediationEvidenceToolError",
     "RemediationEvidenceToolService",
     "RemediationLiveFollowEvent",
@@ -429,4 +514,5 @@ __all__ = [
     "RemediationLogReadResult",
     "RemediationLogReader",
     "RemediationLogStream",
+    "RemediationTargetHealthSnapshot",
 ]
