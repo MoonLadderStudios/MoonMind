@@ -301,12 +301,7 @@ class MoonMindMergeAutomationWorkflow:
             return False
         if observed_head_sha == str(self._input.pull_request.head_sha or "").strip():
             return False
-        if not self._has_blocker(evidence, "stale_revision"):
-            return False
-        return any(
-            blocker.retryable and blocker.kind != "stale_revision"
-            for blocker in getattr(evidence, "blockers", [])
-        )
+        return self._has_blocker(evidence, "stale_revision")
 
     async def _failed_resolver_summary(
         self,
