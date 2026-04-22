@@ -669,7 +669,7 @@ async def test_publish_report_bundle_writes_links_final_marker_and_step_metadata
                     "label": "Summary",
                 },
                 structured={
-                    "payload": b'{"findings":[]}',
+                    "payload": {"findings": [], "status": "complete"},
                     "content_type": "application/json",
                     "label": "Findings JSON",
                 },
@@ -683,7 +683,9 @@ async def test_publish_report_bundle_writes_links_final_marker_and_step_metadata
             )
 
             assert bundle["report_bundle_v"] == 1
+            assert bundle["report_scope"] == "final"
             assert bundle["primary_report_ref"]["artifact_ref_v"] == 1
+            assert bundle["structured_ref"]["artifact_ref_v"] == 1
             assert len(bundle["evidence_refs"]) == 1
 
             primary = await repo.get_artifact(bundle["primary_report_ref"]["artifact_id"])
@@ -702,6 +704,13 @@ async def test_publish_report_bundle_writes_links_final_marker_and_step_metadata
             evidence = await repo.get_artifact(bundle["evidence_refs"][0]["artifact_id"])
             evidence_links = await repo.list_links(evidence.artifact_id)
             assert evidence_links[0].link_type == "report.evidence"
+
+            _structured, structured_payload = await service.read(
+                artifact_id=bundle["structured_ref"]["artifact_id"],
+                principal="workflow-producer",
+                allow_restricted_raw=True,
+            )
+            assert structured_payload == b'{"findings": [], "status": "complete"}'
 
 
 async def test_publish_report_bundle_rejects_missing_and_duplicate_final_marker(
@@ -724,7 +733,7 @@ async def test_publish_report_bundle_rejects_missing_and_duplicate_final_marker(
                     workflow_id="wf-report",
                     run_id="run-report",
                     report_type="unit_test_report",
-                    report_scope="final",
+                    report_scope="Final",
                     primary=None,
                     evidence=[
                         {

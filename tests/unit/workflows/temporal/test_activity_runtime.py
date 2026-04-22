@@ -292,6 +292,12 @@ async def test_artifact_publish_report_bundle_binding_routes_to_artifacts_queue(
             }
 
             binding = bindings["artifact.publish_report_bundle"]
+            assert (
+                catalog.resolve_activity(
+                    "artifact.publish_report_bundle"
+                ).retries.max_attempts
+                == 1
+            )
             result = await binding.handler(
                 {
                     "principal": "workflow-producer",

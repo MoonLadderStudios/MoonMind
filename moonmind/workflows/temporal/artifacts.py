@@ -2132,8 +2132,9 @@ class TemporalArtifactService:
             build_report_bundle_result,
         )
 
+        normalized_report_scope = str(report_scope or "").strip().lower()
         evidence_components = tuple(evidence or ())
-        if str(report_scope or "").strip() == "final":
+        if normalized_report_scope == "final":
             if primary is None:
                 raise TemporalArtifactValidationError(
                     "final report bundles require a primary report"
@@ -2153,7 +2154,7 @@ class TemporalArtifactService:
 
         common_metadata: dict[str, Any] = {
             "report_type": str(report_type),
-            "report_scope": str(report_scope),
+            "report_scope": normalized_report_scope or str(report_scope),
         }
         if sensitivity is not None:
             common_metadata["sensitivity"] = str(sensitivity)
@@ -2174,7 +2175,7 @@ class TemporalArtifactService:
         if primary is not None:
             metadata = dict(common_metadata)
             metadata.update(dict(primary.get("metadata") or {}))
-            if str(report_scope or "").strip() == "final":
+            if normalized_report_scope == "final":
                 metadata["is_final_report"] = True
                 metadata["report_scope"] = "final"
             primary_ref = await self._publish_report_bundle_component(
@@ -2234,7 +2235,7 @@ class TemporalArtifactService:
             structured_ref=structured_ref,
             evidence_refs=evidence_refs,
             report_type=report_type,
-            report_scope=report_scope,
+            report_scope=normalized_report_scope or str(report_scope),
             sensitivity=sensitivity,
             counts=counts,
         )
@@ -2257,8 +2258,13 @@ class TemporalArtifactService:
             encoded = payload.encode("utf-8")
         elif isinstance(payload, bytes):
             encoded = payload
-        elif isinstance(payload, list):
-            encoded = bytes(payload)
+        elif isinstance(payload, Mapping | list):
+            try:
+                encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                raise TemporalArtifactValidationError(
+                    "report component payload must be bytes, text, or JSON-serializable"
+                ) from exc
         else:
             encoded = bytes(payload)
 
