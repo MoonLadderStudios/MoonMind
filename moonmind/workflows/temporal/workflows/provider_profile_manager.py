@@ -40,6 +40,9 @@ DB_AUTHORITATIVE_PROFILE_SYNC_PATCH = (
     "provider-profile-manager-db-authoritative-profile-sync-v1"
 )
 VERIFY_PENDING_REQUESTS_PATCH = "provider-profile-manager-verify-pending-requests-v1"
+DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH = (
+    "provider-profile-manager-default-profile-exclusive-selection-v1"
+)
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -867,13 +870,30 @@ class MoonMindProviderProfileManagerWorkflow:
             return None
 
         if not selector:
+            configured_default_profiles = [
+                profile
+                for profile in self._profiles.values()
+                if profile.is_default and profile.enabled
+            ]
             default_profiles = [
                 profile for profile in eligible_profiles if profile.is_default
             ]
-            if len(eligible_profiles) == 1:
+            if workflow.patched(DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH):
+                if default_profiles:
+                    eligible_profiles = default_profiles
+                elif configured_default_profiles:
+                    return None
+                elif len(eligible_profiles) == 1:
+                    return eligible_profiles[0]
+                eligible_profiles.sort(
+                    key=lambda p: (p.priority, p.available_slots),
+                    reverse=True,
+                )
                 return eligible_profiles[0]
             if len(default_profiles) == 1:
                 return default_profiles[0]
+            if len(eligible_profiles) == 1:
+                return eligible_profiles[0]
             if not default_profiles:
                 # Preserve lease assignment for in-flight manager state restored
                 # from payloads created before is_default existed.

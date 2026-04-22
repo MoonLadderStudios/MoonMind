@@ -1,37 +1,22 @@
 [
   {
-    "id": 3127248910,
+    "id": 3127332306,
     "disposition": "addressed",
-    "rationale": "Updated Claude profile classification to use runtime_id=claude_code and provider_id=anthropic instead of requiring the claude_anthropic profile_id."
+    "rationale": "Restricted patched default-profile selection to available defaults and sorted multiple defaults by priority and slots instead of returning None."
   },
   {
-    "id": 3127248912,
+    "id": 4158369749,
     "disposition": "addressed",
-    "rationale": "Changed default Claude credential actions so API-key enrollment is available for Claude Anthropic profiles by default and OAuth connect is added when OAuth volume metadata exists."
+    "rationale": "Review summary raised the same multiple-default selection concern, which is covered by the manager selection fix and regression test."
   },
   {
-    "id": 3127248915,
-    "disposition": "addressed",
-    "rationale": "Preserved OAuth switching and lifecycle actions after API-key commit when OAuth volume metadata exists, while keeping API-key materialization as secret_ref/api_key_env."
-  },
-  {
-    "id": 4158280929,
+    "id": 4158380932,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary; the actionable inline findings from this review were addressed individually."
+    "rationale": "Informational automated review summary with no distinct actionable request."
   },
   {
-    "id": 4158287583,
-    "disposition": "not-applicable",
-    "rationale": "Automated review wrapper without separate actionable feedback."
-  },
-  {
-    "id": 3127255796,
+    "id": 3127339580,
     "disposition": "addressed",
-    "rationale": "Changed auth_actions parsing to distinguish missing metadata from explicit empty metadata, so auth_actions: [] intentionally suppresses fallback actions."
-  },
-  {
-    "id": 3127255800,
-    "disposition": "addressed",
-    "rationale": "Replaced Claude lifecycle success no-ops with API calls and added backend validate/disconnect endpoints plus tests."
+    "rationale": "Gated the default-unavailable fallback semantic change behind provider-profile-manager-default-profile-exclusive-selection-v1 and preserved the unpatched fallback behavior in a regression test."
   }
 ]
