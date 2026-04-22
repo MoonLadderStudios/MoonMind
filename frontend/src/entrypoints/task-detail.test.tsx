@@ -1382,6 +1382,103 @@ describe('Task Detail Entrypoint', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
   });
 
+  it('renders task detail as separated matte evidence and action regions', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Example task',
+      summary: 'Did work',
+      taskInstructions: 'Inspect the repository.',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      closeStatus: 'COMPLETED',
+      stepsHref: '/api/executions/test-123/steps',
+      taskRunId: 'task-run-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      actions: { canSetTitle: true, canCancel: false, canRerun: false },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifacts: [
+              {
+                artifactId: 'artifact-output',
+                contentType: 'text/plain',
+                sizeBytes: 42,
+                status: 'complete',
+                downloadUrl: '/api/artifacts/artifact-output/download',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    const mm428CompositionPayload: BootPayload = {
+      ...stepsPayload,
+      initialData: {
+        dashboardConfig: {
+          ...(stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig,
+          features: { temporalDashboard: { actionsEnabled: true } },
+        },
+      },
+    };
+
+    renderWithClient(<TaskDetailPage payload={mm428CompositionPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Example task')).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Artifacts' })).toBeTruthy();
+      expect(screen.getByText('artifact-output')).toBeTruthy();
+    });
+
+    const root = document.querySelector<HTMLElement>('.task-detail-page');
+    const summary = document.querySelector<HTMLElement>('.td-summary-block');
+    const facts = document.querySelector<HTMLElement>('.td-facts-region');
+    const steps = document.querySelector<HTMLElement>('.td-steps-region.td-evidence-region');
+    const timeline = document.querySelector<HTMLElement>('.td-timeline-region.td-evidence-region');
+    const artifacts = document.querySelector<HTMLElement>('.td-artifacts-region.td-evidence-region');
+    const actions = document.querySelector<HTMLElement>('.td-actions-region');
+
+    expect(root).not.toBeNull();
+    expect(summary).not.toBeNull();
+    expect(facts).not.toBeNull();
+    expect(steps).not.toBeNull();
+    expect(timeline).not.toBeNull();
+    expect(artifacts).not.toBeNull();
+    expect(actions).not.toBeNull();
+    expect(artifacts?.querySelector('.td-evidence-slab.queue-table-wrapper')).not.toBeNull();
+    expect(timeline?.querySelector('.td-evidence-slab.queue-table-wrapper')).not.toBeNull();
+    expect(root?.querySelector('.td-evidence-region .panel--floating')).toBeNull();
+    expect(root?.querySelector('.td-evidence-region .queue-floating-bar')).toBeNull();
+  });
+
   it('renders empty skill provenance when task skill metadata is missing', async () => {
     const mockExecution = {
       taskId: 'test-123',
