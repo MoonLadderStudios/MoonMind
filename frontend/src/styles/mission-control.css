@@ -1286,6 +1286,8 @@ tr[data-proposal-id].proposal-consuming td {
   --beam-tail-end: var(--beam-head-start);
   --beam-fade-end: 360deg;
   --beam-speed: 3.6s;
+  --beam-enter-duration: 200ms;
+  --beam-exit-duration: 140ms;
   --beam-border-base: rgb(var(--mm-border) / 0.74);
   --beam-head-color: rgb(255 255 255 / 0.95);
   --beam-tail-color: rgb(255 255 255 / 0.28);
@@ -1321,8 +1323,22 @@ tr[data-proposal-id].proposal-consuming td {
   --beam-glow-opacity: 0.58;
 }
 
+.masked-conic-border-beam[data-glow="medium"] {
+  --beam-glow-opacity: 0.52;
+}
+
+.masked-conic-border-beam[data-variant="energized"] {
+  --beam-tail-arc: 36deg;
+  --beam-glow-opacity: 0.56;
+}
+
+.masked-conic-border-beam[data-variant="dualPhase"] {
+  --beam-tail-arc: 30deg;
+}
+
 .masked-conic-border-beam__layer,
-.masked-conic-border-beam__glow {
+.masked-conic-border-beam__glow,
+.masked-conic-border-beam__companion {
   position: absolute;
   inset: calc(-1 * var(--beam-border-width));
   border-radius: inherit;
@@ -1333,6 +1349,7 @@ tr[data-proposal-id].proposal-consuming td {
 .masked-conic-border-beam__layer {
   padding: var(--beam-inner-inset);
   opacity: var(--beam-opacity);
+  visibility: visible;
   background: conic-gradient(
     from 0deg,
     transparent 0deg var(--beam-tail-start),
@@ -1344,12 +1361,21 @@ tr[data-proposal-id].proposal-consuming td {
   mask-composite: exclude;
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
+  transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;
   animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
+}
+
+.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__layer,
+.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__glow,
+.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__companion {
+  opacity: 0;
+  visibility: hidden;
 }
 
 .masked-conic-border-beam__glow {
   padding: var(--beam-inner-inset);
   opacity: var(--beam-glow-opacity);
+  visibility: visible;
   background: conic-gradient(
     from 0deg,
     transparent 0deg calc(var(--beam-tail-start) - 8deg),
@@ -1362,11 +1388,31 @@ tr[data-proposal-id].proposal-consuming td {
   mask-composite: exclude;
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
+  transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;
+  animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
+}
+
+.masked-conic-border-beam__companion {
+  padding: var(--beam-inner-inset);
+  opacity: calc(var(--beam-opacity) * 0.36);
+  background: conic-gradient(
+    from 180deg,
+    transparent 0deg calc(var(--beam-head-start) - 8deg),
+    var(--beam-tail-color) var(--beam-head-start),
+    var(--beam-head-color) var(--beam-head-end),
+    transparent calc(var(--beam-head-end) + 18deg) 360deg
+  );
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;
   animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
 }
 
 .masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__layer,
-.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__glow {
+.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__glow,
+.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__companion {
   animation-direction: reverse;
 }
 
@@ -1379,7 +1425,8 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__layer,
-.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__glow {
+.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__glow,
+.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__companion {
   animation: none;
   transform: rotate(42deg);
 }
@@ -1399,7 +1446,8 @@ tr[data-proposal-id].proposal-consuming td {
 
 @media (prefers-reduced-motion: reduce) {
   .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__layer,
-  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__glow {
+  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__glow,
+  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__companion {
     animation: none;
     transform: rotate(42deg);
   }

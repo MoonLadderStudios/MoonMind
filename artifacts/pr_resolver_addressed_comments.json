@@ -1,47 +1,17 @@
 [
   {
-    "id": 4157053310,
+    "id": 4157254325,
     "disposition": "not-applicable",
-    "rationale": "Review summary describing the actionable inline comments; the specific inline findings are tracked separately in this ledger."
+    "rationale": "Bot review summary explicitly reported no feedback to address."
   },
   {
-    "id": 3126107327,
+    "id": 3126297003,
     "disposition": "addressed",
-    "rationale": "Expanded full_authorized to require the full PentestScopeAction set before that mode can run."
+    "rationale": "Kept beam and glow layers mounted while inactive and moved fade-out visibility to CSS, with Vitest coverage for the inactive fade contract."
   },
   {
-    "id": 3126107338,
-    "disposition": "addressed",
-    "rationale": "Changed mode authorization from any-action intersection to all-actions subset validation and added prohibited action rejection."
-  },
-  {
-    "id": 3126107340,
-    "disposition": "addressed",
-    "rationale": "Changed prohibited_actions to use the PentestScopeAction literal tuple type."
-  },
-  {
-    "id": 3126107359,
-    "disposition": "addressed",
-    "rationale": "Added allowed_actions to the tuple normalization validator so whitespace is normalized before literal validation."
-  },
-  {
-    "id": 3126107368,
-    "disposition": "addressed",
-    "rationale": "Added CIDR-aware target matching for approved cidr scope targets using ipaddress network membership."
-  },
-  {
-    "id": 3126112334,
-    "disposition": "addressed",
-    "rationale": "Added fail-closed rejection for network_attachment_ref when the approved scope has no required network attachment policy."
-  },
-  {
-    "id": 3126112342,
-    "disposition": "addressed",
-    "rationale": "Changed naive expires_at handling to fail closed with scope_expiry_timezone_required instead of assuming UTC."
-  },
-  {
-    "id": 4157060290,
+    "id": 4157264371,
     "disposition": "not-applicable",
-    "rationale": "Automated Codex review wrapper without separate actionable feedback beyond the inline comments already tracked."
+    "rationale": "Bot review wrapper without additional actionable feedback beyond the linked review comment."
   }
 ]
