@@ -1,37 +1,17 @@
 [
   {
-    "id": 3127248910,
+    "id": 3127450221,
     "disposition": "addressed",
-    "rationale": "Updated Claude profile classification to use runtime_id=claude_code and provider_id=anthropic instead of requiring the claude_anthropic profile_id."
+    "rationale": "Backfilled missing CLAUDE_API_KEY into existing claude_anthropic clear_env_keys while preserving existing custom clear keys."
   },
   {
-    "id": 3127248912,
-    "disposition": "addressed",
-    "rationale": "Changed default Claude credential actions so API-key enrollment is available for Claude Anthropic profiles by default and OAuth connect is added when OAuth volume metadata exists."
-  },
-  {
-    "id": 3127248915,
-    "disposition": "addressed",
-    "rationale": "Preserved OAuth switching and lifecycle actions after API-key commit when OAuth volume metadata exists, while keeping API-key materialization as secret_ref/api_key_env."
-  },
-  {
-    "id": 4158280929,
+    "id": 4158522745,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary; the actionable inline findings from this review were addressed individually."
+    "rationale": "Automated review summary metadata; no actionable code feedback."
   },
   {
-    "id": 4158287583,
+    "id": 4158526722,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper without separate actionable feedback."
-  },
-  {
-    "id": 3127255796,
-    "disposition": "addressed",
-    "rationale": "Changed auth_actions parsing to distinguish missing metadata from explicit empty metadata, so auth_actions: [] intentionally suppresses fallback actions."
-  },
-  {
-    "id": 3127255800,
-    "disposition": "addressed",
-    "rationale": "Replaced Claude lifecycle success no-ops with API calls and added backend validate/disconnect endpoints plus tests."
+    "rationale": "Review body explicitly states there is no feedback to address."
   }
 ]

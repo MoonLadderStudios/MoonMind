@@ -254,6 +254,37 @@ async def test_auto_seed_reconciles_legacy_codex_default_provider(
 
 
 @pytest.mark.asyncio
+async def test_auto_seed_backfills_claude_api_key_clear_env_for_existing_profile(
+    _module_db, monkeypatch
+):
+    """Existing Claude OAuth profiles should clear the newer Claude API key alias."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
+        assert profile is not None
+        profile.clear_env_keys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CUSTOM_ENV"]
+        await session.commit()
+
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded == []
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "claude_anthropic")
+        assert profile is not None
+        assert profile.clear_env_keys == [
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "CUSTOM_ENV",
+            "CLAUDE_API_KEY",
+        ]
+
+
+@pytest.mark.asyncio
 async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch):
     """When MINIMAX_API_KEY is absent, only the 3 default profiles are seeded."""
     from api_service.main import _auto_seed_provider_profiles

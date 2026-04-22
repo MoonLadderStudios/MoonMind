@@ -784,6 +784,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     ManagedAgentProviderProfile.provider_id,
                     ManagedAgentProviderProfile.provider_label,
                     ManagedAgentProviderProfile.default_model,
+                    ManagedAgentProviderProfile.clear_env_keys,
                     ManagedAgentProviderProfile.file_templates,
                 )
             )
@@ -793,6 +794,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     "provider_id": row.provider_id,
                     "provider_label": row.provider_label,
                     "default_model": row.default_model,
+                    "clear_env_keys": row.clear_env_keys,
                     "file_templates": row.file_templates,
                 }
                 for row in existing_rows
@@ -845,6 +847,25 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         )
                         await session.execute(stmt)
                         needs_commit = True
+                    desired_clear_env_keys = profile_def.get("clear_env_keys")
+                    if profile_id == "claude_anthropic" and desired_clear_env_keys:
+                        current_clear_env_keys = list(
+                            existing_by_id[profile_id]["clear_env_keys"] or []
+                        )
+                        reconciled_clear_env_keys = list(current_clear_env_keys)
+                        for env_key in desired_clear_env_keys:
+                            if env_key not in reconciled_clear_env_keys:
+                                reconciled_clear_env_keys.append(env_key)
+                        if reconciled_clear_env_keys != current_clear_env_keys:
+                            stmt = (
+                                update(ManagedAgentProviderProfile)
+                                .where(
+                                    ManagedAgentProviderProfile.profile_id == profile_id
+                                )
+                                .values(clear_env_keys=reconciled_clear_env_keys)
+                            )
+                            await session.execute(stmt)
+                            needs_commit = True
                     desired_file_templates = profile_def.get("file_templates")
                     current_file_templates = existing_by_id[profile_id]["file_templates"]
                     if _should_reconcile_openrouter_codex_file_templates(
