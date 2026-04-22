@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -32,6 +33,8 @@ from moonmind.workflows.temporal.remediation_context import (
 )
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
+    RemediationMutationGuardPolicy,
+    RemediationMutationGuardService,
     RemediationPermissionSet,
     RemediationSecurityProfile,
 )
@@ -1265,3 +1268,373 @@ async def test_remediation_action_authority_uses_prepared_action_context(
         assert preparation.target.workflow_id == target.workflow_id
         assert decision.decision == "allowed"
         assert decision.target_workflow_id == target.workflow_id
+
+
+@pytest.mark.asyncio
+async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        service = RemediationMutationGuardService(session=session)
+        now = datetime(2026, 4, 22, tzinfo=timezone.utc)
+
+        first = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="lock-1",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(
+                lock_ttl_seconds=60,
+                cooldown_seconds=0,
+                max_attempts_per_action_kind=5,
+            ),
+            now=now,
+        )
+        duplicate_holder = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="lock-1",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(
+                lock_ttl_seconds=60,
+                cooldown_seconds=0,
+                max_attempts_per_action_kind=5,
+            ),
+            now=now,
+        )
+        expired_same_holder = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="lock-expired-holder",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(
+                lock_ttl_seconds=60,
+                cooldown_seconds=0,
+                max_attempts_per_action_kind=5,
+            ),
+            now=now + timedelta(seconds=61),
+        )
+        conflict = await service.evaluate(
+            remediation_workflow_id="mm:other-remediator",
+            remediation_run_id="other-run",
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="lock-2",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(
+                lock_ttl_seconds=60,
+                cooldown_seconds=0,
+                max_attempts_per_action_kind=5,
+            ),
+            now=now + timedelta(seconds=62),
+        )
+        recovered = await service.evaluate(
+            remediation_workflow_id="mm:other-remediator",
+            remediation_run_id="other-run",
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="lock-3",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(
+                lock_ttl_seconds=60,
+                cooldown_seconds=0,
+                max_attempts_per_action_kind=5,
+            ),
+            now=now + timedelta(seconds=122),
+        )
+        service.release_lock(first.lock.lock_id)
+        lost = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="lock-4",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(
+                lock_ttl_seconds=60,
+                cooldown_seconds=0,
+                max_attempts_per_action_kind=5,
+            ),
+            now=now + timedelta(seconds=62),
+        )
+
+        assert first.decision == "allowed"
+        assert first.lock.status == "acquired"
+        assert first.lock.created_at == now
+        assert duplicate_holder.lock.lock_id == first.lock.lock_id
+        assert expired_same_holder.lock.status == "recovered"
+        assert expired_same_holder.lock.expires_at == now + timedelta(seconds=121)
+        assert conflict.decision == "denied"
+        assert conflict.reason == "mutation_lock_conflict"
+        assert recovered.decision == "allowed"
+        assert recovered.lock.status == "recovered"
+        assert lost.decision == "denied"
+        assert lost.reason == "mutation_lock_lost"
+
+
+@pytest.mark.asyncio
+async def test_remediation_mutation_guard_enforces_ledger_budgets_and_cooldowns(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        service = RemediationMutationGuardService(session=session)
+        now = datetime(2026, 4, 22, tzinfo=timezone.utc)
+        policy = RemediationMutationGuardPolicy(
+            max_actions_per_target=2,
+            max_attempts_per_action_kind=2,
+            cooldown_seconds=30,
+            lock_ttl_seconds=1,
+        )
+
+        first = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="ledger-1",
+            parameters={"reason": "first"},
+            policy=policy,
+            now=now,
+        )
+        duplicate = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="ledger-1",
+            parameters={"reason": "first"},
+            policy=policy,
+            now=now + timedelta(seconds=1),
+        )
+        unsafe_reuse = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="ledger-1",
+            parameters={"reason": "changed"},
+            policy=policy,
+            now=now + timedelta(seconds=2),
+        )
+        cooldown = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="ledger-2",
+            parameters={"reason": "first"},
+            policy=policy,
+            now=now + timedelta(seconds=3),
+        )
+        second = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="terminate_session",
+            idempotency_key="ledger-3",
+            parameters={"reason": "second"},
+            policy=policy,
+            now=now + timedelta(seconds=40),
+        )
+        exhausted = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="terminate_session",
+            idempotency_key="ledger-4",
+            parameters={"reason": "third"},
+            policy=policy,
+            now=now + timedelta(seconds=80),
+        )
+
+        assert first.decision == "allowed"
+        assert duplicate is first
+        assert unsafe_reuse.decision == "denied"
+        assert unsafe_reuse.reason == "idempotency_key_unsafe_reuse"
+        assert cooldown.decision == "denied"
+        assert cooldown.reason == "action_cooldown_active"
+        assert second.decision == "allowed"
+        assert exhausted.decision == "escalate"
+        assert exhausted.reason == "action_budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_remediation_mutation_guard_rejects_nested_and_changed_targets(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        service = RemediationMutationGuardService(session=session)
+        now = datetime(2026, 4, 22, tzinfo=timezone.utc)
+
+        self_target = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=remediation.workflow_id,
+            target_run_id=remediation.run_id,
+            action_kind="restart_worker",
+            idempotency_key="nested-1",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(),
+            now=now,
+            target_is_remediation=True,
+        )
+        nested = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id="mm:other-remediation",
+            target_run_id="other-run",
+            action_kind="restart_worker",
+            idempotency_key="nested-2",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(),
+            now=now,
+            target_is_remediation=True,
+        )
+        allowed_nested = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id="mm:other-remediation",
+            target_run_id="other-run",
+            action_kind="restart_worker",
+            idempotency_key="nested-3",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(allow_nested_remediation=True),
+            now=now,
+            target_is_remediation=True,
+        )
+        changed = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="fresh-1",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(target_change_policy="rediagnose"),
+            now=now + timedelta(seconds=10),
+            target_freshness={
+                "pinnedRunId": target.run_id,
+                "currentRunId": "new-run",
+                "state": "executing",
+                "summary": "new summary",
+                "sessionIdentity": "session-2",
+                "targetRunChanged": True,
+            },
+        )
+        material_drift = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="fresh-state-drift",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(target_change_policy="escalate"),
+            now=now + timedelta(seconds=11),
+            target_freshness={
+                "pinnedRunId": target.run_id,
+                "currentRunId": target.run_id,
+                "pinnedState": "executing",
+                "state": "failed",
+                "pinnedSummary": "old summary",
+                "summary": "old summary",
+                "pinnedSessionIdentity": "session-1",
+                "sessionIdentity": "session-1",
+                "targetRunChanged": False,
+            },
+        )
+        unavailable = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="fresh-2",
+            parameters={},
+            policy=RemediationMutationGuardPolicy(),
+            now=now + timedelta(seconds=20),
+            target_freshness=None,
+            require_target_freshness=True,
+        )
+
+        assert self_target.decision == "denied"
+        assert self_target.reason == "self_target_denied"
+        assert nested.decision == "denied"
+        assert nested.reason == "nested_remediation_denied"
+        assert allowed_nested.decision == "allowed"
+        assert changed.decision == "rediagnose"
+        assert changed.reason == "target_materially_changed"
+        assert material_drift.decision == "escalate"
+        assert material_drift.reason == "target_materially_changed"
+        assert unavailable.decision == "denied"
+        assert unavailable.reason == "target_health_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_remediation_mutation_guard_serialization_redacts_sensitive_values(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        service = RemediationMutationGuardService(session=session)
+        result = await service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="restart_worker",
+            idempotency_key="redact-guard",
+            parameters={
+                "token": "secret-token-value",
+                "path": "/work/agent_jobs/mm:secret/repo/.env",
+                "url": "https://example.test/object?X-Amz-Signature=secret",
+            },
+            policy=RemediationMutationGuardPolicy(),
+            now=datetime(2026, 4, 22, tzinfo=timezone.utc),
+        )
+
+        payload = result.to_dict()
+        serialized = json.dumps(payload, sort_keys=True)
+        assert payload["schemaVersion"] == "v1"
+        assert payload["decision"] == "allowed"
+        assert payload["lock"]["createdAt"] == "2026-04-22T00:00:00Z"
+        assert "secret-token-value" not in serialized
+        assert "/work/agent_jobs" not in serialized
+        assert "X-Amz-Signature" not in serialized
