@@ -455,6 +455,47 @@ async def test_link_artifact_rejects_unsafe_report_metadata(tmp_path: Path) -> N
                 )
 
 
+async def test_link_artifact_allows_internal_preview_metadata_for_reports(
+    tmp_path: Path,
+) -> None:
+    """MM-460: System-added preview metadata must not block report linking."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            artifact, _upload = await service.create(
+                principal="workflow-producer",
+                content_type="text/markdown",
+                metadata_json={"title": "Restricted report"},
+                redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+            )
+            completed = await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="workflow-producer",
+                payload=b"# Report\nsafe display content",
+                content_type="text/markdown",
+            )
+
+            assert completed.metadata_json["preview_artifact_id"].startswith("art_")
+
+            link = await service.link_artifact(
+                artifact_id=artifact.artifact_id,
+                principal="workflow-producer",
+                execution_ref={
+                    "namespace": "moonmind",
+                    "workflow_id": "wf-report",
+                    "run_id": "run-report",
+                    "link_type": "report.primary",
+                },
+            )
+
+            assert link.link_type == "report.primary"
+
+
 async def test_generic_output_links_remain_accepted_with_generic_metadata(
     tmp_path: Path,
 ) -> None:

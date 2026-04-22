@@ -40,6 +40,11 @@ REPORT_METADATA_KEYS = frozenset(
         "attempt",
     }
 )
+REPORT_INTERNAL_METADATA_KEYS = frozenset(
+    {
+        "preview_artifact_id",
+    }
+)
 
 _MAX_REPORT_METADATA_STRING_CHARS = 2048
 _MAX_REPORT_METADATA_DEPTH = 4
@@ -63,6 +68,7 @@ def validate_report_artifact_contract(
     *,
     link_type: str | None,
     metadata: Mapping[str, Any] | None,
+    allow_internal_metadata: bool = False,
 ) -> None:
     """Validate report-specific link-type and metadata invariants.
 
@@ -78,12 +84,24 @@ def validate_report_artifact_contract(
             f"unsupported report artifact link_type '{normalized_link_type}'"
         )
 
-    _validate_report_metadata(dict(metadata or {}))
+    _validate_report_metadata(
+        dict(metadata or {}),
+        allow_internal_metadata=allow_internal_metadata,
+    )
 
 
-def _validate_report_metadata(metadata: Mapping[str, Any]) -> None:
+def _validate_report_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    allow_internal_metadata: bool,
+) -> None:
     for key, value in metadata.items():
         normalized_key = str(key or "").strip()
+        if (
+            allow_internal_metadata
+            and normalized_key in REPORT_INTERNAL_METADATA_KEYS
+        ):
+            continue
         if normalized_key not in REPORT_METADATA_KEYS:
             if _SECRET_KEY_PATTERN.search(normalized_key):
                 raise TemporalArtifactValidationError(
@@ -91,10 +109,6 @@ def _validate_report_metadata(metadata: Mapping[str, Any]) -> None:
                 )
             raise TemporalArtifactValidationError(
                 f"unsupported report metadata key '{normalized_key}'"
-            )
-        if _SECRET_KEY_PATTERN.search(normalized_key):
-            raise TemporalArtifactValidationError(
-                f"unsafe report metadata key '{normalized_key}'"
             )
         _validate_report_metadata_value(value, path=normalized_key, depth=0)
 

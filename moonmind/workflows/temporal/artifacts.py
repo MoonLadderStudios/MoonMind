@@ -1757,6 +1757,7 @@ class TemporalArtifactService:
         validate_report_artifact_contract(
             link_type=coerced_execution_ref.link_type,
             metadata=artifact.metadata_json,
+            allow_internal_metadata=True,
         )
         link = await self._repository.add_link(
             artifact_id=artifact_id,
