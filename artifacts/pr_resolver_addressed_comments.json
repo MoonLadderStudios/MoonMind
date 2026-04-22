@@ -1,47 +1,32 @@
 [
   {
-    "id": 4157053310,
+    "id": 4157627574,
     "disposition": "not-applicable",
-    "rationale": "Review summary describing the actionable inline comments; the specific inline findings are tracked separately in this ledger."
+    "rationale": "Automated review summary only; no actionable code request."
   },
   {
-    "id": 3126107327,
+    "id": 3126629913,
     "disposition": "addressed",
-    "rationale": "Expanded full_authorized to require the full PentestScopeAction set before that mode can run."
+    "rationale": "Manual-auth secret slugs now include a stable SHA-256 digest of the original profile_id, preventing normalized profile ID collisions."
   },
   {
-    "id": 3126107338,
+    "id": 3126632260,
     "disposition": "addressed",
-    "rationale": "Changed mode authorization from any-action intersection to all-actions subset validation and added prohibited action rejection."
+    "rationale": "Manual auth commit now merges Anthropic secret_refs, clear_env_keys, and env_template entries into existing profile configuration."
   },
   {
-    "id": 3126107340,
+    "id": 3126632277,
     "disposition": "addressed",
-    "rationale": "Changed prohibited_actions to use the PentestScopeAction literal tuple type."
+    "rationale": "Claude manual token validation now reuses a cached httpx.AsyncClient instead of constructing one per request."
   },
   {
-    "id": 3126107359,
+    "id": 3126632281,
     "disposition": "addressed",
-    "rationale": "Added allowed_actions to the tuple normalization validator so whitespace is normalized before literal validation."
+    "rationale": "auth_readiness and authreadiness are now treated as non-secret metadata keys by payload redaction."
   },
   {
-    "id": 3126107368,
-    "disposition": "addressed",
-    "rationale": "Added CIDR-aware target matching for approved cidr scope targets using ipaddress network membership."
-  },
-  {
-    "id": 3126112334,
-    "disposition": "addressed",
-    "rationale": "Added fail-closed rejection for network_attachment_ref when the approved scope has no required network attachment policy."
-  },
-  {
-    "id": 3126112342,
-    "disposition": "addressed",
-    "rationale": "Changed naive expires_at handling to fail closed with scope_expiry_timezone_required instead of assuming UTC."
-  },
-  {
-    "id": 4157060290,
+    "id": 4157630619,
     "disposition": "not-applicable",
-    "rationale": "Automated Codex review wrapper without separate actionable feedback beyond the inline comments already tracked."
+    "rationale": "Automated review body summarizing the actionable line comments; no separate code request."
   }
 ]

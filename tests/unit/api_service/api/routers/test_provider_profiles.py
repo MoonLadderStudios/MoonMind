@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.api.routers import provider_profiles as provider_profiles_router
 from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.db.models import (
@@ -602,7 +603,11 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
                     runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
                     volume_ref="claude_auth_volume",
                     volume_mount_path="/home/app/.claude",
-                    clear_env_keys=["OPENAI_API_KEY"],
+                    secret_refs={"custom_tool": "env://CUSTOM_TOOL_SECRET"},
+                    clear_env_keys=["OPENAI_API_KEY", "CUSTOM_ENV"],
+                    env_template={
+                        "CUSTOM_ENV": {"from_secret_ref": "custom_tool"},
+                    },
                     enabled=True,
                 )
             )
@@ -624,7 +629,11 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert payload["readiness"]["connected"] is True
     assert payload["readiness"]["backing_secret_exists"] is True
     assert payload["readiness"]["launch_ready"] is True
-    assert payload["secret_ref"] == "db://claude-anthropic-manual-auth-token"
+    expected_secret_slug = provider_profiles_router._claude_manual_secret_slug(
+        profile_id
+    )
+    expected_secret_ref = f"db://{expected_secret_slug}"
+    assert payload["secret_ref"] == expected_secret_ref
 
     assert profile_response.status_code == 200
     profile_payload = profile_response.json()
@@ -634,21 +643,25 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert profile_payload["volume_ref"] is None
     assert profile_payload["volume_mount_path"] is None
     assert profile_payload["secret_refs"] == {
-        "anthropic_api_key": "db://claude-anthropic-manual-auth-token"
+        "custom_tool": "env://CUSTOM_TOOL_SECRET",
+        "anthropic_api_key": expected_secret_ref,
     }
     assert profile_payload["env_template"] == {
-        "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}
+        "CUSTOM_ENV": {"from_secret_ref": "custom_tool"},
+        "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"},
     }
     assert "ANTHROPIC_API_KEY" in profile_payload["clear_env_keys"]
     assert "ANTHROPIC_AUTH_TOKEN" in profile_payload["clear_env_keys"]
     assert "OPENAI_API_KEY" in profile_payload["clear_env_keys"]
+    assert "CUSTOM_ENV" in profile_payload["clear_env_keys"]
+    assert profile_payload["clear_env_keys"].count("OPENAI_API_KEY") == 1
     assert profile_payload["command_behavior"]["auth_strategy"] == "claude_manual_token"
     assert profile_payload["command_behavior"]["auth_state"] == "connected"
 
     async with db_base.async_session_maker() as session:
         result = await session.execute(
             select(ManagedSecret).where(
-                ManagedSecret.slug == "claude-anthropic-manual-auth-token"
+                ManagedSecret.slug == expected_secret_slug
             )
         )
         secret = result.scalar_one()
@@ -656,6 +669,52 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert secret.ciphertext == submitted_token
     assert validated_tokens == [submitted_token]
     assert synced_runtimes == ["claude_code"]
+
+
+def test_claude_manual_auth_secret_slug_is_collision_resistant() -> None:
+    first = provider_profiles_router._claude_manual_secret_slug("claude.anthropic")
+    second = provider_profiles_router._claude_manual_secret_slug("claude_anthropic")
+
+    assert first != second
+    assert first.startswith("claude-anthropic-")
+    assert second.startswith("claude-anthropic-")
+    assert first.endswith("-token")
+    assert second.endswith("-token")
+
+
+@pytest.mark.asyncio
+async def test_validate_claude_manual_token_reuses_shared_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_clients: list[object] = []
+    requested_tokens: list[str] = []
+
+    class _FakeResponse:
+        status_code = 200
+
+    class _FakeClient:
+        is_closed = False
+
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+            created_clients.append(self)
+
+        async def get(self, _url: str, *, headers: dict[str, str]) -> _FakeResponse:
+            requested_tokens.append(headers["x-api-key"])
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        provider_profiles_router,
+        "_claude_manual_validation_client",
+        None,
+    )
+    monkeypatch.setattr(provider_profiles_router.httpx, "AsyncClient", _FakeClient)
+
+    await provider_profiles_router.validate_claude_manual_token("sk-ant-test-one")
+    await provider_profiles_router.validate_claude_manual_token("sk-ant-test-two")
+
+    assert len(created_clients) == 1
+    assert requested_tokens == ["sk-ant-test-one", "sk-ant-test-two"]
 
 
 @pytest.mark.asyncio
@@ -705,7 +764,8 @@ async def test_claude_manual_auth_commit_rejects_malformed_token_without_persist
     async with db_base.async_session_maker() as session:
         result = await session.execute(
             select(ManagedSecret).where(
-                ManagedSecret.slug == "claude-anthropic-bad-manual-auth-token"
+                ManagedSecret.slug
+                == provider_profiles_router._claude_manual_secret_slug(profile_id)
             )
         )
         assert result.scalar_one_or_none() is None
@@ -765,7 +825,8 @@ async def test_claude_manual_auth_commit_rejects_non_owner_without_validating_or
     async with db_base.async_session_maker() as session:
         result = await session.execute(
             select(ManagedSecret).where(
-                ManagedSecret.slug == "claude-anthropic-owned-manual-auth-token"
+                ManagedSecret.slug
+                == provider_profiles_router._claude_manual_secret_slug(profile_id)
             )
         )
         assert result.scalar_one_or_none() is None
@@ -820,7 +881,8 @@ async def test_claude_manual_auth_commit_rejects_unsupported_profile_without_per
     async with db_base.async_session_maker() as session:
         result = await session.execute(
             select(ManagedSecret).where(
-                ManagedSecret.slug == "codex-unsupported-manual-auth-token"
+                ManagedSecret.slug
+                == provider_profiles_router._claude_manual_secret_slug(profile_id)
             )
         )
         assert result.scalar_one_or_none() is None

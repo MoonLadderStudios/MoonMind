@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from datetime import UTC, datetime
@@ -29,6 +30,7 @@ from moonmind.utils.logging import redact_profile_file_templates, redact_sensiti
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
+_claude_manual_validation_client: httpx.AsyncClient | None = None
 
 
 def validate_secret_refs_helper(value: dict[str, str] | None) -> dict[str, str] | None:
@@ -408,17 +410,27 @@ async def commit_claude_manual_auth(
     profile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
     profile.volume_ref = None
     profile.volume_mount_path = None
-    profile.secret_refs = {"anthropic_api_key": secret_ref}
-    profile.clear_env_keys = [
+    profile.secret_refs = {
+        **(profile.secret_refs or {}),
+        "anthropic_api_key": secret_ref,
+    }
+    clear_env_keys = list(profile.clear_env_keys or [])
+    for env_key in [
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_BASE_URL",
         "OPENAI_API_KEY",
-    ]
+    ]:
+        if env_key not in clear_env_keys:
+            clear_env_keys.append(env_key)
+    profile.clear_env_keys = clear_env_keys
     profile.env_template = {
-        "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}
+        **(profile.env_template or {}),
+        "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"},
     }
-    profile.account_label = body.account_label or profile.account_label or "Claude Anthropic"
+    profile.account_label = (
+        body.account_label or profile.account_label or "Claude Anthropic"
+    )
     behavior = dict(profile.command_behavior or {})
     behavior.update(
         {
@@ -545,7 +557,8 @@ def _claude_manual_secret_slug(profile_id: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", profile_id.lower()).strip("-")
     if not normalized:
         normalized = "claude-anthropic"
-    return f"{normalized}-token"
+    digest = hashlib.sha256(profile_id.encode("utf-8")).hexdigest()[:16]
+    return f"{normalized}-{digest}-token"
 
 
 async def _upsert_managed_secret(
@@ -580,8 +593,10 @@ async def validate_claude_manual_token(token: str) -> None:
         "anthropic-version": "2023-06-01",
     }
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get("https://api.anthropic.com/v1/models", headers=headers)
+        response = await _get_claude_manual_validation_client().get(
+            "https://api.anthropic.com/v1/models",
+            headers=headers,
+        )
     except httpx.HTTPError as exc:
         logger.warning("claude_manual_auth_validation_failed", exc_info=True)
         raise HTTPException(
@@ -599,6 +614,16 @@ async def validate_claude_manual_token(token: str) -> None:
             status_code=502,
             detail="Claude token validation failed.",
         )
+
+
+def _get_claude_manual_validation_client() -> httpx.AsyncClient:
+    global _claude_manual_validation_client
+    if (
+        _claude_manual_validation_client is None
+        or _claude_manual_validation_client.is_closed
+    ):
+        _claude_manual_validation_client = httpx.AsyncClient(timeout=10.0)
+    return _claude_manual_validation_client
 
 
 def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:

@@ -35,6 +35,8 @@ _NON_SECRET_REF_KEYS = frozenset(
     {
         "auth_actions",
         "authactions",
+        "auth_readiness",
+        "authreadiness",
         "auth_status_label",
         "authstatuslabel",
         "auth_state",
