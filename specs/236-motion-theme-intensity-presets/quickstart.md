@@ -19,5 +19,4 @@ npm run ui:test -- frontend/src/components/MaskedConicBorderBeam.test.tsx
 3. Update `MaskedConicBorderBeam.tsx` and `mission-control.css`.
 4. Rerun the focused UI test.
 5. Run the full unit suite.
-6. Create final `/speckit.verify` evidence in `verification.md`.
-
+6. Create final `/moonspec-verify` evidence in `verification.md`.
