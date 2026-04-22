@@ -13,7 +13,7 @@
 
 - Unit tests: `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx frontend/src/lib/liquidGL/useLiquidGL.test.tsx`
 - Integration tests: `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx`
-- Final verification: `/speckit.verify`
+- Final verification: `moonspec-verify` (`/speckit.verify` user-facing equivalent)
 
 ## Format: `[ID] [P?] Description`
 
@@ -102,7 +102,7 @@
 - [X] T029 [P] Review MM-429 traceability in `specs/223-accessibility-performance-fallbacks/spec.md`, `plan.md`, `tasks.md`, and `contracts/accessibility-fallbacks.md`
 - [X] T030 Run quickstart validation commands from `specs/223-accessibility-performance-fallbacks/quickstart.md`
 - [X] T031 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/task-create.test.tsx frontend/src/lib/liquidGL/useLiquidGL.test.tsx frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/task-detail.test.tsx` for final focused unit evidence
-- [X] T032 Run `/speckit.verify` equivalent final verification and write the result to `specs/223-accessibility-performance-fallbacks/verification.md`
+- [X] T032 Run `moonspec-verify` final verification and write the result to `specs/223-accessibility-performance-fallbacks/verification.md`
 
 ---
 
@@ -121,7 +121,7 @@
 - Red-first or verification-first runs must complete before conditional fallback implementation.
 - `mission-control.css` changes are centralized, so CSS implementation tasks should be sequenced rather than parallelized.
 - Route regression tests run after CSS changes.
-- Final verification runs only after tests pass and tasks are marked complete.
+- Final `moonspec-verify` work runs only after tests pass and tasks are marked complete.
 
 ### Parallel Opportunities
 
@@ -150,7 +150,7 @@ Task: "Confirm create-page fallback shell test in frontend/src/entrypoints/task-
 4. Run the focused tests and record red-first failures or existing-pass verification.
 5. Implement only the CSS/hook changes needed by failing MM-429 tests.
 6. Run targeted unit and integration-style UI tests.
-7. Mark tasks complete and run final `/speckit.verify` equivalent.
+7. Mark tasks complete and run final `moonspec-verify`.
 
 ## Notes
 
