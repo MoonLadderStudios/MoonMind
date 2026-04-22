@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from moonmind.workflows.temporal.artifacts import TemporalArtifactValidationError
@@ -69,6 +70,30 @@ REPORT_BUNDLE_ALLOWED_KEYS = frozenset(
         "counts",
     }
 )
+GENERIC_OUTPUT_LINK_TYPES = frozenset(
+    {
+        "output.primary",
+        "output.summary",
+        "output.agent_result",
+    }
+)
+REPORT_WORKFLOW_ROLLOUT_PHASES = (
+    "metadata_conventions",
+    "report_links_and_ui_surfacing",
+    "compact_report_bundle_contract",
+    "optional_projections_filters_retention_pinning",
+)
+REPORT_PROJECTION_ALLOWED_KEYS = frozenset(
+    {
+        "has_report",
+        "latest_report_ref",
+        "latest_report_summary_ref",
+        "report_type",
+        "report_status",
+        "finding_counts",
+        "severity_counts",
+    }
+)
 _UNSAFE_REPORT_BUNDLE_KEY_PATTERN = re.compile(
     r"(?i)(body|blob|payload|raw_?download_?url|presigned|url|log|screenshot|"
     r"transcript|finding_?details|evidence_?body)"
@@ -84,6 +109,94 @@ _SECRET_VALUE_PATTERN = re.compile(
     r"(?i)(ghp_|github_pat_|AIza|ATATT|AKIA|token\s*[=:]|password\s*[=:]|"
     r"authorization\s*:|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ReportWorkflowMapping:
+    """Executable rollout example for one report-producing workflow family."""
+
+    workflow_family: str
+    report_type: str
+    report_link_types: tuple[str, ...]
+    observability_link_types: tuple[str, ...]
+    recommended_metadata_keys: tuple[str, ...]
+
+
+REPORT_WORKFLOW_MAPPINGS: dict[str, ReportWorkflowMapping] = {
+    "unit_test": ReportWorkflowMapping(
+        workflow_family="unit_test",
+        report_type="unit_test_report",
+        report_link_types=(
+            "report.primary",
+            "report.summary",
+            "report.structured",
+            "report.evidence",
+        ),
+        observability_link_types=(
+            "runtime.stdout",
+            "runtime.stderr",
+            "runtime.diagnostics",
+        ),
+        recommended_metadata_keys=(
+            "artifact_type",
+            "producer",
+            "subject",
+            "finding_counts",
+        ),
+    ),
+    "coverage": ReportWorkflowMapping(
+        workflow_family="coverage",
+        report_type="coverage_report",
+        report_link_types=(
+            "report.primary",
+            "report.structured",
+            "report.evidence",
+        ),
+        observability_link_types=(),
+        recommended_metadata_keys=(
+            "artifact_type",
+            "subject",
+            "finding_counts",
+        ),
+    ),
+    "security_pentest": ReportWorkflowMapping(
+        workflow_family="security_pentest",
+        report_type="security_pentest_report",
+        report_link_types=(
+            "report.primary",
+            "report.summary",
+            "report.structured",
+            "report.evidence",
+        ),
+        observability_link_types=(
+            "runtime.stdout",
+            "runtime.stderr",
+            "runtime.diagnostics",
+        ),
+        recommended_metadata_keys=(
+            "artifact_type",
+            "producer",
+            "subject",
+            "severity_counts",
+            "sensitivity",
+        ),
+    ),
+    "benchmark": ReportWorkflowMapping(
+        workflow_family="benchmark",
+        report_type="benchmark_report",
+        report_link_types=(
+            "report.primary",
+            "report.structured",
+            "report.evidence",
+        ),
+        observability_link_types=(),
+        recommended_metadata_keys=(
+            "artifact_type",
+            "subject",
+            "finding_counts",
+        ),
+    ),
+}
 
 
 def is_report_artifact_link_type(link_type: str | None) -> bool:
@@ -116,6 +229,97 @@ def validate_report_artifact_contract(
         dict(metadata or {}),
         allow_internal_metadata=allow_internal_metadata,
     )
+
+
+def get_report_workflow_mapping(workflow_family: str) -> ReportWorkflowMapping:
+    """Return the executable MM-464 rollout mapping for a workflow family."""
+
+    normalized_family = str(workflow_family or "").strip().lower().replace("-", "_")
+    try:
+        return REPORT_WORKFLOW_MAPPINGS[normalized_family]
+    except KeyError as exc:
+        raise TemporalArtifactValidationError(
+            f"unsupported report workflow family '{workflow_family}'"
+        ) from exc
+
+
+def classify_report_rollout_artifacts(
+    link_types: Sequence[str],
+) -> dict[str, Any]:
+    """Classify artifact links for report rollout without local report guessing."""
+
+    normalized = tuple(str(link_type or "").strip() for link_type in link_types)
+    report_links = tuple(
+        link_type for link_type in normalized if link_type.startswith("report.")
+    )
+    generic_links = tuple(
+        link_type for link_type in normalized if link_type in GENERIC_OUTPUT_LINK_TYPES
+    )
+    has_primary_report = "report.primary" in report_links
+    if has_primary_report:
+        mode = "report"
+    elif report_links:
+        mode = "invalid"
+    elif generic_links:
+        mode = "generic_fallback"
+    else:
+        mode = "none"
+    return {
+        "mode": mode,
+        "has_canonical_report": has_primary_report,
+        "report_link_types": report_links,
+        "generic_output_link_types": generic_links,
+    }
+
+
+def validate_report_workflow_artifact_classes(
+    workflow_family: str,
+    link_types: Sequence[str],
+    *,
+    allow_generic_fallback: bool = False,
+) -> None:
+    """Validate MM-464 rollout artifact classes for a report-producing workflow."""
+
+    mapping = get_report_workflow_mapping(workflow_family)
+    classification = classify_report_rollout_artifacts(link_types)
+    if classification["mode"] == "generic_fallback":
+        if allow_generic_fallback:
+            return
+        raise TemporalArtifactValidationError(
+            "report-producing workflows must publish report.primary; "
+            "output.primary is only a generic fallback"
+        )
+    if classification["mode"] != "report":
+        raise TemporalArtifactValidationError(
+            "report-producing workflows must publish report.primary"
+        )
+
+    normalized = {str(link_type or "").strip() for link_type in link_types}
+    allowed = set(mapping.report_link_types) | set(mapping.observability_link_types)
+    unsupported_report_links = sorted(
+        link_type
+        for link_type in normalized
+        if link_type.startswith("report.") and link_type not in mapping.report_link_types
+    )
+    if unsupported_report_links:
+        raise TemporalArtifactValidationError(
+            "unsupported report workflow link type "
+            + ", ".join(unsupported_report_links)
+        )
+    if "report.primary" not in normalized:
+        raise TemporalArtifactValidationError(
+            "report-producing workflows must publish report.primary"
+        )
+    unexpected_observability = sorted(
+        link_type
+        for link_type in normalized
+        if link_type.startswith("runtime.") and link_type not in allowed
+    )
+    if unexpected_observability:
+        raise TemporalArtifactValidationError(
+            "unsupported report workflow observability link type "
+            + ", ".join(unexpected_observability)
+        )
 
 
 def build_report_bundle_result(
@@ -151,6 +355,58 @@ def build_report_bundle_result(
         result["counts"] = dict(counts)
     validate_report_bundle_result(result)
     return result
+
+
+def build_report_projection_summary(
+    bundle: Mapping[str, Any],
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a report convenience projection over compact artifact refs only."""
+
+    validate_report_bundle_result(bundle)
+    for key in bundle:
+        normalized_key = str(key or "").strip()
+        if normalized_key not in REPORT_BUNDLE_ALLOWED_KEYS:
+            raise TemporalArtifactValidationError(
+                f"unsupported projection key '{normalized_key}'"
+            )
+
+    safe_metadata = dict(metadata or {})
+    for key, value in safe_metadata.items():
+        normalized_key = str(key or "").strip()
+        if normalized_key not in {"finding_counts", "severity_counts"}:
+            raise TemporalArtifactValidationError(
+                f"unsafe report projection metadata key '{normalized_key}'"
+            )
+        _validate_report_metadata_value(value, path=normalized_key, depth=0)
+
+    primary_ref = bundle.get("primary_report_ref")
+    summary_ref = bundle.get("summary_ref")
+    projection: dict[str, Any] = {"has_report": primary_ref is not None}
+    if primary_ref is not None:
+        projection["latest_report_ref"] = _compact_artifact_ref(primary_ref)
+    if summary_ref is not None:
+        projection["latest_report_summary_ref"] = _compact_artifact_ref(summary_ref)
+    if bundle.get("report_type") is not None:
+        projection["report_type"] = str(bundle["report_type"])
+    if bundle.get("report_scope") is not None:
+        projection["report_status"] = str(bundle["report_scope"])
+    for key in ("finding_counts", "severity_counts"):
+        if key in safe_metadata:
+            if not isinstance(safe_metadata[key], Mapping):
+                raise TemporalArtifactValidationError(
+                    f"unsafe report projection metadata value at '{key}'"
+                )
+            projection[key] = dict(safe_metadata[key])
+
+    for key, value in projection.items():
+        if key not in REPORT_PROJECTION_ALLOWED_KEYS:
+            raise TemporalArtifactValidationError(
+                f"unsupported projection key '{key}'"
+            )
+        _validate_report_bundle_value(value, path=key, depth=0)
+    return projection
 
 
 def validate_report_bundle_result(bundle: Mapping[str, Any]) -> None:
