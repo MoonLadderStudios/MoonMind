@@ -32,7 +32,9 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal import artifacts as artifact_module
 from moonmind.workflows.temporal.report_artifacts import (
     REPORT_ARTIFACT_LINK_TYPES,
+    build_report_bundle_result,
     validate_report_artifact_contract,
+    validate_report_bundle_result,
 )
 
 pytestmark = [pytest.mark.asyncio]
@@ -577,6 +579,180 @@ async def test_latest_report_primary_uses_existing_execution_linkage(
                 second.artifact_id
             ]
             assert first.artifact_id != second.artifact_id
+
+
+async def test_report_bundle_result_is_compact_and_rejects_inline_payloads() -> None:
+    """MM-461: Report bundle results must be refs and bounded metadata only."""
+
+    bundle = build_report_bundle_result(
+        primary_report_ref={"artifact_ref_v": 1, "artifact_id": "art_primary"},
+        summary_ref={"artifact_ref_v": 1, "artifact_id": "art_summary"},
+        structured_ref={"artifact_ref_v": 1, "artifact_id": "art_structured"},
+        evidence_refs=({"artifact_ref_v": 1, "artifact_id": "art_evidence"},),
+        report_type="unit_test_report",
+        report_scope="final",
+        sensitivity="restricted",
+        counts={"total": 3},
+    )
+
+    assert bundle == {
+        "report_bundle_v": 1,
+        "primary_report_ref": {"artifact_ref_v": 1, "artifact_id": "art_primary"},
+        "summary_ref": {"artifact_ref_v": 1, "artifact_id": "art_summary"},
+        "structured_ref": {"artifact_ref_v": 1, "artifact_id": "art_structured"},
+        "evidence_refs": [{"artifact_ref_v": 1, "artifact_id": "art_evidence"}],
+        "report_type": "unit_test_report",
+        "report_scope": "final",
+        "sensitivity": "restricted",
+        "counts": {"total": 3},
+    }
+
+    with pytest.raises(TemporalArtifactValidationError, match="unsafe report bundle"):
+        validate_report_bundle_result(
+            {
+                "report_bundle_v": 1,
+                "primary_report_ref": {
+                    "artifact_ref_v": 1,
+                    "artifact_id": "art_primary",
+                },
+                "report_body": "# inline body",
+            }
+        )
+
+    with pytest.raises(TemporalArtifactValidationError, match="unsafe report bundle"):
+        validate_report_bundle_result(
+            {
+                "report_bundle_v": 1,
+                "primary_report_ref": {
+                    "artifact_ref_v": 1,
+                    "artifact_id": "art_primary",
+                },
+                "raw_download_url": "https://example.invalid/report",
+            }
+        )
+
+
+async def test_publish_report_bundle_writes_links_final_marker_and_step_metadata(
+    tmp_path: Path,
+) -> None:
+    """MM-461: Activities should publish artifact-backed report bundles."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            bundle = await service.publish_report_bundle(
+                principal="workflow-producer",
+                namespace="moonmind",
+                workflow_id="wf-report",
+                run_id="run-report",
+                report_type="unit_test_report",
+                report_scope="final",
+                sensitivity="restricted",
+                counts={"total": 3},
+                step_id="step-1",
+                attempt=2,
+                scope="step",
+                primary={
+                    "payload": "# Final report",
+                    "content_type": "text/markdown",
+                    "label": "Final report",
+                    "metadata": {"title": "Final report"},
+                },
+                summary={
+                    "payload": "Summary",
+                    "content_type": "text/plain",
+                    "label": "Summary",
+                },
+                structured={
+                    "payload": b'{"findings":[]}',
+                    "content_type": "application/json",
+                    "label": "Findings JSON",
+                },
+                evidence=[
+                    {
+                        "payload": "command output",
+                        "content_type": "text/plain",
+                        "label": "Command output",
+                    }
+                ],
+            )
+
+            assert bundle["report_bundle_v"] == 1
+            assert bundle["primary_report_ref"]["artifact_ref_v"] == 1
+            assert len(bundle["evidence_refs"]) == 1
+
+            primary = await repo.get_artifact(bundle["primary_report_ref"]["artifact_id"])
+            primary_links = await repo.list_links(primary.artifact_id)
+            assert primary_links[0].namespace == "moonmind"
+            assert primary_links[0].workflow_id == "wf-report"
+            assert primary_links[0].run_id == "run-report"
+            assert primary_links[0].link_type == "report.primary"
+            assert primary_links[0].label == "Final report"
+            assert primary.metadata_json["is_final_report"] is True
+            assert primary.metadata_json["report_scope"] == "final"
+            assert primary.metadata_json["step_id"] == "step-1"
+            assert primary.metadata_json["attempt"] == 2
+            assert primary.metadata_json["scope"] == "step"
+
+            evidence = await repo.get_artifact(bundle["evidence_refs"][0]["artifact_id"])
+            evidence_links = await repo.list_links(evidence.artifact_id)
+            assert evidence_links[0].link_type == "report.evidence"
+
+
+async def test_publish_report_bundle_rejects_missing_and_duplicate_final_marker(
+    tmp_path: Path,
+) -> None:
+    """MM-461: Final bundles must have exactly one canonical final report."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            with pytest.raises(TemporalArtifactValidationError, match="primary report"):
+                await service.publish_report_bundle(
+                    principal="workflow-producer",
+                    namespace="moonmind",
+                    workflow_id="wf-report",
+                    run_id="run-report",
+                    report_type="unit_test_report",
+                    report_scope="final",
+                    primary=None,
+                    evidence=[
+                        {
+                            "payload": "evidence",
+                            "metadata": {"is_final_report": True},
+                        }
+                    ],
+                )
+
+            with pytest.raises(TemporalArtifactValidationError, match="exactly one"):
+                await service.publish_report_bundle(
+                    principal="workflow-producer",
+                    namespace="moonmind",
+                    workflow_id="wf-report",
+                    run_id="run-report",
+                    report_type="unit_test_report",
+                    report_scope="final",
+                    primary={
+                        "payload": "# Final report",
+                        "metadata": {"is_final_report": True},
+                    },
+                    evidence=[
+                        {
+                            "payload": "evidence",
+                            "metadata": {"is_final_report": True},
+                        }
+                    ],
+                )
 
 
 async def test_write_complete_rejects_invalid_task_image_signature(

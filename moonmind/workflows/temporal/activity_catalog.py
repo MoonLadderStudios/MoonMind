@@ -320,6 +320,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
         ),
         TemporalActivityDefinition(
+            activity_type="artifact.publish_report_bundle",
+            family="artifact",
+            capability_class="artifacts",
+            task_queue=cfg.activity_artifacts_task_queue,
+            fleet=ARTIFACTS_FLEET,
+            timeouts=TemporalActivityTimeouts(60, 120),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
             activity_type="artifact.read",
             family="artifact",
             capability_class="artifacts",

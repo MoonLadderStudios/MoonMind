@@ -96,3 +96,33 @@ async def test_artifact_write_complete_payload_roundtrip_legacy_list_ints(activi
     )
 
 
+@pytest.mark.asyncio
+async def test_artifact_publish_report_bundle_delegates_to_service(
+    activities, mock_service
+):
+    """MM-461: Activity facade should expose report bundle publication."""
+
+    expected = {
+        "report_bundle_v": 1,
+        "primary_report_ref": {"artifact_ref_v": 1, "artifact_id": "art_primary"},
+        "evidence_refs": [],
+        "report_type": "unit_test_report",
+        "report_scope": "final",
+    }
+    mock_service.publish_report_bundle.return_value = expected
+
+    request = {
+        "principal": "workflow-producer",
+        "namespace": "moonmind",
+        "workflow_id": "wf-report",
+        "run_id": "run-report",
+        "report_type": "unit_test_report",
+        "report_scope": "final",
+        "primary": {"payload": "# Final report", "content_type": "text/markdown"},
+    }
+
+    result = await activities.artifact_publish_report_bundle(request)
+
+    assert result == expected
+    mock_service.publish_report_bundle.assert_awaited_once_with(**request)
+
