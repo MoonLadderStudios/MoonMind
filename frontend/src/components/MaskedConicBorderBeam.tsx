@@ -21,11 +21,12 @@ export interface MaskedConicBorderBeamProps extends HTMLAttributes<HTMLDivElemen
   glow?: MaskedConicBorderBeamGlow;
   variant?: MaskedConicBorderBeamVariant;
   reducedMotion?: MaskedConicBorderBeamReducedMotion;
+  statusLabel?: string | null;
   children?: ReactNode;
 }
 
 export const MASKED_CONIC_BORDER_BEAM_TRACEABILITY = {
-  jiraIssueKeys: ['MM-465', 'MM-466', 'MM-467'],
+  jiraIssueKeys: ['MM-465', 'MM-466', 'MM-467', 'MM-468'],
   designRequirements: [
     'DESIGN-REQ-001',
     'DESIGN-REQ-002',
@@ -39,6 +40,9 @@ export const MASKED_CONIC_BORDER_BEAM_TRACEABILITY = {
     'DESIGN-REQ-010',
     'DESIGN-REQ-011',
     'DESIGN-REQ-012',
+    'DESIGN-REQ-013',
+    'DESIGN-REQ-014',
+    'DESIGN-REQ-015',
     'DESIGN-REQ-016',
   ],
 } as const;
@@ -73,6 +77,7 @@ export function MaskedConicBorderBeam({
   glow = 'low',
   variant = 'precision',
   reducedMotion = 'auto',
+  statusLabel = 'Executing',
   className = '',
   style,
   children,
@@ -125,7 +130,14 @@ export function MaskedConicBorderBeam({
           data-testid="masked-conic-border-beam-glow"
         />
       ) : null}
-      <div className="masked-conic-border-beam__content">{children}</div>
+      <div className="masked-conic-border-beam__content">
+        {active && statusLabel ? (
+          <span className="sr-only" data-testid="masked-conic-border-beam-status">
+            {statusLabel}
+          </span>
+        ) : null}
+        {children}
+      </div>
     </div>
   );
 }
