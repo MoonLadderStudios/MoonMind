@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -14,6 +15,7 @@ from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
     ManagedAgentRateLimitPolicy,
+    ManagedSecret,
     ProviderCredentialSource,
     RuntimeMaterializationMode,
 )
@@ -559,3 +561,151 @@ async def test_update_profile_syncs_provider_profile_manager(
     signal_name, signal_payload = signals[-1]
     assert signal_name == "sync_profiles"
     assert signal_payload["profiles"] == []
+
+
+@pytest.mark.asyncio
+async def test_claude_manual_auth_commit_stores_secret_ref_only(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_id = "claude-anthropic-manual-auth"
+    submitted_token = "sk-ant-test-route-token"
+    validated_tokens: list[str] = []
+    synced_runtimes: list[str] = []
+
+    async def _fake_validate(token: str) -> None:
+        validated_tokens.append(token)
+
+    async def _fake_sync(*, session: AsyncSession, runtime_id: str) -> None:
+        synced_runtimes.append(runtime_id)
+
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.validate_claude_manual_token",
+        _fake_validate,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
+        _fake_sync,
+    )
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="claude_code",
+                    provider_id="anthropic",
+                    provider_label="Anthropic",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref="claude_auth_volume",
+                    volume_mount_path="/home/app/.claude",
+                    clear_env_keys=["OPENAI_API_KEY"],
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/manual-auth/commit",
+            json={"token": submitted_token},
+        )
+        profile_response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert response.status_code == 200
+    response_text = response.text
+    assert submitted_token not in response_text
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["status_label"] == "Claude token ready"
+    assert payload["readiness"]["connected"] is True
+    assert payload["readiness"]["backing_secret_exists"] is True
+    assert payload["readiness"]["launch_ready"] is True
+    assert payload["secret_ref"] == "db://claude-anthropic-manual-auth-token"
+
+    assert profile_response.status_code == 200
+    profile_payload = profile_response.json()
+    assert submitted_token not in profile_response.text
+    assert profile_payload["credential_source"] == "secret_ref"
+    assert profile_payload["runtime_materialization_mode"] == "api_key_env"
+    assert profile_payload["volume_ref"] is None
+    assert profile_payload["volume_mount_path"] is None
+    assert profile_payload["secret_refs"] == {
+        "anthropic_api_key": "db://claude-anthropic-manual-auth-token"
+    }
+    assert profile_payload["env_template"] == {
+        "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}
+    }
+    assert "ANTHROPIC_API_KEY" in profile_payload["clear_env_keys"]
+    assert "ANTHROPIC_AUTH_TOKEN" in profile_payload["clear_env_keys"]
+    assert "OPENAI_API_KEY" in profile_payload["clear_env_keys"]
+    assert profile_payload["command_behavior"]["auth_strategy"] == "claude_manual_token"
+    assert profile_payload["command_behavior"]["auth_state"] == "connected"
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedSecret).where(
+                ManagedSecret.slug == "claude-anthropic-manual-auth-token"
+            )
+        )
+        secret = result.scalar_one()
+
+    assert secret.ciphertext == submitted_token
+    assert validated_tokens == [submitted_token]
+    assert synced_runtimes == ["claude_code"]
+
+
+@pytest.mark.asyncio
+async def test_claude_manual_auth_commit_rejects_malformed_token_without_persisting(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_id = "claude-anthropic-bad-manual-auth"
+    raw_token = "not-a-claude-token-secret"
+
+    async def _unexpected_validate(token: str) -> None:
+        raise AssertionError("malformed tokens should fail before upstream validation")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.validate_claude_manual_token",
+        _unexpected_validate,
+    )
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="claude_code",
+                    provider_id="anthropic",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref="claude_auth_volume",
+                    volume_mount_path="/home/app/.claude",
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/manual-auth/commit",
+            json={"token": raw_token},
+        )
+
+    assert response.status_code == 422
+    assert raw_token not in response.text
+    assert response.json()["detail"] == "Claude token validation failed."
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedSecret).where(
+                ManagedSecret.slug == "claude-anthropic-bad-manual-auth-token"
+            )
+        )
+        assert result.scalar_one_or_none() is None

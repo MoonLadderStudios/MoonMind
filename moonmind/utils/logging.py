@@ -33,6 +33,14 @@ _NON_SECRET_SENTINEL_VALUES = frozenset(
 )
 _NON_SECRET_REF_KEYS = frozenset(
     {
+        "auth_actions",
+        "authactions",
+        "auth_status_label",
+        "authstatuslabel",
+        "auth_state",
+        "authstate",
+        "auth_strategy",
+        "authstrategy",
         "credential_source",
         "credentialsource",
         "runtime_materialization_mode",
