@@ -1,0 +1,928 @@
+{
+  "source": {
+    "title": "Task Remediation",
+    "path": "docs/Tasks/TaskRemediation.md",
+    "referencePath": "docs/Tasks/TaskRemediation.md",
+    "originalDesignText": "# Task Remediation\n\n**Status:** Desired-state design  \n**Owners:** MoonMind Platform + Mission Control  \n**Last Updated:** 2026-04-21  \n**Related:** `docs/Tasks/TaskDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/TaskRunsApi.md`, `docs/Tasks/TaskProposalSystem.md`, `docs/ManagedAgents/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Temporal/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`\n\n---\n\n## 1. Purpose\n\nThis document defines the desired-state contract for **Task Remediation** in MoonMind.\n\nTask Remediation is the system that allows one MoonMind task to **troubleshoot, observe, and optionally intervene on another MoonMind task or run**. It is the architectural home for the “self-healing” feature: a task may be created specifically to investigate another task, read its durable evidence, follow its live observability stream when appropriate, and take typed, policy-bound administrative actions when allowed.\n\nIn this document:\n\n- a **target execution** is the task being investigated or repaired,\n- a **remediation task** is the follow-up task doing the investigation or repair,\n- **troubleshooting** means evidence collection and diagnosis,\n- **remediation** means diagnosis plus allowed intervention actions,\n- **self-healing** means automated or operator-triggered creation of remediation tasks under policy.\n\nThe core design goal is:\n\n> MoonMind should let a task investigate another task **without turning logs into the source of truth and without turning the agent into an unaudited root shell**.\n\n---\n\n## 2. Why a separate system is required\n\nTask Remediation must be a first-class concept, separate from ordinary task dependencies.\n\nTask dependencies are intentionally narrow. They block one `MoonMind.Run` on the successful terminal completion of another `MoonMind.Run`. They do not import the upstream run’s plan DAG, internal context, logs, or artifacts into the dependent run. They also fail the dependent run when the upstream prerequisite ends in a non-success terminal state. That is the correct contract for orchestration ordering, but it is the wrong contract for troubleshooting and repair.\n\nRemediation needs the opposite behavior:\n\n1. it often starts **because** the target run failed, stalled, timed out, or requested attention;\n2. it must read the target run’s evidence instead of waiting for success;\n3. it may need to follow live progress while the target is still active;\n4. it may need to take bounded administrative actions such as clearing a stale slot, interrupting a managed turn, or restarting a managed container through a control-plane action.\n\nTherefore MoonMind needs a dedicated **remediation relationship** and a dedicated **privileged capability surface** rather than overloading `dependsOn`.\n\n---\n\n## 3. Design goals\n\nTask Remediation must satisfy all of the following:\n\n1. **Cross-task troubleshooting**\n   - A new task can explicitly target another task/execution.\n   - The target relationship is durable, inspectable, and visible in both directions.\n\n2. **Pinned evidence identity**\n   - The remediation task can target a logical execution by `workflowId`.\n   - It can also pin a specific run instance by `runId` so it does not silently drift when the target reruns or continues as new.\n\n3. **Artifact-first evidence access**\n   - The remediation task can read:\n     - execution detail,\n     - latest/current step ledger,\n     - selected step artifact refs,\n     - managed-run observability summaries,\n     - durable logs and diagnostics,\n     - continuity and control-boundary artifacts for managed sessions.\n\n4. **Optional live follow**\n   - When the target is active and observability supports it, the remediation task may follow live logs or structured observability events.\n   - Live follow is additive, not authoritative.\n\n5. **Typed administrative actions**\n   - The remediation task may execute allowed administrative actions through a MoonMind-owned action registry.\n   - Actions are explicit, validated, idempotent, and audited.\n\n6. **Privilege separation**\n   - A remediation task may run with stronger permissions than ordinary tasks.\n   - Those permissions are expressed through a named policy/profile, not through implicit raw host access.\n\n7. **Auditability**\n   - Every diagnosis, plan, action request, action result, and verification result must leave durable evidence.\n\n8. **Loop prevention**\n   - Remediation must not create unbounded self-healing loops or conflicting concurrent healers.\n\n9. **Graceful degradation**\n   - Historical runs with only merged logs or partial artifact coverage must still be troubleshootable.\n   - Missing evidence should degrade the remediation task, not deadlock it.\n\n---\n\n## 4. Non-goals\n\nThis design does **not** attempt to provide:\n\n- arbitrary raw shell access on the MoonMind host,\n- unrestricted Docker daemon access from the remediation runtime,\n- arbitrary SQL or direct database row editing by the agent,\n- silent import of another task’s entire workflow history into `initialParameters`,\n- cross-task managed-session reuse,\n- a rule that every failed task automatically spawns an admin healer,\n- a guarantee that historical runs always have full structured event history,\n- a bypass around the Secrets System or artifact redaction rules,\n- a claim that Live Logs itself is the source of truth.\n\nMoonMind may still support operator handoff or manual terminal workflows elsewhere. This document only defines the **task-based remediation system**.\n\n---\n\n## 5. Architectural stance\n\n### 5.1 Remediation tasks remain `MoonMind.Run`\n\nA remediation task should still be represented as a normal top-level `MoonMind.Run` execution with additional nested semantics under `task.remediation`.\n\nThis keeps remediation aligned with the existing task-shaped create path, Mission Control task views, proposal promotion, artifacts, step ledger, cancellation, rerun, and summary flows. A new top-level workflow type is not required in v1.\n\n### 5.2 Remediation is a relationship, not a dependency\n\nA remediation task has a **directed link** to a target execution. The link is not a dependency gate. The remediation run starts immediately once created (or once its own schedule starts); it does not wait for the target to complete successfully.\n\n### 5.3 Control remains separate from observation\n\nLive Logs and observability remain passive observation surfaces. Intervention must occur through a separate MoonMind-owned action surface. A remediation task may use both, but it must not treat the log timeline itself as the control channel.\n\n### 5.4 Source of truth remains unchanged\n\nFor the target execution:\n\n- execution identity and lifecycle remain Temporal-owned,\n- planned structure remains owned by the plan artifact,\n- live step state remains owned by workflow state and step queries,\n- evidence remains owned by artifact linkage and managed-run observability,\n- projections remain read models, not a second workflow engine.\n\nTask Remediation is layered on top of those contracts; it does not redefine them.\n\n---\n\n## 6. Core invariants\n\nThe following invariants are fixed:\n\n1. **A remediation task is explicitly marked.**  \n   The canonical marker is `payload.task.remediation`.\n\n2. **A remediation task targets one logical execution and one pinned run snapshot.**  \n   `target.workflowId` is required. `target.runId` is resolved and persisted at create time even if the user omitted it.\n\n3. **Remediation is non-transitive by default.**  \n   If B remediates A and C remediates B, C does not automatically gain authority over A unless explicitly configured.\n\n4. **Remediation does not import unbounded upstream data into workflow history.**  \n   Large logs, diagnostics, provider snapshots, and evidence bodies remain behind artifact refs or observability APIs.\n\n5. **All evidence access is server-mediated.**  \n   Artifact refs are identifiers, not access grants. The remediation task never receives presigned URLs, raw storage keys, or raw local filesystem paths as durable context.\n\n6. **Administrative actions are typed and allowlisted.**  \n   Remediation never implies “run any command the model suggests.”\n\n7. **Every side-effecting action is idempotent or safely keyed.**  \n   Replays, retries, and duplicate requests must not create duplicate destructive actions.\n\n8. **Exclusive locking is required for acting on shared targets.**  \n   Diagnosis may be parallelized later; mutation may not.\n\n9. **Secrets remain redacted.**  \n   Stronger task authority does not override redaction, audit, or secret-reference rules.\n\n10. **Nested remediation is off by default.**  \n    Automatic remediation of remediation tasks is disabled unless explicitly allowed by policy.\n\n11. **Force termination stays high-risk.**  \n    Even for admin remediation, forced termination is treated as an ops-grade action, not a casual fallback.\n\n12. **Failure to resolve evidence never becomes infinite wait.**  \n    The remediation task must degrade, escalate, or fail with a bounded reason.\n\n---\n\n## 7. Submission contract\n\n### 7.1 Canonical create path\n\nThe canonical create path remains the task-shaped submit flow that normalizes into `POST /api/executions`.\n\nRepresentative request:\n\n```json\n{\n  \"type\": \"task\",\n  \"payload\": {\n    \"repository\": \"MoonLadderStudios/MoonMind\",\n    \"task\": {\n      \"instructions\": \"Investigate the target task, gather evidence, and apply allowed remediation actions if justified.\",\n      \"runtime\": { \"mode\": \"codex\" },\n      \"remediation\": {\n        \"target\": {\n          \"workflowId\": \"mm:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\n          \"runId\": \"8f15a7b2-6e48-44f0-a3ba-d2f0c8d96fd4\",\n          \"stepSelectors\": [\n            { \"logicalStepId\": \"run-tests\", \"attempt\": 1 }\n          ],\n          \"taskRunIds\": [\"tr_01HV8A3Y6Y3Q0QAB7M7H1R5Q7N\"]\n        },\n        \"mode\": \"snapshot_then_follow\",\n        \"authorityMode\": \"admin_auto\",\n        \"evidencePolicy\": {\n          \"includeStepLedger\": true,\n          \"includeObservabilitySummary\": true,\n          \"includeLogs\": [\"merged\", \"stdout\", \"stderr\"],\n          \"includeDiagnostics\": true,\n          \"includeProviderSnapshots\": true,\n          \"includeContinuityArtifacts\": true,\n          \"tailLines\": 2000\n        },\n        \"actionPolicyRef\": \"admin_healer_default\",\n        \"approvalPolicy\": {\n          \"mode\": \"risk_gated\",\n          \"autoAllowedRisk\": \"medium\"\n        },\n        \"lockPolicy\": {\n          \"scope\": \"target_execution\",\n          \"mode\": \"exclusive\"\n        },\n        \"trigger\": {\n          \"type\": \"manual\",\n          \"createdByWorkflowId\": null\n        }\n      }\n    }\n  }\n}\n```\n\n### 7.2 Canonical normalized field\n\nThe backend normalizes remediation intent into:\n\n```json\n{\n  \"initialParameters\": {\n    \"task\": {\n      \"remediation\": { \"...\": \"...\" }\n    }\n  }\n}\n```\n\nThe `task.remediation` object is the durable contract. Compatibility routes may expose different shapes, but they must normalize into this nested object before `MoonMind.Run` starts.\n\n### 7.3 Field semantics\n\n#### `target.workflowId`\nRequired durable identity of the target execution.\n\n#### `target.runId`\nPinned target run instance. If omitted, the server resolves the latest/current run at create time and persists the resolved value.\n\n#### `target.stepSelectors[]`\nOptional bounded selectors for steps the remediation task should prioritize. Each selector may include:\n- `logicalStepId`\n- `attempt`\n- `taskRunId`\n\n#### `target.taskRunIds[]`\nOptional direct observability bindings when the creator already knows which managed-run records matter.\n\n#### `mode`\nAllowed values:\n\n- `snapshot` — build a point-in-time evidence bundle only\n- `live_follow` — follow active observability where supported\n- `snapshot_then_follow` — create a point-in-time bundle, then continue live observation if possible\n\nDefault: `snapshot_then_follow`.\n\n#### `authorityMode`\nAllowed values:\n\n- `observe_only`\n- `approval_gated`\n- `admin_auto`\n\nThis field controls whether the task may only diagnose, may plan actions but require approval, or may execute actions automatically within policy.\n\n#### `evidencePolicy`\nBounded hints controlling which evidence classes are requested and how much initial log context to include.\n\n#### `actionPolicyRef`\nNamed policy describing the action allowlist, risk thresholds, lock requirements, verification requirements, and retry budget.\n\n#### `approvalPolicy`\nPolicy for human approval requirements.\n\n#### `lockPolicy`\nPolicy for lock scope and exclusivity.\n\n#### `trigger`\nMetadata describing how the remediation task was created:\n- `manual`\n- `on_failed`\n- `on_attention_required`\n- `on_stuck`\n- `policy`\n- `proposal_promoted`\n\n### 7.4 Create-time validation\n\nAt create time, the platform must:\n\n1. require `task.remediation.target.workflowId`,\n2. resolve the target execution and verify caller visibility,\n3. reject malformed self-reference,\n4. reject unsupported target workflow types,\n5. resolve and persist a concrete `target.runId`,\n6. verify that selected `taskRunIds` belong to the target execution or selected steps,\n7. reject unsupported `authorityMode` values,\n8. validate `actionPolicyRef` existence and compatibility with the caller’s permission,\n9. reject nested remediation beyond policy limits,\n10. initialize a durable remediation link record supporting forward and reverse lookup.\n\n### 7.5 Convenience API\n\nMoonMind may expose a convenience route such as:\n\n```http\nPOST /api/executions/{workflowId}/remediation\n```\n\nThat route is only a control-plane convenience. It must expand into the same canonical execution create contract as `POST /api/executions`.\n\n### 7.6 Future automatic self-healing policy\n\nAutomatic creation is intentionally a later layer. When MoonMind adds automatic self-healing, the triggering task may carry a bounded policy such as:\n\n```yaml\ntask:\n  remediationPolicy:\n    enabled: true\n    triggers: [\"failed\", \"attention_required\", \"stuck\"]\n    createMode: \"proposal\"   # or immediate_task\n    templateRef: \"admin_healer_default\"\n    authorityMode: \"approval_gated\"\n    maxActiveRemediations: 1\n```\n\nThe important rule is that **automatic remediation is policy-driven and bounded**, not an undocumented side effect of failure.\n\n---\n\n## 8. Identity, linkage, and read models\n\n### 8.1 Why both `workflowId` and `runId` are required\n\nMoonMind detail routes and compatibility views anchor on the logical execution identity (`workflowId`). However, the latest/current run may change when the target reruns or continues as new. Remediation needs both:\n\n- `workflowId` to identify the logical task,\n- `runId` to pin the evidence snapshot that the remediator started from.\n\n### 8.2 Link directions\n\nThe system must support both of these views:\n\n- **Remediator → Target**\n  - “Which execution is this remediation task investigating?”\n- **Target → Remediators**\n  - “Which remediation tasks have investigated or acted on this target?”\n\n### 8.3 Durable linkage requirements\n\nThe platform must persist enough data to support:\n\n- forward lookup from remediation task to target execution,\n- reverse lookup from target execution to remediation tasks,\n- pinned target run identity,\n- current remediation status,\n- current lock holder,\n- latest action summary,\n- final remediation outcome,\n- Mission Control list/detail rendering.\n\n### 8.4 Read model expectations\n\nA derived remediation link read model is allowed for fast UI and API reads, but it must remain downstream of canonical sources.\n\nAt minimum it should expose:\n\n```json\n{\n  \"remediationWorkflowId\": \"mm:...\",\n  \"remediationRunId\": \"run_...\",\n  \"targetWorkflowId\": \"mm:...\",\n  \"targetRunId\": \"run_...\",\n  \"mode\": \"snapshot_then_follow\",\n  \"authorityMode\": \"admin_auto\",\n  \"status\": \"acting\",\n  \"activeLockScope\": \"target_execution\",\n  \"lastActionKind\": \"provider_profile.evict_stale_lease\",\n  \"resolution\": null,\n  \"createdAt\": \"2026-04-21T18:05:00Z\",\n  \"updatedAt\": \"2026-04-21T18:07:12Z\"\n}\n```\n\n### 8.5 Reverse lookup API\n\nA minimal desired-state surface is:\n\n```http\nGET /api/executions/{workflowId}/remediations?direction=inbound\nGET /api/executions/{workflowId}/remediations?direction=outbound\n```\n\nWhere:\n- `inbound` means remediation tasks targeting this execution,\n- `outbound` means executions that this task is remediating.\n\n---\n\n## 9. Evidence and context model\n\n### 9.1 Evidence sources\n\nThe remediation task may need data from several MoonMind surfaces:\n\n1. **Execution detail**\n   - title, summary, lifecycle state, current run metadata, progress summary.\n\n2. **Step ledger**\n   - selected step status, attempt, summary, `taskRunId`, child refs, step-scoped artifact refs.\n\n3. **Managed-run observability**\n   - observability summary,\n   - stdout/stderr/merged logs,\n   - diagnostics,\n   - optional live-follow stream for active runs.\n\n4. **Execution-linked artifacts**\n   - output summaries,\n   - provider snapshots,\n   - run summaries,\n   - continuity artifacts,\n   - control-boundary artifacts.\n\n5. **Managed-session continuity**\n   - session summary,\n   - session checkpoints,\n   - session control events,\n   - reset boundaries,\n   - session identity metadata when relevant.\n\n### 9.2 Remediation Context Builder\n\nMoonMind should introduce a **Remediation Context Builder** activity or service that resolves the target evidence and creates a single MoonMind-owned bundle artifact for the remediation task.\n\nCanonical output artifact:\n\n- path: `reports/remediation_context.json`\n- artifact type: `remediation.context`\n\nThis artifact is the remediation task’s stable entrypoint. It should contain:\n- target identity,\n- selected steps,\n- observability refs,\n- bounded summaries,\n- compact diagnosis hints,\n- live-follow cursor state if applicable,\n- action policy and approval policy snapshot,\n- lock policy snapshot.\n\n### 9.3 Context artifact shape\n\nRepresentative shape:\n\n```json\n{\n  \"schemaVersion\": \"v1\",\n  \"remediationWorkflowId\": \"mm:remediate_123\",\n  \"generatedAt\": \"2026-04-21T18:05:02Z\",\n  \"target\": {\n    \"workflowId\": \"mm:target_456\",\n    \"runId\": \"run_789\",\n    \"title\": \"Run integration tests\",\n    \"state\": \"awaiting_slot\",\n    \"closeStatus\": null\n  },\n  \"selectedSteps\": [\n    {\n      \"logicalStepId\": \"run-tests\",\n      \"attempt\": 1,\n      \"status\": \"awaiting_external\",\n      \"summary\": \"Waiting on managed runtime slot\",\n      \"taskRunId\": \"tr_01HV...\"\n    }\n  ],\n  \"evidence\": {\n    \"stepLedgerRef\": { \"artifact_id\": \"art_step_ledger_snapshot\" },\n    \"runSummaryRef\": { \"artifact_id\": \"art_run_summary\" },\n    \"taskRuns\": [\n      {\n        \"taskRunId\": \"tr_01HV...\",\n        \"observabilitySummaryRef\": { \"artifact_id\": \"art_obs_summary\" },\n        \"stdoutRef\": { \"artifact_id\": \"art_stdout\" },\n        \"stderrRef\": { \"artifact_id\": \"art_stderr\" },\n        \"mergedLogsRef\": { \"artifact_id\": \"art_merged\" },\n        \"diagnosticsRef\": { \"artifact_id\": \"art_diag\" },\n        \"providerSnapshotRef\": { \"artifact_id\": \"art_provider\" }\n      }\n    ],\n    \"continuityRefs\": [\n      { \"artifact_id\": \"art_session_summary\", \"kind\": \"session.summary\" },\n      { \"artifact_id\": \"art_reset_boundary\", \"kind\": \"session.reset_boundary\" }\n    ]\n  },\n  \"liveFollow\": {\n    \"mode\": \"snapshot_then_follow\",\n    \"supported\": true,\n    \"taskRunId\": \"tr_01HV...\",\n    \"resumeCursor\": { \"sequence\": 3842 }\n  },\n  \"policies\": {\n    \"authorityMode\": \"admin_auto\",\n    \"actionPolicyRef\": \"admin_healer_default\",\n    \"approvalPolicy\": { \"mode\": \"risk_gated\", \"autoAllowedRisk\": \"medium\" },\n    \"lockPolicy\": { \"scope\": \"target_execution\", \"mode\": \"exclusive\" }\n  }\n}\n```\n\n### 9.4 Boundedness rule\n\nThe context artifact must stay **bounded**. It may include small excerpts or summaries, but not unbounded full log bodies. Full logs and rich diagnostics stay behind refs.\n\n### 9.5 Evidence access surface for remediation tasks\n\nThe remediation runtime should not scrape Mission Control pages. It should receive a MoonMind-owned tool surface such as:\n\n- `remediation.get_context()`  \n  Return the parsed `remediation.context` bundle.\n\n- `remediation.read_target_artifact(artifactRef, readMode?)`  \n  Read a referenced artifact through normal artifact policy.\n\n- `remediation.read_target_logs(taskRunId, stream, cursor?, tailLines?)`  \n  Read or tail target logs through the `/api/task-runs` observability surfaces.\n\n- `remediation.follow_target_logs(taskRunId, fromSequence?)`  \n  Live follow when supported.\n\n- `remediation.list_allowed_actions()`  \n  Return action kinds allowed by `actionPolicyRef`.\n\n- `remediation.execute_action(actionKind, params, dryRun?)`  \n  Request a typed intervention.\n\n- `remediation.verify_target(checks...)`  \n  Re-read target health after an action.\n\nThe exact transport may be internal API calls, activities, or MCP tools, but the capability boundary must be MoonMind-owned and typed.\n\n### 9.6 Live follow semantics\n\nLive follow is optional and best effort.\n\nRules:\n\n1. the remediation task may follow only when:\n   - the target run is active,\n   - the target `taskRunId` supports live follow,\n   - policy allows it;\n\n2. the remediation task must persist a resume cursor such as last seen `sequence`;\n\n3. disconnects, worker restarts, or task retries must resume from durable cursor state when possible;\n\n4. when structured event history is unavailable, MoonMind may fall back to merged-log retrieval or artifact tailing;\n\n5. live follow must never become the only evidence path.\n\n### 9.7 Evidence freshness before action\n\nBefore executing a side-effecting action, the remediation task must re-read the target’s current bounded health view. The agent is allowed to start from a pinned snapshot, but it must not act on stale assumptions without a fresh precondition check.\n\n---\n\n## 10. Security and authority model\n\n### 10.1 Authority modes\n\nTask Remediation defines three authority modes:\n\n#### `observe_only`\nThe remediation task may:\n- read allowed evidence,\n- produce diagnosis artifacts,\n- suggest actions.\n\nIt may **not** execute side-effecting actions.\n\n#### `approval_gated`\nThe remediation task may:\n- read evidence,\n- propose concrete actions,\n- optionally perform dry runs,\n- execute actions only after required approval.\n\n#### `admin_auto`\nThe remediation task may:\n- read evidence,\n- plan actions,\n- execute allowed actions automatically within policy,\n- still require approval for explicitly high-risk actions if the action policy says so.\n\n### 10.2 Execution principal\n\nA remediation task with elevated authority should execute under a **named admin remediation principal or security profile**, not simply as the ordinary user runtime.\n\nDesired-state fields:\n\n```yaml\ntask:\n  remediation:\n    securityProfileRef: admin_healer\n    actionPolicyRef: admin_healer_default\n```\n\nAudit must record both:\n- the requesting user or workflow,\n- the execution principal actually used for the privileged action.\n\n### 10.3 Permission model\n\nThe control plane should distinguish:\n\n- permission to view a target execution,\n- permission to create a remediation task,\n- permission to request an admin remediation profile,\n- permission to approve high-risk actions,\n- permission to inspect remediation audit history.\n\nA user who can view a task should not automatically be able to launch an admin remediator against it.\n\n### 10.4 Secret handling\n\nPrivileged remediation does **not** bypass the Secrets System.\n\nRules:\n- no raw secrets in remediation context artifacts,\n- no raw secrets in workflow payloads,\n- no raw secrets in run summaries,\n- no raw secrets in logs or diagnostics,\n- generated credential-bearing runtime files stay ephemeral by default,\n- remediation actions receive MoonMind-issued capabilities or narrowly materialized runtime context only where unavoidable.\n\n### 10.5 Artifact and log access mediation\n\nArtifacts and logs must remain server-mediated.\n\nA remediation task may receive:\n- artifact refs,\n- MoonMind-issued read capability handles,\n- redacted or preview views,\n- typed observability APIs.\n\nIt must not receive:\n- presigned storage URLs in durable context,\n- storage backend keys,\n- absolute local filesystem paths,\n- raw secret-bearing config bundles.\n\n### 10.6 High-risk actions\n\nSome actions remain inherently high-risk, even for an admin healer. Examples:\n- forced termination,\n- destructive container cleanup with uncertain ownership,\n- fresh rerun creation that may trigger duplicate external effects,\n- replacement of a managed session with continuity loss.\n\nThe action registry must allow these to be marked as:\n- `low`,\n- `medium`,\n- `high`.\n\nThe `approvalPolicy` then decides whether:\n- they are auto-allowed,\n- require operator approval,\n- are completely disabled.\n\n### 10.7 Visibility and redaction posture\n\nRemediation does not change the rule that non-admin visibility is scoped to ownership and that unauthorized direct fetches must not leak execution existence. Admin remediation may see more, but its artifacts still follow redaction-safe display rules.\n\n---\n\n## 11. Remediation action registry\n\n### 11.1 Rationale\n\nThe user-facing desire may sound like “let the healer restart a container or free a slot,” but the implementation must not be “give the model host root.” MoonMind should instead expose a **typed action registry** backed by existing lifecycle surfaces, managed-session controls, provider-profile management, and Docker workload control-plane activities.\n\n### 11.2 Canonical action kinds\n\nThe initial registry should include at least the following action families.\n\n#### Execution lifecycle actions\n- `execution.pause`\n- `execution.resume`\n- `execution.request_rerun_same_workflow`\n- `execution.start_fresh_rerun`\n- `execution.cancel`\n- `execution.force_terminate`\n\n#### Managed-session actions\n- `session.interrupt_turn`\n- `session.clear`\n- `session.cancel`\n- `session.terminate`\n- `session.restart_container`\n\n#### Provider-profile / slot actions\n- `provider_profile.evict_stale_lease`\n\n#### Workload / container actions\n- `workload.restart_helper_container`\n- `workload.reap_orphan_container`\n\nThe registry may later grow, but every new action kind must declare:\n- target type,\n- allowed inputs,\n- risk tier,\n- preconditions,\n- idempotency rules,\n- verification requirements,\n- audit payload shape.\n\n### 11.3 Action semantics notes\n\n#### `execution.pause` / `execution.resume`\nBacked by the ordinary execution signal surface. Use these when the target should stop progressing while evidence is reviewed or operator work occurs.\n\n#### `execution.request_rerun_same_workflow`\nRepresents Continue-As-New style rerun of the same logical execution where supported and accepted.\n\n#### `execution.start_fresh_rerun`\nRepresents creation of a fresh execution with a new `workflowId`, preserving original parameters unless overridden.\n\n#### `execution.force_terminate`\nOps-only. Used only for runaway execution or policy violation scenarios. This is never a “normal first fix.”\n\n#### `session.interrupt_turn`\nInterrupt an active managed turn without destroying the entire session.\n\n#### `session.clear`\nPerform the managed-session clear/reset operation, producing the normal control and reset-boundary artifacts and incrementing the session epoch.\n\n#### `session.restart_container`\nA stronger action than `session.clear`. It must be implemented by the owning managed-session plane or a MoonMind control-plane activity, not by handing raw Docker access to the agent. Restarting the session container must create an explicit continuity boundary and produce durable audit artifacts.\n\n#### `provider_profile.evict_stale_lease`\nRelease a managed runtime slot lease when the lease is stale or orphaned according to policy and supervision evidence.\n\n#### `workload.restart_helper_container` / `workload.reap_orphan_container`\nThese operate on workload containers that MoonMind launched through the Docker workload plane. They do not imply arbitrary image execution or unrestricted Docker access.\n\n### 11.4 Action request contract\n\nRepresentative shape:\n\n```json\n{\n  \"schemaVersion\": \"v1\",\n  \"actionId\": \"ract_01HV...\",\n  \"actionKind\": \"provider_profile.evict_stale_lease\",\n  \"requestedBy\": {\n    \"workflowId\": \"mm:remediate_123\",\n    \"runId\": \"run_456\",\n    \"logicalStepId\": \"apply-remediation\"\n  },\n  \"target\": {\n    \"workflowId\": \"mm:target_789\",\n    \"runId\": \"run_321\",\n    \"resourceKind\": \"provider_profile_lease\",\n    \"resourceId\": \"profile:codex_openai_oauth_team\"\n  },\n  \"riskTier\": \"medium\",\n  \"dryRun\": false,\n  \"idempotencyKey\": \"mm:remediate_123:run_456:provider_profile.evict_stale_lease:profile:codex_openai_oauth_team\",\n  \"params\": {\n    \"reason\": \"lease exceeded max duration and owner execution is no longer active\"\n  }\n}\n```\n\n### 11.5 Action result contract\n\nRepresentative shape:\n\n```json\n{\n  \"schemaVersion\": \"v1\",\n  \"actionId\": \"ract_01HV...\",\n  \"status\": \"applied\",\n  \"appliedAt\": \"2026-04-21T18:09:11Z\",\n  \"message\": \"Lease evicted successfully.\",\n  \"beforeStateRef\": { \"artifact_id\": \"art_before\" },\n  \"afterStateRef\": { \"artifact_id\": \"art_after\" },\n  \"verificationRequired\": true,\n  \"verificationHint\": \"re-check slot availability and target state\",\n  \"sideEffects\": [\n    \"released provider profile lease\"\n  ]\n}\n```\n\nAllowed `status` values should include:\n- `applied`\n- `no_op`\n- `rejected`\n- `precondition_failed`\n- `approval_required`\n- `timed_out`\n- `failed`\n\n### 11.6 Risk tiers and verification\n\nEvery side-effecting action must declare:\n- required risk tier,\n- precondition checks,\n- default verification procedure.\n\nExamples:\n- `provider_profile.evict_stale_lease` — verify lease age, owner liveness, and slot state afterward.\n- `session.restart_container` — verify new session identity fields and new continuity boundary artifact.\n- `execution.request_rerun_same_workflow` — verify target run state changes and runId rollover if applicable.\n\n### 11.7 Explicitly unsupported actions\n\nThe registry must **not** support by default:\n\n- arbitrary host shell command execution,\n- arbitrary SQL,\n- arbitrary Docker image pull and run,\n- arbitrary volume mounts,\n- arbitrary network egress changes,\n- reading decrypted secret contents,\n- bypassing artifact redaction rules.\n\nIf MoonMind later adds more powerful operations, they must still be expressed as typed actions with explicit target classes and audit, never as “raw admin console.”\n\n---\n\n## 12. Locking, idempotency, and loop prevention\n\n### 12.1 Why locks are required\n\nA healer with admin power can cause harm if:\n- two healers restart the same container,\n- one healer clears a session while another is inspecting it,\n- a stale retry repeats a destructive action,\n- automatic remediation loops keep rerunning the same failing target.\n\nTherefore remediation needs its own lock and action ledger.\n\n### 12.2 Lock scopes\n\nCanonical lock scopes:\n\n- `target_execution`\n- `task_run`\n- `managed_session`\n- `provider_profile_lease`\n- `workload_container`\n\nThe default v1 mutation lock is `target_execution` with `exclusive` mode.\n\n### 12.3 Lock contract\n\nA lock record should capture:\n\n```json\n{\n  \"lockId\": \"rlock_01HV...\",\n  \"scope\": \"target_execution\",\n  \"targetWorkflowId\": \"mm:target_123\",\n  \"targetRunId\": \"run_456\",\n  \"holderWorkflowId\": \"mm:remediate_789\",\n  \"holderRunId\": \"run_abc\",\n  \"createdAt\": \"2026-04-21T18:05:03Z\",\n  \"expiresAt\": \"2026-04-21T18:35:03Z\",\n  \"mode\": \"exclusive\"\n}\n```\n\nRules:\n- lock acquisition must be idempotent,\n- stale locks must expire or be recoverable,\n- lock loss must be surfaced explicitly,\n- the remediation task must not silently keep mutating after lock loss.\n\n### 12.4 Action idempotency\n\nEvery action request must provide an idempotency key stable for the logical intended side effect.\n\nThe remediation system must not rely solely on the generic execution update idempotency behavior because that cache is intentionally narrow. The remediation action ledger is the canonical idempotency surface for remediation actions.\n\n### 12.5 Retry budget and cooldowns\n\nEach remediation task should carry:\n- max actions per target,\n- max attempts per action kind,\n- minimum cooldown between repeated identical actions,\n- terminal escalation condition.\n\nExample defaults:\n- no more than 3 side-effecting actions total,\n- no more than 1 `force_terminate`,\n- no more than 2 session restarts,\n- no repeated stale-lease eviction within the cooldown window.\n\n### 12.6 Nested remediation defaults\n\nDefaults:\n- a remediation task may not automatically spawn another remediation task;\n- a remediation task may not target itself;\n- a remediation task may not target another remediation task unless `allowNestedRemediation` is explicitly enabled by policy;\n- automatic self-healing depth defaults to 1.\n\n### 12.7 Target-change guard\n\nBefore acting, the remediation task must compare:\n- pinned target `runId`,\n- current target `runId`,\n- current target state,\n- current target summary / session identity.\n\nIf the target has materially changed, the action should either:\n- no-op,\n- re-diagnose,\n- escalate to approval.\n\n---\n\n## 13. Runtime lifecycle\n\n### 13.1 Remediation phases\n\nRemediation uses the existing top-level `mm_state` values of `MoonMind.Run`. It does **not** require a new top-level state machine in v1. Instead it exposes a bounded remediation-specific phase field inside summary/read models.\n\nRecommended `remediationPhase` values:\n\n- `collecting_evidence`\n- `diagnosing`\n- `awaiting_approval`\n- `acting`\n- `verifying`\n- `resolved`\n- `escalated`\n- `failed`\n\n### 13.2 Recommended lifecycle\n\n```mermaid\nstateDiagram-v2\n    [*] --> collecting_evidence\n    collecting_evidence --> diagnosing\n    diagnosing --> awaiting_approval : high-risk action or policy gate\n    diagnosing --> acting : action selected\n    diagnosing --> resolved : no action needed\n    diagnosing --> escalated : unsafe or insufficient evidence\n\n    awaiting_approval --> acting : approved\n    awaiting_approval --> escalated : rejected or timed out\n\n    acting --> verifying\n    acting --> escalated : unrecoverable action failure\n\n    verifying --> resolved : target healthy\n    verifying --> diagnosing : more work still needed\n    verifying --> escalated : action budget exhausted\n\n    resolved --> [*]\n    escalated --> [*]\n```\n\n### 13.3 Recommended step structure\n\nA remediation task commonly follows these plan nodes:\n\n1. acquire lock,\n2. build evidence bundle,\n3. diagnose,\n4. propose remediation plan,\n5. request approval if needed,\n6. execute action,\n7. verify target,\n8. write remediation summary,\n9. release lock.\n\nThis does not need to be a hard-coded universal plan, but the system should make these phases observable.\n\n### 13.4 Cancellation semantics\n\nRules:\n- canceling the remediation task cancels only the remediation task,\n- the target execution is not mutated by cancellation unless a specific action already requested that mutation,\n- canceling the target execution does not automatically cancel the remediation task,\n- the remediation task must still attempt best-effort lock release and final audit artifact publication.\n\n### 13.5 Rerun semantics\n\nThe target may change runs while remediation is active.\n\nRules:\n- the pinned `target.runId` is the diagnosis snapshot anchor,\n- the remediation task may still inspect the current/latest target health before acting,\n- action policies may allow:\n  - `request_rerun_same_workflow`,\n  - `start_fresh_rerun`,\n  - neither,\n- when an action intentionally changes the target run, the remediation summary must record both the pinned run and the new resulting run if known.\n\n### 13.6 Continue-As-New safety\n\nIf the remediation task continues as new, it must preserve:\n- target `workflowId`,\n- pinned target `runId`,\n- remediation context artifact ref,\n- acquired lock identity,\n- action ledger,\n- approval state,\n- retry budget state,\n- last seen live-follow cursor.\n\n---\n\n## 14. Artifacts, summaries, and audit\n\n### 14.1 Required remediation artifacts\n\nAt minimum, a remediation task should produce:\n\n- `reports/remediation_context.json`  \n  `artifact_type = remediation.context`\n\n- `reports/remediation_plan.json`  \n  `artifact_type = remediation.plan`\n\n- `logs/remediation_decision_log.ndjson`  \n  `artifact_type = remediation.decision_log`\n\n- `reports/remediation_action_request-<n>.json`  \n  `artifact_type = remediation.action_request`\n\n- `reports/remediation_action_result-<n>.json`  \n  `artifact_type = remediation.action_result`\n\n- `reports/remediation_verification-<n>.json`  \n  `artifact_type = remediation.verification`\n\n- `reports/remediation_summary.json`  \n  `artifact_type = remediation.summary`\n\nThese artifacts must obey the normal artifact presentation contract:\n- bounded safe metadata,\n- artifact refs rather than URLs,\n- correct preview/redaction handling,\n- no secrets in metadata or bodies.\n\n### 14.2 Target-side artifacts\n\nWhen the remediation task mutates a target-managed session or workload, the target side should also receive the normal continuity/control artifacts appropriate to that subsystem.\n\nExamples:\n- `session.control_event`\n- `session.reset_boundary`\n- target-side audit annotations\n- new diagnostics or summary artifacts\n\nThe remediation task does not replace those subsystem-native artifacts; it adds a parallel remediation audit trail.\n\n### 14.3 Remediation summary block\n\n`reports/run_summary.json` for the remediation task should include a stable `remediation` block.\n\nRepresentative shape:\n\n```json\n{\n  \"remediation\": {\n    \"targetWorkflowId\": \"mm:target_123\",\n    \"targetRunId\": \"run_456\",\n    \"mode\": \"snapshot_then_follow\",\n    \"authorityMode\": \"admin_auto\",\n    \"actionsAttempted\": [\n      {\n        \"kind\": \"provider_profile.evict_stale_lease\",\n        \"status\": \"applied\"\n      }\n    ],\n    \"resolution\": \"resolved_after_action\",\n    \"lockConflicts\": 0,\n    \"approvalCount\": 0,\n    \"evidenceDegraded\": false,\n    \"escalated\": false\n  }\n}\n```\n\nRecommended `resolution` values:\n- `not_applicable`\n- `diagnosis_only`\n- `no_action_needed`\n- `resolved_after_action`\n- `escalated`\n- `unsafe_to_act`\n- `lock_conflict`\n- `evidence_unavailable`\n- `failed`\n\n### 14.4 Target-side linkage summary\n\nThe target execution detail view should show inbound remediation metadata such as:\n- active remediation count,\n- latest remediation title,\n- latest remediation status,\n- latest action kind,\n- last updated time.\n\nThis may come from a derived link read model rather than from the target workflow summary itself.\n\n### 14.5 Control-plane audit events\n\nIn addition to artifacts, MoonMind should persist structured audit events for remediation actions. The storage may reuse a general control-event mechanism or add a remediation-specific table, but it must record:\n- actor user,\n- execution principal,\n- remediation workflow/run,\n- target workflow/run,\n- action kind,\n- risk tier,\n- approval decision,\n- timestamps,\n- bounded metadata.\n\nArtifacts remain the operator-facing deep evidence; audit rows remain the compact queryable trail.\n\n---\n\n## 15. Mission Control UX\n\n### 15.1 Create flow\n\nMission Control should expose **Create remediation task** from:\n- task detail,\n- failed task banners,\n- attention-required surfaces,\n- stuck task surfaces,\n- provider-slot or session problem surfaces where applicable.\n\nThe create UI should let the operator:\n- choose the pinned target run,\n- choose all steps or selected steps,\n- choose troubleshooting-only vs admin remediation,\n- choose live-follow mode,\n- choose or review the action policy,\n- preview which evidence will be attached.\n\n### 15.2 Target task detail\n\nThe target task should show a **Remediation Tasks** panel with:\n- remediation task links,\n- status,\n- authority mode,\n- last action,\n- resolution,\n- active lock badge.\n\n### 15.3 Remediation task detail\n\nThe remediation task detail should show a **Remediation Target** panel with:\n- target execution link,\n- pinned target run id,\n- selected steps,\n- current target state,\n- evidence bundle link,\n- allowed actions,\n- approval state,\n- lock state.\n\n### 15.4 Evidence presentation\n\nMission Control should provide direct operator access to:\n- the remediation context artifact,\n- referenced target logs and diagnostics,\n- remediation decision log,\n- action request/result artifacts,\n- verification artifacts.\n\n### 15.5 Live follow behavior\n\nIf live follow is active:\n- clearly label it as live observation,\n- show reconnect state,\n- preserve sequence position when reloading,\n- make epoch boundaries explicit for managed sessions,\n- fall back to durable artifacts when streaming is unavailable.\n\n### 15.6 Operator handoff\n\nWhen a remediation task is `approval_gated` or encounters a high-risk action:\n- show the proposed action,\n- show preconditions,\n- show expected blast radius,\n- allow approve/reject,\n- keep the decision in the audit trail.\n\n---\n\n## 16. Failure modes and edge cases\n\nThe system must explicitly handle these cases.\n\n### 16.1 Target execution not found or not visible\nFail create-time validation or fail early with a structured remediation error. Do not silently create a task with a null target.\n\n### 16.2 Target reran after remediation started\nKeep the pinned snapshot. Revalidate current health before acting. Do not silently retarget without recording it.\n\n### 16.3 Historical target has only merged logs\nAllow diagnosis using merged logs and partial artifacts. Surface `evidenceDegraded = true`.\n\n### 16.4 Missing or partial artifact refs\nContinue with partial evidence when safe. Record which evidence classes were unavailable.\n\n### 16.5 Live follow unavailable\nFall back to `logs/merged`, `logs/stdout`, `logs/stderr`, diagnostics, and summaries.\n\n### 16.6 Lock conflict\nIf another remediator owns the target mutation lock, either:\n- fail fast,\n- downgrade to observe-only,\n- queue for later if future policy supports that.\nDo not allow concurrent mutations by default.\n\n### 16.7 Precondition no longer holds\nTreat as `no_op` or `precondition_failed`, not as silent success.\n\n### 16.8 Stale lease already released\nReturn `no_op` with verification evidence.\n\n### 16.9 Container restart target already gone\nTreat as `no_op` or `verification_failed` depending on desired action semantics.\n\n### 16.10 Forced termination attempted on non-runaway target\nRequire approval or reject by policy. Forced termination is not the generic fallback for every failure.\n\n### 16.11 Remediation task itself fails\nPublish a final remediation summary and release locks. Automatic remediation of the failed remediator is off by default.\n\n---\n\n## 17. Recommended v1\n\nA practical v1 should ship with the following constraints:\n\n1. **Manual creation first**\n   - Operators create remediation tasks explicitly from Mission Control.\n\n2. **Pinned target run**\n   - Always persist `workflowId + runId`.\n\n3. **Artifact-first context bundle**\n   - Generate `reports/remediation_context.json` up front.\n\n4. **MoonMind-owned evidence tools**\n   - Provide read access to:\n     - step ledger snapshot,\n     - target task-run observability summary,\n     - stdout/stderr/merged logs,\n     - diagnostics,\n     - selected artifacts.\n\n5. **Two authority modes only in v1**\n   - `observe_only`\n   - `admin_auto`\n\n6. **Small action registry**\n   - `execution.pause`\n   - `execution.resume`\n   - `execution.request_rerun_same_workflow`\n   - `session.interrupt_turn`\n   - `session.clear`\n   - `provider_profile.evict_stale_lease`\n   - `session.restart_container` if implemented through the owning plane\n   - no raw Docker or host shell\n\n7. **Exclusive mutation lock**\n   - one active remediator per target execution\n\n8. **Full audit artifacts**\n   - always publish context, plan, actions, verification, summary\n\nThis v1 is powerful enough to heal common MoonMind operational failures while staying aligned with the existing architecture.\n\n---\n\n## 18. Future extensions\n\nAfter v1, MoonMind may add:\n\n- automatic remediation policies,\n- proposal-based remediation review,\n- richer action registry coverage,\n- finer-grained lock scopes,\n- policy-driven concurrent observe-only remediators,\n- historical per-run remediation analytics,\n- integration with stuck detection and finish-summary outcomes,\n- reusable remediation templates for common failure signatures,\n- remediation suggestions generated during the normal proposal phase.\n\nFuture work should preserve the core rules of this document:\nartifact-first evidence, typed actions, explicit locks, strict audit, and no raw root shell.\n\n---\n\n## 19. Acceptance criteria\n\nThis document is complete enough to guide implementation when all of the following are true:\n\n1. `task.remediation` is accepted as the canonical create-time contract.\n2. The system distinguishes remediation from ordinary task dependencies.\n3. The create path resolves and persists a pinned target `runId`.\n4. A remediation context bundle artifact is generated and linked.\n5. A MoonMind-owned evidence access surface exists for remediation tasks.\n6. A typed action registry exists for side-effecting admin actions.\n7. Privileged remediation uses named policy/profile binding, not implicit host access.\n8. Exclusive mutation locking and a remediation action idempotency ledger are implemented.\n9. Remediation tasks emit the required audit artifacts and summary block.\n10. Mission Control can show forward and reverse remediation links.\n11. The system degrades safely when only partial historical evidence is available.\n12. Automatic self-healing, when later added, is policy-driven and bounded.\n\n---\n\n## Appendix A. Example action policy\n\n```yaml\nRemediationActionPolicy:\n  policy_id: admin_healer_default\n  allowed_actions:\n    - execution.pause\n    - execution.resume\n    - execution.request_rerun_same_workflow\n    - session.interrupt_turn\n    - session.clear\n    - provider_profile.evict_stale_lease\n  approval_rules:\n    default_mode: risk_gated\n    auto_allowed_risk: medium\n    always_require_approval:\n      - execution.force_terminate\n      - session.restart_container\n  verification_rules:\n    require_verification_for:\n      - execution.request_rerun_same_workflow\n      - session.clear\n      - provider_profile.evict_stale_lease\n  retry_budget:\n    max_total_actions: 3\n    max_per_action_kind: 2\n    cooldown_seconds:\n      provider_profile.evict_stale_lease: 300\n      session.clear: 120\n  locking:\n    default_scope: target_execution\n    mode: exclusive\n  nesting:\n    allow_nested_remediation: false\n```\n\n## Appendix B. Example remediation summary\n\n```json\n{\n  \"schemaVersion\": \"v1\",\n  \"finishOutcome\": {\n    \"code\": \"NO_CHANGES\",\n    \"stage\": \"finalizing\",\n    \"reason\": \"target recovered after stale lease eviction\"\n  },\n  \"remediation\": {\n    \"targetWorkflowId\": \"mm:target_123\",\n    \"targetRunId\": \"run_456\",\n    \"mode\": \"snapshot_then_follow\",\n    \"authorityMode\": \"admin_auto\",\n    \"actionsAttempted\": [\n      {\n        \"kind\": \"provider_profile.evict_stale_lease\",\n        \"status\": \"applied\"\n      }\n    ],\n    \"resolution\": \"resolved_after_action\",\n    \"evidenceDegraded\": false,\n    \"escalated\": false\n  }\n}\n```\n\n## Appendix C. Design rule summary\n\nKeep these rules stable even as implementation evolves:\n\n1. **Remediation is not dependency waiting.**\n2. **`workflowId` is the logical target identity; `runId` pins the evidence snapshot.**\n3. **Evidence is artifact-first and server-mediated.**\n4. **Live follow is helpful but never authoritative.**\n5. **The healer gets typed admin actions, not raw root.**\n6. **Every mutation is locked, idempotent, and audited.**\n7. **Managed-session and Docker actions must go through their owning control planes.**\n8. **Secrets stay redacted even for admin remediation.**\n9. **Loop prevention is required.**\n10. **Mission Control must make the relationship visible in both directions.**\n"
+  },
+  "extractedAt": "2026-04-22T07:17:35Z",
+  "outputMode": "jira",
+  "designSummary": "Task Remediation defines a first-class MoonMind.Run relationship for one task to troubleshoot or repair another target execution. It uses pinned workflow/run identity, artifact-first evidence, optional live observation, typed policy-bound administrative actions, named authority profiles, exclusive mutation locks, idempotent action ledgers, durable audit artifacts, Mission Control visibility, graceful degradation for partial historical evidence, and bounded future self-healing policy. The design explicitly excludes raw host shell, unrestricted Docker, arbitrary SQL, direct secret access, unbounded history import, cross-task session reuse, and treating logs as the source of truth.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Dedicated remediation relationship",
+      "type": "requirement",
+      "source_section": "1. Purpose; 2. Why a separate system is required; 5.2 Remediation is a relationship, not a dependency",
+      "explanation": "Task Remediation must model troubleshooting/repair as a first-class directed relationship that starts because a target failed, stalled, timed out, or requested attention, rather than overloading dependency success gates."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Canonical task-shaped submission contract",
+      "type": "requirement",
+      "source_section": "5.1 Remediation tasks remain MoonMind.Run; 7. Submission contract",
+      "explanation": "Remediation tasks remain normal top-level MoonMind.Run executions and normalize create payloads into initialParameters.task.remediation / payload.task.remediation."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Pinned target identity",
+      "type": "state-model",
+      "source_section": "3. Design goals; 6. Core invariants; 7.3 Field semantics; 8.1 Why both workflowId and runId are required",
+      "explanation": "Each remediation targets a logical workflowId and resolves/persists a concrete runId at create time so evidence does not silently drift across reruns or continue-as-new."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Create-time validation and convenience route normalization",
+      "type": "integration",
+      "source_section": "7.4 Create-time validation; 7.5 Convenience API",
+      "explanation": "The platform must validate target visibility, self-reference, target workflow support, taskRunIds, authority mode, policy compatibility, nested remediation limits, and initialize durable links; convenience APIs must expand to the canonical create contract."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Forward and reverse remediation read models",
+      "type": "state-model",
+      "source_section": "8. Identity, linkage, and read models",
+      "explanation": "The platform must support remediator-to-target and target-to-remediator lookup with pinned run identity, status, lock holder, action summary, final outcome, and Mission Control/API rendering including inbound/outbound APIs."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Artifact-first evidence context bundle",
+      "type": "artifact",
+      "source_section": "3. Design goals; 9.1 Evidence sources; 9.2 Remediation Context Builder; 9.3 Context artifact shape",
+      "explanation": "A Remediation Context Builder must resolve execution detail, step ledger, observability, artifacts, continuity data, policy snapshots, and live-follow cursor state into reports/remediation_context.json with artifact_type remediation.context."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Bounded evidence and server-mediated access",
+      "type": "security",
+      "source_section": "6. Core invariants; 9.4 Boundedness rule; 9.5 Evidence access surface; 10.5 Artifact and log access mediation",
+      "explanation": "Large evidence remains behind artifact refs or typed APIs; remediation tasks receive refs/capabilities/redacted views, not presigned URLs, raw storage keys, local paths, or unbounded bodies."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Optional live follow is best-effort observation",
+      "type": "observability",
+      "source_section": "5.3 Control remains separate from observation; 9.6 Live follow semantics",
+      "explanation": "Live follow may be used only when target activity and policy support it, persists resume cursors, resumes after restarts where possible, falls back to durable logs/artifacts, and never becomes authoritative or a control channel."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Fresh target health before action",
+      "type": "constraint",
+      "source_section": "9.7 Evidence freshness before action; 12.7 Target-change guard",
+      "explanation": "Before a side-effecting action, remediation must re-read bounded current target health and compare pinned run, current run, state, summary, and session identity to avoid stale actions."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Authority modes and security profile binding",
+      "type": "security",
+      "source_section": "10.1 Authority modes; 10.2 Execution principal",
+      "explanation": "observe_only, approval_gated, and admin_auto define authority boundaries; elevated remediation uses a named admin remediation principal/security profile and records both requester and execution principal."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Permission boundaries and redaction",
+      "type": "security",
+      "source_section": "10.3 Permission model; 10.4 Secret handling; 10.7 Visibility and redaction posture",
+      "explanation": "Viewing a task, creating remediation, requesting admin authority, approving high-risk actions, and inspecting audit history are separate permissions; raw secrets never appear in contexts, payloads, summaries, logs, diagnostics, or display artifacts."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Typed action registry",
+      "type": "integration",
+      "source_section": "11. Remediation action registry",
+      "explanation": "Side effects must go through a MoonMind-owned typed action registry with allowlisted action families, declared target type, inputs, risk tier, preconditions, idempotency, verification, audit payload shape, and explicitly unsupported raw admin operations."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Action request/result contracts",
+      "type": "artifact",
+      "source_section": "11.4 Action request contract; 11.5 Action result contract; 11.6 Risk tiers and verification",
+      "explanation": "Action requests and results have schemaVersion, action IDs, target identity, risk, dry-run, idempotency key, statuses, before/after refs, verification requirements, side effects, and risk-specific verification procedures."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Exclusive locks for mutation",
+      "type": "state-model",
+      "source_section": "12.1 Why locks are required; 12.2 Lock scopes; 12.3 Lock contract",
+      "explanation": "Mutating remediation requires explicit locks with canonical scopes, exclusive target_execution default in v1, idempotent acquisition, expiry/recovery, and explicit lock-loss handling."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Remediation action ledger idempotency",
+      "type": "state-model",
+      "source_section": "12.4 Action idempotency",
+      "explanation": "Every action has a stable logical idempotency key and the remediation action ledger, not a generic execution update cache, is the canonical idempotency surface."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Loop prevention and action budgets",
+      "type": "constraint",
+      "source_section": "6. Core invariants; 12.5 Retry budget and cooldowns; 12.6 Nested remediation defaults",
+      "explanation": "Remediation must prevent unbounded loops through max actions, per-kind attempts, cooldowns, terminal escalation, no self-targeting, nested remediation off by default, and automatic self-healing depth defaulting to one."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Observable remediation lifecycle",
+      "type": "state-model",
+      "source_section": "13. Runtime lifecycle",
+      "explanation": "Remediation uses existing mm_state plus bounded remediationPhase values and observable phases for lock, evidence, diagnosis, proposal, approval, action, verification, summary, release, cancellation, rerun, and continue-as-new state preservation."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Required artifacts and summaries",
+      "type": "artifact",
+      "source_section": "14.1 Required remediation artifacts; 14.3 Remediation summary block",
+      "explanation": "Remediation publishes context, plan, decision log, action request/result, verification, summary, and run_summary remediation block with stable resolution fields."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Target-side artifacts and control-plane audit",
+      "type": "observability",
+      "source_section": "14.2 Target-side artifacts; 14.5 Control-plane audit events",
+      "explanation": "Target subsystems still produce their native continuity/control artifacts, while remediation adds a parallel audit trail and compact queryable audit events recording actor, principal, target, action, risk, approval, timestamps, and metadata."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Mission Control creation and relationship UX",
+      "type": "requirement",
+      "source_section": "15.1 Create flow; 15.2 Target task detail; 15.3 Remediation task detail",
+      "explanation": "Mission Control exposes create-remediation entry points, lets operators select target run/steps/mode/policy/evidence, and shows forward/reverse remediation panels with target, authority, lock, actions, approvals, and evidence links."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Mission Control evidence, live follow, and approvals UX",
+      "type": "requirement",
+      "source_section": "15.4 Evidence presentation; 15.5 Live follow behavior; 15.6 Operator handoff",
+      "explanation": "Operators can inspect context, logs, diagnostics, decision/action/verification artifacts; live follow is labeled with reconnect/cursor/epoch state; approval-gated or high-risk actions show proposal, preconditions, blast radius, and audit decisions."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Graceful degradation and edge-case handling",
+      "type": "constraint",
+      "source_section": "3. Design goals; 16. Failure modes and edge cases",
+      "explanation": "The system handles missing/not-visible targets, target reruns, historical merged-log-only evidence, partial artifacts, live-follow unavailability, lock conflicts, failed preconditions, no-op actions, inappropriate force termination, and remediator failure with structured outcomes."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Recommended v1 scope",
+      "type": "migration",
+      "source_section": "17. Recommended v1",
+      "explanation": "A practical v1 should prioritize manual creation, pinned target run, artifact-first context, evidence tools, observe_only/admin_auto modes, small action registry, exclusive target lock, and full audit artifacts."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Future self-healing remains policy-driven",
+      "type": "non-goal",
+      "source_section": "7.6 Future automatic self-healing policy; 18. Future extensions; Appendix C. Design rule summary",
+      "explanation": "Automatic remediation and richer future capabilities are later layers and must remain policy-driven, bounded, artifact-first, typed, locked, audited, redaction-safe, and free of raw root-shell authority."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Accept canonical task remediation submissions with pinned target linkage",
+      "shortName": "remediation-submission",
+      "description": "As an operator, I can create a remediation task for a target MoonMind execution and have the platform persist an explicit non-dependency relationship to the target workflow and pinned run snapshot.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskRemediation.md",
+        "title": "Task Remediation",
+        "sections": [
+          "1. Purpose",
+          "2. Why a separate system is required",
+          "5. Architectural stance",
+          "6. Core invariants",
+          "7. Submission contract",
+          "8. Identity, linkage, and read models"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005"
+        ]
+      },
+      "why": "This story establishes the durable contract all later remediation evidence, actions, UI, and audits depend on.",
+      "scope": [
+        "Normalize task-shaped create payloads into payload.task.remediation / initialParameters.task.remediation.",
+        "Resolve and persist target.workflowId plus concrete target.runId at create time.",
+        "Validate target visibility, workflow type, self-reference, selected taskRunIds, authority mode, action policy compatibility, nested limits, and convenience route normalization.",
+        "Persist forward and reverse remediation link data and expose inbound/outbound lookup API/read-model fields."
+      ],
+      "outOfScope": [
+        "Building evidence bundles, executing actions, or adding Mission Control UI beyond API-visible link data."
+      ],
+      "independentTest": "Submit remediation creation requests through POST /api/executions and the convenience route, then verify normalized payload shape, pinned run persistence, validation failures, forward lookup, and reverse lookup without invoking action execution.",
+      "acceptanceCriteria": [
+        "Given a valid remediation request, the created MoonMind.Run contains the canonical task.remediation object and starts without waiting for target success.",
+        "When runId is omitted, the backend resolves and stores the current target runId before the run starts.",
+        "Malformed self-targets, unsupported targets, invalid authority modes, invisible targets, invalid taskRunIds, or incompatible policies are rejected with structured errors.",
+        "The remediation relationship is visible from remediation-to-target and target-to-remediation read paths including pinned run identity and status fields.",
+        "POST /api/executions/{workflowId}/remediation expands to the same canonical create contract as POST /api/executions."
+      ],
+      "requirements": [
+        "Remediation is modeled separately from dependsOn and never as a success gate.",
+        "Canonical payload storage is nested under task.remediation.",
+        "The link record supports forward lookup, reverse lookup, current remediation status, lock holder, action summary, final outcome, and Mission Control/API rendering."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "title": "Dedicated remediation relationship",
+          "ownership": "Owns the first-class relationship and non-dependency semantics."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "title": "Canonical task-shaped submission contract",
+          "ownership": "Owns canonical task-shaped submission and MoonMind.Run representation."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "title": "Pinned target identity",
+          "ownership": "Owns workflowId/runId resolution and persistence."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "title": "Create-time validation and convenience route normalization",
+          "ownership": "Owns validation and convenience route normalization."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "title": "Forward and reverse remediation read models",
+          "ownership": "Owns durable link/read-model lookup contract."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing execution create services and projection/read-model infrastructure are the implementation entry points."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Build bounded artifact-first remediation evidence bundles and tools",
+      "shortName": "remediation-evidence",
+      "description": "As a remediation runtime, I receive a bounded MoonMind-owned evidence bundle and typed evidence tools so I can diagnose a target execution without scraping UI pages or embedding unbounded logs in workflow history.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskRemediation.md",
+        "title": "Task Remediation",
+        "sections": [
+          "9. Evidence and context model",
+          "5.3 Control remains separate from observation",
+          "6. Core invariants"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "why": "Remediation quality depends on trustworthy evidence that remains bounded, durable, redaction-safe, and resumable.",
+      "scope": [
+        "Introduce a Remediation Context Builder activity/service that writes reports/remediation_context.json with artifact_type remediation.context.",
+        "Include target identity, selected steps, artifact refs, observability refs, bounded summaries, diagnosis hints, policy snapshots, lock policy snapshot, and optional live-follow cursor state.",
+        "Expose MoonMind-owned evidence tools for context, target artifacts, target logs, live follow, allowed actions, action execution handoff, and target verification.",
+        "Implement boundedness and server-mediated access rules, including no presigned URLs, raw storage keys, raw filesystem paths, or unbounded log bodies in durable context.",
+        "Implement optional live-follow cursor persistence, resume behavior, and durable fallback paths.",
+        "Require fresh target health re-read before side-effecting action handoff."
+      ],
+      "outOfScope": [
+        "Defining action registry semantics beyond tool handoff and allowed-action listing.",
+        "Mission Control visual presentation of evidence artifacts."
+      ],
+      "independentTest": "Create a remediation context for a target with selected steps and observability records, then assert the artifact shape, refs, bounded excerpts, live-follow cursor behavior, fallback behavior, and no secret/path/URL leakage.",
+      "acceptanceCriteria": [
+        "A remediation run receives a reports/remediation_context.json artifact containing the specified v1 schema fields and artifact_type remediation.context.",
+        "Full logs and diagnostics remain behind refs or typed read APIs; durable context contains only bounded summaries/excerpts.",
+        "Evidence tools can read referenced artifacts/logs through normal artifact and task-run policy checks.",
+        "Live follow is available only when target state, taskRunId support, and policy allow it; cursor state survives retries where possible.",
+        "When live follow is unavailable, the remediator can still diagnose from merged/stdout/stderr logs, diagnostics, summaries, and artifacts with evidence degradation recorded.",
+        "Before any side-effecting action request is submitted, the runtime re-reads current target health and target-change guard inputs."
+      ],
+      "requirements": [
+        "The context builder is the stable entrypoint for target evidence.",
+        "Live logs are observation only and never the source of truth or control channel.",
+        "Missing evidence degrades the task rather than causing unbounded waits."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-006",
+          "title": "Artifact-first evidence context bundle",
+          "ownership": "Owns context builder and remediation.context artifact."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "title": "Bounded evidence and server-mediated access",
+          "ownership": "Owns bounded/server-mediated evidence access."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "title": "Optional live follow is best-effort observation",
+          "ownership": "Owns live-follow best-effort semantics."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "title": "Fresh target health before action",
+          "ownership": "Owns fresh health re-read before action."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "title": "Graceful degradation and edge-case handling",
+          "ownership": "Owns evidence degradation cases for missing/partial/live-unavailable evidence."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "title": "Recommended v1 scope",
+          "ownership": "Owns v1 artifact-first context and evidence tools."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Existing artifact, task-run log, diagnostics, and managed-session observability services can be reused behind the evidence tools."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Enforce remediation authority modes, permissions, and redaction boundaries",
+      "shortName": "remediation-authority",
+      "description": "As a platform security owner, I can configure remediation authority through explicit modes, permissions, and named security profiles so privileged troubleshooting never implies raw host access or secret disclosure.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskRemediation.md",
+        "title": "Task Remediation",
+        "sections": [
+          "10. Security and authority model",
+          "6. Core invariants",
+          "4. Non-goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "why": "Administrative remediation is useful only if privilege boundaries are explicit, auditable, and redaction-safe.",
+      "scope": [
+        "Implement observe_only, approval_gated, and admin_auto authorization semantics at the control-plane boundary.",
+        "Bind elevated remediation to named securityProfileRef/actionPolicyRef instead of ordinary user runtime identity.",
+        "Separate permissions for target viewing, remediation creation, admin profile request, high-risk approval, and remediation audit history inspection.",
+        "Enforce no raw secrets in context artifacts, workflow payloads, run summaries, logs, diagnostics, or display artifacts.",
+        "Prevent durable exposure of presigned URLs, storage backend keys, absolute filesystem paths, decrypted secrets, and raw secret-bearing config bundles.",
+        "Ensure future self-healing policy cannot bypass these authority and redaction rules."
+      ],
+      "outOfScope": [
+        "Defining the concrete action registry implementation; this story only gates whether actions can be requested/executed."
+      ],
+      "independentTest": "Exercise create-time and action-time authorization cases for observe_only, approval_gated, and admin_auto using users with different permissions, and scan generated artifacts/payloads for prohibited secret or storage/path material.",
+      "acceptanceCriteria": [
+        "observe_only remediation can read evidence and produce diagnoses but cannot execute side-effecting actions.",
+        "approval_gated remediation can propose or dry-run actions but requires recorded approval before side effects.",
+        "admin_auto remediation can execute only allowlisted actions within policy and still respects high-risk approval rules.",
+        "Audit records include both requesting user/workflow and the execution principal used for privileged actions.",
+        "A user with target view permission alone cannot launch admin remediation or approve high-risk actions.",
+        "Generated context, logs, summaries, diagnostics, and artifacts do not contain raw secrets or durable raw storage/file access material."
+      ],
+      "requirements": [
+        "Authority is policy/profile based, not implicit root or ordinary runtime access.",
+        "Unauthorized direct fetches do not leak execution existence.",
+        "Secret redaction rules apply even to admin remediation."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-010",
+          "title": "Authority modes and security profile binding",
+          "ownership": "Owns authority modes and named execution principal binding."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "title": "Permission boundaries and redaction",
+          "ownership": "Owns permission separation and redaction posture."
+        },
+        {
+          "id": "DESIGN-REQ-024",
+          "title": "Future self-healing remains policy-driven",
+          "ownership": "Owns security invariants for future policy-driven self-healing."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Existing provider profile/secrets/authorization services provide reusable permission checks and audit principal concepts."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Provide a typed remediation action registry with audited request and result contracts",
+      "shortName": "remediation-actions",
+      "description": "As a remediation task, I can request only typed, allowlisted administrative actions and receive durable request/result artifacts with risk, precondition, idempotency, verification, and audit data.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskRemediation.md",
+        "title": "Task Remediation",
+        "sections": [
+          "11. Remediation action registry",
+          "10.6 High-risk actions",
+          "17. Recommended v1"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "why": "The design explicitly rejects raw admin consoles; operational repairs must be typed, validated, auditable, and routed through owning control planes.",
+      "scope": [
+        "Implement the action registry metadata model for action kind, target type, allowed inputs, risk tier, preconditions, idempotency rules, verification requirements, and audit payload shape.",
+        "Support v1 action kinds for execution pause/resume/request_rerun_same_workflow, session interrupt/clear, provider_profile.evict_stale_lease, and session.restart_container only if backed by the owning plane.",
+        "Represent high-risk actions such as force termination and session restart with policy approval/disable behavior.",
+        "Produce remediation action request and result contracts with supported statuses, before/after refs, verification hints, and side-effect summaries.",
+        "Reject explicitly unsupported actions such as arbitrary shell, SQL, Docker image run, volume mount, network egress changes, decrypted secret reads, and redaction bypass."
+      ],
+      "outOfScope": [
+        "Implementing Mission Control approval UX or global lock ledger behavior."
+      ],
+      "independentTest": "List allowed actions for a policy, dry-run and execute representative low/medium actions through mocked owning control-plane adapters, verify action request/result artifact shape, and assert unsupported raw operations are rejected.",
+      "acceptanceCriteria": [
+        "list_allowed_actions returns only policy-compatible typed action kinds with risk and input metadata.",
+        "execute_action validates action kind, target class, inputs, risk policy, preconditions, and idempotency key before invoking owning control-plane code.",
+        "Action request artifacts include schemaVersion, actionId, actionKind, requester, target workflow/run/resource, riskTier, dryRun, idempotencyKey, and bounded params.",
+        "Action result artifacts include status, appliedAt when applicable, before/after refs, verificationRequired, verificationHint, and bounded sideEffects.",
+        "Unsupported raw host, SQL, Docker, volume, network, secret-reading, or redaction-bypass operations fail fast and are audited as rejected.",
+        "V1 registry scope matches the recommended small action set unless a supported action is unavailable, in which case it is omitted rather than exposed as raw access."
+      ],
+      "requirements": [
+        "Administrative actions are MoonMind-owned typed capabilities.",
+        "Managed-session and Docker workload actions go through their owning control planes.",
+        "Every side-effecting action declares risk and verification requirements."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-012",
+          "title": "Typed action registry",
+          "ownership": "Owns typed action registry and unsupported action rejection."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "title": "Action request/result contracts",
+          "ownership": "Owns action request/result/risk/verification contracts."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "title": "Recommended v1 scope",
+          "ownership": "Owns recommended v1 small action registry."
+        },
+        {
+          "id": "DESIGN-REQ-024",
+          "title": "Future self-healing remains policy-driven",
+          "ownership": "Owns future extension rule that powerful operations remain typed and audited."
+        }
+      ],
+      "dependencies": [
+        "STORY-002",
+        "STORY-003"
+      ],
+      "assumptions": [
+        "Existing execution signal, managed-session, provider-profile, and workload control-plane APIs can be adapted as registry backends."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Guard remediation mutations with locks, idempotency, budgets, and loop prevention",
+      "shortName": "remediation-guards",
+      "description": "As the orchestration platform, I prevent conflicting or runaway remediation by requiring mutation locks, action-ledger idempotency, cooldowns, retry budgets, nested remediation limits, and target-change checks.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskRemediation.md",
+        "title": "Task Remediation",
+        "sections": [
+          "12. Locking, idempotency, and loop prevention",
+          "6. Core invariants",
+          "9.7 Evidence freshness before action"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "why": "Admin remediation can harm targets if duplicate, stale, or concurrent mutations are allowed.",
+      "scope": [
+        "Implement canonical remediation lock scopes and v1 exclusive target_execution mutation lock.",
+        "Make lock acquisition idempotent, expiring/recoverable, and explicitly surfaced on loss.",
+        "Implement a remediation action ledger keyed by stable logical idempotency keys.",
+        "Enforce max actions per target, max attempts per action kind, cooldowns, and terminal escalation conditions.",
+        "Block self-targeting, automatic nested remediation, unauthorized remediation of remediation tasks, and automatic self-healing depth above one by default.",
+        "Compare pinned run, current run, current state, summary, and session identity before action; no-op, re-diagnose, or escalate when materially changed."
+      ],
+      "outOfScope": [
+        "Rendering lock state in Mission Control panels."
+      ],
+      "independentTest": "Run two remediation tasks against the same target and verify only one can mutate; replay duplicate action requests and verify ledger idempotency; exceed budgets/cooldowns/nesting rules and verify structured escalation or rejection.",
+      "acceptanceCriteria": [
+        "Only one active remediator can hold the default exclusive target_execution mutation lock for a target.",
+        "Duplicate logical action requests with the same idempotency key return the canonical ledger result rather than repeating side effects.",
+        "Lock expiration/recovery and lock loss are explicit; a remediator does not silently continue mutating after losing a lock.",
+        "Retry budgets and cooldowns prevent repeated destructive actions and produce terminal escalation when exhausted.",
+        "Self-targeting and automatic nested remediation are rejected by default.",
+        "If the target materially changed since the pinned snapshot, action execution no-ops, re-diagnoses, or escalates according to policy and records the reason."
+      ],
+      "requirements": [
+        "The remediation action ledger is the canonical idempotency surface for actions.",
+        "Concurrent diagnosis may be allowed later, but concurrent mutation is not allowed by default.",
+        "Loop prevention is mandatory for manual and future automatic remediation."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-009",
+          "title": "Fresh target health before action",
+          "ownership": "Owns target-change guard before mutation."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "title": "Exclusive locks for mutation",
+          "ownership": "Owns locks and exclusive v1 mutation scope."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "title": "Remediation action ledger idempotency",
+          "ownership": "Owns action ledger idempotency."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "title": "Loop prevention and action budgets",
+          "ownership": "Owns budgets, cooldowns, and nested/self-healing loop prevention."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "title": "Graceful degradation and edge-case handling",
+          "ownership": "Owns lock conflict and stale-precondition edge cases."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "title": "Recommended v1 scope",
+          "ownership": "Owns v1 exclusive mutation lock."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "A durable storage mechanism or existing control-event table can back locks and the action ledger without changing the public contract."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Publish remediation lifecycle phases, artifacts, summaries, and audit events",
+      "shortName": "remediation-audit",
+      "description": "As an operator or reviewer, I can inspect a remediation run from evidence collection through verification because each phase, decision, action, result, and final outcome leaves durable artifacts and queryable audit evidence.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskRemediation.md",
+        "title": "Task Remediation",
+        "sections": [
+          "13. Runtime lifecycle",
+          "14. Artifacts, summaries, and audit",
+          "16. Failure modes and edge cases"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "why": "Remediation must be explainable and recoverable even when it fails, cancels, continues as new, or mutates target subsystems.",
+      "scope": [
+        "Expose bounded remediationPhase values alongside existing mm_state without adding a new top-level workflow state machine.",
+        "Make common plan nodes observable: lock, evidence bundle, diagnose, proposal, approval, action, verification, summary, release.",
+        "Implement cancellation, rerun, target run rollover, and continue-as-new preservation semantics for remediation state.",
+        "Publish required remediation artifacts: context, plan, decision log, action requests/results, verification, summary.",
+        "Add stable remediation block to remediation run_summary.json.",
+        "Ensure target-side continuity/control artifacts remain subsystem-native and add structured control-plane audit events for remediation actions.",
+        "Publish final summaries and release locks on remediation failure where possible."
+      ],
+      "outOfScope": [
+        "Mission Control layout for these artifacts and summaries."
+      ],
+      "independentTest": "Drive a remediation run through diagnosis-only, action-applied, approval-required, canceled, failed, and continue-as-new paths using fakes; assert phase transitions, artifacts, summaries, audit rows, lock release, and preserved state.",
+      "acceptanceCriteria": [
+        "remediationPhase values reflect collecting_evidence, diagnosing, awaiting_approval, acting, verifying, resolved, escalated, or failed as the run progresses.",
+        "Required remediation artifacts are published with expected artifact_type values and obey artifact preview/redaction metadata rules.",
+        "run_summary.json includes the remediation block with target identity, mode, authorityMode, actionsAttempted, resolution, lockConflicts, approvalCount, evidenceDegraded, and escalated fields.",
+        "Target-managed session or workload mutations continue to produce native continuity/control artifacts in addition to remediation audit artifacts.",
+        "Control-plane audit events record actor, execution principal, remediation workflow/run, target workflow/run, action kind, risk tier, approval decision, timestamps, and bounded metadata.",
+        "Cancellation or remediation failure does not mutate the target except for already-requested actions and attempts final summary publication and lock release.",
+        "Continue-As-New preserves target identity, pinned run, context ref, lock identity, action ledger, approval state, retry budget, and live-follow cursor."
+      ],
+      "requirements": [
+        "Existing MoonMind.Run state remains the top-level state source.",
+        "Artifacts remain operator-facing deep evidence; audit rows remain compact queryable trail.",
+        "Target-side linkage summary metadata is available for downstream detail views."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-017",
+          "title": "Observable remediation lifecycle",
+          "ownership": "Owns lifecycle phases and cancellation/rerun/continue-as-new semantics."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "title": "Required artifacts and summaries",
+          "ownership": "Owns required remediation artifacts and summary block."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "title": "Target-side artifacts and control-plane audit",
+          "ownership": "Owns target-side artifacts and control-plane audit events."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "title": "Graceful degradation and edge-case handling",
+          "ownership": "Owns failure/cancellation/final-summary edge cases."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "title": "Recommended v1 scope",
+          "ownership": "Owns v1 full audit artifact requirement."
+        }
+      ],
+      "dependencies": [
+        "STORY-002",
+        "STORY-005"
+      ],
+      "assumptions": [
+        "Existing artifact presentation and run summary contracts can carry remediation-specific artifact types and summary blocks."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Show task remediation creation, evidence, locks, approvals, and links in Mission Control",
+      "shortName": "remediation-ui",
+      "description": "As an operator in Mission Control, I can create remediation tasks from relevant target surfaces and inspect target/remediator relationships, evidence, live observation, lock state, actions, approvals, and outcomes.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskRemediation.md",
+        "title": "Task Remediation",
+        "sections": [
+          "15. Mission Control UX",
+          "8.5 Reverse lookup API",
+          "14.4 Target-side linkage summary"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "why": "Operators need remediation to be visible and controllable through the product surface, not only through backend artifacts.",
+      "scope": [
+        "Add Create remediation task entry points from task detail, failed banners, attention-required surfaces, stuck surfaces, and provider-slot/session problem surfaces where applicable.",
+        "Let operators choose pinned target run, all vs selected steps, troubleshooting-only vs admin remediation, live-follow mode, action policy, and preview evidence attachment.",
+        "Show Remediation Tasks panel on target detail with links, status, authority mode, last action, resolution, and active lock badge.",
+        "Show Remediation Target panel on remediation detail with target link, pinned run id, selected steps, current target state, evidence bundle link, allowed actions, approval state, and lock state.",
+        "Provide direct access to remediation context, target logs/diagnostics, decision log, action request/result artifacts, and verification artifacts.",
+        "Label live follow as observation, show reconnect state, preserve sequence position on reload, show managed-session epoch boundaries, and fall back to artifacts when streaming is unavailable.",
+        "Support approval-gated handoff with proposed action, preconditions, blast radius, approve/reject controls, and audit decision recording."
+      ],
+      "outOfScope": [
+        "Implementing backend action execution or evidence bundle generation beyond consuming their APIs."
+      ],
+      "independentTest": "Use UI tests and API-backed fixtures to create a remediation task, view inbound/outbound panels, inspect evidence artifacts, simulate live follow reconnect/fallback, and approve/reject a high-risk action proposal.",
+      "acceptanceCriteria": [
+        "Operators can start remediation from target task/problem surfaces and the submission payload matches the canonical contract.",
+        "Target detail shows inbound remediators and active lock/action/resolution metadata.",
+        "Remediation detail shows target identity, pinned run, selected steps, current state, evidence, action policy, approval, and lock information.",
+        "Evidence links open through artifact/log APIs and honor redaction and visibility rules.",
+        "Live follow UI is clearly non-authoritative, resumes sequence position where possible, and falls back to durable artifacts.",
+        "Approval decisions for gated/high-risk actions are captured and visible in the audit trail."
+      ],
+      "requirements": [
+        "Mission Control makes remediation relationships visible in both directions.",
+        "UI cannot imply raw host/admin shell access; action surfaces are typed and policy-bound.",
+        "Partial evidence and live-follow unavailability must be visible without deadlocking the user flow."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-005",
+          "title": "Forward and reverse remediation read models",
+          "ownership": "Owns UI consumption of forward/reverse remediation links."
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "title": "Mission Control creation and relationship UX",
+          "ownership": "Owns create flow and target/remediator panels."
+        },
+        {
+          "id": "DESIGN-REQ-021",
+          "title": "Mission Control evidence, live follow, and approvals UX",
+          "ownership": "Owns evidence, live-follow, and approval UX."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "title": "Graceful degradation and edge-case handling",
+          "ownership": "Owns UI degradation for partial evidence/live follow/locks."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "title": "Recommended v1 scope",
+          "ownership": "Owns manual creation first for v1."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-006"
+      ],
+      "assumptions": [
+        "Mission Control can reuse existing task detail, artifact presentation, and live-log components with remediation-specific data wiring."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-008",
+      "summary": "Document and enforce bounded v1 rollout and future self-healing policy constraints",
+      "shortName": "remediation-rollout",
+      "description": "As a product/platform owner, I can ship a constrained manual v1 and leave future automatic self-healing behind explicit bounded policy so remediation remains safe as capabilities expand.",
+      "sourceReference": {
+        "path": "docs/Tasks/TaskRemediation.md",
+        "title": "Task Remediation",
+        "sections": [
+          "4. Non-goals",
+          "7.6 Future automatic self-healing policy",
+          "16. Failure modes and edge cases",
+          "17. Recommended v1",
+          "18. Future extensions",
+          "19. Acceptance criteria",
+          "Appendix C. Design rule summary"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "why": "The design includes clear non-goals and rollout constraints that must be testable so future automation does not quietly become unbounded or unsafe.",
+      "scope": [
+        "Encode v1 feature flags/config/defaults for manual creation first, pinned target run, artifact-first context, evidence tools, observe_only/admin_auto modes, small registry, exclusive target lock, and full audit artifacts.",
+        "Reject or hide non-goal capabilities by default: raw host shell, unrestricted Docker daemon, arbitrary SQL, direct DB edits, unbounded workflow history imports, cross-task session reuse, automatic admin healer on every failure, secrets bypass, and treating Live Logs as source of truth.",
+        "Represent future automatic self-healing policy fields as disabled-by-default configuration or documented contract only, with maxActiveRemediations, templateRef, authorityMode, createMode, and trigger constraints when later enabled.",
+        "Add structured handling expectations for all listed edge cases so downstream implementation/test stories can assert safe terminal states.",
+        "Maintain acceptance criteria traceability to the original design rule summary."
+      ],
+      "outOfScope": [
+        "Building the future automatic policy engine unless selected explicitly in a later story."
+      ],
+      "independentTest": "Run configuration/contract tests that assert v1 defaults expose only recommended capabilities, non-goals fail closed, automatic self-healing remains disabled by default, and documented edge cases map to structured degraded/escalated/no-op outcomes.",
+      "acceptanceCriteria": [
+        "Default v1 behavior supports manual remediation only and does not automatically spawn admin healers.",
+        "Unsupported raw admin capabilities are absent from APIs, tools, and UI and fail closed if requested.",
+        "Future self-healing policy fields, if accepted by schemas, remain inert unless explicitly enabled and bounded by policy.",
+        "All documented failure/edge cases have structured output expectations such as validation failure, evidenceDegraded, no_op, precondition_failed, lock_conflict, escalated, unsafe_to_act, or failed.",
+        "The implementation acceptance checklist can be traced back to each design rule without relying on future-work language for current v1 guarantees."
+      ],
+      "requirements": [
+        "V1 must stay useful but constrained.",
+        "Future extensions preserve artifact-first evidence, typed actions, explicit locks, strict audit, redaction, and no raw root shell.",
+        "Non-goals are enforced as guardrails, not merely documentation."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-016",
+          "title": "Loop prevention and action budgets",
+          "ownership": "Owns policy constraints around automatic remediation loops."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "title": "Graceful degradation and edge-case handling",
+          "ownership": "Owns comprehensive edge-case outcome expectations."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "title": "Recommended v1 scope",
+          "ownership": "Owns recommended v1 scope and rollout boundaries."
+        },
+        {
+          "id": "DESIGN-REQ-024",
+          "title": "Future self-healing remains policy-driven",
+          "ownership": "Owns future self-healing policy and non-goal guardrails."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-003",
+        "STORY-004",
+        "STORY-005",
+        "STORY-006"
+      ],
+      "assumptions": [
+        "This story may be implemented as tests, configuration defaults, docs/tmp rollout notes, or contract validation depending on downstream planning."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-005",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-002",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-002",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006",
+      "STORY-007",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-008"
+    ]
+  }
+}
