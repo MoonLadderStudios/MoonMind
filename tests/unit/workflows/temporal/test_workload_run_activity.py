@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from temporalio import exceptions as temporal_exceptions
 
 from moonmind.schemas.workload_models import RunnerProfile, WorkloadResult
 from moonmind.workflows.temporal.activity_runtime import (
@@ -259,9 +260,11 @@ async def test_workload_run_activity_denies_when_workflow_docker_disabled() -> N
         workflow_docker_enabled=False,
     )
 
-    with pytest.raises(TemporalActivityRuntimeError) as exc_info:
+    with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
         await activities.workload_run({"request": _request_payload()})
 
     message = str(exc_info.value)
     assert "docker_workflows_disabled" in message
     assert "policy_denied" in message
+    assert exc_info.value.type == "docker_workflows_disabled"
+    assert exc_info.value.non_retryable is True

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
+from temporalio import exceptions as temporal_exceptions
 
 from moonmind.config.settings import settings
 from moonmind.integrations.pentest.models import (
@@ -305,6 +306,14 @@ def _managed_runtime_artifact_root() -> Path:
 
 class TemporalActivityRuntimeError(RuntimeError):
     """Raised when one of the Temporal activity helpers cannot complete."""
+
+
+def _docker_workflows_disabled_failure() -> temporal_exceptions.ApplicationError:
+    return temporal_exceptions.ApplicationError(
+        "policy_denied: docker_workflows_disabled",
+        type="docker_workflows_disabled",
+        non_retryable=True,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3137,9 +3146,7 @@ class TemporalAgentRuntimeActivities:
         """Run one validated Docker workload on the agent_runtime fleet."""
 
         if not self._workflow_docker_enabled:
-            raise TemporalActivityRuntimeError(
-                "policy_denied: docker_workflows_disabled"
-            )
+            raise _docker_workflows_disabled_failure()
         if self._workload_registry is None or self._workload_launcher is None:
             raise TemporalActivityRuntimeError(
                 "workload registry and launcher are required for workload.run"
@@ -3177,9 +3184,7 @@ class TemporalAgentRuntimeActivities:
         """
 
         if not self._workflow_docker_enabled:
-            raise TemporalActivityRuntimeError(
-                "policy_denied: docker_workflows_disabled"
-            )
+            raise _docker_workflows_disabled_failure()
         request_payload = dict(payload.get("request", payload))
         request = PentestWorkloadRequest.model_validate(request_payload)
         try:

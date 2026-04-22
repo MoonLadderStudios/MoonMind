@@ -1,22 +1,17 @@
 [
   {
-    "id": 3126394695,
+    "id": 3126723168,
     "disposition": "addressed",
-    "rationale": "Aligned the security.pentest.run registry output schema with the current launch_plan_ready activity output, including the required launch_plan object, so downstream JSON-pointer resolution no longer expects absent artifact refs."
+    "rationale": "workload_run now raises a Temporal non-retryable ApplicationError when MOONMIND_WORKFLOW_DOCKER_ENABLED disables Docker workloads."
   },
   {
-    "id": 4157371395,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary body only; the actionable child review comment is tracked separately."
-  },
-  {
-    "id": 3126411835,
+    "id": 3126723172,
     "disposition": "addressed",
-    "rationale": "Moved the shared agent_workspaces mount definition to a module-level _PENTEST_AGENT_WORKSPACES_MOUNT constant and reused it in both approved runner profiles."
+    "rationale": "security_pentest_execute now uses the same non-retryable docker_workflows_disabled ApplicationError policy denial."
   },
   {
-    "id": 4157390624,
+    "id": 4157738650,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary body only; the actionable child review comment is tracked separately."
+    "rationale": "Review summary comment with no separate actionable request beyond the two inline comments."
   }
 ]
