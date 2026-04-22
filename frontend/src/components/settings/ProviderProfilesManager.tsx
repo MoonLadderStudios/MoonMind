@@ -320,9 +320,9 @@ function commandBehaviorString(profile: ProviderProfile, key: string): string | 
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
-function commandBehaviorStringArray(profile: ProviderProfile, key: string): string[] {
+function commandBehaviorStringArray(profile: ProviderProfile, key: string): string[] | null {
   const value = commandBehaviorValue(profile, key);
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value)) return null;
   return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
 }
 
@@ -405,35 +405,35 @@ function isCodexOAuthProfile(profile: ProviderProfile): boolean {
 function isCanonicalClaudeAnthropicProfile(profile: ProviderProfile): boolean {
   return (
     profile.runtime_id === 'claude_code' &&
-    profile.provider_id === 'anthropic' &&
-    profile.profile_id === 'claude_anthropic'
+    profile.provider_id === 'anthropic'
   );
 }
 
 function isClaudeCredentialMethodProfile(profile: ProviderProfile): boolean {
   return (
     profile.runtime_id === 'claude_code' &&
-    profile.provider_id === 'anthropic' &&
-    (commandBehaviorString(profile, 'auth_strategy') === 'claude_credential_methods' ||
-      isCanonicalClaudeAnthropicProfile(profile))
+    profile.provider_id === 'anthropic'
   );
 }
 
 function defaultClaudeCredentialActions(profile: ProviderProfile): string[] {
+  if (!isCanonicalClaudeAnthropicProfile(profile)) {
+    return [];
+  }
+  const actions = ['use_api_key'];
   if (
-    isCanonicalClaudeAnthropicProfile(profile) &&
     (profile.credential_source === 'oauth_volume' ||
       profile.runtime_materialization_mode === 'oauth_home' ||
       Boolean(profile.volume_ref || profile.volume_mount_path))
   ) {
-    return ['connect_oauth', 'use_api_key'];
+    actions.unshift('connect_oauth');
   }
-  return [];
+  return actions;
 }
 
 function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
   const actionIds = commandBehaviorStringArray(profile, 'auth_actions');
-  const resolvedActionIds = actionIds.length > 0 ? actionIds : defaultClaudeCredentialActions(profile);
+  const resolvedActionIds = actionIds ?? defaultClaudeCredentialActions(profile);
   return resolvedActionIds
     .map((actionId) => {
       const label = CLAUDE_AUTH_ACTION_LABELS[actionId];
@@ -976,6 +976,40 @@ export function ProviderProfilesManager({
     },
   });
 
+  const claudeOAuthLifecycleMutation = useMutation({
+    mutationFn: async ({
+      profileId,
+      actionId,
+    }: {
+      profileId: string;
+      actionId: 'validate_oauth' | 'disconnect_oauth';
+    }) => {
+      const endpointAction = actionId === 'validate_oauth' ? 'validate' : 'disconnect';
+      const response = await fetch(
+        `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/oauth/${endpointAction}`,
+        { method: 'POST' },
+      );
+      const payload: unknown = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(redactClaudeSecretText(extractErrorMessage(payload)));
+      }
+      return { profileId, actionId };
+    },
+    onSuccess: ({ profileId, actionId }) => {
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      onNotice({
+        level: 'ok',
+        text:
+          actionId === 'validate_oauth'
+            ? `Claude OAuth validated for "${profileId}".`
+            : `Claude OAuth disconnected for "${profileId}".`,
+      });
+    },
+    onError: (error: Error) => {
+      onNotice({ level: 'error', text: error.message });
+    },
+  });
+
   useEffect(() => {
     const activeSessions = Object.entries(oauthSessions).filter(([, session]) =>
       isActiveOAuthStatus(session.status),
@@ -1281,11 +1315,14 @@ export function ProviderProfilesManager({
                                   openClaudeEnrollment(profile);
                                   return;
                                 }
-                                onNotice({
-                                  level: 'ok',
-                                  text: `${action.label} requested for "${profile.profile_id}".`,
-                                });
+                                if (action.id === 'validate_oauth' || action.id === 'disconnect_oauth') {
+                                  claudeOAuthLifecycleMutation.mutate({
+                                    profileId: profile.profile_id,
+                                    actionId: action.id,
+                                  });
+                                }
                               }}
+                              disabled={claudeOAuthLifecycleMutation.isPending}
                               aria-label={`${action.label} ${profile.profile_id}`}
                             >
                               {action.label}

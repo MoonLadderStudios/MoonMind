@@ -1,22 +1,37 @@
 [
   {
-    "id": 3126996678,
+    "id": 3127248910,
     "disposition": "addressed",
-    "rationale": "Secret aliases consumed by file_templates and home_path_overrides are now collected before default environment injection, so they are not leaked as top-level environment variables."
+    "rationale": "Updated Claude profile classification to use runtime_id=claude_code and provider_id=anthropic instead of requiring the claude_anthropic profile_id."
   },
   {
-    "id": 3126996680,
+    "id": 3127248912,
     "disposition": "addressed",
-    "rationale": "Alias collection now detects {{ alias }} template-string references in addition to from_secret_ref dictionaries."
+    "rationale": "Changed default Claude credential actions so API-key enrollment is available for Claude Anthropic profiles by default and OAuth connect is added when OAuth volume metadata exists."
   },
   {
-    "id": 4158029300,
+    "id": 3127248915,
+    "disposition": "addressed",
+    "rationale": "Preserved OAuth switching and lifecycle actions after API-key commit when OAuth volume metadata exists, while keeping API-key materialization as secret_ref/api_key_env."
+  },
+  {
+    "id": 4158280929,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary; the two actionable inline findings it summarized were addressed separately."
+    "rationale": "Top-level review summary; the actionable inline findings from this review were addressed individually."
   },
   {
-    "id": 3127016069,
+    "id": 4158287583,
+    "disposition": "not-applicable",
+    "rationale": "Automated review wrapper without separate actionable feedback."
+  },
+  {
+    "id": 3127255796,
     "disposition": "addressed",
-    "rationale": "Suppressed secret aliases are now removed from inherited base_env before the child process environment is returned."
+    "rationale": "Changed auth_actions parsing to distinguish missing metadata from explicit empty metadata, so auth_actions: [] intentionally suppresses fallback actions."
+  },
+  {
+    "id": 3127255800,
+    "disposition": "addressed",
+    "rationale": "Replaced Claude lifecycle success no-ops with API calls and added backend validate/disconnect endpoints plus tests."
   }
 ]

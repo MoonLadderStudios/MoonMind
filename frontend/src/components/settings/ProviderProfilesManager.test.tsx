@@ -623,7 +623,7 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByText('Claude OAuth ready')).toBeTruthy();
   });
 
-  it('does not show Claude auth actions without trusted Claude metadata', () => {
+  it('shows default API-key enrollment for Claude profiles without action metadata', () => {
     renderProviderProfilesManager([
       {
         ...claudeCredentialProfile,
@@ -637,7 +637,9 @@ describe('ProviderProfilesManager form controls', () => {
     ]);
 
     expect(screen.queryByRole('button', { name: /Connect with Claude OAuth/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Use Anthropic API key/ })).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Use Anthropic API key claude-without-metadata' }),
+    ).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Validate OAuth/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Disconnect OAuth/ })).toBeNull();
   });
@@ -661,6 +663,36 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByRole('button', { name: /Use Anthropic API key/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Validate OAuth/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Disconnect OAuth/ })).toBeNull();
+  });
+
+  it('runs Claude OAuth lifecycle actions through API endpoints', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ready' }),
+    } as Response);
+    const { onNotice } = renderProviderProfilesManager([connectedClaudeCredentialProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate OAuth claude-anthropic-connected' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/claude-anthropic-connected/oauth/validate',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    expect(onNotice).toHaveBeenCalledWith({
+      level: 'ok',
+      text: 'Claude OAuth validated for "claude-anthropic-connected".',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect OAuth claude-anthropic-connected' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/claude-anthropic-connected/oauth/disconnect',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
   });
 
   it('starts a Claude OAuth session from the OAuth credential method action', async () => {
