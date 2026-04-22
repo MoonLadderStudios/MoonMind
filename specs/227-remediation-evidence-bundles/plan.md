@@ -20,13 +20,13 @@ Implement MM-452 by treating the existing remediation context builder and typed 
 | FR-007 | implemented_verified | undeclared evidence rejection and no raw privileged surface | preserve | focused unit |
 | FR-008 | implemented_verified | live-follow gating by supported/mode/taskRunId | preserve | focused unit |
 | FR-009 | implemented_verified | live-follow cursor recorder and unsupported follow rejection | preserve | focused unit |
-| FR-010 | missing | no pre-action health guard existed before this story | add side-effect-free preparation method | focused unit |
+| FR-010 | implemented_verified | `RemediationEvidenceToolService.prepare_action_request`; focused guard test | no new implementation | focused unit |
 | FR-011 | implemented_verified | sanitized context assertions and restricted artifact metadata | preserve | focused unit |
 | FR-012 | implemented_verified | missing target and optional evidence degradation tests | preserve | focused unit |
 | SC-001-SC-005 | implemented_verified | existing context/evidence unit tests | preserve | focused unit |
-| SC-006 | missing | no test asserted current target health re-read | add focused unit | focused unit |
-| SC-007 | implemented_unverified | MM-452 preserved in new spec only | preserve across all artifacts and final report | traceability check |
-| DESIGN-REQ-006-DESIGN-REQ-009 | partial | context/tool surfaces exist; freshness guard missing | add guard and verification evidence | focused unit |
+| SC-006 | implemented_verified | `test_remediation_evidence_tools_prepare_action_request_rereads_target_health` | no new implementation | focused unit |
+| SC-007 | implemented_verified | MM-452 preserved in spec, plan, tasks, quickstart, and verification | no new implementation | traceability check |
+| DESIGN-REQ-006-DESIGN-REQ-009 | implemented_verified | context/tool surfaces plus freshness guard test | no new implementation | focused unit |
 | DESIGN-REQ-022-DESIGN-REQ-023 | implemented_verified | policy-mediated evidence access and bounded degradation tests | preserve | focused unit |
 
 ## Technical Context
