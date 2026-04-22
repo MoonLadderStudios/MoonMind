@@ -27,6 +27,7 @@ from moonmind.integrations.pentest.models import (
     PentestProviderMaterializationError,
     PentestScopeValidationError,
     PentestWorkloadRequest,
+    build_pentest_execution_materialization,
     build_pentest_provider_cooldown_diagnostic,
     build_pentest_launch_plan,
     materialize_pentest_provider_profile,
@@ -876,6 +877,9 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                                 "retry_allowed": {"type": "boolean"},
                             },
                         },
+                        "instruction_bundle": {"type": "object"},
+                        "runtime_paths": {"type": "object"},
+                        "wrapper_invocation": {"type": "object"},
                         "launch_plan": {
                             "type": "object",
                             "required": [
@@ -3219,6 +3223,9 @@ class TemporalAgentRuntimeActivities:
             provider_materialization = materialize_pentest_provider_profile(
                 provider_profile
             )
+            execution_materialization = build_pentest_execution_materialization(
+                request
+            )
         except (
             PentestScopeValidationError,
             PentestLaunchPolicyError,
@@ -3228,6 +3235,9 @@ class TemporalAgentRuntimeActivities:
         output = launch_plan.to_activity_output(request)
         output["provider_profile"] = provider_materialization.model_dump(mode="json")
         output["provider_lease"] = pentest_provider_lease_metadata(provider_profile)
+        execution_metadata = execution_materialization.model_dump(mode="json")
+        execution_metadata["instruction_bundle"].pop("content", None)
+        output.update(execution_metadata)
         provider_failure = request.provider_failure or {}
         failure_category = str(provider_failure.get("category") or "").strip()
         if failure_category in {"provider_429", "provider_quota"}:
