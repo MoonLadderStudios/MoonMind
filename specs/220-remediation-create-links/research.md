@@ -39,3 +39,51 @@ Evidence: `docs/Tasks/TaskRemediation.md` section 5.2 says remediation is a rela
 Rationale: Remediation often starts because the target failed, so dependency wait semantics are inappropriate.
 Alternatives considered: Reusing `dependsOn` was rejected by the source design.
 Test implications: Unit test asserts remediation creation has no prerequisites.
+
+## FR-008 / Authority Mode Validation
+
+Decision: Validate `task.remediation.authorityMode` against the desired-state modes `observe_only`, `approval_gated`, and `admin_auto` during create-time service validation.
+Evidence: `docs/Tasks/TaskRemediation.md` section 7.3 defines the allowed authority modes, and `moonmind/workflows/temporal/service.py` owns remediation create validation before workflow start.
+Rationale: Unsupported authority modes affect privilege semantics and must fail before a remediation link or workflow starts.
+Alternatives considered: Deferring authority-mode validation to later action execution was rejected because the canonical create contract requires structured rejection at create time.
+Test implications: Service unit test for unsupported `authorityMode`.
+
+## FR-009 / Action Policy Compatibility
+
+Decision: Validate `task.remediation.actionPolicyRef` against the trusted action policy references available in this slice, currently `admin_healer_default`.
+Evidence: `docs/Tasks/TaskRemediation.md` section 7.4 requires action policy compatibility validation, while no broader persisted action policy catalog exists in this story.
+Rationale: A narrow allowlist keeps create-time behavior deterministic without inventing a new policy storage model.
+Alternatives considered: Accepting arbitrary policy refs was rejected because it would silently defer an incompatible privilege request; adding a full policy registry was rejected as broader action-execution scope.
+Test implications: Service unit test for unsupported `actionPolicyRef`.
+
+## FR-010 / Task Run ID Shape Validation
+
+Decision: Validate `task.remediation.target.taskRunIds` as a list of non-empty strings during create-time service validation.
+Evidence: `docs/Tasks/TaskRemediation.md` section 7.3 defines `target.taskRunIds[]`; `moonmind/workflows/temporal/remediation_context.py` later normalizes bounded task-run IDs for context artifacts.
+Rationale: This slice can enforce the durable payload shape without coupling create-time validation to later evidence lookup internals.
+Alternatives considered: Rejecting unknown task-run IDs by resolving managed-run records was rejected because not every target has a persisted managed-run binding at create time and later context tooling performs evidence scoping.
+Test implications: Service unit test for malformed `target.taskRunIds`.
+
+## FR-011 / Nested Remediation Guard
+
+Decision: Reject remediation tasks that target an execution whose canonical parameters already contain `task.remediation`.
+Evidence: `docs/Tasks/TaskRemediation.md` section 6 states nested remediation is off by default.
+Rationale: Disallowing nested remediation at create time prevents unbounded self-healing loops until policy explicitly supports them.
+Alternatives considered: Allowing nested remediation under `admin_auto` was rejected because no loop-prevention policy surface exists in this slice.
+Test implications: Service unit test for nested remediation target rejection.
+
+## FR-012 / Convenience Route Expansion
+
+Decision: Add `POST /api/executions/{workflowId}/remediation` as a control-plane convenience route that builds the same task-shaped create contract as `POST /api/executions`.
+Evidence: `docs/Tasks/TaskRemediation.md` section 7.5 allows a convenience route only when it expands into the canonical execution create contract.
+Rationale: The route improves submission ergonomics without adding a second durable payload shape.
+Alternatives considered: Persisting a route-specific remediation payload was rejected because `initialParameters.task.remediation` is the canonical durable contract.
+Test implications: Router unit test for expansion into `initial_parameters.task.remediation`.
+
+## DESIGN-REQ-024 / Compact Link Metadata
+
+Decision: Add nullable lock/action/outcome fields to the remediation link model so canonical link data remains upstream of later read models.
+Evidence: `docs/Tasks/TaskRemediation.md` sections 8.3 and 8.4 require durable linkage to support current status, lock holder, latest action summary, final outcome, and downstream rendering.
+Rationale: Nullable compact fields preserve the read-model foundation without implementing action execution, locks, or UI rendering in this story.
+Alternatives considered: Deferring all fields until a later UI/API slice was rejected because the MM-431 preset brief includes link support for lock/action/outcome metadata.
+Test implications: Service unit test verifies newly created links expose the compact metadata fields as unset until later lifecycle updates.

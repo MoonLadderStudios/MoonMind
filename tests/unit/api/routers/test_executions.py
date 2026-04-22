@@ -876,6 +876,117 @@ def test_create_task_shaped_execution_preserves_malformed_remediation_for_servic
     assert kwargs["initial_parameters"]["task"]["remediation"] == "mm:target-workflow"
 
 
+def test_create_remediation_convenience_route_expands_to_task_create_contract(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions/mm:target-workflow/remediation",
+        json={
+            "repository": "MoonLadderStudios/MoonMind",
+            "instructions": "Investigate the target execution.",
+            "runtime": {"mode": "codex"},
+            "remediation": {
+                "mode": "snapshot",
+                "authorityMode": "observe_only",
+                "trigger": {"type": "manual"},
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    service.create_execution.assert_awaited_once()
+    kwargs = service.create_execution.call_args.kwargs
+    assert kwargs["workflow_type"] == "MoonMind.Run"
+    assert kwargs["initial_parameters"]["task"]["instructions"] == (
+        "Investigate the target execution."
+    )
+    assert kwargs["initial_parameters"]["task"]["runtime"] == {"mode": "codex_cli"}
+    assert kwargs["initial_parameters"]["task"]["remediation"] == {
+        "target": {"workflowId": "mm:target-workflow"},
+        "mode": "snapshot",
+        "authorityMode": "observe_only",
+        "trigger": {"type": "manual"},
+    }
+
+
+def test_create_remediation_convenience_route_uses_top_level_overrides(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    scheduled_for = datetime.now(UTC) + timedelta(minutes=5)
+    record = _build_execution_record(state=MoonMindWorkflowState.SCHEDULED)
+    record.scheduled_for = scheduled_for
+    service.create_execution.return_value = record
+
+    response = test_client.post(
+        "/api/executions/mm:target-workflow/remediation",
+        json={
+            "repository": "MoonLadderStudios/MoonMind",
+            "priority": 7,
+            "maxAttempts": 5,
+            "schedule": {
+                "mode": "once",
+                "scheduledFor": scheduled_for.isoformat(),
+            },
+            "instructions": "Top-level instructions",
+            "runtime": {"mode": "codex"},
+            "remediation": {
+                "mode": "snapshot",
+                "authorityMode": "observe_only",
+                "trigger": {"type": "manual"},
+            },
+            "task": {
+                "instructions": "Nested instructions",
+                "runtime": {"mode": "jules"},
+                "remediation": {
+                    "mode": "snapshot_then_follow",
+                    "authorityMode": "limited_write",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    initial_parameters = called_kwargs["initial_parameters"]
+    assert called_kwargs["scheduled_for"] == scheduled_for
+    assert initial_parameters["priority"] == 7
+    assert initial_parameters["maxAttempts"] == 5
+    assert initial_parameters["task"]["instructions"] == "Top-level instructions"
+    assert initial_parameters["task"]["runtime"] == {"mode": "codex_cli"}
+    assert initial_parameters["task"]["remediation"] == {
+        "target": {"workflowId": "mm:target-workflow"},
+        "mode": "snapshot",
+        "authorityMode": "observe_only",
+        "trigger": {"type": "manual"},
+    }
+
+
+def test_create_remediation_convenience_route_rejects_malformed_remediation(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions/mm:target-workflow/remediation",
+        json={
+            "repository": "MoonLadderStudios/MoonMind",
+            "instructions": "Investigate the target execution.",
+            "remediation": "mm:target-workflow",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "invalid_execution_request",
+        "message": "task.remediation must be an object",
+    }
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

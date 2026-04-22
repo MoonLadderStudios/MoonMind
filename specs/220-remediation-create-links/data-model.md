@@ -14,6 +14,10 @@ Fields:
 - `authority_mode`: Compact authority mode. Defaults to `observe_only` when omitted.
 - `status`: Link lifecycle status for the persistence slice. Initial value is `created`.
 - `trigger_type`: Optional trigger type copied from `task.remediation.trigger.type`.
+- `active_lock_scope`: Nullable compact lock scope for later action/lock updates.
+- `active_lock_holder`: Nullable compact lock holder identifier for later action/lock updates.
+- `latest_action_summary`: Nullable bounded summary of the latest remediation action.
+- `outcome`: Nullable final remediation outcome.
 - `created_at`: Create timestamp.
 - `updated_at`: Last update timestamp.
 
@@ -23,4 +27,8 @@ Validation rules:
 - The target must exist and be a `MoonMind.Run`.
 - The target must be visible to the creating owner.
 - `target.runId`, when supplied, must match the current target run ID in this slice.
+- `target.taskRunIds`, when supplied, must be a list of non-empty strings.
+- `authorityMode`, when supplied, must be one of `observe_only`, `approval_gated`, or `admin_auto`.
+- `actionPolicyRef`, when supplied, must be supported by the current trusted action policy catalog.
+- The target must not itself be a remediation execution in this slice.
 - Remediation links do not create dependency edges.

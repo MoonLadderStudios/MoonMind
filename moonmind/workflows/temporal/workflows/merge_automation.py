@@ -285,6 +285,44 @@ class MoonMindMergeAutomationWorkflow:
         self._input.pull_request.head_sha = head_sha
         return True
 
+    @staticmethod
+    def _stale_revision_can_track_current_head(evidence: Any) -> bool:
+        blockers = list(getattr(evidence, "blockers", []) or [])
+        stale_seen = False
+        for blocker in blockers:
+            kind = str(getattr(blocker, "kind", "") or "").strip()
+            if kind == "stale_revision":
+                stale_seen = True
+                continue
+            if kind in TERMINAL_BLOCKER_KINDS or not bool(
+                getattr(blocker, "retryable", False)
+            ):
+                return False
+        return stale_seen
+
+    def _refresh_current_head_for_stale_wait(
+        self,
+        *,
+        evaluation: Any,
+        evidence: Any,
+    ) -> Any:
+        if self._input is None or not isinstance(evaluation, Mapping):
+            return evidence
+        if getattr(evidence, "ready", False) or getattr(
+            evidence,
+            "pull_request_merged",
+            False,
+        ):
+            return evidence
+        if not self._stale_revision_can_track_current_head(evidence):
+            return evidence
+        if not self._refresh_tracked_head_sha(evaluation):
+            return evidence
+        return classify_readiness(
+            evaluation,
+            tracked_head_sha=self._input.pull_request.head_sha,
+        )
+
     def _should_refresh_pre_resolver_head(
         self,
         *,
@@ -446,7 +484,12 @@ class MoonMindMergeAutomationWorkflow:
                         evaluation if isinstance(evaluation, Mapping) else {},
                         tracked_head_sha=self._input.pull_request.head_sha,
                     )
-            if workflow.patched(
+            if workflow.patched("merge-automation-refresh-stale-current-head"):
+                evidence = self._refresh_current_head_for_stale_wait(
+                    evaluation=evaluation,
+                    evidence=evidence,
+                )
+            elif workflow.patched(
                 "merge-automation-pre-resolver-head-refresh-v1"
             ) and self._should_refresh_pre_resolver_head(
                 evaluation=evaluation,

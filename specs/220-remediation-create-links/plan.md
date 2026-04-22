@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement MM-431 by adding the create-time persistence slice for Task Remediation. The existing `MoonMind.Run` create path already validates and persists dependency edges; this story adds a separate remediation relationship that accepts `task.remediation`, validates the target execution, pins the current target run ID, writes a durable link table, and exposes service-level inbound/outbound lookup methods. Tests focus on the service boundary and task-shaped API normalization so behavior is proven before production changes.
+Implement MM-431 by adding the create-time persistence slice for Task Remediation. The existing `MoonMind.Run` create path already validates and persists dependency edges; this story adds a separate remediation relationship that accepts `task.remediation`, validates the target execution, pins the current target run ID, writes a durable link table, exposes service-level inbound/outbound lookup methods, and maps the remediation convenience route into the same canonical task-shaped create contract. Tests focus on the service boundary and task-shaped API normalization so behavior is proven before production changes.
 
 ## Requirement Status
 
@@ -18,10 +18,17 @@ Implement MM-431 by adding the create-time persistence slice for Task Remediatio
 | FR-005 | missing | No link persistence exists | Write link in same create transaction as canonical record | unit |
 | FR-006 | missing | No remediation lookup methods exist | Add inbound and outbound service lookup methods | unit |
 | FR-007 | implemented_unverified | Dependency logic is separate but no remediation regression coverage exists | Add test proving remediation does not write dependency edges | unit |
+| FR-008 | missing | No authority-mode allowlist exists | Reject unsupported `task.remediation.authorityMode` values | unit |
+| FR-009 | missing | No action-policy compatibility check exists | Reject unsupported `task.remediation.actionPolicyRef` values | unit |
+| FR-010 | missing | No `target.taskRunIds` shape validation exists | Reject malformed task run ID lists | unit |
+| FR-011 | missing | Nested remediation target policy is not enforced | Reject remediation tasks that target remediation executions | unit |
+| FR-012 | missing | No remediation convenience route exists | Add route that expands into canonical task create payload | unit |
 | DESIGN-REQ-001 | missing | `docs/Tasks/TaskRemediation.md` desired state only | Implement required target validation | unit |
 | DESIGN-REQ-002 | missing | `docs/Tasks/TaskRemediation.md` desired state only | Persist pinned target run ID | unit |
 | DESIGN-REQ-003 | missing | `docs/Tasks/TaskRemediation.md` desired state only | Persist relationship and lookup directions | unit |
-| DESIGN-REQ-004 | implemented_verified | Out-of-scope in `spec.md` | No implementation | final verify |
+| DESIGN-REQ-004 | missing | `docs/Tasks/TaskRemediation.md` desired state only | Implement bounded create-time validation for supported fields | unit |
+| DESIGN-REQ-005 | missing | `docs/Tasks/TaskRemediation.md` desired state only | Add convenience route expansion | unit |
+| DESIGN-REQ-024 | missing | Link table lacks compact action/outcome columns | Add nullable link metadata columns | unit |
 
 ## Technical Context
 
