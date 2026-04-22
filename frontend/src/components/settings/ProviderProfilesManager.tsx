@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
 export interface ProviderProfile {
@@ -295,6 +295,14 @@ const CLAUDE_ENROLLMENT_STEPS: ClaudeEnrollmentStep[] = [
   'failed',
 ];
 
+const CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS = 350;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function commandBehaviorValue(profile: ProviderProfile, key: string): unknown {
   const commandBehavior = profile.command_behavior;
   if (!commandBehavior || typeof commandBehavior !== 'object' || Array.isArray(commandBehavior)) {
@@ -489,9 +497,27 @@ export function ProviderProfilesManager({
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [oauthSessions, setOauthSessions] = useState<Record<string, OAuthSessionState>>({});
   const [claudeEnrollment, setClaudeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
+  const claudeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
+  const claudeEnrollmentProfileIdRef = useRef<string | null>(null);
 
   const isEditing = editingProfileId !== null;
   const defaultFormValues = defaultFormState();
+
+  const updateClaudeEnrollmentForProfile = (
+    profileId: string,
+    updater: (current: ClaudeEnrollmentState) => ClaudeEnrollmentState,
+  ) => {
+    setClaudeEnrollment((current) => {
+      if (!current || current.profile.profile_id !== profileId) {
+        return current;
+      }
+      return updater(current);
+    });
+  };
+
+  useEffect(() => {
+    claudeEnrollmentProfileIdRef.current = claudeEnrollment?.profile.profile_id ?? null;
+  }, [claudeEnrollment?.profile.profile_id]);
 
   const resetForm = () => {
     setEditingProfileId(null);
@@ -500,11 +526,13 @@ export function ProviderProfilesManager({
   };
 
   const closeClaudeEnrollment = () => {
+    claudeEnrollmentProfileIdRef.current = null;
     setClaudeEnrollment(null);
   };
 
   const openClaudeEnrollment = (profile: ProviderProfile) => {
     const authModel = providerAuthModel(profile);
+    claudeEnrollmentProfileIdRef.current = profile.profile_id;
     setClaudeEnrollment({
       profile,
       step: 'not_connected',
@@ -526,21 +554,16 @@ export function ProviderProfilesManager({
     );
   };
 
-  const submitClaudeEnrollment = async () => {
-    if (!claudeEnrollment) return;
-    const submittedToken = claudeEnrollment.token.trim();
-    if (!submittedToken) {
-      onNotice({ level: 'error', text: 'Returned Claude token is required.' });
-      return;
-    }
-
-    setClaudeEnrollment((current) =>
-      current ? { ...current, step: 'validating_token', failureReason: null } : current,
-    );
-
-    try {
+  const claudeEnrollmentMutation = useMutation({
+    mutationFn: async ({
+      profileId,
+      submittedToken,
+    }: {
+      profileId: string;
+      submittedToken: string;
+    }) => {
       const response = await fetch(
-        `/api/v1/provider-profiles/${encodeURIComponent(claudeEnrollment.profile.profile_id)}/manual-auth/commit`,
+        `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/manual-auth/commit`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -553,46 +576,92 @@ export function ProviderProfilesManager({
         throw new Error(redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ?? 'Claude token validation failed.');
       }
 
-      const result = payload as ClaudeManualAuthResult;
-      setClaudeEnrollment((current) =>
-        current ? { ...current, step: 'saving_secret', token: '' } : current,
-      );
-      setClaudeEnrollment((current) =>
-        current ? { ...current, step: 'updating_profile', token: '' } : current,
-      );
-      setClaudeEnrollment((current) =>
-        current
-          ? {
-              ...current,
-              step: 'ready',
-              token: '',
-              failureReason: null,
-              statusLabel: result.status_label ?? result.statusLabel ?? current.statusLabel,
-              readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
-            }
-          : current,
-      );
+      return payload as ClaudeManualAuthResult;
+    },
+    onMutate: ({ profileId }) => {
+      updateClaudeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'validating_token',
+        token: '',
+        failureReason: null,
+      }));
+    },
+    onSuccess: async (result, { profileId }) => {
+      updateClaudeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'saving_secret',
+        token: '',
+      }));
+      await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
+      updateClaudeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'updating_profile',
+        token: '',
+      }));
+      await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
+      if (claudeEnrollmentProfileIdRef.current !== profileId) {
+        return;
+      }
+      updateClaudeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'ready',
+        token: '',
+        failureReason: null,
+        statusLabel: result.status_label ?? result.statusLabel ?? current.statusLabel,
+        readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
+      }));
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({
         level: 'ok',
-        text: `Claude token enrollment completed for "${claudeEnrollment.profile.profile_id}".`,
+        text: `Claude token enrollment completed for "${profileId}".`,
       });
-    } catch (error) {
+    },
+    onError: (error, { profileId, submittedToken }) => {
+      if (claudeEnrollmentProfileIdRef.current !== profileId) {
+        return;
+      }
       const failureReason =
         error instanceof Error
           ? redactClaudeSecretText(error.message, submittedToken)
           : 'Claude token validation failed.';
-      setClaudeEnrollment((current) =>
-        current
-          ? {
-              ...current,
-              step: 'failed',
-              failureReason: failureReason ?? 'Claude token validation failed.',
-            }
-          : current,
-      );
+      updateClaudeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'failed',
+        token: '',
+        failureReason: failureReason ?? 'Claude token validation failed.',
+      }));
+    },
+  });
+
+  const submitClaudeEnrollment = () => {
+    if (!claudeEnrollment) return;
+    const profileId = claudeEnrollment.profile.profile_id;
+    const submittedToken = claudeEnrollment.token.trim();
+    if (!submittedToken) {
+      onNotice({ level: 'error', text: 'Returned Claude token is required.' });
+      return;
     }
+
+    claudeEnrollmentMutation.mutate({ profileId, submittedToken });
   };
+
+  useEffect(() => {
+    if (!claudeEnrollment) return;
+    claudeEnrollmentDrawerRef.current?.focus();
+  }, [claudeEnrollment?.profile.profile_id]);
+
+  useEffect(() => {
+    if (!claudeEnrollment) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeClaudeEnrollment();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [claudeEnrollment]);
 
   const saveMutation = useMutation({
     mutationFn: async (formState: ProviderProfileFormState) => {
@@ -1279,12 +1348,22 @@ export function ProviderProfilesManager({
 
       {claudeEnrollment ? (
         <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="claude-enrollment-title"
-          className="mt-6 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-white dark:bg-slate-900 p-5 shadow-lg"
+          className="fixed inset-0 z-50 flex justify-end bg-slate-950/40"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeClaudeEnrollment();
+            }
+          }}
         >
-          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div
+            ref={claudeEnrollmentDrawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="claude-enrollment-title"
+            tabIndex={-1}
+            className="h-full w-full max-w-2xl overflow-y-auto border-l border-emerald-200 dark:border-emerald-900/60 bg-white dark:bg-slate-900 p-5 shadow-2xl outline-none"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="space-y-2">
               <h4
                 id="claude-enrollment-title"
@@ -1383,6 +1462,7 @@ export function ProviderProfilesManager({
               </button>
             </div>
           ) : null}
+          </div>
         </div>
       ) : null}
 

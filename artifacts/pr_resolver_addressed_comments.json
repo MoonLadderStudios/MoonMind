@@ -1,22 +1,37 @@
 [
   {
-    "id": 3122381615,
+    "id": 3122683153,
     "disposition": "addressed",
-    "rationale": "Updated Claude manual auth classification to require the canonical claude_code runtime and covered it in ProviderProfilesManager tests."
+    "rationale": "Claude enrollment progress now uses asynchronous transitions through saving_secret and updating_profile before ready, so the lifecycle states can render visibly."
   },
   {
-    "id": 4152931396,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary with no separate actionable request."
-  },
-  {
-    "id": 3122381622,
+    "id": 3122683164,
     "disposition": "addressed",
-    "rationale": "Preserved Claude manual auth status rendering even when no lifecycle actions are currently exposed, with a status-only test case."
+    "rationale": "Manual Claude token submission now uses a TanStack useMutation with mutation callbacks for loading, success, and error state management."
   },
   {
-    "id": 4152938547,
+    "id": 3122683174,
+    "disposition": "addressed",
+    "rationale": "The Claude enrollment surface now renders as a fixed drawer overlay with dialog semantics, modal backdrop behavior, initial focus, and Escape/backdrop close handling."
+  },
+  {
+    "id": 3122702328,
+    "disposition": "addressed",
+    "rationale": "Enrollment mutation callbacks are scoped to the submitting profile and ignore stale responses after another profile drawer is opened."
+  },
+  {
+    "id": 3122702335,
+    "disposition": "addressed",
+    "rationale": "Submitted tokens are cleared when submission starts and remain cleared on failed retry entry."
+  },
+  {
+    "id": 4153274362,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; it did not request a code change."
+    "rationale": "Review summary only; the referenced actionable items are tracked by their individual review comments."
+  },
+  {
+    "id": 4153297608,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary only; the actionable Codex comments are tracked by their individual review comments."
   }
 ]
