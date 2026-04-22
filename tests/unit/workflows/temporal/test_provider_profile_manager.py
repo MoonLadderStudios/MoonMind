@@ -679,6 +679,58 @@ class TestProviderProfileManagerHelpers:
         
         assert wf._find_available_profile({"tagsAll": ["fast", "expensive"]}) is None
 
+    def test_find_available_profile_handles_pentest_selector_contract(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "pentestgpt"
+        wf._profiles["pentestgpt_anthropic_api_team"] = ProfileSlotState(
+            profile_id="pentestgpt_anthropic_api_team",
+            max_parallel_runs=2,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            provider_id="anthropic",
+            tags=["default", "api-key"],
+            priority=100,
+            runtime_materialization_mode="api_key_env",
+        )
+        wf._profiles["pentestgpt_openrouter_default"] = ProfileSlotState(
+            profile_id="pentestgpt_openrouter_default",
+            max_parallel_runs=2,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            provider_id="openrouter",
+            tags=["api-key", "router"],
+            priority=90,
+            runtime_materialization_mode="composite",
+        )
+        wf._profiles["pentestgpt_local_default"] = ProfileSlotState(
+            profile_id="pentestgpt_local_default",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=60,
+            rate_limit_policy="queue",
+            enabled=False,
+            provider_id="local_openai_compatible",
+            tags=["local"],
+            priority=80,
+            runtime_materialization_mode="composite",
+        )
+
+        best = wf._find_available_profile(
+            {
+                "providerId": "openrouter",
+                "tagsAll": ["api-key", "router"],
+                "runtimeMaterializationMode": "composite",
+            }
+        )
+
+        assert best is not None
+        assert best.profile_id == "pentestgpt_openrouter_default"
+        assert (
+            wf._find_available_profile({"providerId": "local_openai_compatible"})
+            is None
+        )
+
     def test_build_continue_as_new_input(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(
