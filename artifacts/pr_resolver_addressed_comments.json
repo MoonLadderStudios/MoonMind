@@ -1,27 +1,37 @@
 [
   {
-    "id": 3126903925,
-    "disposition": "addressed",
-    "rationale": "Merged scope-specific prohibited actions with the baseline Pentest safety defaults so global prohibitions remain present."
-  },
-  {
-    "id": 4157934270,
+    "id": 4158134143,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; the actionable child finding is tracked separately."
+    "rationale": "Review summary; no separate code action beyond the line comments."
   },
   {
-    "id": 4157939366,
+    "id": 3127101654,
+    "disposition": "addressed",
+    "rationale": "Merged provider evidence_artifact_refs with the required evidence.bundle artifact ref instead of overwriting them."
+  },
+  {
+    "id": 3127101658,
+    "disposition": "addressed",
+    "rationale": "Blank required finding summaries now normalize to a deterministic fallback string while optional text fields can remain absent."
+  },
+  {
+    "id": 3127101660,
+    "disposition": "addressed",
+    "rationale": "Publication metadata is now sourced from one unambiguous payload object: nested request when present, otherwise the flat payload."
+  },
+  {
+    "id": 3127102522,
+    "disposition": "addressed",
+    "rationale": "Stringly typed publication flags now use bool coercion instead of Python truthiness."
+  },
+  {
+    "id": 3127102524,
+    "disposition": "addressed",
+    "rationale": "Secret redaction now covers spaced equals and colon assignment formats, including prefixed API key names."
+  },
+  {
+    "id": 4158134981,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated Codex review summary with no requested code change."
-  },
-  {
-    "id": 3126908901,
-    "disposition": "addressed",
-    "rationale": "Removed raw objective text from wrapper environment metadata and durable activity output."
-  },
-  {
-    "id": 3126908903,
-    "disposition": "addressed",
-    "rationale": "Normalized Pentest artifact roots with path-aware joins and rejected relative, root, double-slash, and parent-traversal roots."
+    "rationale": "Automated review container comment; actionable suggestions are represented by the individual line comments."
   }
 ]

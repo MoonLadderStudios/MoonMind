@@ -3228,7 +3228,13 @@ class TemporalAgentRuntimeActivities:
         if not self._workflow_docker_enabled:
             raise _docker_workflows_disabled_failure()
         raw_payload = dict(payload)
-        request_payload = dict(raw_payload.get("request", raw_payload))
+        nested_request = raw_payload.get("request")
+        if nested_request is not None:
+            request_payload = dict(nested_request)
+            publication_source = request_payload
+        else:
+            request_payload = raw_payload
+            publication_source = raw_payload
         publication_keys = {
             "findings",
             "provider_snapshot_available",
@@ -3240,9 +3246,9 @@ class TemporalAgentRuntimeActivities:
             "publication_errors",
         }
         publication_payload = {
-            key: raw_payload.get(key, request_payload.get(key))
+            key: publication_source[key]
             for key in publication_keys
-            if key in raw_payload or key in request_payload
+            if key in publication_source
         }
         request_payload = {
             key: value
@@ -3279,11 +3285,13 @@ class TemporalAgentRuntimeActivities:
         publication = build_pentest_publication_result(
             request,
             findings=list(publication_payload.get("findings") or ()),
-            provider_snapshot_available=bool(
-                publication_payload.get("provider_snapshot_available")
+            provider_snapshot_available=_coerce_bool(
+                publication_payload.get("provider_snapshot_available"),
+                default=False,
             ),
-            wrapper_log_available=bool(
-                publication_payload.get("wrapper_log_available")
+            wrapper_log_available=_coerce_bool(
+                publication_payload.get("wrapper_log_available"),
+                default=False,
             ),
             summary_text=publication_payload.get("summary_text"),
             stdout_preview=publication_payload.get("stdout_preview"),
