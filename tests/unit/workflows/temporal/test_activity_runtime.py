@@ -918,7 +918,7 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
     invocation = result["wrapper_invocation"]
 
     assert bundle["target"] == "https://lab.example.test"
-    assert bundle["objective"] == "Validate auth bypass hypothesis."
+    assert "objective" not in bundle
     assert bundle["operation_mode"] == "validate_hypothesis"
     assert "content" not in bundle
     assert len(bundle["sha256"]) == 64
@@ -935,8 +935,13 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
     assert invocation["command"][0] == "/usr/local/bin/moonmind-pentestgpt-run"
     assert "--non-interactive" in invocation["command"]
     assert "--instruction-file" in invocation["command"]
-    assert invocation["env"]["LANGFUSE_ENABLED"] == "false"
-    assert invocation["env"]["MM_PENTEST_INSTRUCTION_FILE"] == paths["instruction_file"]
+    assert invocation["env"] == {
+        "MM_PENTEST_TARGET": "https://lab.example.test",
+        "MM_PENTEST_MODE": "validate_hypothesis",
+        "MM_PENTEST_INSTRUCTION_FILE": paths["instruction_file"],
+        "LANGFUSE_ENABLED": "false",
+    }
+    assert "Validate auth bypass hypothesis" not in str(result)
     assert "Objective:" not in str(invocation["command"])
     assert "Objective:" not in str(invocation["env"])
     assert "Objective:" not in str(result["launch_plan"]["labels"])

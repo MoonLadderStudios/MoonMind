@@ -3237,6 +3237,7 @@ class TemporalAgentRuntimeActivities:
         output["provider_lease"] = pentest_provider_lease_metadata(provider_profile)
         execution_metadata = execution_materialization.model_dump(mode="json")
         execution_metadata["instruction_bundle"].pop("content", None)
+        execution_metadata["instruction_bundle"].pop("objective", None)
         output.update(execution_metadata)
         provider_failure = request.provider_failure or {}
         failure_category = str(provider_failure.get("category") or "").strip()

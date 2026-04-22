@@ -1,32 +1,27 @@
 [
   {
-    "id": 3126646870,
+    "id": 3126903925,
     "disposition": "addressed",
-    "rationale": "Updated the security.pentest.run output schema to include provider_cooldown as a valid status and to declare provider_profile, provider_lease, and provider_cooldown outputs."
+    "rationale": "Merged scope-specific prohibited actions with the baseline Pentest safety defaults so global prohibitions remain present."
   },
   {
-    "id": 4157648571,
+    "id": 4157934270,
     "disposition": "not-applicable",
-    "rationale": "Automated Codex review wrapper text with no independent requested code change."
+    "rationale": "Top-level automated review summary; the actionable child finding is tracked separately."
   },
   {
-    "id": 4157649792,
-    "disposition": "addressed",
-    "rationale": "Addressed the summarized materialization secret_refs gap and runtime-state filtering gap in the inline comment fixes."
+    "id": 4157939366,
+    "disposition": "not-applicable",
+    "rationale": "Top-level automated Codex review summary with no requested code change."
   },
   {
-    "id": 3126648064,
+    "id": 3126908901,
     "disposition": "addressed",
-    "rationale": "Added secret_refs to PentestProviderMaterialization so launch-time secret descriptors are available alongside secret_env."
+    "rationale": "Removed raw objective text from wrapper environment metadata and durable activity output."
   },
   {
-    "id": 3126648092,
+    "id": 3126908903,
     "disposition": "addressed",
-    "rationale": "materialize_pentest_provider_profile now copies profile.secret_refs into the materialization result."
-  },
-  {
-    "id": 3126648100,
-    "disposition": "addressed",
-    "rationale": "Added provider_runtime_state filtering for active cooldowns and slot availability to exact-ref and selector-based Pentest profile resolution, with activity-boundary coverage."
+    "rationale": "Normalized Pentest artifact roots with path-aware joins and rejected relative, root, double-slash, and parent-traversal roots."
   }
 ]
