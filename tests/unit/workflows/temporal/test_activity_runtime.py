@@ -963,6 +963,73 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
     assert "docker attach" not in str(result).lower()
 
 
+async def test_security_pentest_execute_includes_publication_metadata_without_session_artifacts():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            summary_text="Pentest finished with password=hunter2",
+            findings=[
+                {
+                    "finding_id": "finding-1",
+                    "title": "Supported issue",
+                    "severity": "high",
+                    "confidence": "supported",
+                    "target": "https://lab.example.test",
+                    "summary": "Evidence supports issue",
+                }
+            ],
+            provider_snapshot_available=True,
+            wrapper_log_available=True,
+        )
+    )
+
+    publication = result["artifact_publication"]
+    finding_set = result["normalized_findings"]
+    live_logs = result["live_log_events"]
+    artifact_names = {item["name"] for item in publication["artifacts"]}
+
+    assert publication["status"] == "complete"
+    assert {
+        "input.manifest",
+        "input.instructions",
+        "runtime.stdout",
+        "runtime.stderr",
+        "runtime.diagnostics",
+        "output.summary",
+        "output.primary",
+        "output.provider_snapshot",
+        "output.logs",
+        "evidence.bundle",
+    }.issubset(artifact_names)
+    assert "session.summary" not in artifact_names
+    assert "session.step_checkpoint" not in artifact_names
+    assert "session.control_event" not in artifact_names
+    assert "session.reset_boundary" not in artifact_names
+    assert publication["restricted_evidence_refs"]
+    assert finding_set["summary"] == {
+        "findings_count": 1,
+        "confirmed_findings_count": 0,
+        "high_or_critical_count": 1,
+    }
+    assert finding_set["findings"][0]["confidence"] == "supported"
+    assert result["heartbeat_phases"] == [
+        "validating_scope",
+        "waiting_for_profile_slot",
+        "materializing_inputs",
+        "launching_container",
+        "running",
+        "publishing_artifacts",
+        "normalizing_findings",
+        "cleanup",
+    ]
+    assert any(event["event_type"] == "artifact" for event in live_logs)
+    assert any(event["event_type"] == "annotation" for event in live_logs)
+    assert "hunter2" not in str(result)
+    assert "terminal_control" not in str(live_logs)
+    assert "docker attach" not in str(result).lower()
+
+
 async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval():
     activities = TemporalAgentRuntimeActivities()
 
