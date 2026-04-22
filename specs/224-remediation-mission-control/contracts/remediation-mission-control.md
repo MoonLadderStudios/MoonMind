@@ -5,11 +5,11 @@
 Mission Control needs a bounded read surface for task detail.
 
 ```http
-GET /api/executions/{workflowId}/remediations?direction=inbound
-GET /api/executions/{workflowId}/remediations?direction=outbound
+GET /api/executions/{workflow_id}/remediations?direction=inbound
+GET /api/executions/{workflow_id}/remediations?direction=outbound
 ```
 
-`inbound` returns remediation tasks targeting `{workflowId}`. `outbound` returns the target execution for a remediation task.
+`inbound` returns remediation tasks targeting `{workflow_id}`. `outbound` returns the target execution for a remediation task.
 
 Response shape:
 
@@ -39,6 +39,8 @@ Response shape:
 
 Rules:
 - Response items are compact read-model data sourced from persisted remediation links and artifacts.
+- `remediationWorkflowId`, `remediationRunId`, `targetWorkflowId`, `targetRunId`, `mode`, `authorityMode`, `status`, `createdAt`, and `updatedAt` come from the persisted remediation link/read model.
+- `activeLockScope`, `activeLockHolder`, `latestActionSummary`, `resolution`, and `contextArtifactRef` are derived from bounded remediation execution state, control/action-event metadata, and artifact metadata. If an existing bounded source is unavailable, the fields are returned as `null` or omitted; implementation must not add a persistent table solely for these summaries.
 - The route must not scan raw logs or artifact bodies during task-detail rendering.
 - Missing or unauthorized executions return existing task-detail authorization semantics.
 
@@ -47,7 +49,7 @@ Rules:
 Existing route:
 
 ```http
-POST /api/executions/{workflowId}/remediation
+POST /api/executions/{workflow_id}/remediation
 ```
 
 Mission Control sends target-scoped choices such as:
@@ -99,8 +101,10 @@ The UI uses existing artifact preview/download routes. It must not render storag
 If no existing control-event route can record decisions, add a narrow route:
 
 ```http
-POST /api/executions/{workflowId}/remediation/approvals/{requestId}
+POST /api/executions/{remediation_workflow_id}/remediation/approvals/{request_id}
 ```
+
+`{remediation_workflow_id}` identifies the remediation task execution that owns the action request. Target-scoped screens must submit the selected remediation task workflow ID rather than the target workflow ID, because one target execution can have multiple remediation tasks and pending requests.
 
 Request:
 

@@ -38,7 +38,7 @@ Implement MM-437 by layering Mission Control UI and narrow API read/decision sur
 **Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for FastAPI route/read-model tests.  
 **Primary Dependencies**: React, TanStack Query, existing Mission Control task-detail entrypoint, generated OpenAPI types, FastAPI, SQLAlchemy async ORM, existing Temporal execution/remediation services, pytest, Vitest and Testing Library.  
 **Storage**: Existing remediation link table, artifact tables, and any existing control/audit event storage; no new persistent table planned unless approval decisions lack a current audit surface.  
-**Unit Testing**: `./tools/test_unit.sh` for Python and `./tools/test_unit.sh --ui-args <paths>` for frontend-focused runs.  
+**Unit Testing**: `./tools/test_unit.sh` for Python and `./tools/test_unit.sh --dashboard-only --ui-args <paths>` for frontend-focused runs.
 **Integration Testing**: Rendered React entrypoint tests plus focused API/router tests; no compose-backed integration expected unless the approval decision path crosses an existing integration boundary.  
 **Target Platform**: Browser Mission Control UI backed by FastAPI control-plane APIs.  
 **Project Type**: Frontend runtime behavior with narrow backend API/read-model support.  

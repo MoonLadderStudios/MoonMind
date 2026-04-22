@@ -12,7 +12,7 @@
 **Test Commands**:
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_temporal_service.py`
-- Integration tests: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
+- Integration tests: `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
 - Final verification: `/speckit.verify`
 
 ## Format: `[ID] [P?] Description`
@@ -77,7 +77,7 @@
 - [ ] T019 Add failing task-detail UI test for missing link, missing context artifact, missing evidence refs, unavailable live follow, and approval fetch failure degraded states in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-010, SC-006, DESIGN-REQ-007)
 - [ ] T020 Add failing CSS/accessibility assertions for remediation panel focus, contrast, mobile containment, reduced-motion/fallback posture in `frontend/src/entrypoints/task-detail.test.tsx` and `frontend/src/styles/mission-control.css` inspection helpers. (FR-011, DESIGN-REQ-008)
 - [ ] T021 Add or confirm non-remediation task-detail/create regression coverage in `frontend/src/entrypoints/task-detail.test.tsx` and `frontend/src/entrypoints/task-create.test.tsx`. (FR-012, SC-007)
-- [ ] T022 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` and capture expected red-first failures for T013-T021.
+- [ ] T022 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` and capture expected red-first failures for T013-T021.
 
 ### Implementation
 
@@ -89,7 +89,7 @@
 - [ ] T028 Implement approval-gated remediation display and approve/reject controls in `frontend/src/entrypoints/task-detail.tsx`, wired to the trusted backend route from T010 when required. (FR-008, FR-009, DESIGN-REQ-006)
 - [ ] T029 Implement degraded and empty states for missing remediation links, context artifacts, evidence refs, live follow, and approval metadata in `frontend/src/entrypoints/task-detail.tsx`. (FR-010, DESIGN-REQ-007)
 - [ ] T030 Update remediation panel styling in `frontend/src/styles/mission-control.css` using existing Mission Control evidence-region patterns. (FR-011, DESIGN-REQ-008)
-- [ ] T031 Run `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` and fix UI failures.
+- [ ] T031 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` and fix UI failures.
 - [ ] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_temporal_service.py` and fix backend regressions.
 
 **Checkpoint**: The story is fully functional, covered by API and integration-style UI tests, and independently testable.
@@ -103,7 +103,7 @@
 - [ ] T033 [P] Review MM-437 traceability in `specs/224-remediation-mission-control/spec.md`, `plan.md`, `tasks.md`, and `contracts/remediation-mission-control.md`. (FR-013, SC-008)
 - [ ] T034 [P] Review rendered remediation panels for long workflow IDs, run IDs, action labels, artifact labels, and mobile containment in `frontend/src/entrypoints/task-detail.test.tsx`. (FR-011)
 - [ ] T035 Run quickstart validation commands from `specs/224-remediation-mission-control/quickstart.md`.
-- [ ] T036 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` for final focused frontend evidence.
+- [ ] T036 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` for final focused frontend evidence.
 - [ ] T037 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_temporal_service.py` for final focused backend evidence.
 - [ ] T038 Run `/speckit.verify` final verification and write the result to `specs/224-remediation-mission-control/verification.md`. (SC-008)
 

@@ -1,32 +1,32 @@
 [
   {
-    "id": 3121241459,
+    "id": 3121722981,
     "disposition": "addressed",
-    "rationale": "Replaced the exact long primary-button selector assertion with a PostCSS-backed rule lookup based on selector shape and declarations."
+    "rationale": "Changed remediation read contract route parameters from camelCase {workflowId} to snake_case {workflow_id}."
   },
   {
-    "id": 3121241462,
+    "id": 3121722994,
     "disposition": "addressed",
-    "rationale": "Consolidated the adjacent prefers-reduced-motion blocks for the running icon and liquidGL surfaces."
+    "rationale": "Clarified that link identity/status fields come from the persisted link/read model, while lock/action/resolution/context fields are bounded derived summaries returned as null or omitted when unavailable without adding a new persistence table."
   },
   {
-    "id": 4151743717,
+    "id": 3121722997,
+    "disposition": "addressed",
+    "rationale": "Changed the approval decision route to scope by {remediation_workflow_id} and {request_id}, and documented that target-scoped screens must submit the selected remediation task workflow ID."
+  },
+  {
+    "id": 4152209722,
     "disposition": "not-applicable",
-    "rationale": "Review summary reported no direct code-change feedback; inline suggestions are tracked by their own comment ids."
+    "rationale": "Summary review body only; the three concrete child review comments were addressed individually."
   },
   {
-    "id": 3121245746,
+    "id": 3121729143,
     "disposition": "addressed",
-    "rationale": "Added .route-nav a:focus-visible to the forced-colors focus outline fallback."
+    "rationale": "Updated focused frontend test commands in tasks, plan, and quickstart to use --dashboard-only with --ui-args."
   },
   {
-    "id": 4151748283,
+    "id": 4152216624,
     "disposition": "not-applicable",
-    "rationale": "Automated review preamble with no standalone remediation request; inline suggestions are tracked by their own comment ids."
-  },
-  {
-    "id": 3121245749,
-    "disposition": "addressed",
-    "rationale": "Added .live-logs-artifact-link:focus-visible to the forced-colors focus outline fallback."
+    "rationale": "Automated review summary/header only; no separate actionable request beyond the inline comments."
   }
 ]
