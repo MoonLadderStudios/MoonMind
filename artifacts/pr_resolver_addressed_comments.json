@@ -13,5 +13,10 @@
     "id": 4158029300,
     "disposition": "not-applicable",
     "rationale": "Top-level bot review summary; the two actionable inline findings it summarized were addressed separately."
+  },
+  {
+    "id": 3127016069,
+    "disposition": "addressed",
+    "rationale": "Suppressed secret aliases are now removed from inherited base_env before the child process environment is returned."
   }
 ]

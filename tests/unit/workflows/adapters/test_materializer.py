@@ -25,7 +25,11 @@ class StaticSecretResolver:
 
 @pytest.mark.asyncio
 async def test_materializer_generates_correct_env():
-    base_env = {"SOME_PATH": "/usr/bin", "TO_BE_CLEARED": "bad_token"}
+    base_env = {
+        "SOME_PATH": "/usr/bin",
+        "TO_BE_CLEARED": "bad_token",
+        "ANTHROPIC_API_KEY": "ambient_token",
+    }
     resolver = MockSecretResolver()
 
     materializer = ProviderProfileMaterializer(
@@ -104,7 +108,7 @@ async def test_materializer_launches_claude_anthropic_from_secret_ref_alias():
 @pytest.mark.asyncio
 async def test_materializer_excludes_file_template_secret_alias_from_base_env(tmp_path):
     materializer = ProviderProfileMaterializer(
-        base_env={"PATH": "/usr/bin"},
+        base_env={"PATH": "/usr/bin", "provider_api_key": "ambient-provider-key"},
         secret_resolver=StaticSecretResolver({"env://provider-key": "resolved-key"}),
     )
     profile = ManagedRuntimeProfile(
@@ -139,7 +143,7 @@ async def test_materializer_excludes_file_template_secret_alias_from_base_env(tm
 @pytest.mark.asyncio
 async def test_materializer_excludes_home_path_template_secret_alias_from_base_env():
     materializer = ProviderProfileMaterializer(
-        base_env={},
+        base_env={"home_root": "ambient-home-root"},
         secret_resolver=StaticSecretResolver({"env://home-root": "profile-home"}),
     )
     profile = ManagedRuntimeProfile(

@@ -78,6 +78,8 @@ class ProviderProfileMaterializer:
             template_secret_aliases.update(
                 self._collect_from_secret_ref_aliases(file_template.content_template)
             )
+        for alias in template_secret_aliases:
+            env.pop(alias, None)
         env.update(
             {
                 k: str(v)
