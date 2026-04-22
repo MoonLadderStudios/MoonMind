@@ -34,7 +34,7 @@ Mission Control task detail now uses server-selected report linkage to render a 
 
 ## Test Evidence
 
-- Red-first evidence: `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py` passed the API contract and the dashboard suite failed on the newly added report-first UI assertion before implementation.
+- Red-first evidence: the dashboard/unit suite failed on the newly added report-first UI assertion before production UI changes, then passed after implementation. The API contract check for `link_type=report.primary&latest_only=true` was a pre-existing green boundary verification, so no backend production code was changed for that path.
 - Focused dashboard validation: `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx` passed with 78 tests.
 - Focused API contract validation: `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py` passed.
 - Final unit validation: `./tools/test_unit.sh` passed with 3752 Python tests, 16 subtests, and 367 frontend tests.
