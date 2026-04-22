@@ -1,22 +1,32 @@
 [
   {
-    "id": 3126394695,
+    "id": 3126646870,
     "disposition": "addressed",
-    "rationale": "Aligned the security.pentest.run registry output schema with the current launch_plan_ready activity output, including the required launch_plan object, so downstream JSON-pointer resolution no longer expects absent artifact refs."
+    "rationale": "Updated the security.pentest.run output schema to include provider_cooldown as a valid status and to declare provider_profile, provider_lease, and provider_cooldown outputs."
   },
   {
-    "id": 4157371395,
+    "id": 4157648571,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary body only; the actionable child review comment is tracked separately."
+    "rationale": "Automated Codex review wrapper text with no independent requested code change."
   },
   {
-    "id": 3126411835,
+    "id": 4157649792,
     "disposition": "addressed",
-    "rationale": "Moved the shared agent_workspaces mount definition to a module-level _PENTEST_AGENT_WORKSPACES_MOUNT constant and reused it in both approved runner profiles."
+    "rationale": "Addressed the summarized materialization secret_refs gap and runtime-state filtering gap in the inline comment fixes."
   },
   {
-    "id": 4157390624,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary body only; the actionable child review comment is tracked separately."
+    "id": 3126648064,
+    "disposition": "addressed",
+    "rationale": "Added secret_refs to PentestProviderMaterialization so launch-time secret descriptors are available alongside secret_env."
+  },
+  {
+    "id": 3126648092,
+    "disposition": "addressed",
+    "rationale": "materialize_pentest_provider_profile now copies profile.secret_refs into the materialization result."
+  },
+  {
+    "id": 3126648100,
+    "disposition": "addressed",
+    "rationale": "Added provider_runtime_state filtering for active cooldowns and slot availability to exact-ref and selector-based Pentest profile resolution, with activity-boundary coverage."
   }
 ]
