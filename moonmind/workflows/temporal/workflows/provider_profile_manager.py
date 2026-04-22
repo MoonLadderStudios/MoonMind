@@ -867,13 +867,20 @@ class MoonMindProviderProfileManagerWorkflow:
             return None
 
         if not selector:
+            configured_default_profiles = [
+                profile
+                for profile in self._profiles.values()
+                if profile.is_default and profile.enabled
+            ]
             default_profiles = [
                 profile for profile in eligible_profiles if profile.is_default
             ]
-            if len(eligible_profiles) == 1:
-                return eligible_profiles[0]
             if len(default_profiles) == 1:
                 return default_profiles[0]
+            if configured_default_profiles:
+                return None
+            if len(eligible_profiles) == 1:
+                return eligible_profiles[0]
             if not default_profiles:
                 # Preserve lease assignment for in-flight manager state restored
                 # from payloads created before is_default existed.

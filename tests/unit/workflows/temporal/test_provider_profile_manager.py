@@ -509,6 +509,28 @@ class TestProviderProfileManagerHelpers:
         assert best is not None
         assert best.profile_id == "p2"
 
+    def test_find_available_profile_does_not_fallback_when_default_unavailable(self):
+        wf = self._make_workflow()
+        wf._profiles["fallback"] = ProfileSlotState(
+            profile_id="fallback",
+            max_parallel_runs=3,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=False,
+        )
+        wf._profiles["default"] = ProfileSlotState(
+            profile_id="default",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            current_leases=["wf1"],
+        )
+
+        assert wf._find_available_profile() is None
+
     def test_find_available_profile_treats_empty_selector_as_no_selector(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(
