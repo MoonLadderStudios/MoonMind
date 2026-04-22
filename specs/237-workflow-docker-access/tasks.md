@@ -12,7 +12,8 @@
 **Test Commands**:
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/config/test_settings.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py`
-- Integration tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/integration/temporal/test_integration_ci_tool_contract.py`
+- Integration boundary tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/integration/temporal/test_integration_ci_tool_contract.py`
+- Full hermetic integration tests, when Docker is available: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_integration.sh`
 - Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
@@ -54,6 +55,7 @@
 
 - Unit: settings defaults/env override, generic DooD denial, direct `workload.run` denial, curated integration-CI mapping, result shape.
 - Integration/activity boundary: curated `moonmind.integration_ci` routes through dispatcher semantics and returns workload artifact refs without starting an agent session.
+- Full hermetic integration: run the repository integration runner through `./tools/test_integration.sh` when a Docker socket is available.
 
 ### Unit Tests (write first)
 
@@ -88,9 +90,10 @@
 **Purpose**: Strengthen the completed story without expanding scope.
 
 - [X] T021 [P] Check traceability for MM-476 in `docs/tmp/jira-orchestration-inputs/MM-476-moonspec-orchestration-input.md` and `specs/237-workflow-docker-access/`
-- [X] T022 Run quickstart validation commands from `specs/237-workflow-docker-access/quickstart.md`
+- [X] T022 Run quickstart unit and integration-boundary validation commands from `specs/237-workflow-docker-access/quickstart.md`
 - [X] T023 Run full unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [X] T024 Run `/moonspec-verify` to validate the final implementation against the original MM-476 feature request
+- [X] T024 Run full hermetic integration verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_integration.sh` when Docker is available, or record the Docker-socket blocker in final verification evidence
+- [X] T025 Run `/moonspec-verify` to validate the final implementation against the original MM-476 feature request
 
 ---
 
@@ -109,7 +112,7 @@
 - Integration/activity-boundary test T011 must be written before implementation tasks T014-T018.
 - Red-first confirmations T010 and T012 must complete before production code tasks T013-T018.
 - Settings T013 and gate wiring T017 precede final direct runtime verification.
-- Story validation T020 precedes polish and final verification.
+- Story validation T020 precedes polish, full integration verification when available, and final verification.
 
 ### Parallel Opportunities
 
@@ -124,7 +127,7 @@
 2. Confirm the new tests fail for the expected missing behavior.
 3. Add the setting and propagate it into workload tool handlers and activity runtime.
 4. Add the curated integration-CI tool/profile mapping through the existing workload result contract.
-5. Run focused validation, then quickstart/full unit verification, then `/moonspec-verify`.
+5. Run focused validation, quickstart/full unit verification, full hermetic integration verification when Docker is available, then `/moonspec-verify`.
 
 ## Notes
 
