@@ -66,7 +66,7 @@
 
 - [X] T014 Run quickstart validation from `specs/236-motion-theme-intensity-presets/quickstart.md`.
 - [X] T015 Run `./tools/test_unit.sh` for final unit-test verification.
-- [X] T016 Run `/speckit.verify` by creating `specs/236-motion-theme-intensity-presets/verification.md` with MM-467, DESIGN-REQ-* coverage, test evidence, and final verdict.
+- [X] T016 Run `/moonspec-verify` by creating `specs/236-motion-theme-intensity-presets/verification.md` with MM-467, DESIGN-REQ-* coverage, test evidence, and final verdict.
 
 ## Dependencies and Execution Order
 
@@ -83,4 +83,3 @@
 ## Implementation Strategy
 
 Write the MM-467 tests first against the existing component. Implement the smallest component and CSS changes needed to satisfy the public preset contract. Keep all behavior inside the existing `MaskedConicBorderBeam` surface, preserve previous MM-465/MM-466 tests, and avoid adopting the effect on unrelated Mission Control cards.
-
