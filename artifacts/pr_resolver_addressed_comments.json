@@ -1,22 +1,22 @@
 [
   {
-    "id": 3122381615,
+    "id": 3122397775,
     "disposition": "addressed",
-    "rationale": "Updated Claude manual auth classification to require the canonical claude_code runtime and covered it in ProviderProfilesManager tests."
+    "rationale": "Allowed known service-managed preview_artifact_id metadata during report link validation and added a regression for linking restricted report artifacts after preview creation."
   },
   {
-    "id": 4152931396,
+    "id": 4152948692,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary with no separate actionable request."
+    "rationale": "Automated review summary without a distinct actionable request."
   },
   {
-    "id": 3122381622,
+    "id": 3122402310,
     "disposition": "addressed",
-    "rationale": "Preserved Claude manual auth status rendering even when no lifecycle actions are currently exposed, with a status-only test case."
+    "rationale": "Simplified top-level report metadata validation by removing the redundant post-whitelist secret-key check while preserving unsafe unknown-key rejection."
   },
   {
-    "id": 4152938547,
+    "id": 4152954022,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; it did not request a code change."
+    "rationale": "Automated review summary; its single actionable item is tracked by comment 3122402310."
   }
 ]

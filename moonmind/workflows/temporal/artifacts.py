@@ -1246,6 +1246,15 @@ class TemporalArtifactService:
                 raise TemporalArtifactValidationError("size_bytes must be non-negative")
 
         execution_ref = self._coerce_execution_ref(link)
+        if execution_ref is not None:
+            from moonmind.workflows.temporal.report_artifacts import (
+                validate_report_artifact_contract,
+            )
+
+            validate_report_artifact_contract(
+                link_type=execution_ref.link_type,
+                metadata=metadata_json,
+            )
         derived_retention = _derive_retention(
             retention_class,
             execution_ref.link_type if execution_ref else None,
@@ -1740,9 +1749,19 @@ class TemporalArtifactService:
     ) -> db_models.TemporalArtifactLink:
         artifact = await self._repository.get_artifact(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
+        coerced_execution_ref = self._coerce_execution_ref(execution_ref)
+        from moonmind.workflows.temporal.report_artifacts import (
+            validate_report_artifact_contract,
+        )
+
+        validate_report_artifact_contract(
+            link_type=coerced_execution_ref.link_type,
+            metadata=artifact.metadata_json,
+            allow_internal_metadata=True,
+        )
         link = await self._repository.add_link(
             artifact_id=artifact_id,
-            execution=self._coerce_execution_ref(execution_ref),
+            execution=coerced_execution_ref,
         )
         if (
             artifact.retention_class
