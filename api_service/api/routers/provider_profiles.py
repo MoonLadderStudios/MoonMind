@@ -401,15 +401,13 @@ async def commit_claude_manual_auth(
             "provider_profile_id": profile.profile_id,
             "runtime_id": profile.runtime_id,
             "provider_id": profile.provider_id,
-            "auth_strategy": "claude_manual_token",
+            "auth_strategy": "claude_credential_methods",
             "last_validated_at": validated_at.isoformat(),
         },
     )
 
     profile.credential_source = ProviderCredentialSource.SECRET_REF
     profile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
-    profile.volume_ref = None
-    profile.volume_mount_path = None
     profile.secret_refs = {
         **(profile.secret_refs or {}),
         "anthropic_api_key": secret_ref,
@@ -434,10 +432,10 @@ async def commit_claude_manual_auth(
     behavior = dict(profile.command_behavior or {})
     behavior.update(
         {
-            "auth_strategy": "claude_manual_token",
+            "auth_strategy": "claude_credential_methods",
             "auth_state": "connected",
-            "auth_actions": ["replace_token", "validate", "disconnect"],
-            "auth_status_label": "Claude token ready",
+            "auth_actions": _claude_auth_actions_for_profile(profile),
+            "auth_status_label": "Anthropic API key ready",
             "auth_readiness": {
                 "connected": True,
                 "last_validated_at": validated_at.isoformat(),
@@ -456,7 +454,7 @@ async def commit_claude_manual_auth(
 
     return {
         "status": "ready",
-        "status_label": "Claude token ready",
+        "status_label": "Anthropic API key ready",
         "profile_id": profile.profile_id,
         "secret_ref": secret_ref,
         "readiness": {
@@ -466,6 +464,123 @@ async def commit_claude_manual_auth(
             "launch_ready": True,
             "failure_reason": None,
         },
+    }
+
+
+@router.post("/{profile_id}/oauth/validate")
+async def validate_claude_oauth_profile(
+    profile_id: str,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_profile_management(profile, current_user)
+    _require_claude_anthropic_profile(profile)
+    if not profile.volume_ref or not profile.volume_mount_path:
+        raise HTTPException(
+            status_code=422,
+            detail="Claude OAuth validation requires OAuth volume metadata.",
+        )
+
+    try:
+        from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
+            verify_volume_credentials,
+        )
+
+        verification = await verify_volume_credentials(
+            runtime_id=profile.runtime_id,
+            volume_ref=profile.volume_ref,
+            volume_mount_path=profile.volume_mount_path,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Claude OAuth validation unavailable.",
+        ) from exc
+
+    if not verification.get("verified", False):
+        reason = str(verification.get("reason") or "unknown")
+        _update_claude_auth_behavior(
+            profile,
+            auth_state="validation_failed",
+            status_label="Claude OAuth validation failed",
+            readiness={
+                "connected": False,
+                "last_validated_at": datetime.now(UTC).isoformat(),
+                "backing_secret_exists": False,
+                "launch_ready": False,
+                "failure_reason": reason,
+            },
+        )
+        await session.commit()
+        await session.refresh(profile)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Claude OAuth validation failed: {reason}",
+        )
+
+    validated_at = datetime.now(UTC)
+    _update_claude_auth_behavior(
+        profile,
+        auth_state="connected",
+        status_label="Claude OAuth ready",
+        readiness={
+            "connected": True,
+            "last_validated_at": validated_at.isoformat(),
+            "backing_secret_exists": True,
+            "launch_ready": True,
+        },
+    )
+    await session.commit()
+    await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+    return {
+        "status": "ready",
+        "status_label": "Claude OAuth ready",
+        "profile_id": profile.profile_id,
+        "readiness": profile.command_behavior.get("auth_readiness")
+        if isinstance(profile.command_behavior, dict)
+        else None,
+    }
+
+
+@router.post("/{profile_id}/oauth/disconnect")
+async def disconnect_claude_oauth_profile(
+    profile_id: str,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_profile_management(profile, current_user)
+    _require_claude_anthropic_profile(profile)
+
+    if profile.credential_source == ProviderCredentialSource.OAUTH_VOLUME:
+        profile.credential_source = ProviderCredentialSource.NONE
+        profile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
+    profile.volume_ref = None
+    profile.volume_mount_path = None
+    _update_claude_auth_behavior(
+        profile,
+        auth_state="not_connected",
+        status_label="Claude OAuth disconnected",
+        readiness={
+            "connected": False,
+            "last_validated_at": datetime.now(UTC).isoformat(),
+            "backing_secret_exists": False,
+            "launch_ready": False,
+        },
+    )
+    await session.commit()
+    await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+    return {
+        "status": "disconnected",
+        "status_label": "Claude OAuth disconnected",
+        "profile_id": profile.profile_id,
     }
 
 
@@ -547,6 +662,34 @@ def _require_claude_anthropic_profile(row: ManagedAgentProviderProfile) -> None:
             status_code=422,
             detail="Manual Claude auth is only supported for claude_code Anthropic profiles.",
         )
+
+
+def _claude_auth_actions_for_profile(row: ManagedAgentProviderProfile) -> list[str]:
+    actions = ["use_api_key"]
+    if row.volume_ref or row.volume_mount_path:
+        actions.insert(0, "connect_oauth")
+        actions.extend(["validate_oauth", "disconnect_oauth"])
+    return actions
+
+
+def _update_claude_auth_behavior(
+    row: ManagedAgentProviderProfile,
+    *,
+    auth_state: str,
+    status_label: str,
+    readiness: dict[str, Any],
+) -> None:
+    behavior = dict(row.command_behavior or {})
+    behavior.update(
+        {
+            "auth_strategy": "claude_credential_methods",
+            "auth_state": auth_state,
+            "auth_actions": _claude_auth_actions_for_profile(row),
+            "auth_status_label": status_label,
+            "auth_readiness": readiness,
+        }
+    )
+    row.command_behavior = behavior
 
 
 def _looks_like_claude_manual_token(token: str) -> bool:

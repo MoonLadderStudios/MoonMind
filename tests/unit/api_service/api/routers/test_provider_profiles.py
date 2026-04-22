@@ -625,7 +625,7 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert submitted_token not in response_text
     payload = response.json()
     assert payload["status"] == "ready"
-    assert payload["status_label"] == "Claude token ready"
+    assert payload["status_label"] == "Anthropic API key ready"
     assert payload["readiness"]["connected"] is True
     assert payload["readiness"]["backing_secret_exists"] is True
     assert payload["readiness"]["launch_ready"] is True
@@ -640,8 +640,8 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert submitted_token not in profile_response.text
     assert profile_payload["credential_source"] == "secret_ref"
     assert profile_payload["runtime_materialization_mode"] == "api_key_env"
-    assert profile_payload["volume_ref"] is None
-    assert profile_payload["volume_mount_path"] is None
+    assert profile_payload["volume_ref"] == "claude_auth_volume"
+    assert profile_payload["volume_mount_path"] == "/home/app/.claude"
     assert profile_payload["secret_refs"] == {
         "custom_tool": "env://CUSTOM_TOOL_SECRET",
         "anthropic_api_key": expected_secret_ref,
@@ -655,8 +655,15 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert "OPENAI_API_KEY" in profile_payload["clear_env_keys"]
     assert "CUSTOM_ENV" in profile_payload["clear_env_keys"]
     assert profile_payload["clear_env_keys"].count("OPENAI_API_KEY") == 1
-    assert profile_payload["command_behavior"]["auth_strategy"] == "claude_manual_token"
+    assert profile_payload["command_behavior"]["auth_strategy"] == "claude_credential_methods"
     assert profile_payload["command_behavior"]["auth_state"] == "connected"
+    assert profile_payload["command_behavior"]["auth_actions"] == [
+        "connect_oauth",
+        "use_api_key",
+        "validate_oauth",
+        "disconnect_oauth",
+    ]
+    assert profile_payload["command_behavior"]["auth_status_label"] == "Anthropic API key ready"
 
     async with db_base.async_session_maker() as session:
         result = await session.execute(
@@ -680,6 +687,87 @@ def test_claude_manual_auth_secret_slug_is_collision_resistant() -> None:
     assert second.startswith("claude-anthropic-")
     assert first.endswith("-token")
     assert second.endswith("-token")
+
+
+@pytest.mark.asyncio
+async def test_claude_oauth_lifecycle_actions_validate_and_disconnect(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_id = "claude-anthropic-oauth-lifecycle"
+    synced_runtimes: list[str] = []
+
+    async def _fake_verify(
+        *,
+        runtime_id: str,
+        volume_ref: str,
+        volume_mount_path: str | None,
+    ) -> dict[str, object]:
+        assert runtime_id == "claude_code"
+        assert volume_ref == "claude_auth_volume"
+        assert volume_mount_path == "/home/app/.claude"
+        return {"verified": True}
+
+    async def _fake_sync(*, session: AsyncSession, runtime_id: str) -> None:
+        synced_runtimes.append(runtime_id)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _fake_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
+        _fake_sync,
+    )
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="claude_code",
+                    provider_id="anthropic",
+                    provider_label="Anthropic",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref="claude_auth_volume",
+                    volume_mount_path="/home/app/.claude",
+                    enabled=True,
+                    command_behavior={
+                        "auth_strategy": "claude_credential_methods",
+                        "auth_actions": [
+                            "connect_oauth",
+                            "use_api_key",
+                            "validate_oauth",
+                            "disconnect_oauth",
+                        ],
+                    },
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        validate_response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/oauth/validate"
+        )
+        disconnect_response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/oauth/disconnect"
+        )
+        profile_response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert validate_response.status_code == 200
+    assert validate_response.json()["status"] == "ready"
+    assert disconnect_response.status_code == 200
+    assert disconnect_response.json()["status"] == "disconnected"
+    profile_payload = profile_response.json()
+    assert profile_payload["credential_source"] == "none"
+    assert profile_payload["volume_ref"] is None
+    assert profile_payload["volume_mount_path"] is None
+    assert profile_payload["command_behavior"]["auth_actions"] == ["use_api_key"]
+    assert profile_payload["command_behavior"]["auth_status_label"] == "Claude OAuth disconnected"
+    assert synced_runtimes == ["claude_code", "claude_code"]
 
 
 @pytest.mark.asyncio
