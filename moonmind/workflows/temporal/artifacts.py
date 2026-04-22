@@ -192,6 +192,10 @@ def _derive_retention(
     if explicit is not None:
         return explicit
     link = (link_type or "").strip().lower()
+    if link in {"report.primary", "report.summary"}:
+        return db_models.TemporalArtifactRetentionClass.LONG
+    if link in {"report.structured", "report.evidence"}:
+        return db_models.TemporalArtifactRetentionClass.STANDARD
     if link in {"output.logs", "debug.trace"}:
         return db_models.TemporalArtifactRetentionClass.EPHEMERAL
     if link in {"input.instructions", "input.plan", "input.manifest"}:
@@ -199,6 +203,22 @@ def _derive_retention(
     if link in {"output.primary", "output.patch", "output.summary"}:
         return db_models.TemporalArtifactRetentionClass.STANDARD
     return db_models.TemporalArtifactRetentionClass.STANDARD
+
+
+def _strongest_retention_class(
+    values: Iterable[db_models.TemporalArtifactRetentionClass],
+) -> db_models.TemporalArtifactRetentionClass:
+    rank = {
+        db_models.TemporalArtifactRetentionClass.EPHEMERAL: 0,
+        db_models.TemporalArtifactRetentionClass.STANDARD: 1,
+        db_models.TemporalArtifactRetentionClass.LONG: 2,
+        db_models.TemporalArtifactRetentionClass.PINNED: 3,
+    }
+    strongest = db_models.TemporalArtifactRetentionClass.STANDARD
+    for value in values:
+        if rank[value] > rank[strongest]:
+            strongest = value
+    return strongest
 
 
 def _normalized_content_type(value: object | None) -> str:
@@ -1845,9 +1865,12 @@ class TemporalArtifactService:
         self._assert_mutation_access(artifact, principal=principal)
         await self._repository.unpin_artifact(artifact_id)
         if artifact.retention_class is db_models.TemporalArtifactRetentionClass.PINNED:
-            artifact.retention_class = db_models.TemporalArtifactRetentionClass.STANDARD
+            links = await self._repository.list_links(artifact_id)
+            artifact.retention_class = _strongest_retention_class(
+                _derive_retention(None, link.link_type) for link in links
+            )
             artifact.expires_at = _expires_at_for_retention(
-                db_models.TemporalArtifactRetentionClass.STANDARD,
+                artifact.retention_class,
                 datetime.now(UTC),
             )
         await self._repository.commit()
