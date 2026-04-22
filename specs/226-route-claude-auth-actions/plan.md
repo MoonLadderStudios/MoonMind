@@ -11,25 +11,25 @@ Route `claude_anthropic` provider profile rows in Settings to Claude-specific au
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | implemented_unverified | `frontend/src/components/settings/ProviderProfilesManager.tsx` renders provider rows inside Settings Provider Profiles | preserve row-level placement and add Claude action assertions | unit UI |
-| FR-002 | missing | no Claude action classification exists | add disconnected Claude `Connect Claude` action | unit UI |
-| FR-003 | partial | `isCodexOAuthCapable(profile)` hardcodes `runtime_id === 'codex_cli'` | replace with metadata/strategy-based action classification | unit UI |
-| FR-004 | implemented_unverified | Codex OAuth tests cover Auth start/finalize/retry | keep Codex path unchanged and rerun targeted tests | unit UI |
-| FR-005 | missing | no connected Claude lifecycle action rendering exists | add supported `Replace token`, `Validate`, and `Disconnect` labels from trusted metadata/readiness | unit UI |
-| FR-006 | missing | Claude-specific labels are absent | render Claude labels and avoid Codex OAuth text for Claude rows | unit UI |
-| FR-007 | implemented_unverified | actions render in provider row; no standalone Claude route exists | keep Claude entrypoint in row and do not add route/page | unit UI + final verify |
-| FR-008 | missing | no fail-closed Claude capability logic exists | suppress Claude actions when metadata is absent or unsupported | unit UI |
-| FR-009 | partial | row status shows enabled/disabled and OAuth state only | surface concise Claude readiness/validation state where available | unit UI |
-| FR-010 | implemented_unverified | `spec.md` preserves MM-445 and design mappings | carry traceability through artifacts, tasks, verification, commit, and PR metadata | final verify |
-| SC-001 | missing | no disconnected Claude row assertion exists | add focused UI test for `Connect Claude` and omitted generic `Auth` | unit UI |
-| SC-002 | missing | no connected Claude lifecycle assertion exists | add focused UI test for supported lifecycle actions | unit UI |
-| SC-003 | implemented_unverified | existing Codex OAuth tests cover current behavior | rerun/update Codex regression tests after classifier change | unit UI |
-| SC-004 | missing | no assertion proves classifier avoids runtime-only Claude decisions | add unsupported/missing metadata fail-closed test | unit UI |
-| SC-005 | implemented_unverified | no standalone Claude page exists today | preserve row-local flow and verify no new route/page is added | unit UI + final verify |
-| SC-006 | implemented_unverified | `spec.md` and task artifacts preserve MM-445 and source mappings | carry traceability through verification | final verify |
-| DESIGN-REQ-001 | implemented_unverified | provider rows are already in Settings Provider Profiles | preserve placement and readiness/status visibility | unit UI |
-| DESIGN-REQ-003 | partial | Codex-only hardcoded helper is present | replace with profile metadata action classifier | unit UI |
-| DESIGN-REQ-007 | missing | Claude row-level labels are absent | add Claude-specific labels and no standalone page | unit UI |
+| FR-001 | verified | `ProviderProfilesManager.tsx` continues rendering actions inside Settings Provider Profiles; T018-T020 passed | preserve row-level placement | unit UI |
+| FR-002 | verified | disconnected Claude fixture renders `Connect Claude`; T004 and T017 passed | maintain disconnected Claude action | unit UI |
+| FR-003 | verified | provider-profile auth classifier derives actions from metadata/strategy instead of a Codex-only helper; T006 and T011 passed | maintain metadata/strategy-based action classification | unit UI |
+| FR-004 | verified | Codex OAuth regression assertions remained passing through T009, T016, T017, and T020 | keep Codex path unchanged | unit UI |
+| FR-005 | verified | connected Claude fixture renders supported `Replace token`, `Validate`, and `Disconnect` actions; T005 and T017 passed | maintain supported lifecycle labels | unit UI |
+| FR-006 | verified | Claude rows omit generic Codex `Auth` while rendering Claude labels; T004-T005 and T017 passed | maintain Claude-specific labels | unit UI |
+| FR-007 | verified | Claude actions remain row-local and no standalone Claude auth route/page was added; T012, T018, and T019 passed | keep Claude entrypoint in row | unit UI + final verify |
+| FR-008 | verified | unsupported or missing Claude metadata hides lifecycle actions; T006 and T014 passed | maintain fail-closed unsupported metadata behavior | unit UI |
+| FR-009 | verified | Claude metadata-backed status labels render in the Status cell; T007 and T015 passed | maintain secret-free status label rendering | unit UI |
+| FR-010 | verified | `spec.md`, `plan.md`, `tasks.md`, and verification artifacts preserve MM-445 and source mappings | carry traceability through verification, commit, and PR metadata | final verify |
+| SC-001 | verified | disconnected Claude row assertion covers `Connect Claude` and omitted generic `Auth`; T004 and T017 passed | maintain focused UI test | unit UI |
+| SC-002 | verified | connected Claude lifecycle assertion covers supported actions; T005 and T017 passed | maintain focused UI test | unit UI |
+| SC-003 | verified | Codex OAuth behavior remains covered by existing regression assertions; T009, T016, and T017 passed | maintain Codex regression tests | unit UI |
+| SC-004 | verified | unsupported metadata assertion proves action decisions are not runtime-only; T006 and T011 passed | maintain fail-closed test | unit UI |
+| SC-005 | verified | row-local flow and absence of standalone Claude auth route/page are covered by T018-T019 | maintain row-local verification | unit UI + final verify |
+| SC-006 | verified | MM-445 and DESIGN-REQ-001/003/007 remain present in spec, plan, tasks, and final verification work | maintain traceability | final verify |
+| DESIGN-REQ-001 | verified | provider rows remain in Settings Provider Profiles with readiness/status visibility; T015 and T018 passed | maintain placement and status visibility | unit UI |
+| DESIGN-REQ-003 | verified | Codex-only hardcoded helper was replaced by provider metadata action classification; T011 passed | maintain metadata classifier | unit UI |
+| DESIGN-REQ-007 | verified | Claude row-level labels render without a standalone page; T012-T019 passed | maintain Claude labels and row-local flow | unit UI |
 
 ## Technical Context
 
