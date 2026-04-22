@@ -5,41 +5,41 @@
 
 ## Summary
 
-Implement MM-457 by layering Mission Control UI and narrow API read/decision surfaces over the existing remediation create/link/context/evidence foundations. Existing backend work already accepts remediation create requests, persists remediation links, builds bounded context artifacts, and exposes typed evidence tools at service boundaries. This story adds operator-visible task-detail panels and create/approval flows: target pages show remediation creation and inbound links, remediation pages show target/evidence/approval state, evidence artifact refs use the existing artifact presentation path, and approval decisions stay permission-aware and audit-backed. Tests are frontend-first with focused backend route coverage where Mission Control needs a read or decision contract that does not already exist.
+Implement MM-457 by layering Mission Control UI and narrow API read/decision surfaces over the existing remediation create/link/context/evidence foundations. Existing backend work already accepts remediation create requests, persists remediation links, builds bounded context artifacts, and exposes typed evidence tools at service boundaries. Current implementation adds operator-visible task-detail panels and create/approval flows: target pages show remediation creation and inbound links, remediation pages show target/evidence/approval state, evidence artifact refs use the existing artifact presentation path, and approval decisions stay permission-aware and audit-backed. Verification is frontend-first with focused backend route/service coverage where Mission Control needs a read or decision contract.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | missing | Task detail has generic status and action regions, but no remediation create action | Add eligible-target create action in task detail | UI unit |
-| FR-002 | partial | `POST /api/executions/{workflow_id}/remediation` exists in `api_service/api/routers/executions.py`; no Mission Control prefill flow | Wire create action/form to canonical route with target context | UI unit + router unit |
-| FR-003 | missing | No remediation create UI policy/evidence preview found | Add troubleshooting/admin choices and evidence preview | UI unit |
-| FR-004 | partial | Service methods `list_remediations_for_target` exist; no API/UI read surface | Add/read inbound remediation link API and target panel | API unit + UI unit |
-| FR-005 | partial | Service methods `list_remediation_targets` and context builder exist; no task-detail panel | Add/read outbound target API and remediation target panel | API unit + UI unit |
-| FR-006 | partial | Remediation artifacts and context refs exist; task detail shows generic artifacts only | Add remediation evidence grouping and labels | UI unit |
-| FR-007 | implemented_unverified | Artifact authorization/preview path exists; no remediation-specific no-raw-storage test | Verify evidence links use artifact refs only | UI unit |
-| FR-008 | missing | Timeline can render approval rows; no remediation approval summary contract | Add approval-state read model and UI display | API unit + UI unit |
-| FR-009 | missing | No remediation approval decision controls found | Add permission-aware approve/reject flow or read-only fallback | API unit + UI unit |
-| FR-010 | missing | No remediation degraded/empty states | Add degraded states for missing links, context, evidence, live follow, approval | UI unit |
-| FR-011 | implemented_unverified | MM-429 accessibility/fallback CSS exists; remediation-specific panels not covered | Add remediation panel accessibility/fallback assertions | UI unit |
-| FR-012 | implemented_unverified | Existing task-detail/create/artifact tests pass in prior specs | Preserve and rerun route regression tests | UI unit |
-| FR-013 | missing | This artifact set has been realigned to the canonical MM-457 orchestration input | Preserve traceability in specs/tasks/verification | final verify |
-| DESIGN-REQ-001 | missing | Desired-state doc only for Mission Control create entrypoints | Implement create action entrypoints | UI unit |
-| DESIGN-REQ-002 | missing | Desired-state doc only for remediation create choices | Implement create form/prefill choices | UI unit |
-| DESIGN-REQ-003 | partial | Backend link table/service exists; no Mission Control panel | Implement inbound panel/API | API unit + UI unit |
-| DESIGN-REQ-004 | partial | Backend outbound link/context exists; no Mission Control panel | Implement outbound panel/API | API unit + UI unit |
-| DESIGN-REQ-005 | partial | Remediation artifacts exist as generic artifacts | Implement remediation evidence grouping | UI unit |
-| DESIGN-REQ-006 | missing | No remediation approval handoff UI/API found | Implement approval display and decision path | API unit + UI unit |
-| DESIGN-REQ-007 | missing | No remediation degraded UI states | Implement partial-evidence and missing-link states | UI unit |
-| DESIGN-REQ-008 | implemented_unverified | Mission Control design tests exist but not for new remediation surfaces | Add accessibility/fallback coverage for remediation panels | UI unit |
+| FR-001 | implemented_verified | `frontend/src/entrypoints/task-detail.tsx` adds eligible-target Create remediation task action; `frontend/src/entrypoints/task-detail.test.tsx` covers eligible submission | No new implementation; add ineligible-state coverage if expanding regression scope | UI unit |
+| FR-002 | implemented_verified | `frontend/src/entrypoints/task-detail.tsx` posts target context to `POST /api/executions/{workflow_id}/remediation`; router regression remains in `tests/unit/api/routers/test_executions.py` | No new implementation | UI unit + router unit |
+| FR-003 | partial | Current UI submits bounded default mode, authority, evidence policy, and manual trigger but does not expose a complete troubleshooting/admin choice surface | Add richer operator choices and evidence preview when this scope is resumed | UI unit |
+| FR-004 | implemented_verified | `api_service/api/routers/executions.py` exposes inbound remediation link read route; `frontend/src/entrypoints/task-detail.tsx` renders Remediation Tasks; API/UI tests cover the panel | No new implementation | API unit + UI unit |
+| FR-005 | implemented_verified | `api_service/api/routers/executions.py` exposes outbound remediation target read route; `frontend/src/entrypoints/task-detail.tsx` renders Remediation Target; API/UI tests cover the panel | No new implementation | API unit + UI unit |
+| FR-006 | implemented_verified | `frontend/src/entrypoints/task-detail.tsx` groups remediation-prefixed artifacts; UI tests cover remediation evidence links | No new implementation | UI unit |
+| FR-007 | implemented_verified | Evidence links route through existing artifact download/preview paths and tests cover rendered remediation artifact links without raw storage paths | No new implementation | UI unit |
+| FR-008 | implemented_verified | `RemediationApprovalStateModel` and task-detail approval state rendering are present; API/UI tests cover approval state and decision submission | No new implementation | API unit + UI unit |
+| FR-009 | partial | Approve/reject submission route and enabled UI path exist; unauthorized/read-only fallback still needs focused UI coverage | Add unauthorized/read-only regression test before closing | API unit + UI unit |
+| FR-010 | partial | Empty and fallback panel states exist for missing relationship/evidence data; broader degraded-state coverage for live-follow and approval metadata remains open | Add degraded-state UI tests and adjust implementation if gaps appear | UI unit |
+| FR-011 | partial | `.td-remediation-region` and `.td-remediation-list` styling exists; focused accessibility, focus, reduced-motion, and mobile containment assertions remain open | Add remediation panel accessibility/fallback assertions | UI unit |
+| FR-012 | implemented_verified | Non-remediation task detail/create tests pass in focused and full unit runs | No new implementation | UI unit |
+| FR-013 | implemented_verified | `spec.md` now preserves the original MM-457 preset brief and traceability checks find MM-457 plus source coverage IDs | No new implementation | final verify |
+| DESIGN-REQ-001 | implemented_verified | Task detail create entrypoint exists and is tested for eligible remediation targets | No new implementation | UI unit |
+| DESIGN-REQ-002 | partial | Submitted create payload includes target, mode, authority, evidence policy, and trigger; richer selected-step/policy preview controls remain open | Complete richer create choices if required for closure | UI unit |
+| DESIGN-REQ-003 | implemented_verified | Inbound API and target Remediation Tasks panel exist with compact status/action/lock fields | No new implementation | API unit + UI unit |
+| DESIGN-REQ-004 | implemented_verified | Outbound API and Remediation Target panel exist with target/evidence/approval fields | No new implementation | API unit + UI unit |
+| DESIGN-REQ-005 | implemented_verified | Remediation evidence grouping and artifact links are implemented in task detail and covered by UI tests | No new implementation | UI unit |
+| DESIGN-REQ-006 | partial | Approval display and decision route exist; unauthorized/read-only approval behavior needs focused coverage | Add read-only approval tests and implementation fixes if needed | API unit + UI unit |
+| DESIGN-REQ-007 | partial | Missing relationship/evidence states exist; partial live-follow and approval degraded states need stronger coverage | Add degraded-state tests and fixes if needed | UI unit |
+| DESIGN-REQ-008 | partial | Remediation CSS exists; accessibility/fallback-specific assertions remain open | Add accessibility/fallback coverage for remediation panels | UI unit |
 
 ## Technical Context
 
 **Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 for FastAPI route/read-model tests.  
 **Primary Dependencies**: React, TanStack Query, existing Mission Control task-detail entrypoint, generated OpenAPI types, FastAPI, SQLAlchemy async ORM, existing Temporal execution/remediation services, pytest, Vitest and Testing Library.  
 **Storage**: Existing remediation link table, artifact tables, and any existing control/audit event storage; no new persistent table planned unless approval decisions lack a current audit surface.  
-**Unit Testing**: `./tools/test_unit.sh` for Python and `./tools/test_unit.sh --dashboard-only --ui-args <paths>` for frontend-focused runs.
-**Integration Testing**: Rendered React entrypoint tests plus focused API/router tests; no compose-backed integration expected unless the approval decision path crosses an existing integration boundary.  
+**Unit Testing**: `./tools/test_unit.sh` for Python service/router tests and `./tools/test_unit.sh --dashboard-only --ui-args <paths>` for frontend-focused Vitest runs.
+**Integration Testing**: React entrypoint rendering tests exercise task-detail integration behavior across query data, user actions, and rendered panels; focused FastAPI router tests exercise route-to-service contracts. No compose-backed `integration_ci` suite is required for this bounded UI/API story unless later work moves remediation approval decisions across a workflow or external service boundary.
 **Target Platform**: Browser Mission Control UI backed by FastAPI control-plane APIs.  
 **Project Type**: Frontend runtime behavior with narrow backend API/read-model support.  
 **Performance Goals**: Task detail loads remediation metadata with bounded list payloads and artifact refs only; no unbounded log or artifact body fetches during page render.  
