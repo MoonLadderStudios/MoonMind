@@ -29,6 +29,11 @@ from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationContextError,
 )
+from moonmind.workflows.temporal.remediation_actions import (
+    RemediationActionAuthorityService,
+    RemediationPermissionSet,
+    RemediationSecurityProfile,
+)
 from moonmind.workflows.temporal.remediation_tools import (
     RemediationEvidenceToolError,
     RemediationEvidenceToolService,
@@ -37,6 +42,82 @@ from moonmind.workflows.temporal.remediation_tools import (
     RemediationLogReadResult,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+
+
+async def _create_target_and_remediation(
+    session: AsyncSession,
+    mock_client_adapter,
+    *,
+    owner_id=None,
+    authority_mode: str = "observe_only",
+    action_policy_ref: str = "admin_healer_default",
+):
+    owner = owner_id or uuid4()
+    mock_client_adapter.start_workflow.side_effect = [
+        SimpleNamespace(run_id="target-run"),
+        SimpleNamespace(run_id="remediation-run"),
+    ]
+    execution_service = TemporalExecutionService(
+        session, client_adapter=mock_client_adapter
+    )
+    target = await execution_service.create_execution(
+        workflow_type="MoonMind.Run",
+        owner_id=owner,
+        title="Target",
+        input_artifact_ref=None,
+        plan_artifact_ref=None,
+        manifest_artifact_ref=None,
+        failure_policy=None,
+        initial_parameters={},
+        idempotency_key=None,
+    )
+    remediation = await execution_service.create_execution(
+        workflow_type="MoonMind.Run",
+        owner_id=owner,
+        title="Remediate target",
+        input_artifact_ref=None,
+        plan_artifact_ref=None,
+        manifest_artifact_ref=None,
+        failure_policy=None,
+        initial_parameters={
+            "task": {
+                "remediation": {
+                    "target": {"workflowId": target.workflow_id},
+                    "authorityMode": authority_mode,
+                    "actionPolicyRef": action_policy_ref,
+                    "approvalPolicy": {
+                        "mode": "risk_gated",
+                        "autoAllowedRisk": "medium",
+                    },
+                }
+            }
+        },
+        idempotency_key=None,
+    )
+    return target, remediation
+
+
+def _admin_permissions(**overrides):
+    data = {
+        "can_view_target": True,
+        "can_create_remediation": True,
+        "can_request_admin_profile": True,
+        "can_approve_high_risk": False,
+        "can_inspect_audit": False,
+    }
+    data.update(overrides)
+    return RemediationPermissionSet(**data)
+
+
+def _admin_profile(**overrides):
+    data = {
+        "profile_ref": "admin_healer",
+        "execution_principal": "service:admin-healer",
+        "allowed_action_kinds": ("restart_worker", "terminate_session"),
+        "enabled": True,
+    }
+    data.update(overrides)
+    return RemediationSecurityProfile(**data)
 
 
 @pytest.fixture
@@ -757,3 +838,284 @@ async def test_remediation_context_builder_rejects_missing_target_record(
                 remediation_workflow_id=remediation.workflow_id,
                 principal="service:remediation-context",
             )
+
+
+@pytest.mark.asyncio
+async def test_remediation_action_authority_enforces_authority_modes(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        _target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="observe_only",
+        )
+        service = RemediationActionAuthorityService(session=session)
+
+        dry_run = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={"reason": "diagnose only"},
+            dry_run=True,
+            idempotency_key="observe-dry-run",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        assert dry_run.decision == "dry_run_only"
+        assert dry_run.executable is False
+
+        denied = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={"reason": "side effect"},
+            dry_run=False,
+            idempotency_key="observe-execute",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        assert denied.decision == "denied"
+        assert denied.reason == "observe_only_rejects_side_effects"
+        assert denied.executable is False
+
+
+@pytest.mark.asyncio
+async def test_remediation_action_authority_requires_approval_for_gated_mode(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        _target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="approval_gated",
+        )
+        service = RemediationActionAuthorityService(session=session)
+
+        pending = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={},
+            dry_run=False,
+            idempotency_key="gated-pending",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        assert pending.decision == "approval_required"
+        assert pending.reason == "approval_gated_requires_approval"
+        assert pending.executable is False
+
+        approved = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={},
+            dry_run=False,
+            idempotency_key="gated-approved",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(can_approve_high_risk=True),
+            security_profile=_admin_profile(),
+            approval_ref="approval://ops/1",
+        )
+        assert approved.decision == "allowed"
+        assert approved.executable is True
+        assert approved.audit["requestingPrincipal"] == "user:operator"
+        assert approved.audit["executionPrincipal"] == "service:admin-healer"
+
+
+@pytest.mark.asyncio
+async def test_remediation_action_authority_enforces_profile_permissions_and_risk(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        _target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        service = RemediationActionAuthorityService(session=session)
+
+        view_only = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={},
+            dry_run=False,
+            idempotency_key="view-only",
+            requesting_principal="user:viewer",
+            permissions=RemediationPermissionSet(can_view_target=True),
+            security_profile=_admin_profile(),
+        )
+        assert view_only.decision == "denied"
+        assert view_only.reason == "admin_profile_permission_required"
+
+        disabled_profile = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={},
+            dry_run=False,
+            idempotency_key="disabled-profile",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(enabled=False),
+        )
+        assert disabled_profile.decision == "denied"
+        assert disabled_profile.reason == "security_profile_disabled"
+
+        allowed = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={},
+            dry_run=False,
+            idempotency_key="medium-allowed",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        assert allowed.decision == "allowed"
+        assert allowed.risk == "medium"
+        assert allowed.executable is True
+
+        high_risk = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="terminate_session",
+            parameters={},
+            dry_run=False,
+            idempotency_key="high-risk",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        assert high_risk.decision == "approval_required"
+        assert high_risk.reason == "high_risk_requires_approval"
+        assert high_risk.executable is False
+
+
+@pytest.mark.asyncio
+async def test_remediation_action_authority_redacts_audits_and_deduplicates(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        _target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        service = RemediationActionAuthorityService(session=session)
+
+        result = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={
+                "token": "raw-secret-token",
+                "path": "/work/agent_jobs/mm:secret/repo/.env",
+                "note": "Authorization: Bearer raw-secret-token",
+            },
+            dry_run=False,
+            idempotency_key="dedupe-redact",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        duplicate = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={"token": "different-secret"},
+            dry_run=False,
+            idempotency_key="dedupe-redact",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+
+        assert duplicate is result
+        serialized = json.dumps(result.to_dict(), sort_keys=True)
+        assert "raw-secret-token" not in serialized
+        assert "/work/agent_jobs" not in serialized
+        assert "Bearer" not in serialized
+        assert result.audit["requestingPrincipal"] == "user:operator"
+        assert result.audit["executionPrincipal"] == "service:admin-healer"
+
+
+@pytest.mark.asyncio
+async def test_remediation_action_authority_denies_raw_access_and_unknown_targets(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        _target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        service = RemediationActionAuthorityService(session=session)
+
+        raw_access = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="raw_host_shell",
+            parameters={"command": "docker ps"},
+            dry_run=False,
+            idempotency_key="raw-shell",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        assert raw_access.decision == "denied"
+        assert raw_access.reason == "raw_access_action_denied"
+
+        missing = await service.evaluate_action_request(
+            remediation_workflow_id="mm:missing-remediation",
+            action_kind="restart_worker",
+            parameters={},
+            dry_run=False,
+            idempotency_key="missing-target",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        assert missing.decision == "denied"
+        assert missing.reason == "remediation_link_not_found"
+        assert "missing-remediation" not in missing.audit["summary"]
+
+
+@pytest.mark.asyncio
+async def test_remediation_action_authority_uses_prepared_action_context(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        builder = RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        )
+        await builder.build_context(remediation_workflow_id=remediation.workflow_id)
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+        )
+        preparation = await tools.prepare_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+        )
+
+        service = RemediationActionAuthorityService(session=session)
+        decision = await service.evaluate_action_request(
+            remediation_workflow_id=preparation.remediation_workflow_id,
+            action_kind=preparation.action_kind,
+            parameters={"targetState": preparation.target.state},
+            dry_run=False,
+            idempotency_key="prepared-action",
+            requesting_principal="workflow:remediator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+
+        assert preparation.target.workflow_id == target.workflow_id
+        assert decision.decision == "allowed"
+        assert decision.target_workflow_id == target.workflow_id
