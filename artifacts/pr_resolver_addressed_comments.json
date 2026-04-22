@@ -8,5 +8,15 @@
     "id": 4157371395,
     "disposition": "not-applicable",
     "rationale": "Automated review summary body only; the actionable child review comment is tracked separately."
+  },
+  {
+    "id": 3126411835,
+    "disposition": "addressed",
+    "rationale": "Moved the shared agent_workspaces mount definition to a module-level _PENTEST_AGENT_WORKSPACES_MOUNT constant and reused it in both approved runner profiles."
+  },
+  {
+    "id": 4157390624,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary body only; the actionable child review comment is tracked separately."
   }
 ]
