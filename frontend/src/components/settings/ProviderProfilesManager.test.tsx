@@ -734,7 +734,9 @@ describe('ProviderProfilesManager form controls', () => {
 
   it('ignores stale Claude enrollment responses after another profile is opened', async () => {
     const submittedToken = 'sk-ant-stale-token';
-    let resolveCommit: ((response: Response) => void) | null = null;
+    let resolveCommit: (response: Response) => void = (_response: Response) => {
+      throw new Error('Claude commit resolver was not initialized.');
+    };
     const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
       () =>
         new Promise<Response>((resolve) => {
@@ -768,7 +770,7 @@ describe('ProviderProfilesManager form controls', () => {
       screen.getByRole('button', { name: 'Connect Claude claude-anthropic-secondary' }),
     );
 
-    resolveCommit?.({
+    resolveCommit({
       ok: true,
       json: async () => ({
         status: 'ready',
