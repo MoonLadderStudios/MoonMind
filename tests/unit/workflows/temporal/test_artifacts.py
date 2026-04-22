@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import (
     Base,
     TemporalArtifactRedactionLevel,
+    TemporalArtifactRetentionClass,
     TemporalArtifactStatus,
     TemporalArtifactStorageBackend,
 )
@@ -379,6 +380,167 @@ async def test_create_accepts_report_primary_with_bounded_metadata(
             links = await repo.list_links(artifact.artifact_id)
             assert artifact.metadata_json["report_type"] == "unit_test"
             assert links[0].link_type == "report.primary"
+
+
+async def test_report_primary_and_summary_default_to_long_retention(
+    tmp_path: Path,
+) -> None:
+    """MM-463: Canonical report and summary artifacts should be retained long."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            for link_type in ("report.primary", "report.summary"):
+                artifact, _upload = await service.create(
+                    principal="workflow-producer",
+                    content_type="text/markdown",
+                    link={
+                        "namespace": "moonmind",
+                        "workflow_id": "wf-report",
+                        "run_id": "run-report",
+                        "link_type": link_type,
+                    },
+                    metadata_json={"title": f"{link_type} artifact"},
+                )
+
+                assert artifact.retention_class is TemporalArtifactRetentionClass.LONG
+
+
+async def test_report_structured_and_evidence_retention_policy_defaults(
+    tmp_path: Path,
+) -> None:
+    """MM-463: Structured/evidence reports default to standard unless overridden."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            for link_type in ("report.structured", "report.evidence"):
+                artifact, _upload = await service.create(
+                    principal="workflow-producer",
+                    content_type="application/json",
+                    link={
+                        "namespace": "moonmind",
+                        "workflow_id": "wf-report",
+                        "run_id": "run-report",
+                        "link_type": link_type,
+                    },
+                    metadata_json={"title": f"{link_type} artifact"},
+                )
+                assert (
+                    artifact.retention_class is TemporalArtifactRetentionClass.STANDARD
+                )
+
+            evidence, _upload = await service.create(
+                principal="workflow-producer",
+                content_type="application/json",
+                retention_class=TemporalArtifactRetentionClass.LONG,
+                link={
+                    "namespace": "moonmind",
+                    "workflow_id": "wf-report",
+                    "run_id": "run-report",
+                    "link_type": "report.evidence",
+                },
+                metadata_json={"title": "Long evidence"},
+            )
+            assert evidence.retention_class is TemporalArtifactRetentionClass.LONG
+
+
+async def test_unpin_report_primary_restores_report_retention(tmp_path: Path) -> None:
+    """MM-463: Unpinning a final report should restore report-derived retention."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            artifact, _upload = await service.create(
+                principal="workflow-producer",
+                content_type="text/markdown",
+                link={
+                    "namespace": "moonmind",
+                    "workflow_id": "wf-report",
+                    "run_id": "run-report",
+                    "link_type": "report.primary",
+                },
+                metadata_json={
+                    "title": "Final report",
+                    "report_scope": "final",
+                    "is_final_report": True,
+                },
+            )
+            assert artifact.retention_class is TemporalArtifactRetentionClass.LONG
+
+            await service.pin(
+                artifact_id=artifact.artifact_id,
+                principal="workflow-producer",
+                reason="retain final report",
+            )
+            pinned = await repo.get_artifact(artifact.artifact_id)
+            assert pinned.retention_class is TemporalArtifactRetentionClass.PINNED
+
+            await service.unpin(
+                artifact_id=artifact.artifact_id,
+                principal="workflow-producer",
+            )
+            unpinned = await repo.get_artifact(artifact.artifact_id)
+            assert unpinned.retention_class is TemporalArtifactRetentionClass.LONG
+
+
+async def test_unpin_ephemeral_artifact_restores_ephemeral_retention(
+    tmp_path: Path,
+) -> None:
+    """MM-463: Unpinning trace artifacts should not upgrade retention."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            artifact, _upload = await service.create(
+                principal="workflow-producer",
+                content_type="application/json",
+                link={
+                    "namespace": "moonmind",
+                    "workflow_id": "wf-trace",
+                    "run_id": "run-trace",
+                    "link_type": "debug.trace",
+                },
+                metadata_json={"artifact_kind": "integration_event"},
+            )
+            assert artifact.retention_class is TemporalArtifactRetentionClass.EPHEMERAL
+
+            await service.pin(
+                artifact_id=artifact.artifact_id,
+                principal="workflow-producer",
+                reason="temporary inspection",
+            )
+            pinned = await repo.get_artifact(artifact.artifact_id)
+            assert pinned.retention_class is TemporalArtifactRetentionClass.PINNED
+
+            await service.unpin(
+                artifact_id=artifact.artifact_id,
+                principal="workflow-producer",
+            )
+            unpinned = await repo.get_artifact(artifact.artifact_id)
+            assert (
+                unpinned.retention_class is TemporalArtifactRetentionClass.EPHEMERAL
+            )
 
 
 async def test_create_rejects_bad_report_link_and_metadata(tmp_path: Path) -> None:
