@@ -12,6 +12,7 @@
 **Test Commands**:
 
 - Unit tests: `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx`
+- Backend unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py`
 - Integration tests: `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx`
 - Final verification: `/moonspec-verify`
 
@@ -74,16 +75,18 @@
 - [X] T009 [P] Add failing UI test that `Connect with Claude OAuth` calls `/api/v1/oauth-sessions` with `runtime_id=claude_code` and does not open the API-key drawer in `frontend/src/components/settings/ProviderProfilesManager.test.tsx` for FR-005, SC-002, DESIGN-REQ-002
 - [X] T010 [P] Add failing UI test that `Use Anthropic API key` opens the API-key enrollment flow and makes no `/api/v1/oauth-sessions` request in `frontend/src/components/settings/ProviderProfilesManager.test.tsx` for FR-006, FR-011, FR-012, SC-003, DESIGN-REQ-005
 - [X] T011 Preserve Codex OAuth regression assertions in `frontend/src/components/settings/ProviderProfilesManager.test.tsx` for FR-013 and SC-006
-- [X] T012 Run `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx` and confirm only the new MM-477 Claude tests fail while existing Codex OAuth assertions remain meaningful
+- [X] T012 Add backend unit assertions for Anthropic API-key status labels, `claude_credential_methods` metadata, and `ANTHROPIC_API_KEY` materialization in `tests/unit/api_service/api/routers/test_provider_profiles.py` for FR-011, FR-014, and DESIGN-REQ-005
+- [X] T013 Run `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx` and confirm only the new MM-477 Claude tests fail while existing Codex OAuth assertions remain meaningful
 
 ### Implementation
 
-- [X] T013 Replace the Claude manual-only auth action labels with a credential-method action model in `frontend/src/components/settings/ProviderProfilesManager.tsx` for FR-003, FR-004, FR-007, FR-008, FR-010, and DESIGN-REQ-002
-- [X] T014 Route `Connect with Claude OAuth` through the existing OAuth session mutation in `frontend/src/components/settings/ProviderProfilesManager.tsx` for FR-005 and SC-002
-- [X] T015 Route `Use Anthropic API key` to the existing API-key/manual-auth enrollment drawer without OAuth session creation in `frontend/src/components/settings/ProviderProfilesManager.tsx` for FR-006, FR-011, FR-012, SC-003, and DESIGN-REQ-005
-- [X] T016 Hide Claude credential method actions for unsupported or metadata-free rows in `frontend/src/components/settings/ProviderProfilesManager.tsx` for FR-009 and SC-005
-- [X] T017 Preserve Codex OAuth session start/finalize/retry/cancel rendering and request behavior in `frontend/src/components/settings/ProviderProfilesManager.tsx` for FR-013 and SC-006
-- [X] T018 Run `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx` and fix failures until the focused Settings suite passes
+- [X] T014 Replace the Claude manual-only auth action labels with a credential-method action model in `frontend/src/components/settings/ProviderProfilesManager.tsx` for FR-003, FR-004, FR-007, FR-008, FR-010, and DESIGN-REQ-002
+- [X] T015 Route `Connect with Claude OAuth` through the existing OAuth session mutation in `frontend/src/components/settings/ProviderProfilesManager.tsx` for FR-005 and SC-002
+- [X] T016 Route `Use Anthropic API key` to the existing API-key/manual-auth enrollment drawer without OAuth session creation in `frontend/src/components/settings/ProviderProfilesManager.tsx` for FR-006, FR-011, FR-012, SC-003, and DESIGN-REQ-005
+- [X] T017 Update the API-key commit response and provider profile metadata in `api_service/api/routers/provider_profiles.py` so stored Anthropic keys report `claude_credential_methods`, `Anthropic API key ready`, and `ANTHROPIC_API_KEY` materialization for FR-011, FR-014, and DESIGN-REQ-005
+- [X] T018 Hide Claude credential method actions for unsupported or metadata-free rows in `frontend/src/components/settings/ProviderProfilesManager.tsx` for FR-009 and SC-005
+- [X] T019 Preserve Codex OAuth session start/finalize/retry/cancel rendering and request behavior in `frontend/src/components/settings/ProviderProfilesManager.tsx` for FR-013 and SC-006
+- [X] T020 Run `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx` and fix failures until the focused Settings suite passes
 
 **Checkpoint**: The story is fully functional, covered by focused UI tests, and testable independently.
 
@@ -93,10 +96,11 @@
 
 **Purpose**: Strengthen the completed story without adding hidden scope.
 
-- [X] T019 [P] Review `frontend/src/components/settings/ProviderProfilesManager.tsx` for readable Claude labels, accessible aria labels, and narrow row/card layout containment for SC-007
-- [X] T020 [P] Confirm no standalone Claude auth route or page was created outside the existing Settings Provider Profiles flow for FR-001, FR-002, and DESIGN-REQ-001
-- [X] T021 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit verification
-- [X] T022 Run `/moonspec-verify` to validate the final implementation against MM-477 and DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-005
+- [X] T021 [P] Review `frontend/src/components/settings/ProviderProfilesManager.tsx` for readable Claude labels, accessible aria labels, and narrow row/card layout containment for SC-007
+- [X] T022 [P] Confirm no standalone Claude auth route or page was created outside the existing Settings Provider Profiles flow for FR-001, FR-002, and DESIGN-REQ-001
+- [X] T023 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py` for focused backend unit verification
+- [X] T024 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit verification
+- [X] T025 Run `/moonspec-verify` to validate the final implementation against MM-477 and DESIGN-REQ-001, DESIGN-REQ-002, and DESIGN-REQ-005
 
 ---
 
@@ -111,17 +115,17 @@
 
 ### Within The Story
 
-- Unit tests T005-T007 MUST be written and fail before implementation tasks T013-T017.
+- Unit tests T005-T007 and T012 MUST be written and fail before implementation tasks T014-T019.
 - Integration-style UI tests T009-T011 MUST be written and fail or remain meaningful before implementation.
-- T013 classifier work must precede routing tasks T014-T016.
-- T017 preserves Codex behavior and must be checked before final story validation T018.
-- Final verification T022 runs only after focused and full unit tests pass or are explicitly blocked.
+- T014 classifier work must precede routing tasks T015-T018.
+- T019 preserves Codex behavior and must be checked before final story validation T020.
+- Final verification T025 runs only after focused and full unit tests pass or are explicitly blocked.
 
 ### Parallel Opportunities
 
 - T005-T007 can be authored together because they add independent assertions in the same test file but must be merged carefully.
 - T009-T010 can be authored together with T011 because they validate different action paths in the same test harness.
-- T019 and T020 can run in parallel after story tests pass.
+- T021 and T022 can run in parallel after story tests pass.
 
 ---
 
@@ -147,8 +151,9 @@ Task: "Add Claude API-key no-OAuth assertion in frontend/src/components/settings
 5. Route Claude OAuth through the existing OAuth session mutation.
 6. Route Anthropic API-key enrollment through the existing Managed Secrets-backed enrollment drawer.
 7. Pass focused UI tests.
-8. Run full required unit verification.
-9. Run `/moonspec-verify` and preserve MM-477 in the final report.
+8. Verify the backend API-key metadata path with focused provider-profile router unit tests.
+9. Run full required unit verification.
+10. Run `/moonspec-verify` and preserve MM-477 in the final report.
 
 ---
 
