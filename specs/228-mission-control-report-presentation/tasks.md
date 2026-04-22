@@ -3,13 +3,16 @@
 **Input**: `specs/228-mission-control-report-presentation/spec.md`  
 **Plan**: `specs/228-mission-control-report-presentation/plan.md`  
 **Unit Test Command**: `./tools/test_unit.sh`  
-**Focused UI Test Command**: `npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx`  
-**Focused API Contract Command**: `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py`
+**Focused UI Test Command**: `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx`  
+**Focused API Contract Command**: `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py`  
+**Integration Test Command**: `./tools/test_integration.sh` when backend artifact behavior changes beyond the existing read-only query/serialization contract
 
 ## Source Traceability
 
 - Jira: MM-462
 - Story: Present canonical reports in Mission Control task detail surfaces.
+- Story count: exactly one independently testable story from `spec.md`.
+- Independent test: load an execution detail surface with report artifacts, verify report-first presentation, related content openability, presentation-field viewer selection, and no fabricated report panel when `report.primary` is absent.
 - Requirements: FR-001 through FR-008; SC-001 through SC-006.
 - Source design coverage: DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-020, DESIGN-REQ-022.
 - Requirement statuses from plan: FR-002, FR-007, DESIGN-REQ-014 are missing; FR-003, FR-005, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-020 are partial; FR-001, FR-004, FR-006, FR-008, DESIGN-REQ-011, DESIGN-REQ-022 are implemented_unverified.
@@ -21,6 +24,9 @@
 - [X] T003 Inspect existing task detail and artifact API tests in `frontend/src/entrypoints/task-detail.test.tsx` and `tests/contract/test_temporal_artifact_api.py` before adding failures (FR-001 through FR-007).
 
 ## Phase 2: Foundational Tests
+
+Unit test plan: frontend unit tests cover report-first UI, related report content, fallback behavior, and viewer/open-target selection.
+Integration/contract test plan: API contract coverage verifies the execution artifact boundary accepts `link_type=report.primary&latest_only=true` and preserves links/default read refs; `./tools/test_integration.sh` is reserved for backend behavior changes beyond this existing read-only contract.
 
 - [X] T004 [P] Add failing frontend unit test in `frontend/src/entrypoints/task-detail.test.tsx` asserting the UI queries `/artifacts?link_type=report.primary&latest_only=true` and renders a Report section before Artifacts when a primary report exists (FR-001, FR-002, FR-007, SC-001, DESIGN-REQ-011, DESIGN-REQ-014).
 - [X] T005 [P] Add failing frontend unit test in `frontend/src/entrypoints/task-detail.test.tsx` asserting related `report.summary`, `report.structured`, and `report.evidence` artifacts are displayed as related report content and individually openable (FR-003, SC-002, DESIGN-REQ-012, DESIGN-REQ-020).
@@ -41,7 +47,7 @@
 
 ## Phase 4: Validation
 
-- [X] T017 Run `npm run ui:test -- frontend/src/entrypoints/task-detail.test.tsx` and fix failures (FR-001 through FR-007).
+- [X] T017 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx` and fix failures (FR-001 through FR-007).
 - [X] T018 Run `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py` and fix failures (FR-001, FR-006).
 - [X] T019 Run traceability check `rg -n "MM-462|DESIGN-REQ-011|DESIGN-REQ-012|DESIGN-REQ-013|DESIGN-REQ-014|DESIGN-REQ-020|DESIGN-REQ-022" specs/228-mission-control-report-presentation docs/tmp/jira-orchestration-inputs/MM-462-moonspec-orchestration-input.md` (FR-008, SC-006).
 - [X] T020 Run final `./tools/test_unit.sh` unless blocked by environment constraints.
