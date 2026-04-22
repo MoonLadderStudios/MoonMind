@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio import exceptions as temporal_exceptions
 
 from api_service.db.models import Base
 from moonmind.config.settings import settings
@@ -803,6 +804,19 @@ async def test_security_pentest_execute_fails_closed_before_runner_without_scope
     assert "INVALID_SCOPE" in message
     assert "missing_approved_scope" in message
     assert "runner is not implemented" not in message
+
+
+async def test_security_pentest_execute_denies_without_retry_when_workflow_docker_disabled():
+    activities = TemporalAgentRuntimeActivities(workflow_docker_enabled=False)
+
+    with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
+        await activities.security_pentest_execute(_pentest_activity_payload())
+
+    message = str(exc_info.value)
+    assert "docker_workflows_disabled" in message
+    assert "policy_denied" in message
+    assert exc_info.value.type == "docker_workflows_disabled"
+    assert exc_info.value.non_retryable is True
 
 
 async def test_security_pentest_execute_reaches_launch_plan_after_scope_validation():

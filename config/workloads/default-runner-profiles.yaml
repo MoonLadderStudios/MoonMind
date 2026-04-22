@@ -1,4 +1,36 @@
 profiles:
+  - id: moonmind-integration-ci
+    kind: one_shot
+    image: ghcr.io/moonladderstudios/moonmind-integration-ci:1.0
+    entrypoint:
+      - /bin/bash
+    commandWrapper:
+      - -lc
+    workdirTemplate: /work/agent_jobs/${task_run_id}/repo
+    requiredMounts:
+      - type: volume
+        source: agent_workspaces
+        target: /work/agent_jobs
+    envAllowlist:
+      - CI
+      - DOCKER_HOST
+      - MOONMIND_DOCKER_NETWORK
+    networkPolicy: bridge
+    resources:
+      cpu: "4"
+      memory: 8g
+      shmSize: 1g
+      maxCpu: "8"
+      maxMemory: 16g
+      maxShmSize: 2g
+    timeoutSeconds: 3600
+    maxTimeoutSeconds: 7200
+    maxConcurrency: 1
+    cleanup:
+      removeContainerOnExit: true
+      killGraceSeconds: 30
+    devicePolicy:
+      mode: none
   - id: unreal-5_3-linux
     kind: one_shot
     image: ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3
