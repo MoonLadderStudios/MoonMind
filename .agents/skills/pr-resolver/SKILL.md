@@ -80,6 +80,7 @@ Repeat this state machine until a terminal success or manual blocker:
   - `ci_signal_degraded`
   - `merge_not_ready` (limited grace retries)
 - If retries transition from transient CI states into actionable `ci_failures`, continue into `run_fix_ci_skill` instead of stopping at manual review.
+- If `merge_not_ready` resolves into an actionable blocker such as `merge_conflicts`, continue into the matching remediation skill instead of stopping at manual review.
 - Non-retryable stop reasons:
   - `comment_policy_not_enforced`
   - any unknown blocker
