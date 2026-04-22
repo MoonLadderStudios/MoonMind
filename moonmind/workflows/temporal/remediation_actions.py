@@ -42,8 +42,11 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
     "terminate_session": {"risk": "high", "enabled": True},
 }
 _DEFAULT_AUTO_ALLOWED_RISK = "medium"
+_SUPPORTED_AUTHORITY_MODES = frozenset(
+    {"observe_only", "approval_gated", "admin_auto"}
+)
 _ABSOLUTE_PATH_PATTERN = re.compile(
-    r"(?:/[A-Za-z0-9._:@+-]+){2,}(?:/[A-Za-z0-9._:@+-]+)?"
+    r"/(?:[A-Za-z0-9._:@+-]+/)*[A-Za-z0-9._:@+-]+"
 )
 _PRESIGNED_URL_PATTERN = re.compile(
     r"https?://[^\s\"']*(?:token|signature|x-amz-signature|credential)[^\s\"']*",
@@ -131,7 +134,7 @@ class RemediationActionAuthorityService:
         workflow_id = str(remediation_workflow_id or "").strip()
         idem = str(idempotency_key or "").strip()
         normalized_action = str(action_kind or "").strip()
-        cache_key = (workflow_id, idem)
+        cache_key = (workflow_id, idem, normalized_action, dry_run)
         if workflow_id and idem and cache_key in self._decisions:
             return self._decisions[cache_key]
 
@@ -266,6 +269,19 @@ class RemediationActionAuthorityService:
                 approval_ref=approval_ref,
                 parameters=parameters,
             )
+        if authority_mode not in _SUPPORTED_AUTHORITY_MODES:
+            return self._linked_result(
+                link=link,
+                action_kind=action_kind,
+                risk=risk,
+                decision="denied",
+                reason="unsupported_authority_mode",
+                idempotency_key=idempotency_key,
+                requesting_principal=requesting_principal,
+                security_profile=security_profile,
+                approval_ref=approval_ref,
+                parameters=parameters,
+            )
         if dry_run:
             decision: RemediationActionDecision = (
                 "dry_run_only" if authority_mode == "observe_only" else "allowed"
@@ -357,7 +373,10 @@ class RemediationActionAuthorityService:
 
         auto_allowed_risk = _DEFAULT_AUTO_ALLOWED_RISK
         if authority_mode == "admin_auto" and not approval_ref:
-            if _RISK_ORDER[str(risk)] > _RISK_ORDER[auto_allowed_risk]:
+            if (
+                risk is not None
+                and _RISK_ORDER[str(risk)] > _RISK_ORDER[auto_allowed_risk]
+            ):
                 return self._linked_result(
                     link=link,
                     action_kind=action_kind,
@@ -500,6 +519,8 @@ def _scrub_paths(value: Any) -> Any:
 
 def _redact_text(value: str | None) -> str:
     redacted = redact_sensitive_text(value)
+    if redacted is None:
+        return ""
     redacted = _PRESIGNED_URL_PATTERN.sub("[REDACTED_URL]", redacted)
     redacted = _ABSOLUTE_PATH_PATTERN.sub("[REDACTED_PATH]", redacted)
     return redacted

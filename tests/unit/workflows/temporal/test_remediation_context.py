@@ -24,6 +24,7 @@ from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    remediation_actions,
 )
 from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
@@ -991,6 +992,91 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
 
 @pytest.mark.asyncio
+async def test_remediation_action_authority_rejects_unsupported_authority_mode(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        _target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        link = await session.get(
+            TemporalExecutionRemediationLink,
+            remediation.workflow_id,
+        )
+        assert link is not None
+        link.authority_mode = "stale_typo"
+        await session.commit()
+
+        service = RemediationActionAuthorityService(session=session)
+        result = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={},
+            dry_run=False,
+            idempotency_key="unsupported-authority",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+
+        assert result.decision == "denied"
+        assert result.reason == "unsupported_authority_mode"
+        assert result.executable is False
+
+
+@pytest.mark.asyncio
+async def test_remediation_action_authority_cache_keys_include_request_shape(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        _target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        service = RemediationActionAuthorityService(session=session)
+
+        allowed = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={},
+            dry_run=False,
+            idempotency_key="same-idempotency-key",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        high_risk = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="terminate_session",
+            parameters={},
+            dry_run=False,
+            idempotency_key="same-idempotency-key",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+        dry_run = await service.evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind="restart_worker",
+            parameters={},
+            dry_run=True,
+            idempotency_key="same-idempotency-key",
+            requesting_principal="user:operator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(),
+        )
+
+        assert allowed.decision == "allowed"
+        assert high_risk.decision == "approval_required"
+        assert high_risk.reason == "high_risk_requires_approval"
+        assert dry_run.decision == "allowed"
+        assert dry_run is not allowed
+
+
+@pytest.mark.asyncio
 async def test_remediation_action_authority_redacts_audits_and_deduplicates(
     tmp_path, mock_client_adapter
 ):
@@ -1034,6 +1120,19 @@ async def test_remediation_action_authority_redacts_audits_and_deduplicates(
         assert "Bearer" not in serialized
         assert result.audit["requestingPrincipal"] == "user:operator"
         assert result.audit["executionPrincipal"] == "service:admin-healer"
+
+
+def test_remediation_action_redaction_handles_null_and_single_segment_paths(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        remediation_actions,
+        "redact_sensitive_text",
+        lambda value: None if value is None else str(value),
+    )
+
+    assert remediation_actions._redact_text(None) == ""
+    assert remediation_actions._redact_text("/tmp") == "[REDACTED_PATH]"
 
 
 @pytest.mark.asyncio

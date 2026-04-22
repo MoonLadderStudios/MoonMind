@@ -1,22 +1,37 @@
 [
   {
-    "id": 3122397775,
+    "id": 3122759438,
     "disposition": "addressed",
-    "rationale": "Allowed known service-managed preview_artifact_id metadata during report link validation and added a regression for linking restricted report artifacts after preview creation."
+    "rationale": "Changed remediation action idempotency caching to include request-shaping fields so a reused key with a different action kind or dry-run flag is evaluated independently."
   },
   {
-    "id": 4152948692,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary without a distinct actionable request."
-  },
-  {
-    "id": 3122402310,
+    "id": 3122759452,
     "disposition": "addressed",
-    "rationale": "Simplified top-level report metadata validation by removing the redundant post-whitelist secret-key check while preserving unsafe unknown-key rejection."
+    "rationale": "Added explicit supported authority mode validation so stale or unknown stored authority modes are denied before any allow path."
   },
   {
-    "id": 4152954022,
+    "id": 4153367196,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary; its single actionable item is tracked by comment 3122402310."
+    "rationale": "Automated review summary only; the actionable child review comments are classified separately."
+  },
+  {
+    "id": 3122774747,
+    "disposition": "addressed",
+    "rationale": "Guarded the admin-auto risk comparison so malformed catalog entries with null risk do not raise KeyError."
+  },
+  {
+    "id": 3122774771,
+    "disposition": "addressed",
+    "rationale": "Updated the absolute-path redaction regex to cover single-segment absolute paths and removed the redundant optional segment."
+  },
+  {
+    "id": 4153386617,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary only; the actionable child review comments are classified separately."
+  },
+  {
+    "id": 3122774796,
+    "disposition": "addressed",
+    "rationale": "Added a defensive null guard after sensitive-text redaction before applying regex substitutions."
   }
 ]
