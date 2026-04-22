@@ -349,6 +349,97 @@ describe('Mission Control shared entry', () => {
     }
   });
 
+  it('enforces MM-430 semantic shell class stability for Mission Control sources', async () => {
+    const { readFileSync } = await import('node:fs');
+    const dashboardTemplate = readFileSync(
+      `${process.cwd()}/api_service/templates/react_dashboard.html`,
+      'utf8',
+    );
+    const navigationTemplate = readFileSync(
+      `${process.cwd()}/api_service/templates/_navigation.html`,
+      'utf8',
+    );
+
+    expect(dashboardTemplate).toContain('class="dashboard-root"');
+    expect(dashboardTemplate).toContain('class="masthead"');
+    expect(navigationTemplate).toContain('class="route-nav"');
+
+    for (const selector of [
+      '.dashboard-root',
+      '.masthead',
+      '.route-nav',
+      '.panel',
+      '.card',
+      '.toolbar',
+      '.status-queued',
+      '.status-running',
+      '.queue-submit-form',
+    ]) {
+      expect(cssRuleBlock(missionControlCss, selector)).not.toBe('');
+    }
+  });
+
+  it('enforces MM-430 additive shared styling modifiers', async () => {
+    for (const selector of [
+      '.panel--controls',
+      '.panel--data',
+      '.panel--floating',
+      '.panel--utility',
+      '.panel.panel--data-wide',
+      '.dashboard-shell-constrained--data-wide',
+    ]) {
+      expect(cssRuleBlock(missionControlCss, selector)).not.toBe('');
+    }
+
+    expect(cssRuleBlock(missionControlCss, '.panel.panel--data-wide')).toContain(
+      'max-width: min(112rem, calc(100vw - 2rem))',
+    );
+  });
+
+  it('enforces MM-430 token-first styling for semantic role surfaces', async () => {
+    const semanticRoleSelectors = [
+      '.panel',
+      '.card',
+      '.route-nav a',
+      '.queue-floating-bar',
+      '.queue-inline-filter',
+      '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility',
+    ];
+
+    for (const selector of semanticRoleSelectors) {
+      const block = cssRuleBlock(missionControlCss, selector);
+      expect(block).toContain('var(--mm-');
+      expect(block).not.toMatch(
+        /(?:^|\n)(?:color|background|border(?:-color)?):\s*(?:#[0-9a-fA-F]{3,8}\b|rgba\(|rgb\((?!var\())/,
+      );
+    }
+  });
+
+  it('enforces MM-430 light and dark themes through token swaps', async () => {
+    for (const token of [
+      '--mm-bg',
+      '--mm-panel',
+      '--mm-ink',
+      '--mm-muted',
+      '--mm-border',
+      '--mm-accent',
+      '--mm-glass-fill',
+      '--mm-control-shell',
+    ]) {
+      expect(missionControlCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
+      expect(missionControlCss).toMatch(new RegExp(`\\.dark\\s*\\{[^}]*${token}:`, 's'));
+    }
+
+    expect(missionControlCss).toMatch(
+      /^body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/ms,
+    );
+    expect(missionControlCss).toMatch(
+      /\.dark body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/s,
+    );
+    expect(missionControlCss).not.toMatch(/\.dark\s+\.panel\s*\{[^}]*background:/s);
+    expect(missionControlCss).not.toMatch(/\.dark\s+\.card\s*\{[^}]*background:/s);
+  });
+
   it('defines shared interaction tokens for routine controls', async () => {
     const requiredTokens = [
       '--mm-control-hover-scale',
