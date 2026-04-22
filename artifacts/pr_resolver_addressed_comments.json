@@ -1,17 +1,32 @@
 [
   {
-    "id": 3121950433,
+    "id": 3121885533,
     "disposition": "addressed",
-    "rationale": "Aligned Source Design Requirements in spec.md to the Jira brief coverage IDs DESIGN-REQ-006, DESIGN-REQ-011, DESIGN-REQ-019, DESIGN-REQ-022, DESIGN-REQ-023, and DESIGN-REQ-024 instead of local DESIGN-REQ-001 through DESIGN-REQ-004 numbering."
+    "rationale": "Cached the parsed PostCSS root so cssRuleBlock and matching helpers no longer parse the full Mission Control stylesheet on every lookup."
   },
   {
-    "id": 3121950436,
+    "id": 3121885539,
     "disposition": "addressed",
-    "rationale": "Added explicit mappings from docs/Tasks/TaskRemediation.md sections 14.1 and 16.x into the Source Design Requirements table, including artifact presentation/redaction and bounded degraded evidence handling."
+    "rationale": "Expanded token-first color assertions to cover shorthand border, outline, and box-shadow declarations."
   },
   {
-    "id": 4152462627,
+    "id": 4152392996,
+    "disposition": "not-applicable",
+    "rationale": "Top-level bot review summary; its actionable inline comments are tracked separately in this ledger."
+  },
+  {
+    "id": 4152397163,
+    "disposition": "not-applicable",
+    "rationale": "Top-level automated review wrapper with no separate actionable request."
+  },
+  {
+    "id": 3121889590,
     "disposition": "addressed",
-    "rationale": "The broad review summary was addressed by correcting the inconsistent requirement IDs and source-section traceability across spec.md, plan.md, tasks.md, and verification.md."
+    "rationale": "Normalized resolved paths to forward slashes before regex assertions so the boundary test is separator-agnostic."
+  },
+  {
+    "id": 3121889592,
+    "disposition": "addressed",
+    "rationale": "Added cssRuleBlocks and updated token-first validation to check every matching rule block for each semantic selector."
   }
 ]

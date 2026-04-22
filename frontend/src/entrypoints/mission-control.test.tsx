@@ -9,7 +9,7 @@ import {
   type MockInstance,
 } from 'vitest';
 import postcss from 'postcss';
-import type { Rule } from 'postcss';
+import type { Root, Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
@@ -22,28 +22,44 @@ function normalizeCssSelector(selector: string): string {
     .replace(/\s+/g, ' ');
 }
 
-function cssRuleBlock(css: string, selector: string): string {
+const parsedCssCache = new Map<string, Root>();
+
+function parsedCssRoot(css: string): Root {
+  const cachedRoot = parsedCssCache.get(css);
+  if (cachedRoot) {
+    return cachedRoot;
+  }
+
+  const root = postcss.parse(css);
+  parsedCssCache.set(css, root);
+  return root;
+}
+
+function cssRuleBlocks(css: string, selector: string): string[] {
   const expectedSelector = normalizeCssSelector(selector);
   const expectedSelectors = selector.split(',').map(normalizeCssSelector);
-  let block = '';
-  postcss.parse(css).walkRules((rule) => {
+  const blocks: string[] = [];
+  parsedCssRoot(css).walkRules((rule) => {
     const ruleSelector = normalizeCssSelector(rule.selector);
     const ruleSelectors = rule.selector.split(',').map(normalizeCssSelector);
     if (
-      !block &&
-      (ruleSelector === expectedSelector ||
+      ruleSelector === expectedSelector ||
         ruleSelectors.includes(expectedSelector) ||
-        expectedSelectors.every((expected) => ruleSelectors.includes(expected)))
+        expectedSelectors.every((expected) => ruleSelectors.includes(expected))
     ) {
-      block = rule.nodes.map((node) => `${node.toString()};`).join('\n');
+      blocks.push(rule.nodes.map((node) => `${node.toString()};`).join('\n'));
     }
   });
-  return block;
+  return blocks;
+}
+
+function cssRuleBlock(css: string, selector: string): string {
+  return cssRuleBlocks(css, selector)[0] ?? '';
 }
 
 function cssRuleBlockMatching(css: string, matches: (rule: Rule) => boolean): string {
   let block = '';
-  postcss.parse(css).walkRules((rule) => {
+  parsedCssRoot(css).walkRules((rule) => {
     if (!block && matches(rule)) {
       block = rule.nodes.map((node) => `${node.toString()};`).join('\n');
     }
@@ -347,6 +363,99 @@ describe('Mission Control shared entry', () => {
       expect(block).not.toContain('backdrop-filter');
       expect(block).not.toContain('blur(26px)');
     }
+  });
+
+  it('enforces MM-430 semantic shell class stability for Mission Control sources', async () => {
+    const { readFileSync } = await import('node:fs');
+    const dashboardTemplate = readFileSync(
+      `${process.cwd()}/api_service/templates/react_dashboard.html`,
+      'utf8',
+    );
+    const navigationTemplate = readFileSync(
+      `${process.cwd()}/api_service/templates/_navigation.html`,
+      'utf8',
+    );
+
+    expect(dashboardTemplate).toContain('class="dashboard-root"');
+    expect(dashboardTemplate).toContain('class="masthead"');
+    expect(navigationTemplate).toContain('class="route-nav"');
+
+    for (const selector of [
+      '.dashboard-root',
+      '.masthead',
+      '.route-nav',
+      '.panel',
+      '.card',
+      '.toolbar',
+      '.status-queued',
+      '.status-running',
+      '.queue-submit-form',
+    ]) {
+      expect(cssRuleBlock(missionControlCss, selector)).not.toBe('');
+    }
+  });
+
+  it('enforces MM-430 additive shared styling modifiers', async () => {
+    for (const selector of [
+      '.panel--controls',
+      '.panel--data',
+      '.panel--floating',
+      '.panel--utility',
+      '.panel.panel--data-wide',
+      '.dashboard-shell-constrained--data-wide',
+    ]) {
+      expect(cssRuleBlock(missionControlCss, selector)).not.toBe('');
+    }
+
+    expect(cssRuleBlock(missionControlCss, '.panel.panel--data-wide')).toContain(
+      'max-width: min(112rem, calc(100vw - 2rem))',
+    );
+  });
+
+  it('enforces MM-430 token-first styling for semantic role surfaces', async () => {
+    const semanticRoleSelectors = [
+      '.panel',
+      '.card',
+      '.route-nav a',
+      '.queue-floating-bar',
+      '.queue-inline-filter',
+      '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility',
+    ];
+
+    for (const selector of semanticRoleSelectors) {
+      const blocks = cssRuleBlocks(missionControlCss, selector);
+      expect(blocks.join('\n')).toContain('var(--mm-');
+      for (const block of blocks) {
+        expect(block).not.toMatch(
+          /(?:^|\n)(?:color|background|border|outline|box-shadow):.*?(?:#[0-9a-fA-F]{3,8}\b|rgba\(|rgb\((?!var\())/,
+        );
+      }
+    }
+  });
+
+  it('enforces MM-430 light and dark themes through token swaps', async () => {
+    for (const token of [
+      '--mm-bg',
+      '--mm-panel',
+      '--mm-ink',
+      '--mm-muted',
+      '--mm-border',
+      '--mm-accent',
+      '--mm-glass-fill',
+      '--mm-control-shell',
+    ]) {
+      expect(missionControlCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
+      expect(missionControlCss).toMatch(new RegExp(`\\.dark\\s*\\{[^}]*${token}:`, 's'));
+    }
+
+    expect(missionControlCss).toMatch(
+      /^body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/ms,
+    );
+    expect(missionControlCss).toMatch(
+      /\.dark body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/s,
+    );
+    expect(missionControlCss).not.toMatch(/\.dark\s+\.panel\s*\{[^}]*background:/s);
+    expect(missionControlCss).not.toMatch(/\.dark\s+\.card\s*\{[^}]*background:/s);
   });
 
   it('defines shared interaction tokens for routine controls', async () => {
