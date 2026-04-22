@@ -21,7 +21,7 @@ npm run ui:build
 
 In this mode, FastAPI serves the built `dist/` bundle through the Vite manifest.
 
-## Live development with HMR
+## Live development with Hot Module Replacement (HMR)
 
 Assume the normal MoonMind development stack is already running, for example:
 
