@@ -1,27 +1,17 @@
 [
   {
-    "id": 3126021003,
-    "disposition": "addressed",
-    "rationale": "Removed inline derived --beam-inner-inset and --beam-inner-radius assignments so mission-control.css derives them from primary beam radius and width variables."
-  },
-  {
-    "id": 3126021015,
-    "disposition": "addressed",
-    "rationale": "Changed the data-trail=none conic gradient to use solid --beam-head-color stops from --beam-head-start through --beam-head-end."
-  },
-  {
-    "id": 4156958082,
+    "id": 4157254325,
     "disposition": "not-applicable",
-    "rationale": "Bot review summary only; its actionable points are tracked by the inline comments addressed separately."
+    "rationale": "Bot review summary explicitly reported no feedback to address."
   },
   {
-    "id": 3126026516,
+    "id": 3126297003,
     "disposition": "addressed",
-    "rationale": "Removed inner-radius overrides from the masked beam and glow layers so they inherit the host outer ring radius while padding defines the content-box mask."
+    "rationale": "Kept beam and glow layers mounted while inactive and moved fade-out visibility to CSS, with Vitest coverage for the inactive fade contract."
   },
   {
-    "id": 4156964203,
+    "id": 4157264371,
     "disposition": "not-applicable",
-    "rationale": "Bot review summary/metadata only; the actionable Codex inline comment is addressed separately."
+    "rationale": "Bot review wrapper without additional actionable feedback beyond the linked review comment."
   }
 ]

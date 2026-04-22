@@ -90,7 +90,7 @@ export function MaskedConicBorderBeam({
   } as CSSProperties;
 
   const classes = ['masked-conic-border-beam', className].filter(Boolean).join(' ');
-  const showGlow = active && glow !== 'off';
+  const showGlow = glow !== 'off';
 
   return (
     <div
@@ -106,14 +106,12 @@ export function MaskedConicBorderBeam({
       data-reduced-motion={reducedMotion}
       style={beamStyle}
     >
-      {active ? (
-        <span
-          aria-hidden="true"
-          className="masked-conic-border-beam__layer"
-          data-testid="masked-conic-border-beam-layer"
-        />
-      ) : null}
-      {active && variant === 'dualPhase' ? (
+      <span
+        aria-hidden="true"
+        className="masked-conic-border-beam__layer"
+        data-testid="masked-conic-border-beam-layer"
+      />
+      {variant === 'dualPhase' ? (
         <span
           aria-hidden="true"
           className="masked-conic-border-beam__companion"

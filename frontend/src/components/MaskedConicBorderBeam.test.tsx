@@ -103,7 +103,7 @@ describe('MaskedConicBorderBeam', () => {
     expect(contentWrapper?.tagName).toBe('DIV');
   });
 
-  it('does not render moving beam or glow layers when inactive', () => {
+  it('keeps inactive beam layers mounted so CSS can run fade transitions', () => {
     render(
       <MaskedConicBorderBeam active={false} data-testid="beam">
         <span>Idle content</span>
@@ -111,8 +111,8 @@ describe('MaskedConicBorderBeam', () => {
     );
 
     expect(screen.getByTestId('beam').getAttribute('data-active')).toBe('false');
-    expect(screen.queryByTestId('masked-conic-border-beam-layer')).toBeNull();
-    expect(screen.queryByTestId('masked-conic-border-beam-glow')).toBeNull();
+    expect(screen.getByTestId('masked-conic-border-beam-layer').getAttribute('aria-hidden')).toBe('true');
+    expect(screen.getByTestId('masked-conic-border-beam-glow').getAttribute('aria-hidden')).toBe('true');
     expect(screen.getByText('Idle content')).toBeTruthy();
   });
 
@@ -302,6 +302,9 @@ describe('MaskedConicBorderBeam', () => {
     expect(rootBlock).toContain('--beam-glow-opacity: 0.42;');
     expect(layerBlock).toContain('transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;');
     expect(glowBlock).toContain('transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;');
+    expect(cssRuleBlock('.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__layer')).toContain('opacity: 0;');
+    expect(cssRuleBlock('.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__glow')).toContain('visibility: hidden;');
+    expect(cssRuleBlock('.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__companion')).toContain('opacity: 0;');
     expect(brandBlock).toContain('--beam-head-color:');
     expect(successBlock).toContain('--beam-head-color:');
     expect(subtleBlock).toContain('--beam-opacity: 0.62;');

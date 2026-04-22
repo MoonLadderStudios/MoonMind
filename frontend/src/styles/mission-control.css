@@ -1365,6 +1365,13 @@ tr[data-proposal-id].proposal-consuming td {
   animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
 }
 
+.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__layer,
+.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__glow,
+.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__companion {
+  opacity: 0;
+  visibility: hidden;
+}
+
 .masked-conic-border-beam__glow {
   padding: var(--beam-inner-inset);
   opacity: var(--beam-glow-opacity);
