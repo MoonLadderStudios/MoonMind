@@ -156,6 +156,72 @@ async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
 
 
 @pytest.mark.asyncio
+async def test_create_claude_oauth_session_applies_profile_and_transport_defaults(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = {}
+    profile_id = "claude_anthropic_route_defaults"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="claude_code",
+                provider_id="anthropic",
+                provider_label="Anthropic",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                account_label="Claude Anthropic OAuth",
+                clear_env_keys=[
+                    "ANTHROPIC_API_KEY",
+                    "CLAUDE_API_KEY",
+                    "OPENAI_API_KEY",
+                ],
+            )
+        )
+        await session.commit()
+
+    async def _capture_start(session_model):
+        captured["profile_id"] = session_model.profile_id
+        captured["volume_ref"] = session_model.volume_ref
+        captured["volume_mount_path"] = session_model.volume_mount_path
+        captured["session_transport"] = session_model.session_transport
+        captured["metadata_json"] = session_model.metadata_json
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json={
+                "runtime_id": "claude_code",
+                "profile_id": profile_id,
+                "account_label": "Claude Anthropic OAuth",
+            },
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["runtime_id"] == "claude_code"
+    assert body["profile_id"] == profile_id
+    assert body["session_transport"] == "moonmind_pty_ws"
+    assert body["profile_summary"]["profile_id"] == profile_id
+    assert body["profile_summary"]["runtime_id"] == "claude_code"
+    assert body["profile_summary"]["provider_id"] == "anthropic"
+    assert captured["profile_id"] == profile_id
+    assert captured["volume_ref"] == "claude_auth_volume"
+    assert captured["volume_mount_path"] == "/home/app/.claude"
+    assert captured["session_transport"] == "moonmind_pty_ws"
+    assert captured["metadata_json"]["provider_id"] == "anthropic"
+    assert captured["metadata_json"]["provider_label"] == "Anthropic"
+
+
+@pytest.mark.asyncio
 async def test_create_oauth_session_returns_terminal_transport_refs(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:

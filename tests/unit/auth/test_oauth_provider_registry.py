@@ -36,8 +36,14 @@ class TestOAuthProviderRegistry:
         spec = get_provider("claude_code")
         assert spec is not None
         assert spec["runtime_id"] == "claude_code"
+        assert spec["auth_mode"] == "oauth"
+        assert spec["session_transport"] == "moonmind_pty_ws"
         assert spec["default_volume_name"] == "claude_auth_volume"
         assert spec["default_mount_path"] == "/home/app/.claude"
+        assert spec["provider_id"] == "anthropic"
+        assert spec["provider_label"] == "Anthropic"
+        assert spec["success_check"] == "claude_config_exists"
+        assert get_provider_bootstrap_command("claude_code") == ("claude", "login")
 
 
 
@@ -70,9 +76,9 @@ class TestOAuthProviderRegistry:
             for key in required_keys:
                 assert key in spec, f"Missing key '{key}' in provider '{runtime_id}'"
 
-    def test_non_codex_providers_use_none_transport(self) -> None:
+    def test_gemini_provider_uses_none_transport(self) -> None:
         for runtime_id, spec in OAUTH_PROVIDERS.items():
-            if runtime_id == "codex_cli":
+            if runtime_id != "gemini_cli":
                 continue
             assert spec["session_transport"] == "none", (
                 f"Provider '{runtime_id}' should use none transport until a replacement exists"

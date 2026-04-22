@@ -1,22 +1,17 @@
 [
   {
-    "id": 3127332306,
+    "id": 3127450221,
     "disposition": "addressed",
-    "rationale": "Restricted patched default-profile selection to available defaults and sorted multiple defaults by priority and slots instead of returning None."
+    "rationale": "Backfilled missing CLAUDE_API_KEY into existing claude_anthropic clear_env_keys while preserving existing custom clear keys."
   },
   {
-    "id": 4158369749,
-    "disposition": "addressed",
-    "rationale": "Review summary raised the same multiple-default selection concern, which is covered by the manager selection fix and regression test."
-  },
-  {
-    "id": 4158380932,
+    "id": 4158522745,
     "disposition": "not-applicable",
-    "rationale": "Informational automated review summary with no distinct actionable request."
+    "rationale": "Automated review summary metadata; no actionable code feedback."
   },
   {
-    "id": 3127339580,
-    "disposition": "addressed",
-    "rationale": "Gated the default-unavailable fallback semantic change behind provider-profile-manager-default-profile-exclusive-selection-v1 and preserved the unpatched fallback behavior in a regression test."
+    "id": 4158526722,
+    "disposition": "not-applicable",
+    "rationale": "Review body explicitly states there is no feedback to address."
   }
 ]
