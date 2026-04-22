@@ -48,5 +48,20 @@
     "id": 4152216624,
     "disposition": "not-applicable",
     "rationale": "Automated review summary/header only; no separate actionable request beyond the inline comments."
+  },
+  {
+    "id": 3121925034,
+    "disposition": "addressed",
+    "rationale": "Resolved the seed template directory from the api_service package location instead of using brittle parents[3] traversal."
+  },
+  {
+    "id": 3121925036,
+    "disposition": "addressed",
+    "rationale": "Extracted shared expand_template arguments into expand_kwargs and reused them for the retry after seed sync."
+  },
+  {
+    "id": 4152435413,
+    "disposition": "not-applicable",
+    "rationale": "Summary review comment only; its two actionable recommendations are tracked by inline comments 3121925034 and 3121925036."
   }
 ]
