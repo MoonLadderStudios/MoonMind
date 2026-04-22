@@ -5752,6 +5752,27 @@ describe("Task Create Entrypoint", () => {
     expect(LIQUID_GL_OPTIONS.reveal).toBe(false);
   });
 
+  it("keeps MM-429 liquid glass fallback shell complete before enhancement initializes", async () => {
+    const { readFileSync } = await import("node:fs");
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      "utf8",
+    );
+
+    expect(missionControlCss).toMatch(
+      /\.queue-floating-bar\s*\{[^}]*position:\s*fixed;[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-floating\);[^}]*display:\s*grid;/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.queue-floating-bar--liquid-glass\s*\{[^}]*position:\s*fixed;[^}]*isolation:\s*isolate;[^}]*overflow:\s*hidden;/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.queue-floating-bar--liquid-glass\[data-liquid-gl-initialized="true"\]\s*>\s*\*\s*\{[^}]*pointer-events:\s*auto;/s,
+    );
+    expect(missionControlCss).toMatch(
+      /@supports not \(\(backdrop-filter:\s*blur\(2px\)\) or \(-webkit-backdrop-filter:\s*blur\(2px\)\)\)\s*\{[^}]*\.queue-floating-bar\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.94\);/s,
+    );
+  });
+
   it("lets repository, branch, and publish controls fill the floating bar on desktop", async () => {
     const { readFileSync } = await import("node:fs");
     const missionControlCss = readFileSync(

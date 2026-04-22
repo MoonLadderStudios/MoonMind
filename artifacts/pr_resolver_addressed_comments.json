@@ -18,5 +18,35 @@
     "id": 4151638987,
     "disposition": "not-applicable",
     "rationale": "Codex review wrapper text only; the actionable rollback concern is tracked by review comment 3121158039."
+  },
+  {
+    "id": 3121722981,
+    "disposition": "addressed",
+    "rationale": "Changed remediation read contract route parameters from camelCase {workflowId} to snake_case {workflow_id}."
+  },
+  {
+    "id": 3121722994,
+    "disposition": "addressed",
+    "rationale": "Clarified that link identity/status fields come from the persisted link/read model, while lock/action/resolution/context fields are bounded derived summaries returned as null or omitted when unavailable without adding a new persistence table."
+  },
+  {
+    "id": 3121722997,
+    "disposition": "addressed",
+    "rationale": "Changed the approval decision route to scope by {remediation_workflow_id} and {request_id}, and documented that target-scoped screens must submit the selected remediation task workflow ID."
+  },
+  {
+    "id": 4152209722,
+    "disposition": "not-applicable",
+    "rationale": "Summary review body only; the three concrete child review comments were addressed individually."
+  },
+  {
+    "id": 3121729143,
+    "disposition": "addressed",
+    "rationale": "Updated focused frontend test commands in tasks, plan, and quickstart to use --dashboard-only with --ui-args."
+  },
+  {
+    "id": 4152216624,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary/header only; no separate actionable request beyond the inline comments."
   }
 ]

@@ -53,6 +53,44 @@ The service exposes:
 
 Both return durable link rows from `execution_remediation_links`.
 
+Link rows include nullable compact status/action fields for later read-model updates:
+
+- `active_lock_scope`
+- `active_lock_holder`
+- `latest_action_summary`
+- `outcome`
+
+## Convenience Route
+
+`POST /api/executions/{workflowId}/remediation` accepts a remediation request body and expands it into the same task-shaped create contract as `POST /api/executions`.
+
+The route sets:
+
+```json
+{
+  "task": {
+    "remediation": {
+      "target": {
+        "workflowId": "mm:target-workflow"
+      }
+    }
+  }
+}
+```
+
+from the path workflow ID. It must not introduce a second durable payload shape.
+
 ## Error Contract
 
 Invalid remediation create requests fail with `TemporalExecutionValidationError` before workflow start and before any remediation link is committed.
+
+Invalid requests include:
+
+- missing or malformed `target.workflowId`
+- target run IDs supplied as workflow IDs
+- missing, unauthorized, or non-`MoonMind.Run` targets
+- mismatched target `runId`
+- malformed `target.taskRunIds`
+- unsupported `authorityMode`
+- unsupported `actionPolicyRef`
+- nested remediation targets

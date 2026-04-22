@@ -1042,6 +1042,14 @@ class TemporalExecutionRemediationLink(Base):
         ForeignKey("temporal_artifacts.artifact_id", ondelete="SET NULL"),
         nullable=True,
     )
+    active_lock_scope: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    active_lock_holder: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    latest_action_summary: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    outcome: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

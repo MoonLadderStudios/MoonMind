@@ -590,6 +590,10 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
         assert link.authority_mode == "approval_gated"
         assert link.status == "created"
         assert link.trigger_type == "manual"
+        assert link.active_lock_scope is None
+        assert link.active_lock_holder is None
+        assert link.latest_action_summary is None
+        assert link.outcome is None
 
         remediation_record = await session.get(
             TemporalExecutionCanonicalRecord, remediation.workflow_id
@@ -841,6 +845,192 @@ async def test_create_execution_rejects_mismatched_remediation_target_run_id(
                             "target": {
                                 "workflowId": target.workflow_id,
                                 "runId": "not-current-run",
+                            }
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_unsupported_remediation_authority_mode(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Unsupported task.remediation.authorityMode",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title="Remediate target",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "task": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "authorityMode": "root_shell",
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_incompatible_remediation_action_policy(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Unsupported task.remediation.actionPolicyRef",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title="Remediate target",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "task": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "actionPolicyRef": "unknown_policy",
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_nested_remediation_target(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        first_remediation = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="First remediation",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {"remediation": {"target": {"workflowId": target.workflow_id}}}
+            },
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Nested remediation targets are not supported",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title="Nested remediation",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "task": {
+                        "remediation": {
+                            "target": {"workflowId": first_remediation.workflow_id}
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_malformed_remediation_task_run_ids(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="task.remediation.target.taskRunIds must be a list of strings",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title="Remediate target",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "task": {
+                        "remediation": {
+                            "target": {
+                                "workflowId": target.workflow_id,
+                                "taskRunIds": ["tr_valid", ""],
                             }
                         }
                     }

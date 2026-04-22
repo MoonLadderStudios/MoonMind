@@ -70,6 +70,10 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.CANCELED,
 }
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
+ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
+    {"observe_only", "approval_gated", "admin_auto"}
+)
+ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
 
 import logging
 
@@ -408,17 +412,63 @@ class TemporalExecutionService:
                 f"Remediation target {target_workflow_id} is a {wf_type_value} "
                 "workflow, not a MoonMind.Run workflow."
             )
+        target_task = (
+            target_record.parameters.get("task")
+            if isinstance(target_record.parameters, Mapping)
+            else None
+        )
+        if (
+            isinstance(target_task, Mapping)
+            and target_task.get("remediation") is not None
+        ):
+            raise TemporalExecutionValidationError(
+                "Nested remediation targets are not supported."
+            )
 
         requested_run_id = str(target.get("runId") or target.get("run_id") or "").strip()
         if requested_run_id and requested_run_id != target_record.run_id:
             raise TemporalExecutionValidationError(
                 "task.remediation.target.runId must match the current target runId."
             )
+        task_run_ids = (
+            target.get("taskRunIds")
+            if "taskRunIds" in target
+            else target.get("task_run_ids")
+        )
+        if task_run_ids is not None:
+            if not isinstance(task_run_ids, list) or any(
+                not isinstance(item, str) or not item.strip()
+                for item in task_run_ids
+            ):
+                raise TemporalExecutionValidationError(
+                    "task.remediation.target.taskRunIds must be a list of strings."
+                )
 
         trigger = remediation.get("trigger")
         trigger_type = None
         if isinstance(trigger, Mapping):
             trigger_type = str(trigger.get("type") or "").strip() or None
+        authority_mode = str(
+            remediation.get("authorityMode")
+            or remediation.get("authority_mode")
+            or "observe_only"
+        ).strip() or "observe_only"
+        if authority_mode not in ALLOWED_REMEDIATION_AUTHORITY_MODES:
+            supported = ", ".join(sorted(ALLOWED_REMEDIATION_AUTHORITY_MODES))
+            raise TemporalExecutionValidationError(
+                "Unsupported task.remediation.authorityMode "
+                f"'{authority_mode}'. Supported values: {supported}."
+            )
+        action_policy_ref = str(remediation.get("actionPolicyRef") or "").strip()
+        if (
+            action_policy_ref
+            and action_policy_ref not in ALLOWED_REMEDIATION_ACTION_POLICY_REFS
+        ):
+            supported = ", ".join(sorted(ALLOWED_REMEDIATION_ACTION_POLICY_REFS))
+            raise TemporalExecutionValidationError(
+                "Unsupported task.remediation.actionPolicyRef "
+                f"'{action_policy_ref}'. Supported values: {supported}."
+            )
 
         return TemporalExecutionRemediationLink(
             remediation_workflow_id=new_workflow_id,
@@ -427,12 +477,7 @@ class TemporalExecutionService:
             target_run_id=target_record.run_id,
             mode=str(remediation.get("mode") or "snapshot_then_follow").strip()
             or "snapshot_then_follow",
-            authority_mode=str(
-                remediation.get("authorityMode")
-                or remediation.get("authority_mode")
-                or "observe_only"
-            ).strip()
-            or "observe_only",
+            authority_mode=authority_mode,
             status="created",
             trigger_type=trigger_type,
         )

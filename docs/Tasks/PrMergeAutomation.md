@@ -542,6 +542,15 @@ This does **not** require the same runtime process or exact same Python module. 
 
 The merge gate and the resolver snapshot/finalize logic may use different implementations, but they MUST agree on contract semantics.
 
+Before any resolver child has launched, `MoonMind.MergeAutomation` MAY adopt the
+latest observed PR head SHA when a readiness evaluation sees that the published
+head changed before the first resolver launch. This keeps normal post-publish
+head updates from terminally failing the parent before the resolver has had a
+chance to act, including when the updated head is already ready to merge. After
+a resolver child has launched, revision changes MUST use the resolver
+disposition and gate re-entry contract instead of silently advancing the tracked
+head.
+
 ---
 
 ## 16. Dependency Semantics
