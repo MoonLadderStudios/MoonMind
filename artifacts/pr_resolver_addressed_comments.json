@@ -1,22 +1,37 @@
 [
   {
-    "id": 3126996678,
-    "disposition": "addressed",
-    "rationale": "Secret aliases consumed by file_templates and home_path_overrides are now collected before default environment injection, so they are not leaked as top-level environment variables."
-  },
-  {
-    "id": 3126996680,
-    "disposition": "addressed",
-    "rationale": "Alias collection now detects {{ alias }} template-string references in addition to from_secret_ref dictionaries."
-  },
-  {
-    "id": 4158029300,
+    "id": 4158134143,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary; the two actionable inline findings it summarized were addressed separately."
+    "rationale": "Review summary; no separate code action beyond the line comments."
   },
   {
-    "id": 3127016069,
+    "id": 3127101654,
     "disposition": "addressed",
-    "rationale": "Suppressed secret aliases are now removed from inherited base_env before the child process environment is returned."
+    "rationale": "Merged provider evidence_artifact_refs with the required evidence.bundle artifact ref instead of overwriting them."
+  },
+  {
+    "id": 3127101658,
+    "disposition": "addressed",
+    "rationale": "Blank required finding summaries now normalize to a deterministic fallback string while optional text fields can remain absent."
+  },
+  {
+    "id": 3127101660,
+    "disposition": "addressed",
+    "rationale": "Publication metadata is now sourced from one unambiguous payload object: nested request when present, otherwise the flat payload."
+  },
+  {
+    "id": 3127102522,
+    "disposition": "addressed",
+    "rationale": "Stringly typed publication flags now use bool coercion instead of Python truthiness."
+  },
+  {
+    "id": 3127102524,
+    "disposition": "addressed",
+    "rationale": "Secret redaction now covers spaced equals and colon assignment formats, including prefixed API key names."
+  },
+  {
+    "id": 4158134981,
+    "disposition": "not-applicable",
+    "rationale": "Automated review container comment; actionable suggestions are represented by the individual line comments."
   }
 ]
