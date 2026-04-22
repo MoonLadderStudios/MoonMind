@@ -36,5 +36,6 @@
 
 ## Notes
 
-- The source Jira issue is MM-457 and the spec preserves MM-457 traceability from `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
+- The source Jira issue is MM-457 and the spec preserves the original Jira preset brief directly in `spec.md` from `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
+- Implementation-oriented wording appears only inside the preserved original preset brief source block required for verification traceability; the generated user-facing specification remains behavior-focused.
 - Runtime implementation is in scope after artifact alignment.
