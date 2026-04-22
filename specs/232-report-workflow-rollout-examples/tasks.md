@@ -13,7 +13,7 @@
 
 - Unit tests: `./tools/test_unit.sh tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/workflows/temporal/test_artifacts.py`
 - Integration tests: `pytest tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/workflows/temporal/test_artifacts.py -q`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -81,7 +81,7 @@
 
 - [X] T013 Run traceability check for MM-464 and source design IDs across specs, input brief, runtime code, and tests
 - [X] T014 Create `specs/232-report-workflow-rollout-examples/verification.md` with final evidence and verdict
-- [X] T015 Run `/speckit.verify` equivalent by checking the final implementation against the original MM-464 request
+- [X] T015 Run `/moonspec-verify` equivalent by checking the final implementation against the original MM-464 request
 
 ---
 
