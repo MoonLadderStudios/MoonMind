@@ -286,22 +286,57 @@ class MoonMindMergeAutomationWorkflow:
         return True
 
     @staticmethod
-    def _has_blocker(evidence: Any, kind: str) -> bool:
-        return any(
-            blocker.kind == kind for blocker in getattr(evidence, "blockers", [])
+    def _stale_revision_can_track_current_head(evidence: Any) -> bool:
+        blockers = list(getattr(evidence, "blockers", []) or [])
+        stale_seen = False
+        for blocker in blockers:
+            kind = str(getattr(blocker, "kind", "") or "").strip()
+            if kind == "stale_revision":
+                stale_seen = True
+                continue
+        return stale_seen
+
+    def _refresh_current_head_for_stale_wait(
+        self,
+        *,
+        evaluation: Any,
+        evidence: Any,
+    ) -> Any:
+        if self._input is None or not isinstance(evaluation, Mapping):
+            return evidence
+        if getattr(evidence, "ready", False) or getattr(
+            evidence,
+            "pull_request_merged",
+            False,
+        ):
+            return evidence
+        if not self._stale_revision_can_track_current_head(evidence):
+            return evidence
+        if not self._refresh_tracked_head_sha(evaluation):
+            return evidence
+        return classify_readiness(
+            evaluation,
+            tracked_head_sha=self._input.pull_request.head_sha,
         )
 
-    def _should_adopt_initial_waiting_head_sha(self, evidence: Any) -> bool:
-        if self._input is None:
+    def _should_refresh_pre_resolver_head(
+        self,
+        *,
+        evaluation: Any,
+        blockers: list[ReadinessBlockerModel],
+    ) -> bool:
+        if (
+            self._input is None
+            or self._resolver_child_workflow_ids
+            or not isinstance(evaluation, Mapping)
+        ):
             return False
-        if self._resolver_child_workflow_ids:
-            return False
-        observed_head_sha = str(getattr(evidence, "head_sha", "") or "").strip()
+        observed_head_sha = self._head_sha_from_mapping(evaluation)
         if not observed_head_sha:
             return False
-        if observed_head_sha == str(self._input.pull_request.head_sha or "").strip():
+        if observed_head_sha == self._input.pull_request.head_sha:
             return False
-        return self._has_blocker(evidence, "stale_revision")
+        return any(blocker.kind == "stale_revision" for blocker in blockers)
 
     async def _failed_resolver_summary(
         self,
@@ -438,12 +473,6 @@ class MoonMindMergeAutomationWorkflow:
                 evaluation if isinstance(evaluation, Mapping) else {},
                 tracked_head_sha=self._input.pull_request.head_sha,
             )
-            if self._should_adopt_initial_waiting_head_sha(evidence):
-                self._refresh_tracked_head_sha(evaluation)
-                evidence = classify_readiness(
-                    evaluation if isinstance(evaluation, Mapping) else {},
-                    tracked_head_sha=self._input.pull_request.head_sha,
-                )
             if self._refresh_tracked_head_sha_on_next_evaluation:
                 self._refresh_tracked_head_sha_on_next_evaluation = False
                 if self._refresh_tracked_head_sha(evaluation):
@@ -451,6 +480,22 @@ class MoonMindMergeAutomationWorkflow:
                         evaluation if isinstance(evaluation, Mapping) else {},
                         tracked_head_sha=self._input.pull_request.head_sha,
                     )
+            if workflow.patched("merge-automation-refresh-stale-current-head"):
+                evidence = self._refresh_current_head_for_stale_wait(
+                    evaluation=evaluation,
+                    evidence=evidence,
+                )
+            elif workflow.patched(
+                "merge-automation-pre-resolver-head-refresh-v1"
+            ) and self._should_refresh_pre_resolver_head(
+                evaluation=evaluation,
+                blockers=list(evidence.blockers),
+            ):
+                self._refresh_tracked_head_sha(evaluation)
+                evidence = classify_readiness(
+                    evaluation if isinstance(evaluation, Mapping) else {},
+                    tracked_head_sha=self._input.pull_request.head_sha,
+                )
             self._blockers = list(evidence.blockers)
             await self._write_gate_snapshot(evidence_ready=evidence.ready)
             if evidence.pull_request_merged:

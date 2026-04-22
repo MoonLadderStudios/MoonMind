@@ -13,6 +13,11 @@
 | FR-005 | VERIFIED | Link insertion occurs before the create transaction commit with the canonical source record. |
 | FR-006 | VERIFIED | Inbound and outbound service lookup methods are covered by service unit tests. |
 | FR-007 | VERIFIED | Service unit test confirms remediation links do not create dependency prerequisites. |
+| FR-008 | VERIFIED | Unsupported `task.remediation.authorityMode` values are rejected by `TemporalExecutionService`; covered by `tests/unit/workflows/temporal/test_temporal_service.py`. |
+| FR-009 | VERIFIED | Unsupported `task.remediation.actionPolicyRef` values are rejected by `TemporalExecutionService`; covered by `tests/unit/workflows/temporal/test_temporal_service.py`. |
+| FR-010 | VERIFIED | Malformed `target.taskRunIds` values are rejected by `TemporalExecutionService`; covered by `tests/unit/workflows/temporal/test_temporal_service.py`. |
+| FR-011 | VERIFIED | Nested remediation targets are rejected by `TemporalExecutionService`; covered by `tests/unit/workflows/temporal/test_temporal_service.py`. |
+| FR-012 | VERIFIED | `POST /api/executions/{workflowId}/remediation` expands into canonical task-shaped execution creation; covered by `tests/unit/api/routers/test_executions.py`. |
 
 ## Test Evidence
 
