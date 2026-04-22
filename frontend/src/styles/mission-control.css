@@ -1273,6 +1273,117 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-border) / 0.75);
 }
 
+.masked-conic-border-beam {
+  --beam-border-radius: 16px;
+  --beam-border-width: 1.5px;
+  --beam-speed: 3.6s;
+  --beam-border-base: rgb(var(--mm-border) / 0.74);
+  --beam-head-color: rgb(255 255 255 / 0.95);
+  --beam-tail-color: rgb(255 255 255 / 0.28);
+  --beam-glow-color: rgb(255 255 255 / 0.22);
+  --beam-opacity: 0.9;
+  --beam-glow-opacity: 0.42;
+  position: relative;
+  display: block;
+  border: var(--beam-border-width) solid var(--beam-border-base);
+  border-radius: var(--beam-border-radius);
+  isolation: isolate;
+}
+
+.masked-conic-border-beam[data-theme="brand"] {
+  --beam-head-color: rgb(var(--mm-accent-2) / 0.96);
+  --beam-tail-color: rgb(var(--mm-accent) / 0.32);
+  --beam-glow-color: rgb(var(--mm-accent-2) / 0.28);
+}
+
+.masked-conic-border-beam[data-theme="success"] {
+  --beam-head-color: rgb(var(--mm-ok) / 0.96);
+  --beam-tail-color: rgb(var(--mm-accent-2) / 0.28);
+  --beam-glow-color: rgb(var(--mm-ok) / 0.24);
+}
+
+.masked-conic-border-beam[data-intensity="subtle"] {
+  --beam-opacity: 0.62;
+  --beam-glow-opacity: 0.26;
+}
+
+.masked-conic-border-beam[data-intensity="vivid"] {
+  --beam-opacity: 1;
+  --beam-glow-opacity: 0.58;
+}
+
+.masked-conic-border-beam__layer,
+.masked-conic-border-beam__glow {
+  position: absolute;
+  inset: calc(-1 * var(--beam-border-width));
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.masked-conic-border-beam__layer {
+  padding: var(--beam-border-width);
+  opacity: var(--beam-opacity);
+  background: conic-gradient(from 0deg, transparent 0deg 300deg, var(--beam-tail-color) 320deg, var(--beam-head-color) 332deg, transparent 360deg);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
+}
+
+.masked-conic-border-beam__glow {
+  padding: var(--beam-border-width);
+  opacity: var(--beam-glow-opacity);
+  background: conic-gradient(from 0deg, transparent 0deg 292deg, var(--beam-glow-color) 318deg, var(--beam-head-color) 334deg, transparent 360deg);
+  filter: blur(5px);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
+}
+
+.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__layer,
+.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__glow {
+  animation-direction: reverse;
+}
+
+.masked-conic-border-beam[data-trail="none"] .masked-conic-border-beam__layer {
+  background: conic-gradient(from 0deg, transparent 0deg 318deg, var(--beam-head-color) 330deg, transparent 342deg 360deg);
+}
+
+.masked-conic-border-beam[data-trail="defined"] .masked-conic-border-beam__layer {
+  background: conic-gradient(from 0deg, transparent 0deg 284deg, var(--beam-tail-color) 318deg, var(--beam-head-color) 334deg, transparent 360deg);
+}
+
+.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__layer,
+.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__glow {
+  animation: none;
+  transform: rotate(42deg);
+}
+
+.masked-conic-border-beam__content {
+  position: relative;
+  z-index: 1;
+  display: block;
+  border-radius: calc(var(--beam-border-radius) - var(--beam-border-width));
+}
+
+@keyframes masked-conic-border-beam-orbit {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__layer,
+  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__glow {
+    animation: none;
+    transform: rotate(42deg);
+  }
+}
+
 .notice {
   border-radius: 0.65rem;
   padding: 0.65rem 0.72rem;
