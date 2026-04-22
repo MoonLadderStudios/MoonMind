@@ -249,6 +249,76 @@ describe('Mission Control shared entry', () => {
     expect(liquidBlock).toContain('backdrop-filter: blur(26px) saturate(1.65)');
   });
 
+  it('enforces MM-429 readable contrast tokens across common Mission Control surfaces', async () => {
+    expect(cssRuleBlock(missionControlCss, 'label')).toContain('color: rgb(var(--mm-ink))');
+    expect(cssRuleBlock(missionControlCss, '.data-table th,\n.data-table td')).toContain(
+      'color: rgb(var(--mm-ink))',
+    );
+    expect(cssRuleBlock(missionControlCss, 'input::placeholder,\ntextarea::placeholder')).toContain(
+      'color: rgb(var(--mm-muted))',
+    );
+    expect(cssRuleBlock(missionControlCss, '.task-list-filter-chip')).toContain(
+      'color: rgb(var(--mm-ink))',
+    );
+    expect(
+      cssRuleBlock(
+        missionControlCss,
+        'button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle)',
+      ),
+    ).toContain('color: #fff');
+    expect(cssRuleBlock(missionControlCss, '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility')).toContain(
+      'background: var(--mm-glass-fill)',
+    );
+  });
+
+  it('enforces MM-429 focus visibility across representative interactive surfaces', async () => {
+    const focusSelectors = [
+      'button:focus-visible',
+      '.button:focus-visible',
+      'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible',
+      '.route-nav a:focus-visible',
+      '.table-sort-button:focus-visible',
+      '.queue-action:focus-visible,\n.queue-submit-primary:focus-visible',
+      '.queue-step-attachment-add-button:focus-visible',
+      '.live-logs-artifact-link:focus-visible',
+      '.td-instructions-toggle:focus-visible',
+    ];
+
+    for (const selector of focusSelectors) {
+      const block = cssRuleBlock(missionControlCss, selector);
+      expect(block).toContain('box-shadow: var(--mm-control-focus-ring)');
+    }
+  });
+
+  it('enforces MM-429 reduced-motion suppression for live and premium effects', async () => {
+    expect(missionControlCss).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.step-tl-icon\.step-icon-running\s*\{[^}]*animation:\s*none !important;[^}]*opacity:\s*1;/s,
+    );
+    expect(missionControlCss).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.surface--liquidgl-hero,[^}]*\.queue-floating-bar--liquid-glass\s*\{[^}]*transition-duration:\s*0s !important;[^}]*animation-duration:\s*0s !important;/s,
+    );
+  });
+
+  it('enforces MM-429 fallback shells and premium-effect limits', async () => {
+    expect(missionControlCss).toMatch(
+      /@supports not \(\(backdrop-filter:\s*blur\(2px\)\) or \(-webkit-backdrop-filter:\s*blur\(2px\)\)\)\s*\{[^}]*\.surface--glass-control,[^}]*\.panel--controls,[^}]*\.panel--floating,[^}]*\.panel--utility,[^}]*\.surface--liquidgl-hero,[^}]*\.queue-floating-bar\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.94\);[^}]*border-color:\s*rgb\(var\(--mm-border\) \/ 0\.84\);/s,
+    );
+
+    for (const selector of [
+      '.surface--matte-data',
+      '.surface--nested-dense',
+      '.data-table-slab',
+      '.td-evidence-region',
+      '.td-evidence-slab',
+      'textarea',
+    ]) {
+      const block = cssRuleBlock(missionControlCss, selector);
+      expect(block).not.toContain('liquid');
+      expect(block).not.toContain('backdrop-filter');
+      expect(block).not.toContain('blur(26px)');
+    }
+  });
+
   it('defines shared interaction tokens for routine controls', async () => {
     const requiredTokens = [
       '--mm-control-hover-scale',
