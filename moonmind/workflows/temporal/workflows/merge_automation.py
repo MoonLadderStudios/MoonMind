@@ -285,6 +285,29 @@ class MoonMindMergeAutomationWorkflow:
         self._input.pull_request.head_sha = head_sha
         return True
 
+    @staticmethod
+    def _has_blocker(evidence: Any, kind: str) -> bool:
+        return any(
+            blocker.kind == kind for blocker in getattr(evidence, "blockers", [])
+        )
+
+    def _should_adopt_initial_waiting_head_sha(self, evidence: Any) -> bool:
+        if self._input is None:
+            return False
+        if self._resolver_child_workflow_ids:
+            return False
+        observed_head_sha = str(getattr(evidence, "head_sha", "") or "").strip()
+        if not observed_head_sha:
+            return False
+        if observed_head_sha == str(self._input.pull_request.head_sha or "").strip():
+            return False
+        if not self._has_blocker(evidence, "stale_revision"):
+            return False
+        return any(
+            blocker.retryable and blocker.kind != "stale_revision"
+            for blocker in getattr(evidence, "blockers", [])
+        )
+
     async def _failed_resolver_summary(
         self,
         *,
@@ -420,6 +443,12 @@ class MoonMindMergeAutomationWorkflow:
                 evaluation if isinstance(evaluation, Mapping) else {},
                 tracked_head_sha=self._input.pull_request.head_sha,
             )
+            if self._should_adopt_initial_waiting_head_sha(evidence):
+                self._refresh_tracked_head_sha(evaluation)
+                evidence = classify_readiness(
+                    evaluation if isinstance(evaluation, Mapping) else {},
+                    tracked_head_sha=self._input.pull_request.head_sha,
+                )
             if self._refresh_tracked_head_sha_on_next_evaluation:
                 self._refresh_tracked_head_sha_on_next_evaluation = False
                 if self._refresh_tracked_head_sha(evaluation):
