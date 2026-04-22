@@ -24,9 +24,14 @@ from pydantic import BaseModel, ValidationError
 from moonmind.config.settings import settings
 from moonmind.integrations.pentest.models import (
     PentestLaunchPolicyError,
+    PentestProviderMaterializationError,
     PentestScopeValidationError,
     PentestWorkloadRequest,
+    build_pentest_provider_cooldown_diagnostic,
     build_pentest_launch_plan,
+    materialize_pentest_provider_profile,
+    pentest_provider_lease_metadata,
+    resolve_pentest_provider_profile,
 )
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
@@ -3174,9 +3179,36 @@ class TemporalAgentRuntimeActivities:
         request = PentestWorkloadRequest.model_validate(request_payload)
         try:
             launch_plan = build_pentest_launch_plan(request)
-        except (PentestScopeValidationError, PentestLaunchPolicyError) as exc:
+            provider_profile = resolve_pentest_provider_profile(
+                execution_profile_ref=request.execution_profile_ref,
+                provider_selector=request.provider_selector,
+            )
+            provider_materialization = materialize_pentest_provider_profile(
+                provider_profile
+            )
+        except (
+            PentestScopeValidationError,
+            PentestLaunchPolicyError,
+            PentestProviderMaterializationError,
+        ) as exc:
             raise TemporalActivityRuntimeError(str(exc)) from exc
-        return launch_plan.to_activity_output(request)
+        output = launch_plan.to_activity_output(request)
+        output["provider_profile"] = provider_materialization.model_dump(mode="json")
+        output["provider_lease"] = pentest_provider_lease_metadata(provider_profile)
+        provider_failure = request.provider_failure or {}
+        failure_category = str(provider_failure.get("category") or "").strip()
+        if failure_category in {"provider_429", "provider_quota"}:
+            output["status"] = "provider_cooldown"
+            output["provider_cooldown"] = build_pentest_provider_cooldown_diagnostic(
+                profile_id=provider_profile.profile_id,
+                cooldown_seconds=provider_profile.cooldown_after_429_seconds,
+                reason=failure_category,
+            ).model_dump(mode="json")
+            output["provider_lease"] = pentest_provider_lease_metadata(
+                provider_profile,
+                release_required=True,
+            )
+        return output
 
     async def agent_runtime_publish_artifacts(
         self,
