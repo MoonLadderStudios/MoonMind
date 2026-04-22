@@ -41,4 +41,4 @@ Result: PASS. Full unit verification reported `3789 passed, 1 xpassed, 100 warni
 
 ## Remaining Work
 
-Complete the remaining unchecked tasks in `specs/224-remediation-mission-control/tasks.md`, especially ineligible/read-only/degraded UI assertions and final `/speckit.verify`.
+Complete the remaining unchecked tasks in `specs/224-remediation-mission-control/tasks.md`, especially ineligible/read-only/degraded UI assertions and final `/moonspec-verify`.
