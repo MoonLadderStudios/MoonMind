@@ -1044,6 +1044,54 @@ async def test_create_execution_rejects_incompatible_remediation_action_policy(
 
 
 @pytest.mark.asyncio
+async def test_create_execution_keeps_future_remediation_policy_inert(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        execution = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Policy-only task",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "instructions": "Normal task with future policy metadata.",
+                    "remediationPolicy": {
+                        "enabled": True,
+                        "triggers": ["failed", "attention_required", "stuck"],
+                        "createMode": "proposal",
+                        "templateRef": "admin_healer_default",
+                        "authorityMode": "approval_gated",
+                        "maxActiveRemediations": 1,
+                        "maxSelfHealingDepth": 1,
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+
+        record = await session.get(
+            TemporalExecutionCanonicalRecord, execution.workflow_id
+        )
+        link = await session.get(
+            TemporalExecutionRemediationLink, execution.workflow_id
+        )
+
+        assert record is not None
+        assert record.parameters["task"]["remediationPolicy"]["enabled"] is True
+        assert link is None
+        mock_client_adapter.start_workflow.assert_awaited_once()
+        start_args = mock_client_adapter.start_workflow.await_args.kwargs["input_args"]
+        assert "remediation" not in start_args["initial_parameters"]["task"]
+
+
+@pytest.mark.asyncio
 async def test_create_execution_rejects_nested_remediation_target(
     tmp_path, mock_client_adapter
 ):

@@ -158,6 +158,42 @@ def test_remediation_action_authority_lists_policy_compatible_actions():
     assert listed_again[0]["inputMetadata"]["reason"]["required"] is False
 
 
+def test_remediation_action_authority_does_not_advertise_raw_admin_actions():
+    service = RemediationActionAuthorityService(session=object())
+
+    allowed = service.list_allowed_actions(
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(
+            allowed_action_kinds=(
+                "restart_worker",
+                "terminate_session",
+                "raw_host_shell",
+                "raw_docker",
+                "raw_sql",
+                "storage_key_read",
+                "secret_read",
+                "redaction_bypass",
+            )
+        ),
+    )
+
+    action_kinds = {item["actionKind"] for item in allowed}
+    assert action_kinds == {"restart_worker", "terminate_session"}
+    assert not action_kinds.intersection(
+        {
+            "raw_host_shell",
+            "host_shell",
+            "docker_daemon",
+            "raw_docker",
+            "sql_database",
+            "raw_sql",
+            "storage_key_read",
+            "secret_read",
+            "redaction_bypass",
+        }
+    )
+
+
 @pytest.fixture
 def mock_client_adapter():
     adapter = MagicMock()
