@@ -22,6 +22,7 @@ from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequen
 from pydantic import BaseModel, ValidationError
 
 from moonmind.config.settings import settings
+from moonmind.integrations.pentest.models import PentestWorkloadRequest
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.schemas.temporal_activity_models import (
@@ -509,6 +510,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
     "workload.run": ("agent_runtime", "workload_run"),
+    "security.pentest.execute": ("agent_runtime", "security_pentest_execute"),
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
     "step.review": ("reviews", "step_review"),
@@ -726,6 +728,151 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
 def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any]:
     if is_dood_tool(name):
         return build_dood_tool_definition_payload(name=name, version=version)
+
+    if name == "security.pentest.run":
+        return {
+            "name": name,
+            "version": version,
+            "type": "skill",
+            "description": (
+                "Run an authorized PentestGPT workload against an approved "
+                "target scope and publish normalized findings plus evidence "
+                "artifacts."
+            ),
+            "inputs": {
+                "schema": {
+                    "type": "object",
+                    "required": [
+                        "target",
+                        "scope_artifact_ref",
+                        "operation_mode",
+                        "runner_profile_id",
+                    ],
+                    "properties": {
+                        "target": {"type": "string"},
+                        "scope_artifact_ref": {
+                            "type": "string",
+                            "description": (
+                                "ArtifactRef for the approved pentest scope "
+                                "document."
+                            ),
+                        },
+                        "objective": {"type": "string"},
+                        "operation_mode": {
+                            "type": "string",
+                            "enum": [
+                                "recon_only",
+                                "validate_hypothesis",
+                                "full_authorized",
+                            ],
+                        },
+                        "runner_profile_id": {"type": "string"},
+                        "execution_profile_ref": {
+                            "type": "string",
+                            "description": (
+                                "Exact Provider Profile to use for PentestGPT."
+                            ),
+                        },
+                        "provider_selector": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "provider_id": {"type": "string"},
+                                "tags_any": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "tags_all": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                        },
+                        "time_budget_minutes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 480,
+                            "default": 60,
+                        },
+                        "repo_dir": {"type": "string"},
+                        "artifacts_dir": {
+                            "type": "string",
+                            "description": (
+                                "Task artifact directory for PentestGPT evidence "
+                                "outputs. Supplied by the runtime when not "
+                                "provided by a trusted caller."
+                            ),
+                        },
+                        "evidence_level": {
+                            "type": "string",
+                            "enum": ["minimal", "standard", "full"],
+                            "default": "standard",
+                        },
+                        "network_attachment_ref": {
+                            "type": "string",
+                            "description": (
+                                "Optional artifact or ref required by runner "
+                                "profiles that need VPN/lab connectivity."
+                            ),
+                        },
+                    },
+                }
+            },
+            "outputs": {
+                "schema": {
+                    "type": "object",
+                    "required": [
+                        "status",
+                        "target",
+                        "runner_profile_id",
+                        "stdout_artifact_ref",
+                        "stderr_artifact_ref",
+                        "diagnostics_artifact_ref",
+                        "summary_artifact_ref",
+                        "findings_artifact_ref",
+                    ],
+                    "properties": {
+                        "status": {"type": "string"},
+                        "target": {"type": "string"},
+                        "runner_profile_id": {"type": "string"},
+                        "execution_profile_ref": {"type": "string"},
+                        "stdout_artifact_ref": {"type": "string"},
+                        "stderr_artifact_ref": {"type": "string"},
+                        "diagnostics_artifact_ref": {"type": "string"},
+                        "summary_artifact_ref": {"type": "string"},
+                        "findings_artifact_ref": {"type": "string"},
+                        "evidence_bundle_artifact_ref": {"type": "string"},
+                        "provider_snapshot_artifact_ref": {"type": "string"},
+                        "findings_count": {"type": "integer"},
+                        "confirmed_findings_count": {"type": "integer"},
+                    },
+                }
+            },
+            "executor": {
+                "activity_type": "security.pentest.execute",
+                "selector": {"mode": "by_capability"},
+                "binding_reason": "stronger_isolation",
+            },
+            "requirements": {"capabilities": ["agent_runtime"]},
+            "policies": {
+                "timeouts": {
+                    "start_to_close_seconds": 28800,
+                    "schedule_to_close_seconds": 32400,
+                },
+                "retries": {
+                    "max_attempts": 1,
+                    "backoff": "none",
+                    "non_retryable_error_codes": [
+                        "INVALID_SCOPE",
+                        "PERMISSION_DENIED",
+                        "UNAPPROVED_TARGET",
+                        "UNSUPPORTED_PROFILE",
+                        "NON_IDEMPOTENT_OPERATION",
+                    ],
+                },
+            },
+            "security": {"allowed_roles": ["admin", "security_operator"]},
+        }
 
     if name == "story.create_jira_issues":
         return {
@@ -2962,6 +3109,25 @@ class TemporalAgentRuntimeActivities:
         if not isinstance(result, WorkloadResult):
             result = WorkloadResult.model_validate(result)
         return result.model_dump(mode="json", by_alias=True)
+
+    async def security_pentest_execute(
+        self,
+        payload: Mapping[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Validate the curated PentestGPT activity boundary.
+
+        The full PentestGPT runner is intentionally implemented separately from
+        the registry contract. Keeping this activity registered lets workflow
+        validation and worker startup recognize the curated route without
+        silently falling back to the generic tool executor.
+        """
+
+        request_payload = dict(payload.get("request", payload))
+        PentestWorkloadRequest.model_validate(request_payload)
+        raise TemporalActivityRuntimeError(
+            "security.pentest.execute runner is not implemented"
+        )
 
     async def agent_runtime_publish_artifacts(
         self,

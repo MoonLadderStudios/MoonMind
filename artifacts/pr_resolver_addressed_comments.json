@@ -1,27 +1,27 @@
 [
   {
-    "id": 3125731282,
+    "id": 3125840616,
     "disposition": "addressed",
-    "rationale": "Changed the MaskedConicBorderBeam content wrapper from span to div so arbitrary block-level children are validly nested."
+    "rationale": "Registered security.pentest.execute in the Temporal catalog and worker binding metadata so the curated pentest tool resolves to a supported agent-runtime activity route."
   },
   {
-    "id": 4156629488,
+    "id": 4156750665,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary; its actionable wrapper feedback is addressed by inline comments 3125731282 and 3125738170."
+    "rationale": "Top-level automated Codex review summary; actionable feedback is tracked by inline comment 3125840616."
   },
   {
-    "id": 3125738162,
-    "disposition": "addressed",
-    "rationale": "Applied the border-ring mask to the glow layer and added CSS contract coverage so the conic glow is not painted as a full-box fill."
-  },
-  {
-    "id": 3125738170,
-    "disposition": "addressed",
-    "rationale": "Changed the content wrapper to a div and added a component test asserting the wrapper element is DIV."
-  },
-  {
-    "id": 4156636448,
+    "id": 4156766456,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review body; actionable Codex findings are represented by inline comments 3125738162 and 3125738170."
+    "rationale": "Top-level automated review summary; actionable findings are tracked by inline comments 3125854787 and 3125854793."
+  },
+  {
+    "id": 3125854787,
+    "disposition": "addressed",
+    "rationale": "Added security.pentest.execute to _ACTIVITY_HANDLER_ATTRS and implemented the TemporalAgentRuntimeActivities handler boundary so worker binding recognizes the curated activity."
+  },
+  {
+    "id": 3125854793,
+    "disposition": "addressed",
+    "rationale": "Added artifacts_dir to the security.pentest.run input schema so the registry-visible contract aligns with the typed PentestWorkloadRequest activity payload."
   }
 ]

@@ -165,6 +165,23 @@ def test_resolve_explicit_activity_uses_catalog_binding():
     assert route.task_queue == INTEGRATIONS_TASK_QUEUE
 
 
+def test_resolve_curated_pentest_activity_uses_agent_runtime_binding():
+    catalog = build_default_activity_catalog()
+    route = catalog.resolve_skill(
+        _skill_definition(
+            activity_type="security.pentest.execute",
+            capabilities=["agent_runtime"],
+            binding_reason="stronger_isolation",
+        )
+    )
+
+    assert route.activity_type == "security.pentest.execute"
+    assert route.fleet == AGENT_RUNTIME_FLEET
+    assert route.task_queue == AGENT_RUNTIME_TASK_QUEUE
+    assert route.capability_class == "agent_runtime"
+    assert route.heartbeat_required is True
+
+
 def test_resolve_explicit_activity_requires_binding_reason():
     catalog = build_default_activity_catalog()
 

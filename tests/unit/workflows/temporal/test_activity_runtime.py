@@ -591,6 +591,136 @@ async def test_default_skill_registry_payload_uses_dood_tool_definitions():
     )
 
 
+async def test_default_skill_registry_payload_uses_curated_pentest_tool_definition():
+    payload = _default_skill_registry_payload(
+        parameters={
+            "task": {
+                "steps": [
+                    {
+                        "tool": {
+                            "type": "skill",
+                            "name": "security.pentest.run",
+                            "version": "1.0.0",
+                        }
+                    }
+                ]
+            }
+        }
+    )
+
+    skills = payload.get("skills")
+    assert isinstance(skills, list)
+    assert len(skills) == 1
+    definition = skills[0]
+
+    assert definition["name"] == "security.pentest.run"
+    assert definition["version"] == "1.0.0"
+    assert definition["type"] == "skill"
+    assert definition["executor"] == {
+        "activity_type": "security.pentest.execute",
+        "selector": {"mode": "by_capability"},
+        "binding_reason": "stronger_isolation",
+    }
+    assert definition["requirements"]["capabilities"] == ["agent_runtime"]
+    assert definition["security"]["allowed_roles"] == [
+        "admin",
+        "security_operator",
+    ]
+
+    input_schema = definition["inputs"]["schema"]
+    assert input_schema["required"] == [
+        "target",
+        "scope_artifact_ref",
+        "operation_mode",
+        "runner_profile_id",
+    ]
+    assert input_schema["properties"]["operation_mode"]["enum"] == [
+        "recon_only",
+        "validate_hypothesis",
+        "full_authorized",
+    ]
+    assert input_schema["properties"]["provider_selector"][
+        "additionalProperties"
+    ] is False
+    assert set(input_schema["properties"]["provider_selector"]["properties"]) == {
+        "provider_id",
+        "tags_any",
+        "tags_all",
+    }
+    assert input_schema["properties"]["time_budget_minutes"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 480,
+        "default": 60,
+    }
+    assert input_schema["properties"]["artifacts_dir"]["type"] == "string"
+    assert input_schema["properties"]["evidence_level"]["enum"] == [
+        "minimal",
+        "standard",
+        "full",
+    ]
+
+    output_schema = definition["outputs"]["schema"]
+    assert output_schema["required"] == [
+        "status",
+        "target",
+        "runner_profile_id",
+        "stdout_artifact_ref",
+        "stderr_artifact_ref",
+        "diagnostics_artifact_ref",
+        "summary_artifact_ref",
+        "findings_artifact_ref",
+    ]
+    assert {
+        "evidence_bundle_artifact_ref",
+        "provider_snapshot_artifact_ref",
+        "findings_count",
+        "confirmed_findings_count",
+    }.issubset(output_schema["properties"])
+
+    assert definition["policies"] == {
+        "timeouts": {
+            "start_to_close_seconds": 28800,
+            "schedule_to_close_seconds": 32400,
+        },
+        "retries": {
+            "max_attempts": 1,
+            "backoff": "none",
+            "non_retryable_error_codes": [
+                "INVALID_SCOPE",
+                "PERMISSION_DENIED",
+                "UNAPPROVED_TARGET",
+                "UNSUPPORTED_PROFILE",
+                "NON_IDEMPOTENT_OPERATION",
+            ],
+        },
+    }
+
+    parsed = parse_skill_registry(payload)
+    assert [(tool.name, tool.version) for tool in parsed] == [
+        ("security.pentest.run", "1.0.0")
+    ]
+    assert parsed[0].executor.activity_type == "security.pentest.execute"
+
+
+async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_fleet():
+    bindings = build_activity_bindings(
+        build_default_activity_catalog(),
+        agent_runtime_activities=TemporalAgentRuntimeActivities(),
+        agent_skills_activities=AgentSkillsActivities(),
+        fleets=[AGENT_RUNTIME_FLEET],
+    )
+
+    binding = next(
+        item for item in bindings if item.activity_type == "security.pentest.execute"
+    )
+    assert binding.fleet == AGENT_RUNTIME_FLEET
+    assert binding.task_queue == "mm.activity.agent_runtime"
+    assert binding.handler.__temporal_activity_definition.name == (
+        "security.pentest.execute"
+    )
+
+
 async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
     tmp_path: Path,
 ):

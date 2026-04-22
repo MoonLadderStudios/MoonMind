@@ -984,6 +984,30 @@ def build_default_activity_catalog(
             ),
         ),
         TemporalActivityDefinition(
+            activity_type="security.pentest.execute",
+            family="security",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(
+                28800,
+                32400,
+                heartbeat_timeout_seconds=300,
+            ),
+            retries=_activity_retries(
+                max_attempts=1,
+                max_interval_seconds=300,
+                non_retryable=(
+                    "INVALID_SCOPE",
+                    "PERMISSION_DENIED",
+                    "UNAPPROVED_TARGET",
+                    "UNSUPPORTED_PROFILE",
+                    "NON_IDEMPOTENT_OPERATION",
+                ),
+            ),
+            heartbeat_required=True,
+        ),
+        TemporalActivityDefinition(
             activity_type="proposal.generate",
             family="proposal",
             capability_class="llm",
