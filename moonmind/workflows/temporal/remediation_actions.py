@@ -21,6 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db import models as db_models
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
+_GUARD_STATE_RETENTION_SECONDS = 24 * 60 * 60
+_MAX_GUARD_STATE_ENTRIES = 2048
+
 RemediationActionRisk = Literal["low", "medium", "high"]
 RemediationActionDecision = Literal[
     "allowed",
@@ -196,6 +199,7 @@ class RemediationMutationLockDecision:
     holder_run_id: str | None
     target_workflow_id: str
     target_run_id: str
+    created_at: datetime | None
     expires_at: datetime | None
 
     def to_dict(self) -> dict[str, Any]:
@@ -208,6 +212,7 @@ class RemediationMutationLockDecision:
             "holderRunId": self.holder_run_id,
             "targetWorkflowId": self.target_workflow_id,
             "targetRunId": self.target_run_id,
+            "createdAt": _datetime_to_json(self.created_at),
             "expiresAt": _datetime_to_json(self.expires_at),
         }
 
@@ -330,6 +335,7 @@ class _ActiveMutationLock:
     holder_run_id: str | None
     target_workflow_id: str
     target_run_id: str
+    created_at: datetime
     expires_at: datetime
     released: bool = False
 
@@ -337,6 +343,7 @@ class _ActiveMutationLock:
 @dataclass(frozen=True, slots=True)
 class _LedgerEntry:
     request_shape_hash: str
+    recorded_at: datetime
     result: RemediationMutationGuardResult
 
 
@@ -756,13 +763,14 @@ class RemediationMutationGuardService:
         self._session = session
         self._locks: dict[tuple[str, str, str], _ActiveMutationLock] = {}
         self._locks_by_id: dict[str, _ActiveMutationLock] = {}
-        self._lost_holders: set[tuple[str, str, str, str]] = set()
+        self._lost_holders: dict[tuple[str, str, str, str], datetime] = {}
         self._ledger: dict[tuple[str, str], _LedgerEntry] = {}
         self._action_counts_by_target: defaultdict[str, int] = defaultdict(int)
         self._attempts_by_target_action: defaultdict[tuple[str, str], int] = (
             defaultdict(int)
         )
         self._last_attempt_by_shape: dict[tuple[str, str, str], datetime] = {}
+        self._last_target_activity: dict[str, datetime] = {}
 
     def release_lock(self, lock_id: str) -> None:
         """Mark a lock as lost/released so the holder cannot silently continue."""
@@ -771,14 +779,14 @@ class RemediationMutationGuardService:
         if lock is None:
             return
         lock.released = True
-        self._lost_holders.add(
+        self._lost_holders[
             (
                 lock.scope,
                 lock.target_workflow_id,
                 lock.target_run_id,
                 lock.holder_workflow_id,
             )
-        )
+        ] = lock.expires_at
 
     async def evaluate(
         self,
@@ -791,7 +799,7 @@ class RemediationMutationGuardService:
         idempotency_key: str,
         parameters: Mapping[str, Any] | None,
         policy: RemediationMutationGuardPolicy | None = None,
-        now: datetime | None = None,
+        now: datetime,
         target_freshness: Mapping[str, Any] | Any | None = None,
         require_target_freshness: bool = False,
         target_is_remediation: bool = False,
@@ -799,6 +807,7 @@ class RemediationMutationGuardService:
     ) -> RemediationMutationGuardResult:
         active_policy = _normalize_guard_policy(policy)
         current_time = _normalize_datetime(now)
+        self._cleanup_state(now=current_time)
         workflow_id = str(remediation_workflow_id or "").strip()
         target_id = str(target_workflow_id or "").strip()
         pinned_run_id = str(target_run_id or "").strip()
@@ -820,6 +829,7 @@ class RemediationMutationGuardService:
             holder_run_id=remediation_run_id,
             target_workflow_id=target_id,
             target_run_id=pinned_run_id,
+            created_at=None,
             expires_at=None,
         )
         base_budget = RemediationActionBudgetDecision(
@@ -1052,6 +1062,7 @@ class RemediationMutationGuardService:
 
         self._action_counts_by_target[target_id] += 1
         self._attempts_by_target_action[(target_id, normalized_action)] += 1
+        self._last_target_activity[target_id] = current_time
         self._last_attempt_by_shape[(target_id, normalized_action, shape_hash)] = (
             current_time
         )
@@ -1111,20 +1122,25 @@ class RemediationMutationGuardService:
                     holder_run_id=remediation_run_id,
                     target_workflow_id=target_workflow_id,
                     target_run_id=target_run_id,
+                    created_at=None,
                     expires_at=None,
                 ),
                 False,
             )
 
         existing = self._locks.get(lock_key)
+        expired_existing = False
         if existing is not None and existing.released:
+            existing = None
+        if existing is not None and now >= existing.expires_at:
+            expired_existing = True
             existing = None
         if existing is not None and existing.holder_workflow_id == workflow_id:
             return (_lock_decision(existing, "acquired"), True)
         if existing is not None and now < existing.expires_at:
             return (_lock_decision(existing, "mutation_lock_conflict"), False)
 
-        status = "recovered" if existing is not None else "acquired"
+        status = "recovered" if expired_existing else "acquired"
         lock = _ActiveMutationLock(
             lock_id=_stable_lock_id(
                 policy.lock_scope,
@@ -1138,6 +1154,7 @@ class RemediationMutationGuardService:
             holder_run_id=remediation_run_id,
             target_workflow_id=target_workflow_id,
             target_run_id=target_run_id,
+            created_at=now,
             expires_at=now + timedelta(seconds=max(policy.lock_ttl_seconds, 1)),
         )
         self._locks[lock_key] = lock
@@ -1250,9 +1267,51 @@ class RemediationMutationGuardService:
     ) -> RemediationMutationGuardResult:
         self._ledger[ledger_key] = _LedgerEntry(
             request_shape_hash=shape_hash,
+            recorded_at=result.lock.created_at
+            or datetime.fromtimestamp(0, timezone.utc),
             result=result,
         )
+        self._trim_state()
         return result
+
+    def _cleanup_state(self, *, now: datetime) -> None:
+        cutoff = now - timedelta(seconds=_GUARD_STATE_RETENTION_SECONDS)
+        for key, lock in list(self._locks.items()):
+            if lock.released or lock.expires_at <= cutoff:
+                self._locks.pop(key, None)
+                self._locks_by_id.pop(lock.lock_id, None)
+        for key, entry in list(self._ledger.items()):
+            if entry.recorded_at <= cutoff:
+                self._ledger.pop(key, None)
+        for key, recorded_at in list(self._lost_holders.items()):
+            if recorded_at <= cutoff:
+                self._lost_holders.pop(key, None)
+        for key, last_attempt in list(self._last_attempt_by_shape.items()):
+            if last_attempt <= cutoff:
+                self._last_attempt_by_shape.pop(key, None)
+        for target_id, last_activity in list(self._last_target_activity.items()):
+            if last_activity > cutoff:
+                continue
+            self._last_target_activity.pop(target_id, None)
+            self._action_counts_by_target.pop(target_id, None)
+            for action_key in list(self._attempts_by_target_action):
+                if action_key[0] == target_id:
+                    self._attempts_by_target_action.pop(action_key, None)
+        self._trim_state()
+
+    def _trim_state(self) -> None:
+        while len(self._ledger) > _MAX_GUARD_STATE_ENTRIES:
+            oldest_key = min(
+                self._ledger,
+                key=lambda key: self._ledger[key].recorded_at,
+            )
+            self._ledger.pop(oldest_key, None)
+        while len(self._last_attempt_by_shape) > _MAX_GUARD_STATE_ENTRIES:
+            oldest_shape_key = min(
+                self._last_attempt_by_shape,
+                key=lambda key: self._last_attempt_by_shape[key],
+            )
+            self._last_attempt_by_shape.pop(oldest_shape_key, None)
 
 
 def _security_profile_error(
@@ -1294,9 +1353,7 @@ def _normalize_guard_policy(
     )
 
 
-def _normalize_datetime(value: datetime | None) -> datetime:
-    if value is None:
-        return datetime.now(timezone.utc)
+def _normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
@@ -1343,6 +1400,7 @@ def _lock_decision(
         holder_run_id=lock.holder_run_id,
         target_workflow_id=lock.target_workflow_id,
         target_run_id=lock.target_run_id,
+        created_at=lock.created_at,
         expires_at=lock.expires_at,
     )
 
@@ -1403,11 +1461,43 @@ def _freshness_decision(
         "sessionIdentity",
         "session_identity",
     )
+    pinned_state = _freshness_value(target_freshness, "pinnedState", "pinned_state")
+    pinned_summary = _freshness_value(
+        target_freshness,
+        "pinnedSummary",
+        "pinned_summary",
+    )
+    pinned_session_identity = _freshness_value(
+        target_freshness,
+        "pinnedSessionIdentity",
+        "pinned_session_identity",
+    )
     target_run_changed = bool(
         _freshness_value(target_freshness, "targetRunChanged", "target_run_changed")
     )
-    materially_changed = target_run_changed or (
-        bool(current_run_id) and bool(pinned_run_id) and current_run_id != pinned_run_id
+    state_changed = (
+        pinned_state is not None and state is not None and state != pinned_state
+    )
+    summary_changed = (
+        pinned_summary is not None
+        and summary is not None
+        and summary != pinned_summary
+    )
+    session_changed = (
+        pinned_session_identity is not None
+        and session_identity is not None
+        and session_identity != pinned_session_identity
+    )
+    materially_changed = (
+        target_run_changed
+        or (
+            bool(current_run_id)
+            and bool(pinned_run_id)
+            and current_run_id != pinned_run_id
+        )
+        or state_changed
+        or summary_changed
+        or session_changed
     )
     return RemediationTargetFreshnessDecision(
         status="materially_changed" if materially_changed else "fresh",
