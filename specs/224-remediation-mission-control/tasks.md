@@ -13,7 +13,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_temporal_service.py`
 - Integration tests: `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -92,7 +92,7 @@
 - [X] T031 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` and fix UI failures.
 - [X] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_temporal_service.py` and fix backend regressions.
 
-**Checkpoint**: The story is fully functional, covered by API and integration-style UI tests, and independently testable.
+**Checkpoint**: Backend/read-model and implemented UI slices are covered by API and integration-style UI tests. Complete remaining unchecked UI coverage and degraded-state tasks before final story verification.
 
 ---
 
@@ -105,7 +105,7 @@
 - [X] T035 Run quickstart validation commands from `specs/224-remediation-mission-control/quickstart.md`.
 - [X] T036 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx` for final focused frontend evidence.
 - [X] T037 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_temporal_service.py` for final focused backend evidence.
-- [ ] T038 Run `/speckit.verify` final verification and write the result to `specs/224-remediation-mission-control/verification.md`. (SC-008)
+- [ ] T038 Run `/moonspec-verify` final verification and write the result to `specs/224-remediation-mission-control/verification.md`. (SC-008)
 
 ---
 
@@ -124,7 +124,7 @@
 - UI tests must be authored before task-detail implementation.
 - Create action and data-fetch wiring should land before panels that consume remediation data.
 - Evidence grouping and approval controls depend on remediation panel data shape.
-- Final `/speckit.verify` runs only after tests pass and tasks are marked complete.
+- Final `/moonspec-verify` runs only after tests pass and tasks are marked complete.
 
 ### Parallel Opportunities
 
@@ -140,7 +140,7 @@
 3. Add task-detail and create-page UI tests for every visible operator state.
 4. Implement the UI panels using existing Mission Control evidence-region styling.
 5. Run focused frontend and backend verification.
-6. Run `/speckit.verify` and record final evidence.
+6. Run `/moonspec-verify` and record final evidence.
 
 ## Notes
 
