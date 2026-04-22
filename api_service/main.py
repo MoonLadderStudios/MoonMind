@@ -688,7 +688,11 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_mount_path": get_provider_default(
                 "claude_code", "volume_mount_path"
             ),
-            "clear_env_keys": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+            "clear_env_keys": [
+                "ANTHROPIC_API_KEY",
+                "CLAUDE_API_KEY",
+                "OPENAI_API_KEY",
+            ],
             "account_label": "Claude Code (auto-seeded)",
         },
 

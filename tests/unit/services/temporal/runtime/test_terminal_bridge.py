@@ -207,6 +207,46 @@ async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
 
 
 @pytest.mark.asyncio
+async def test_start_terminal_bridge_container_uses_claude_home_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[str] = []
+
+    async def fake_create_subprocess_exec(*args, **_kwargs):
+        observed.extend(args)
+        return _FakeProcess()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-anthropic")
+    monkeypatch.setenv("CLAUDE_API_KEY", "ambient-claude")
+    monkeypatch.setattr(
+        terminal_bridge.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    await start_terminal_bridge_container(
+        session_id="oas_terminal_runner_claude",
+        runtime_id="claude_code",
+        volume_ref="claude_auth_volume",
+        volume_mount_path="/home/app/.claude",
+        session_ttl=1800,
+        bootstrap_command=("claude", "login"),
+    )
+
+    assert "claude_auth_volume:/home/app/.claude" in observed
+    assert "HOME=/home/app" in observed
+    assert "CLAUDE_HOME=/home/app/.claude" in observed
+    assert "CLAUDE_VOLUME_PATH=/home/app/.claude" in observed
+    assert "ANTHROPIC_API_KEY=" in observed
+    assert "CLAUDE_API_KEY=" in observed
+    assert "ANTHROPIC_API_KEY=ambient-anthropic" not in observed
+    assert "CLAUDE_API_KEY=ambient-claude" not in observed
+    assert "CODEX_HOME=/home/app/.claude" not in observed
+    assert "command -v claude" in observed[-1]
+    assert observed[-1] != "claude login"
+
+
+@pytest.mark.asyncio
 async def test_start_terminal_bridge_container_redacts_startup_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

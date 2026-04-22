@@ -8,7 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db import base as db_base
-from api_service.db.models import Base, ManagedAgentProviderProfile
+from api_service.db.models import (
+    Base,
+    ManagedAgentProviderProfile,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
+)
 
 
 @pytest.fixture()
@@ -70,8 +75,23 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert runtime_defaults["claude_anthropic"] is True
     provider_ids = {p.profile_id: p.provider_id for p in profiles}
     assert provider_ids["codex_default"] == "openai"
+    assert provider_ids["claude_anthropic"] == "anthropic"
     provider_labels = {p.profile_id: p.provider_label for p in profiles}
     assert provider_labels["codex_default"] == "OpenAI"
+    assert provider_labels["claude_anthropic"] == "Anthropic"
+    claude_profile = next(p for p in profiles if p.profile_id == "claude_anthropic")
+    assert claude_profile.credential_source == ProviderCredentialSource.OAUTH_VOLUME
+    assert (
+        claude_profile.runtime_materialization_mode
+        == RuntimeMaterializationMode.OAUTH_HOME
+    )
+    assert claude_profile.volume_ref == "claude_auth_volume"
+    assert claude_profile.volume_mount_path == "/home/app/.claude"
+    assert claude_profile.clear_env_keys == [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_API_KEY",
+        "OPENAI_API_KEY",
+    ]
 
 
 

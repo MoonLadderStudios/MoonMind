@@ -370,6 +370,42 @@ async def test_start_auth_runner_resolves_provider_bootstrap_command(
 
 
 @pytest.mark.asyncio
+async def test_start_auth_runner_resolves_claude_bootstrap_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def fake_start_terminal_bridge_container(**kwargs):
+        observed.update(kwargs)
+        return {
+            "container_name": "moonmind_auth_oas_claude_activityrunner",
+            "terminal_session_id": "term_oas_claude_activityrunner",
+            "terminal_bridge_id": "br_oas_claude_activityrunner",
+            "session_transport": "moonmind_pty_ws",
+        }
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.terminal_bridge.start_terminal_bridge_container",
+        fake_start_terminal_bridge_container,
+    )
+
+    result = await oauth_session_start_auth_runner(
+        {
+            "session_id": "oas_claude_activityrunner",
+            "runtime_id": "claude_code",
+            "volume_ref": "claude_auth_volume",
+            "volume_mount_path": "/home/app/.claude",
+            "session_ttl": 120,
+        }
+    )
+
+    assert result["container_name"] == "moonmind_auth_oas_claude_activityrunner"
+    assert observed["bootstrap_command"] == ("claude", "login")
+    assert observed["volume_ref"] == "claude_auth_volume"
+    assert observed["volume_mount_path"] == "/home/app/.claude"
+
+
+@pytest.mark.asyncio
 async def test_start_auth_runner_rejects_missing_provider_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
