@@ -1,7 +1,7 @@
 # Specification Quality Checklist: Mission Control Accessibility, Performance, and Fallback Posture
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning  
-**Created**: 2026-04-22  
+**Purpose**: Validate specification completeness and quality before proceeding to planning
+**Created**: 2026-04-22
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality

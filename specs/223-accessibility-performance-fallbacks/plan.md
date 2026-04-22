@@ -1,6 +1,6 @@
 # Implementation Plan: Mission Control Accessibility, Performance, and Fallback Posture
 
-**Branch**: `mm-429-cbbc7b30` | **Date**: 2026-04-22 | **Spec**: `specs/223-accessibility-performance-fallbacks/spec.md`  
+**Branch**: `mm-429-cbbc7b30` | **Date**: 2026-04-22 | **Spec**: `specs/223-accessibility-performance-fallbacks/spec.md`
 **Input**: Single-story runtime spec from trusted MM-429 Jira preset brief.
 
 ## Summary
@@ -30,15 +30,15 @@ Implement and verify the MM-429 accessibility, reduced-motion, fallback, and per
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI; CSS for shared Mission Control styling; Python 3.12 remains present but is not expected for this story.  
-**Primary Dependencies**: React, TanStack Query, existing Mission Control stylesheet, liquidGL enhancement wrapper, Vitest, Testing Library, PostCSS CSS inspection helpers.  
-**Storage**: No new persistent storage.  
-**Unit Testing**: Vitest via `npm run ui:test -- <paths>` or `./tools/test_unit.sh --ui-args <paths>`.  
-**Integration Testing**: Rendered React entrypoint tests act as integration-style coverage for Mission Control UI behavior; no compose-backed integration is required because backend contracts and persistence are unchanged.  
-**Target Platform**: Browser Mission Control UI.  
-**Project Type**: Frontend runtime behavior, CSS resilience, and UI regression tests.  
-**Performance Goals**: No additional network calls; heavy blur, glow, sticky glass, and liquidGL effects remain limited to strategic surfaces; fallback paths preserve usable rendering without advanced effects.  
-**Constraints**: Preserve existing task-list, task-creation, navigation, filtering, pagination, detail/evidence behavior, task submission payloads, Jira Orchestrate behavior, and Temporal contracts.  
+**Language/Version**: TypeScript/React for Mission Control UI; CSS for shared Mission Control styling; Python 3.12 remains present but is not expected for this story.
+**Primary Dependencies**: React, TanStack Query, existing Mission Control stylesheet, liquidGL enhancement wrapper, Vitest, Testing Library, PostCSS CSS inspection helpers.
+**Storage**: No new persistent storage.
+**Unit Testing**: Vitest via `npm run ui:test -- <paths>` or `./tools/test_unit.sh --ui-args <paths>`.
+**Integration Testing**: Rendered React entrypoint tests act as integration-style coverage for Mission Control UI behavior; no compose-backed integration is required because backend contracts and persistence are unchanged.
+**Target Platform**: Browser Mission Control UI.
+**Project Type**: Frontend runtime behavior, CSS resilience, and UI regression tests.
+**Performance Goals**: No additional network calls; heavy blur, glow, sticky glass, and liquidGL effects remain limited to strategic surfaces; fallback paths preserve usable rendering without advanced effects.
+**Constraints**: Preserve existing task-list, task-creation, navigation, filtering, pagination, detail/evidence behavior, task submission payloads, Jira Orchestrate behavior, and Temporal contracts.
 **Scale/Scope**: One story across Mission Control shared chrome, task workflow routes, dense content regions, liquidGL target surfaces, and reduced-motion/fallback modes.
 
 ## Constitution Check

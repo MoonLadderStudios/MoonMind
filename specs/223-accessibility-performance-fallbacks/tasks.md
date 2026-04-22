@@ -1,6 +1,6 @@
 # Tasks: Mission Control Accessibility, Performance, and Fallback Posture
 
-**Input**: Design documents from `specs/223-accessibility-performance-fallbacks/`  
+**Input**: Design documents from `specs/223-accessibility-performance-fallbacks/`
 **Prerequisites**: `plan.md`, `spec.md`, `research.md`, `contracts/accessibility-fallbacks.md`, `quickstart.md`
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
