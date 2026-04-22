@@ -111,10 +111,6 @@ from moonmind.workloads.tool_bridge import register_workload_tool_handlers
 
 logger = logging.getLogger(__name__)
 
-_TASK_TEMPLATE_SEED_DIR = (
-    Path(__file__).resolve().parents[3] / "api_service" / "data" / "task_step_templates"
-)
-
 _MANAGED_SESSION_LOG_FIELD_MAP: tuple[tuple[str, str], ...] = (
     ("taskRunId", "managed_session_task_run_id"),
     ("runtimeId", "managed_session_runtime_id"),
@@ -148,7 +144,9 @@ _OPENTELEMETRY_LOG_FORMAT = (
 
 
 def _task_template_seed_dir() -> Path:
-    return _TASK_TEMPLATE_SEED_DIR
+    import api_service
+
+    return Path(api_service.__file__).resolve().parent / "data" / "task_step_templates"
 
 
 def _template_slug_from_task(task_payload: Mapping[str, Any]) -> str:
@@ -205,27 +203,20 @@ async def _expand_task_template_for_child_run(
     )
     template_inputs = _coerce_mapping(task_payload.get("inputs"))
     catalog = TaskTemplateCatalogService(session)
+    expand_kwargs = {
+        "slug": template_slug,
+        "scope": template_scope,
+        "scope_ref": template_scope_ref,
+        "version": template_version,
+        "inputs": template_inputs,
+        "context": {},
+        "options": ExpandOptions(should_enforce_step_limit=True),
+    }
     try:
-        expanded = await catalog.expand_template(
-            slug=template_slug,
-            scope=template_scope,
-            scope_ref=template_scope_ref,
-            version=template_version,
-            inputs=template_inputs,
-            context={},
-            options=ExpandOptions(should_enforce_step_limit=True),
-        )
+        expanded = await catalog.expand_template(**expand_kwargs)
     except TaskTemplateNotFoundError:
         await catalog.sync_seed_templates(seed_dir=_task_template_seed_dir())
-        expanded = await catalog.expand_template(
-            slug=template_slug,
-            scope=template_scope,
-            scope_ref=template_scope_ref,
-            version=template_version,
-            inputs=template_inputs,
-            context={},
-            options=ExpandOptions(should_enforce_step_limit=True),
-        )
+        expanded = await catalog.expand_template(**expand_kwargs)
 
     expanded_steps = expanded.get("steps") if isinstance(expanded, Mapping) else None
     if not isinstance(expanded_steps, list) or not expanded_steps:

@@ -1,32 +1,17 @@
 [
   {
-    "id": 3121241459,
+    "id": 3121925034,
     "disposition": "addressed",
-    "rationale": "Replaced the exact long primary-button selector assertion with a PostCSS-backed rule lookup based on selector shape and declarations."
+    "rationale": "Resolved the seed template directory from the api_service package location instead of using brittle parents[3] traversal."
   },
   {
-    "id": 3121241462,
+    "id": 3121925036,
     "disposition": "addressed",
-    "rationale": "Consolidated the adjacent prefers-reduced-motion blocks for the running icon and liquidGL surfaces."
+    "rationale": "Extracted shared expand_template arguments into expand_kwargs and reused them for the retry after seed sync."
   },
   {
-    "id": 4151743717,
+    "id": 4152435413,
     "disposition": "not-applicable",
-    "rationale": "Review summary reported no direct code-change feedback; inline suggestions are tracked by their own comment ids."
-  },
-  {
-    "id": 3121245746,
-    "disposition": "addressed",
-    "rationale": "Added .route-nav a:focus-visible to the forced-colors focus outline fallback."
-  },
-  {
-    "id": 4151748283,
-    "disposition": "not-applicable",
-    "rationale": "Automated review preamble with no standalone remediation request; inline suggestions are tracked by their own comment ids."
-  },
-  {
-    "id": 3121245749,
-    "disposition": "addressed",
-    "rationale": "Added .live-logs-artifact-link:focus-visible to the forced-colors focus outline fallback."
+    "rationale": "Summary review comment only; its two actionable recommendations are tracked by inline comments 3121925034 and 3121925036."
   }
 ]
