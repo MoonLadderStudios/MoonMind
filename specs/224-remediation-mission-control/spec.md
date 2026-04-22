@@ -3,14 +3,14 @@
 **Feature Branch**: `224-remediation-mission-control`
 **Created**: 2026-04-22
 **Status**: Draft
-**Input**: Jira Orchestrate for MM-437.
+**Input**: Jira Orchestrate for MM-457 using `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
 
-Source story: STORY-007.
-Source summary: Show remediation creation, evidence, links, and approvals in Mission Control.
-Source Jira issue: unknown.
-Original brief reference: not provided.
+Source summary: Show task remediation creation, evidence, locks, approvals, and links in Mission Control.
+Source Jira issue: MM-457.
+Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
+Source coverage IDs: DESIGN-REQ-005, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022, DESIGN-REQ-023.
 
-Use the existing Jira Orchestrate workflow for this Jira issue. Do not run implementation inline inside the breakdown task.
+Use the Jira preset brief for MM-457 as the canonical Moon Spec orchestration input. Runtime mode is selected, so implementation and verification work should proceed from this artifact set.
 
 ## User Story - Remediation Mission Control Surfaces
 
@@ -43,7 +43,7 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 - This story implements Mission Control visibility and operator handoff surfaces only; it does not create a new remediation execution workflow type.
 - Existing remediation create, context artifact, and evidence-tool slices provide the canonical backend foundations where already implemented.
 - Approval decision persistence may reuse an existing audit/control-event surface if one is available; otherwise this story adds only the narrow API/UI contract needed for approval-gated remediation display and decision submission.
-- The source Jira issue key is unknown in the task instruction, so artifacts preserve MM-437 as the orchestration target while recording the issue field as unknown.
+- The source Jira issue key is MM-457; artifacts, implementation notes, verification output, commit text, and pull request metadata preserve that key.
 
 ## Source Design Requirements
 
@@ -72,7 +72,7 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 - **FR-010**: Missing remediation links, context artifacts, evidence refs, live-follow support, or approval audit rows MUST render explicit degraded or empty states without breaking task detail rendering.
 - **FR-011**: Remediation creation, link, evidence, and approval surfaces MUST retain Mission Control accessibility, reduced-motion, mobile containment, and fallback styling guarantees.
 - **FR-012**: Existing task-list, task-detail, artifact, timeline, live-log, and execution create behavior MUST remain unchanged for non-remediation executions.
-- **FR-013**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve MM-437, STORY-007, the source summary, and the unknown Jira issue status from the orchestration input.
+- **FR-013**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve MM-457, the source summary, and source coverage IDs DESIGN-REQ-005, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022, and DESIGN-REQ-023 from the orchestration input.
 
 ### Key Entities
 
@@ -93,4 +93,4 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 - **SC-005**: UI/API tests prove approval-gated remediation shows proposed action, preconditions, blast radius, risk tier, current decision, and permission-correct approve/reject controls.
 - **SC-006**: UI tests prove missing or degraded remediation data renders explicit empty/degraded states and does not break existing task detail rendering.
 - **SC-007**: Existing task-list, task-detail, artifact, live-log, and create-page tests continue to pass for non-remediation executions.
-- **SC-008**: Traceability verification confirms MM-437, STORY-007, source summary, and DESIGN-REQ-001 through DESIGN-REQ-008 are preserved in the MoonSpec artifacts.
+- **SC-008**: Traceability verification confirms MM-457, the source summary, source coverage IDs DESIGN-REQ-005, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022, DESIGN-REQ-023, and generated design mappings DESIGN-REQ-001 through DESIGN-REQ-008 are preserved in the MoonSpec artifacts.

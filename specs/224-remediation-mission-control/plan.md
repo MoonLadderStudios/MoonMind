@@ -1,11 +1,11 @@
 # Implementation Plan: Remediation Mission Control Surfaces
 
 **Branch**: `224-remediation-mission-control` | **Date**: 2026-04-22 | **Spec**: `specs/224-remediation-mission-control/spec.md`
-**Input**: Single-story Jira Orchestrate request for MM-437 / STORY-007.
+**Input**: Single-story Jira Orchestrate request for MM-457 from `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
 
 ## Summary
 
-Implement MM-437 by layering Mission Control UI and narrow API read/decision surfaces over the existing remediation create/link/context/evidence foundations. Existing backend work already accepts remediation create requests, persists remediation links, builds bounded context artifacts, and exposes typed evidence tools at service boundaries. This story adds operator-visible task-detail panels and create/approval flows: target pages show remediation creation and inbound links, remediation pages show target/evidence/approval state, evidence artifact refs use the existing artifact presentation path, and approval decisions stay permission-aware and audit-backed. Tests are frontend-first with focused backend route coverage where Mission Control needs a read or decision contract that does not already exist.
+Implement MM-457 by layering Mission Control UI and narrow API read/decision surfaces over the existing remediation create/link/context/evidence foundations. Existing backend work already accepts remediation create requests, persists remediation links, builds bounded context artifacts, and exposes typed evidence tools at service boundaries. This story adds operator-visible task-detail panels and create/approval flows: target pages show remediation creation and inbound links, remediation pages show target/evidence/approval state, evidence artifact refs use the existing artifact presentation path, and approval decisions stay permission-aware and audit-backed. Tests are frontend-first with focused backend route coverage where Mission Control needs a read or decision contract that does not already exist.
 
 ## Requirement Status
 
@@ -23,7 +23,7 @@ Implement MM-437 by layering Mission Control UI and narrow API read/decision sur
 | FR-010 | missing | No remediation degraded/empty states | Add degraded states for missing links, context, evidence, live follow, approval | UI unit |
 | FR-011 | implemented_unverified | MM-429 accessibility/fallback CSS exists; remediation-specific panels not covered | Add remediation panel accessibility/fallback assertions | UI unit |
 | FR-012 | implemented_unverified | Existing task-detail/create/artifact tests pass in prior specs | Preserve and rerun route regression tests | UI unit |
-| FR-013 | missing | This artifact set did not exist before MM-437 | Preserve traceability in specs/tasks/verification | final verify |
+| FR-013 | missing | This artifact set has been realigned to the canonical MM-457 orchestration input | Preserve traceability in specs/tasks/verification | final verify |
 | DESIGN-REQ-001 | missing | Desired-state doc only for Mission Control create entrypoints | Implement create action entrypoints | UI unit |
 | DESIGN-REQ-002 | missing | Desired-state doc only for remediation create choices | Implement create form/prefill choices | UI unit |
 | DESIGN-REQ-003 | partial | Backend link table/service exists; no Mission Control panel | Implement inbound panel/API | API unit + UI unit |
@@ -58,7 +58,7 @@ Implement MM-437 by layering Mission Control UI and narrow API read/decision sur
 - VIII. Modular Architecture: PASS. Work stays in task-detail UI, remediation API/read-model boundaries, and tests.
 - IX. Resilient by Default: PASS. Degraded states prevent missing evidence from breaking operator visibility.
 - X. Continuous Improvement: PASS. Remediation evidence and approvals make follow-up outcomes reviewable.
-- XI. Spec-Driven Development: PASS. This plan follows one MM-437 story with traceable requirements.
+- XI. Spec-Driven Development: PASS. This plan follows one MM-457 story with traceable requirements.
 - XII. Canonical Documentation Separation: PASS. Desired-state docs remain canonical; implementation work stays under specs and source/tests.
 - XIII. Pre-release Compatibility Policy: PASS. The story uses the canonical remediation contract and does not add compatibility aliases.
 

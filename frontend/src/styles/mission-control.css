@@ -2924,9 +2924,18 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 .td-run-summary-region,
 .td-steps-region,
 .td-artifacts-region,
+.td-remediation-region,
 .td-timeline-region,
 .td-observation-region {
   overflow-wrap: anywhere;
+}
+
+.td-remediation-list {
+  display: grid;
+  gap: 0.75rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .td-actions-region {

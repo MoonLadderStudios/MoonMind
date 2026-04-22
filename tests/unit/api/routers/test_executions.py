@@ -987,6 +987,203 @@ def test_create_remediation_convenience_route_rejects_malformed_remediation(
     service.create_execution.assert_not_awaited()
 
 
+def test_list_remediations_for_target_returns_compact_inbound_links(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    now = datetime.now(UTC)
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+    service.list_remediations_for_target.return_value = [
+        SimpleNamespace(
+            remediation_workflow_id="mm:remediation-1",
+            remediation_run_id="run-remediation-1",
+            target_workflow_id="mm:target-workflow",
+            target_run_id="run-target",
+            mode="snapshot_then_follow",
+            authority_mode="approval_gated",
+            status="awaiting_approval",
+            active_lock_scope="target_execution",
+            active_lock_holder="mm:remediation-1",
+            latest_action_summary="Proposed session interrupt",
+            outcome=None,
+            context_artifact_ref="art_context",
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+
+    response = test_client.get(
+        "/api/executions/mm:target-workflow/remediations",
+        params={"direction": "inbound"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "direction": "inbound",
+        "items": [
+            {
+                "remediationWorkflowId": "mm:remediation-1",
+                "remediationRunId": "run-remediation-1",
+                "targetWorkflowId": "mm:target-workflow",
+                "targetRunId": "run-target",
+                "mode": "snapshot_then_follow",
+                "authorityMode": "approval_gated",
+                "status": "awaiting_approval",
+                "activeLockScope": "target_execution",
+                "activeLockHolder": "mm:remediation-1",
+                "latestActionSummary": "Proposed session interrupt",
+                "resolution": None,
+                "contextArtifactRef": "art_context",
+                "approvalState": {
+                    "requestId": None,
+                    "actionKind": None,
+                    "riskTier": None,
+                    "preconditions": None,
+                    "blastRadius": None,
+                    "decision": "pending",
+                    "decisionActor": None,
+                    "decisionAt": None,
+                    "canDecide": False,
+                    "auditRef": None,
+                },
+                "createdAt": now.isoformat().replace("+00:00", "Z"),
+                "updatedAt": now.isoformat().replace("+00:00", "Z"),
+            }
+        ],
+    }
+    service.list_remediations_for_target.assert_awaited_once_with("mm:target-workflow")
+    service.list_remediation_targets.assert_not_called()
+
+
+def test_list_remediations_for_remediation_returns_compact_outbound_links(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    now = datetime.now(UTC)
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+    service.list_remediation_targets.return_value = [
+        SimpleNamespace(
+            remediation_workflow_id="mm:remediation-1",
+            remediation_run_id="run-remediation-1",
+            target_workflow_id="mm:target-workflow",
+            target_run_id="run-target",
+            mode="snapshot",
+            authority_mode="observe_only",
+            status="created",
+            active_lock_scope=None,
+            active_lock_holder=None,
+            latest_action_summary=None,
+            outcome="resolved",
+            context_artifact_ref=None,
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+
+    response = test_client.get(
+        "/api/executions/mm:remediation-1/remediations",
+        params={"direction": "outbound"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["direction"] == "outbound"
+    assert response.json()["items"][0] == {
+        "remediationWorkflowId": "mm:remediation-1",
+        "remediationRunId": "run-remediation-1",
+        "targetWorkflowId": "mm:target-workflow",
+        "targetRunId": "run-target",
+        "mode": "snapshot",
+        "authorityMode": "observe_only",
+        "status": "created",
+        "activeLockScope": None,
+        "activeLockHolder": None,
+        "latestActionSummary": None,
+        "resolution": "resolved",
+        "contextArtifactRef": None,
+        "approvalState": None,
+        "createdAt": now.isoformat().replace("+00:00", "Z"),
+        "updatedAt": now.isoformat().replace("+00:00", "Z"),
+    }
+    service.list_remediation_targets.assert_awaited_once_with("mm:remediation-1")
+    service.list_remediations_for_target.assert_not_called()
+
+
+def test_list_remediations_rejects_unknown_direction(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+
+    response = test_client.get(
+        "/api/executions/mm:target-workflow/remediations",
+        params={"direction": "sideways"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_remediation_direction"
+
+
+def test_record_remediation_approval_decision_calls_trusted_service(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+    service.record_remediation_approval_decision.return_value = {
+        "accepted": True,
+        "workflowId": "mm:remediation-1",
+        "requestId": "approval-1",
+        "decision": "approved",
+    }
+
+    response = test_client.post(
+        "/api/executions/mm:remediation-1/remediation/approvals/approval-1",
+        json={"decision": "approved", "comment": "Reviewed."},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "accepted": True,
+        "workflowId": "mm:remediation-1",
+        "requestId": "approval-1",
+        "decision": "approved",
+    }
+    service.record_remediation_approval_decision.assert_awaited_once_with(
+        remediation_workflow_id="mm:remediation-1",
+        request_id="approval-1",
+        decision="approved",
+        comment="Reviewed.",
+        actor=user.email,
+    )
+
+
+def test_record_remediation_approval_decision_rejects_unknown_decision(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+
+    response = test_client.post(
+        "/api/executions/mm:remediation-1/remediation/approvals/approval-1",
+        json={"decision": "maybe"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == (
+        "invalid_remediation_approval_decision"
+    )
+    service.record_remediation_approval_decision.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

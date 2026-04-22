@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 from functools import lru_cache
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import Client
@@ -121,6 +121,54 @@ _GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(
     r"^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+$",
     re.IGNORECASE,
 )
+
+
+class RemediationApprovalStateModel(BaseModel):
+    requestId: str | None = None
+    actionKind: str | None = None
+    riskTier: str | None = None
+    preconditions: str | None = None
+    blastRadius: str | None = None
+    decision: str
+    decisionActor: str | None = None
+    decisionAt: datetime | None = None
+    canDecide: bool = False
+    auditRef: str | None = None
+
+
+class RemediationLinkSummaryModel(BaseModel):
+    remediationWorkflowId: str
+    remediationRunId: str
+    targetWorkflowId: str
+    targetRunId: str
+    mode: str
+    authorityMode: str
+    status: str
+    activeLockScope: str | None = None
+    activeLockHolder: str | None = None
+    latestActionSummary: str | None = None
+    resolution: str | None = None
+    contextArtifactRef: str | None = None
+    approvalState: RemediationApprovalStateModel | None = None
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class RemediationLinksResponseModel(BaseModel):
+    direction: str
+    items: list[RemediationLinkSummaryModel]
+
+
+class RemediationApprovalDecisionRequest(BaseModel):
+    decision: str
+    comment: str | None = None
+
+
+class RemediationApprovalDecisionResponse(BaseModel):
+    accepted: bool
+    workflowId: str
+    requestId: str
+    decision: str
 _PR_URL_CANDIDATE_SOURCES = (
     ("memo", "pull_request_url"),
     ("memo", "pullRequestUrl"),
@@ -3445,6 +3493,109 @@ async def create_remediation_execution(
         user=user,
         session=session,
     )
+
+
+def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryModel:
+    authority_mode = str(getattr(link, "authority_mode", "") or "")
+    status_value = str(getattr(link, "status", "") or "")
+    approval_state: RemediationApprovalStateModel | None = None
+    if authority_mode == "approval_gated":
+        approval_state = RemediationApprovalStateModel(
+            decision=(
+                "pending"
+                if status_value in {"awaiting_approval", "approval_required"}
+                else "not_required"
+            ),
+            canDecide=False,
+        )
+
+    return RemediationLinkSummaryModel(
+        remediationWorkflowId=str(getattr(link, "remediation_workflow_id", "")),
+        remediationRunId=str(getattr(link, "remediation_run_id", "")),
+        targetWorkflowId=str(getattr(link, "target_workflow_id", "")),
+        targetRunId=str(getattr(link, "target_run_id", "")),
+        mode=str(getattr(link, "mode", "")),
+        authorityMode=authority_mode,
+        status=status_value,
+        activeLockScope=getattr(link, "active_lock_scope", None),
+        activeLockHolder=getattr(link, "active_lock_holder", None),
+        latestActionSummary=getattr(link, "latest_action_summary", None),
+        resolution=getattr(link, "outcome", None),
+        contextArtifactRef=getattr(link, "context_artifact_ref", None),
+        approvalState=approval_state,
+        createdAt=getattr(link, "created_at"),
+        updatedAt=getattr(link, "updated_at"),
+    )
+
+
+@router.get(
+    "/{workflow_id}/remediations",
+    response_model=RemediationLinksResponseModel,
+)
+async def list_execution_remediations(
+    workflow_id: str,
+    direction: str = Query("inbound"),
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> RemediationLinksResponseModel:
+    if direction not in {"inbound", "outbound"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_remediation_direction",
+                "message": "direction must be 'inbound' or 'outbound'.",
+            },
+        )
+
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    if direction == "inbound":
+        links = await service.list_remediations_for_target(workflow_id)
+    else:
+        links = await service.list_remediation_targets(workflow_id)
+
+    return RemediationLinksResponseModel(
+        direction=direction,
+        items=[_serialize_remediation_link_summary(link) for link in links],
+    )
+
+
+@router.post(
+    "/{workflow_id}/remediation/approvals/{request_id}",
+    response_model=RemediationApprovalDecisionResponse,
+)
+async def record_remediation_approval_decision(
+    workflow_id: str,
+    request_id: str,
+    payload: RemediationApprovalDecisionRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> RemediationApprovalDecisionResponse:
+    if payload.decision not in {"approved", "rejected"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_remediation_approval_decision",
+                "message": "decision must be 'approved' or 'rejected'.",
+            },
+        )
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    try:
+        result = await service.record_remediation_approval_decision(
+            remediation_workflow_id=workflow_id,
+            request_id=request_id,
+            decision=payload.decision,
+            comment=payload.comment,
+            actor=getattr(user, "email", None) or str(getattr(user, "id", "")),
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_remediation_approval_decision",
+                "message": str(exc),
+            },
+        ) from exc
+    return RemediationApprovalDecisionResponse.model_validate(result)
 
 
 @router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)

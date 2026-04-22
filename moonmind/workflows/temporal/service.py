@@ -527,6 +527,42 @@ class TemporalExecutionService:
         )
         return await self._scalars_all(stmt)
 
+    async def record_remediation_approval_decision(
+        self,
+        *,
+        remediation_workflow_id: str,
+        request_id: str,
+        decision: str,
+        comment: str | None,
+        actor: str | None,
+    ) -> dict[str, Any]:
+        if decision not in {"approved", "rejected"}:
+            raise TemporalExecutionValidationError(
+                "decision must be 'approved' or 'rejected'."
+            )
+        record = await self._require_source_execution(remediation_workflow_id)
+        detail_parts = [f"requestId={request_id}"]
+        if actor:
+            detail_parts.append(f"actor={actor}")
+        if comment:
+            detail_parts.append(f"comment={comment[:500]}")
+        self._append_intervention_audit(
+            record,
+            action=f"remediation_approval_{decision}",
+            transport="api",
+            summary=f"Remediation approval {decision}.",
+            detail="; ".join(detail_parts),
+        )
+        await self._session.commit()
+        await self._session.refresh(record)
+        await self._sync_projection_best_effort(record)
+        return {
+            "accepted": True,
+            "workflowId": remediation_workflow_id,
+            "requestId": request_id,
+            "decision": decision,
+        }
+
     async def list_prerequisites(
         self, dependent_workflow_id: str
     ) -> list[TemporalExecutionDependency]:

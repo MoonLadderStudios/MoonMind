@@ -624,6 +624,52 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
 
 
 @pytest.mark.asyncio
+async def test_record_remediation_approval_decision_appends_bounded_audit(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        mock_client_adapter.start_workflow.return_value = SimpleNamespace(
+            run_id="remediation-temporal-run"
+        )
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        result = await service.record_remediation_approval_decision(
+            remediation_workflow_id=remediation.workflow_id,
+            request_id="approval-1",
+            decision="approved",
+            comment="Reviewed blast radius.",
+            actor="ops@example.com",
+        )
+
+        assert result == {
+            "accepted": True,
+            "workflowId": remediation.workflow_id,
+            "requestId": "approval-1",
+            "decision": "approved",
+        }
+        record = await service.describe_execution(remediation.workflow_id)
+        audit = record.memo["intervention_audit"]
+        assert audit[-1]["action"] == "remediation_approval_approved"
+        assert audit[-1]["transport"] == "api"
+        assert audit[-1]["summary"] == "Remediation approval approved."
+        assert "approval-1" in audit[-1]["detail"]
+        assert "ops@example.com" in audit[-1]["detail"]
+
+
+@pytest.mark.asyncio
 async def test_create_execution_persists_supplied_matching_remediation_run_id(
     tmp_path, mock_client_adapter
 ):

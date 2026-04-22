@@ -1409,6 +1409,173 @@ describe('Task Detail Entrypoint', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
   });
 
+  it('renders remediation create action, relationships, evidence, and degraded states', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Failed target task',
+      summary: 'Needs remediation.',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      repository: 'MoonLadderStudios/MoonMind',
+      createdAt: '2026-04-22T00:00:00Z',
+      updatedAt: '2026-04-22T00:00:01Z',
+      actions: { canSetTitle: true },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/remediations?direction=inbound')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            direction: 'inbound',
+            items: [
+              {
+                remediationWorkflowId: 'mm:remediation-1',
+                remediationRunId: 'run-remediation-1',
+                targetWorkflowId: 'test-123',
+                targetRunId: '01-run',
+                mode: 'snapshot_then_follow',
+                authorityMode: 'approval_gated',
+                status: 'awaiting_approval',
+                activeLockScope: 'target_execution',
+                activeLockHolder: 'mm:remediation-1',
+                latestActionSummary: 'Proposed session interrupt',
+                resolution: null,
+                contextArtifactRef: 'art_context',
+                approvalState: { requestId: 'approval-1', decision: 'pending', canDecide: true },
+                createdAt: '2026-04-22T00:00:02Z',
+                updatedAt: '2026-04-22T00:00:03Z',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/remediations?direction=outbound')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            direction: 'outbound',
+            items: [
+              {
+                remediationWorkflowId: 'test-123',
+                remediationRunId: '01-run',
+                targetWorkflowId: 'mm:target-1',
+                targetRunId: 'run-target',
+                mode: 'snapshot',
+                authorityMode: 'observe_only',
+                status: 'created',
+                contextArtifactRef: null,
+                approvalState: null,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/executions/default/test-123/01-run/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            artifacts: [
+              {
+                artifactId: 'art_context',
+                contentType: 'application/json',
+                sizeBytes: 128,
+                status: 'complete',
+                metadata: { artifact_type: 'remediation.context' },
+                links: [],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/remediation') && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ workflowId: 'mm:remediation-created' }),
+        } as Response);
+      }
+      if (url.includes('/executions/mm%3Aremediation-1/remediation/approvals/approval-1') && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            accepted: true,
+            workflowId: 'mm:remediation-1',
+            requestId: 'approval-1',
+            decision: 'approved',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={actionsPayload} />);
+
+    expect(await screen.findByRole('button', { name: 'Create remediation task' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Remediation' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Remediation Tasks' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Remediation Target' })).toBeTruthy();
+    expect(screen.getByText('mm:remediation-1')).toBeTruthy();
+    expect(screen.getByText('mm:target-1')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
+    expect(screen.getByText('Context')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(
+      '/api/artifacts/art_context/download',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create remediation task' }));
+
+    await waitFor(() => {
+      const remediationCreateCall = fetchSpy.mock.calls.find(
+        ([url, init]) => String(url) === '/api/executions/test-123/remediation' && init?.method === 'POST',
+      );
+      expect(remediationCreateCall).toBeTruthy();
+      expect(JSON.parse(String(remediationCreateCall?.[1]?.body))).toMatchObject({
+        repository: 'MoonLadderStudios/MoonMind',
+        remediation: {
+          mode: 'snapshot_then_follow',
+          authorityMode: 'approval_gated',
+          target: { runId: '01-run' },
+          evidencePolicy: {
+            includeStepLedger: true,
+            includeDiagnostics: true,
+            tailLines: 2000,
+          },
+          trigger: { type: 'manual' },
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve remediation action' }));
+
+    await waitFor(() => {
+      const approvalCall = fetchSpy.mock.calls.find(
+        ([url, init]) =>
+          String(url) === '/api/executions/mm%3Aremediation-1/remediation/approvals/approval-1' &&
+          init?.method === 'POST',
+      );
+      expect(approvalCall).toBeTruthy();
+      expect(JSON.parse(String(approvalCall?.[1]?.body))).toEqual({
+        decision: 'approved',
+      });
+    });
+  });
+
   it('renders task detail as separated matte evidence and action regions', async () => {
     const mockExecution = {
       taskId: 'test-123',
