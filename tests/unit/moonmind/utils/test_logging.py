@@ -9,6 +9,7 @@ from moonmind.utils.logging import (
     _is_sensitive_key,
     _secret_variants,
     redact_profile_file_templates,
+    redact_sensitive_payload,
     scrub_github_tokens,
 )
 
@@ -155,3 +156,12 @@ def test_redact_profile_file_templates_redacts_nested_content_fields():
     assert result[0]["content_template"]["model"] == "gpt-test"
     assert result[1]["contentTemplate"]["token"] == "[REDACTED]"
     assert result[2]["content"] == "[REDACTED]"
+
+
+def test_redact_sensitive_payload_preserves_auth_readiness_metadata_string():
+    payload = {
+        "auth_readiness": "launch_ready",
+        "nested": {"authreadiness": "connected"},
+    }
+
+    assert redact_sensitive_payload(payload) == payload
