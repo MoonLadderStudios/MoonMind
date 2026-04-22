@@ -1,22 +1,27 @@
 [
   {
-    "id": 4150774709,
+    "id": 3120694528,
+    "disposition": "addressed",
+    "rationale": "Re-indented the FactGroup block inside td-facts-region so children match the new nesting level."
+  },
+  {
+    "id": 3120694532,
+    "disposition": "addressed",
+    "rationale": "Added .td-facts-region to the overflow-wrap:anywhere rule for long workflow and run metadata."
+  },
+  {
+    "id": 4151166434,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary; the specific actionable review comments were handled individually."
+    "rationale": "Summary review; its two actionable findings are tracked by review comments 3120694528 and 3120694532."
   },
   {
-    "id": 3120307347,
-    "disposition": "addressed",
-    "rationale": "Renamed the feature directory to specs/219-mission-control-interaction-language and updated .specify/feature.json plus internal references to follow global max+1 spec numbering after merging current main."
+    "id": 4292917999,
+    "disposition": "not-applicable",
+    "rationale": "Review trigger comment only; no requested code change."
   },
   {
-    "id": 3120307352,
-    "disposition": "addressed",
-    "rationale": "Updated FR-011 in the implementation plan from implemented_unverified to verified."
-  },
-  {
-    "id": 3120307361,
-    "disposition": "addressed",
-    "rationale": "Updated the feature specification status from Draft to Implemented."
+    "id": 4292927279,
+    "disposition": "not-applicable",
+    "rationale": "Informational Codex review result with no actionable finding."
   }
 ]

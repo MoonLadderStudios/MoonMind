@@ -2880,6 +2880,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   box-shadow: 0 16px 36px -30px rgb(var(--mm-ink) / 0.48);
 }
 
+.td-facts-region,
 .td-run-summary-region,
 .td-steps-region,
 .td-artifacts-region,

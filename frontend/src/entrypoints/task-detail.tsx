@@ -3439,77 +3439,77 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             />
 
             <FactGroup title="Runtime">
-            {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
-            {execution.model ? (
-              <Fact label="Model">
-                <code className="text-xs">{execution.model}</code>
-              </Fact>
-            ) : null}
-            {execution.profileId ? (
-              <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
-            ) : null}
-            {execution.effort ? <Fact label="Effort">{execution.effort}</Fact> : null}
-          </FactGroup>
+              {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
+              {execution.model ? (
+                <Fact label="Model">
+                  <code className="text-xs">{execution.model}</code>
+                </Fact>
+              ) : null}
+              {execution.profileId ? (
+                <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
+              ) : null}
+              {execution.effort ? <Fact label="Effort">{execution.effort}</Fact> : null}
+            </FactGroup>
 
-          <FactGroup title="Git & Publish">
-            {execution.repository ? (
-              <Fact label="Repository">
-                <code className="text-xs break-all">{execution.repository}</code>
-              </Fact>
-            ) : null}
-            {execution.publishMode ? (
-              <Fact label="Publish Mode">
-                <code className="text-xs">{execution.publishMode}</code>
-              </Fact>
-            ) : null}
-            {execution.startingBranch ? (
-              <Fact label="Starting Branch">
-                <code className="text-xs break-all">{execution.startingBranch}</code>
-              </Fact>
-            ) : null}
-            {execution.targetBranch ? (
-              <Fact label="Target Branch">
-                <code className="text-xs break-all">{execution.targetBranch}</code>
-              </Fact>
-            ) : null}
-            <Fact label="Merge Automation">{execution.mergeAutomationSelected ? 'Selected' : '—'}</Fact>
-            {prUrl ? (
-              <Fact label="PR Link">
-                <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">
-                  {prUrl}
-                </a>
-              </Fact>
-            ) : null}
-          </FactGroup>
+            <FactGroup title="Git & Publish">
+              {execution.repository ? (
+                <Fact label="Repository">
+                  <code className="text-xs break-all">{execution.repository}</code>
+                </Fact>
+              ) : null}
+              {execution.publishMode ? (
+                <Fact label="Publish Mode">
+                  <code className="text-xs">{execution.publishMode}</code>
+                </Fact>
+              ) : null}
+              {execution.startingBranch ? (
+                <Fact label="Starting Branch">
+                  <code className="text-xs break-all">{execution.startingBranch}</code>
+                </Fact>
+              ) : null}
+              {execution.targetBranch ? (
+                <Fact label="Target Branch">
+                  <code className="text-xs break-all">{execution.targetBranch}</code>
+                </Fact>
+              ) : null}
+              <Fact label="Merge Automation">{execution.mergeAutomationSelected ? 'Selected' : '—'}</Fact>
+              {prUrl ? (
+                <Fact label="PR Link">
+                  <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">
+                    {prUrl}
+                  </a>
+                </Fact>
+              ) : null}
+            </FactGroup>
 
-          <FactGroup title="Lifecycle">
-            <Fact label="Created">{formatWhen(execution.createdAt)}</Fact>
-            <Fact label="Started">{formatWhen(execution.startedAt)}</Fact>
-            <Fact label="Updated">{formatWhen(execution.updatedAt)}</Fact>
-            <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
-            {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
-            {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
-          </FactGroup>
+            <FactGroup title="Lifecycle">
+              <Fact label="Created">{formatWhen(execution.createdAt)}</Fact>
+              <Fact label="Started">{formatWhen(execution.startedAt)}</Fact>
+              <Fact label="Updated">{formatWhen(execution.updatedAt)}</Fact>
+              <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
+              {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
+              {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
+            </FactGroup>
 
-          <FactGroup title="Temporal">
-            <Fact label="Temporal Status">{execution.temporalStatus || '—'}</Fact>
-            <Fact label="Current State">{execution.rawState || execution.state || '—'}</Fact>
-            {execution.closeStatus ? <Fact label="Close Status">{execution.closeStatus}</Fact> : null}
-            <Fact label="Source">Temporal</Fact>
-            <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
-            <Fact label="Entry">{execution.entry || '—'}</Fact>
-            <Fact label="Latest Run">
-              <code className="text-xs break-all">{latestRunId || '—'}</code>
-            </Fact>
-            {resolvedTaskRunId ? (
-              <Fact label="Task Run">
-                <code className="text-xs break-all">{resolvedTaskRunId}</code>
+            <FactGroup title="Temporal">
+              <Fact label="Temporal Status">{execution.temporalStatus || '—'}</Fact>
+              <Fact label="Current State">{execution.rawState || execution.state || '—'}</Fact>
+              {execution.closeStatus ? <Fact label="Close Status">{execution.closeStatus}</Fact> : null}
+              <Fact label="Source">Temporal</Fact>
+              <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
+              <Fact label="Entry">{execution.entry || '—'}</Fact>
+              <Fact label="Latest Run">
+                <code className="text-xs break-all">{latestRunId || '—'}</code>
               </Fact>
-            ) : null}
-            <Fact label="Workflow ID">
-              <code className="text-xs break-all">{workflowId}</code>
-            </Fact>
-          </FactGroup>
+              {resolvedTaskRunId ? (
+                <Fact label="Task Run">
+                  <code className="text-xs break-all">{resolvedTaskRunId}</code>
+                </Fact>
+              ) : null}
+              <Fact label="Workflow ID">
+                <code className="text-xs break-all">{workflowId}</code>
+              </Fact>
+            </FactGroup>
           </div>
 
           {runSummary ? (
