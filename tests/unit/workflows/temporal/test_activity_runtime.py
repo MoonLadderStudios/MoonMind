@@ -665,18 +665,32 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
         "status",
         "target",
         "runner_profile_id",
-        "stdout_artifact_ref",
-        "stderr_artifact_ref",
-        "diagnostics_artifact_ref",
-        "summary_artifact_ref",
-        "findings_artifact_ref",
+        "launch_plan",
+    ]
+    assert output_schema["properties"]["status"] == {
+        "type": "string",
+        "enum": ["launch_plan_ready"],
+    }
+    launch_plan_schema = output_schema["properties"]["launch_plan"]
+    assert launch_plan_schema["required"] == [
+        "profile_id",
+        "container_name",
+        "image",
+        "entrypoint",
+        "workdir",
+        "network_policy",
+        "linux_capabilities",
+        "devices",
+        "labels",
+        "cleanup_selector",
     ]
     assert {
-        "evidence_bundle_artifact_ref",
-        "provider_snapshot_artifact_ref",
-        "findings_count",
-        "confirmed_findings_count",
-    }.issubset(output_schema["properties"])
+        "mounts",
+        "env_keys",
+        "resources",
+        "timeout_seconds",
+        "cleanup",
+    }.issubset(launch_plan_schema["properties"])
 
     assert definition["policies"] == {
         "timeouts": {
