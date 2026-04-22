@@ -220,8 +220,16 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         "execute_child_workflow",
         fake_execute_child_workflow,
     )
-    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
-    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "upsert_search_attributes",
@@ -258,6 +266,114 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         "name": "pr-resolver",
         "version": "1.0",
     }
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_tracks_current_head_when_checks_are_still_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    readiness_calls = 0
+    child_workflow_ids: list[str] = []
+    child_payloads: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        nonlocal readiness_calls
+        if activity_type != "merge_automation.evaluate_readiness":
+            raise RuntimeError(activity_type)
+        readiness_calls += 1
+        if readiness_calls == 1:
+            return {
+                "headSha": "def456",
+                "ready": False,
+                "pullRequestOpen": True,
+                "policyAllowed": True,
+                "checksComplete": False,
+                "checksPassing": False,
+                "automatedReviewComplete": True,
+                "jiraStatusAllowed": True,
+                "blockers": [
+                    {
+                        "kind": "checks_running",
+                        "summary": "Required checks are still running.",
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            }
+        return {
+            "headSha": "def456",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.Run"
+        child_payloads.append(payload)
+        child_workflow_ids.append(str(kwargs["id"]))
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    async def fake_wait_condition(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    expected_resolver_id = deterministic_resolver_idempotency_key(
+        parent_workflow_id="wf-parent",
+        repo="MoonLadderStudios/MoonMind",
+        pr_number=350,
+        head_sha="def456",
+    )
+    assert readiness_calls == 2
+    assert result["status"] == "merged"
+    assert result["latestHeadSha"] == "def456"
+    assert result["blockers"] == []
+    assert child_workflow_ids == [f"{expected_resolver_id}:1"]
+    assert child_payloads[0]["initial_parameters"]["mergeGate"]["headSha"] == "def456"
 
 
 @pytest.mark.asyncio
