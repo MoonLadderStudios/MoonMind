@@ -2788,9 +2788,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
     animation: none !important;
     opacity: 1;
   }
-}
 
-@media (prefers-reduced-motion: reduce) {
   .surface--liquidgl-hero,
   .queue-floating-bar--liquid-glass {
     transition-duration: 0s !important;
@@ -2816,6 +2814,8 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 @media (forced-colors: active) {
   button:focus-visible,
   .button:focus-visible,
+  .route-nav a:focus-visible,
+  .live-logs-artifact-link:focus-visible,
   .queue-action:focus-visible,
   .queue-submit-primary:focus-visible {
     outline: 2px solid ButtonText;

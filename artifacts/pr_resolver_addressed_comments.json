@@ -1,27 +1,32 @@
 [
   {
-    "id": 3120694528,
+    "id": 3121241459,
     "disposition": "addressed",
-    "rationale": "Re-indented the FactGroup block inside td-facts-region so children match the new nesting level."
+    "rationale": "Replaced the exact long primary-button selector assertion with a PostCSS-backed rule lookup based on selector shape and declarations."
   },
   {
-    "id": 3120694532,
+    "id": 3121241462,
     "disposition": "addressed",
-    "rationale": "Added .td-facts-region to the overflow-wrap:anywhere rule for long workflow and run metadata."
+    "rationale": "Consolidated the adjacent prefers-reduced-motion blocks for the running icon and liquidGL surfaces."
   },
   {
-    "id": 4151166434,
+    "id": 4151743717,
     "disposition": "not-applicable",
-    "rationale": "Summary review; its two actionable findings are tracked by review comments 3120694528 and 3120694532."
+    "rationale": "Review summary reported no direct code-change feedback; inline suggestions are tracked by their own comment ids."
   },
   {
-    "id": 4292917999,
-    "disposition": "not-applicable",
-    "rationale": "Review trigger comment only; no requested code change."
+    "id": 3121245746,
+    "disposition": "addressed",
+    "rationale": "Added .route-nav a:focus-visible to the forced-colors focus outline fallback."
   },
   {
-    "id": 4292927279,
+    "id": 4151748283,
     "disposition": "not-applicable",
-    "rationale": "Informational Codex review result with no actionable finding."
+    "rationale": "Automated review preamble with no standalone remediation request; inline suggestions are tracked by their own comment ids."
+  },
+  {
+    "id": 3121245749,
+    "disposition": "addressed",
+    "rationale": "Added .live-logs-artifact-link:focus-visible to the forced-colors focus outline fallback."
   }
 ]

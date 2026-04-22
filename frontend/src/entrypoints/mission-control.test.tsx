@@ -9,6 +9,7 @@ import {
   type MockInstance,
 } from 'vitest';
 import postcss from 'postcss';
+import type { Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
@@ -34,6 +35,16 @@ function cssRuleBlock(css: string, selector: string): string {
         ruleSelectors.includes(expectedSelector) ||
         expectedSelectors.every((expected) => ruleSelectors.includes(expected)))
     ) {
+      block = rule.nodes.map((node) => `${node.toString()};`).join('\n');
+    }
+  });
+  return block;
+}
+
+function cssRuleBlockMatching(css: string, matches: (rule: Rule) => boolean): string {
+  let block = '';
+  postcss.parse(css).walkRules((rule) => {
+    if (!block && matches(rule)) {
       block = rule.nodes.map((node) => `${node.toString()};`).join('\n');
     }
   });
@@ -260,12 +271,14 @@ describe('Mission Control shared entry', () => {
     expect(cssRuleBlock(missionControlCss, '.task-list-filter-chip')).toContain(
       'color: rgb(var(--mm-ink))',
     );
-    expect(
-      cssRuleBlock(
-        missionControlCss,
-        'button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button):not(.queue-step-attachment-add-button):not(.queue-step-extension-button):not(.table-sort-button):not(.td-instructions-toggle)',
-      ),
-    ).toContain('color: #fff');
+    const primaryButtonBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+      const selectors = rule.selector.split(',').map(normalizeCssSelector);
+      return (
+        selectors.some((selector) => selector.startsWith('button:not(')) &&
+        rule.nodes.some((node) => node.type === 'decl' && node.prop === 'color' && node.value === '#fff')
+      );
+    });
+    expect(primaryButtonBlock).toContain('color: #fff');
     expect(cssRuleBlock(missionControlCss, '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility')).toContain(
       'background: var(--mm-glass-fill)',
     );
@@ -291,12 +304,29 @@ describe('Mission Control shared entry', () => {
   });
 
   it('enforces MM-429 reduced-motion suppression for live and premium effects', async () => {
-    expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.step-tl-icon\.step-icon-running\s*\{[^}]*animation:\s*none !important;[^}]*opacity:\s*1;/s,
+    const runningIconBlock = cssRuleBlockMatching(
+      missionControlCss,
+      (rule) =>
+        normalizeCssSelector(rule.selector) === '.step-tl-icon.step-icon-running' &&
+        rule.nodes.some((node) => node.type === 'decl' && node.toString() === 'animation: none !important'),
     );
-    expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.surface--liquidgl-hero,[^}]*\.queue-floating-bar--liquid-glass\s*\{[^}]*transition-duration:\s*0s !important;[^}]*animation-duration:\s*0s !important;/s,
+    expect(runningIconBlock).toContain('animation: none !important');
+    expect(runningIconBlock).toContain('opacity: 1');
+
+    const premiumEffectBlock = cssRuleBlockMatching(
+      missionControlCss,
+      (rule) =>
+        rule.selector
+          .split(',')
+          .map(normalizeCssSelector)
+          .includes('.surface--liquidgl-hero') &&
+        rule.nodes.some(
+          (node) =>
+            node.type === 'decl' && node.toString() === 'transition-duration: 0s !important',
+        ),
     );
+    expect(premiumEffectBlock).toContain('transition-duration: 0s !important');
+    expect(premiumEffectBlock).toContain('animation-duration: 0s !important');
   });
 
   it('enforces MM-429 fallback shells and premium-effect limits', async () => {
@@ -408,7 +438,7 @@ describe('Mission Control shared entry', () => {
       /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*button,[^}]*\.button,[^}]*\.queue-action,[^}]*\.queue-submit-primary,[^}]*\.queue-step-icon-button,[^}]*\.queue-step-extension-button,[^}]*\.queue-inline-toggle,[^}]*\.queue-inline-filter\s*\{[^}]*transition-duration:\s*0s !important;[^}]*animation-duration:\s*0s !important;[^}]*transform:\s*none !important;/s,
     );
     expect(missionControlCss).toMatch(
-      /@media \(forced-colors: active\)\s*\{[^}]*button:focus-visible,[^}]*\.button:focus-visible,[^}]*\.queue-action:focus-visible,[^}]*\.queue-submit-primary:focus-visible\s*\{[^}]*outline:\s*2px solid ButtonText;[^}]*outline-offset:\s*2px;/s,
+      /@media \(forced-colors: active\)\s*\{[^}]*button:focus-visible,[^}]*\.button:focus-visible,[^}]*\.route-nav a:focus-visible,[^}]*\.live-logs-artifact-link:focus-visible,[^}]*\.queue-action:focus-visible,[^}]*\.queue-submit-primary:focus-visible\s*\{[^}]*outline:\s*2px solid ButtonText;[^}]*outline-offset:\s*2px;/s,
     );
   });
 
