@@ -294,10 +294,6 @@ class MoonMindMergeAutomationWorkflow:
             if kind == "stale_revision":
                 stale_seen = True
                 continue
-            if kind in TERMINAL_BLOCKER_KINDS or not bool(
-                getattr(blocker, "retryable", False)
-            ):
-                return False
         return stale_seen
 
     def _refresh_current_head_for_stale_wait(

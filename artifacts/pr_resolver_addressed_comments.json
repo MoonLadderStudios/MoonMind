@@ -1,32 +1,17 @@
 [
   {
-    "id": 3121241459,
+    "id": 3121533585,
     "disposition": "addressed",
-    "rationale": "Replaced the exact long primary-button selector assertion with a PostCSS-backed rule lookup based on selector shape and declarations."
+    "rationale": "Changed pre-resolver head adoption to trigger on stale_revision alone and added a regression test for already-ready updated heads."
   },
   {
-    "id": 3121241462,
+    "id": 3121533589,
     "disposition": "addressed",
-    "rationale": "Consolidated the adjacent prefers-reduced-motion blocks for the running icon and liquidGL surfaces."
+    "rationale": "Updated PrMergeAutomation docs to state that pre-resolver adoption happens whenever the published head changes, including already-ready heads."
   },
   {
-    "id": 4151743717,
-    "disposition": "not-applicable",
-    "rationale": "Review summary reported no direct code-change feedback; inline suggestions are tracked by their own comment ids."
-  },
-  {
-    "id": 3121245746,
+    "id": 4152015530,
     "disposition": "addressed",
-    "rationale": "Added .route-nav a:focus-visible to the forced-colors focus outline fallback."
-  },
-  {
-    "id": 4151748283,
-    "disposition": "not-applicable",
-    "rationale": "Automated review preamble with no standalone remediation request; inline suggestions are tracked by their own comment ids."
-  },
-  {
-    "id": 3121245749,
-    "disposition": "addressed",
-    "rationale": "Added .live-logs-artifact-link:focus-visible to the forced-colors focus outline fallback."
+    "rationale": "Addressed the review summary by updating both implementation and documentation for unrestricted pre-resolver head adoption."
   }
 ]
