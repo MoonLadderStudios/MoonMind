@@ -5,53 +5,53 @@
 
 ## Summary
 
-Implement MM-455 by extending the existing remediation action authority boundary with mutation guard decisions. The current runtime already has remediation links, context/evidence tools, action authority decisions, in-memory idempotency for duplicate request shapes, and a pre-action target-health read. This story adds explicit mutation lock state, action-ledger entries, retry/cooldown budgets, nested-remediation policy checks, and target-freshness decisions to the same service boundary so side-effecting actions are allowed only after guard evaluation. Unit tests cover the guard service directly; service-boundary tests exercise linked remediation executions, current target state, and redaction-safe serialized outputs.
+Implement MM-455 by extending the existing remediation action authority boundary with mutation guard decisions. The current runtime has remediation links, context/evidence tools, action authority decisions, in-memory idempotency for duplicate request shapes, a pre-action target-health read, and now explicit mutation lock state, action-ledger entries, retry/cooldown budgets, nested-remediation policy checks, and target-freshness decisions at the same service boundary. Side-effecting actions are allowed only after guard evaluation. Unit tests cover the guard service directly; service-boundary tests exercise linked remediation executions, current target state, and redaction-safe serialized outputs.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | implemented_unverified | `TemporalExecutionRemediationLink` stores target workflow/run | verify in guard tests | unit |
-| FR-002 | implemented_verified | `RemediationEvidenceToolService.prepare_action_request()` re-reads bounded target health | keep as input to guard | unit |
-| FR-003 | implemented_verified | `RemediationActionAuthorityService` denies unsupported/raw action kinds | preserve existing behavior | unit |
-| FR-004 | missing | no explicit remediation mutation lock object or evaluator found | add guard lock decision model/service | unit + service-boundary |
-| FR-005 | missing | no default `target_execution` lock evaluation found | add default lock policy | unit |
-| FR-006 | missing | no lock record/result contract found | add serialized lock fields | unit |
-| FR-007 | missing | no idempotent lock acquisition helper found | add idempotent acquisition by holder/target/scope | unit |
-| FR-008 | missing | no stale lock recovery rule found | add expiration/recovery behavior | unit |
-| FR-009 | missing | no lock-loss guard found | add lock-loss non-mutating outcome | unit |
-| FR-010 | implemented_verified | action authority requires nonblank idempotency key | preserve and reuse | unit |
-| FR-011 | partial | current `_decisions` cache is process-local and not a named ledger contract | add explicit action-ledger entry/result model | unit |
-| FR-012 | implemented_unverified | current duplicate cache returns original result for same workflow/key/action/dry-run | add request-shape-aware ledger tests | unit |
-| FR-013 | missing | no action count budget found | add max-actions-per-target check | unit |
-| FR-014 | missing | no per-action-kind attempt budget found | add max-attempts-per-kind check | unit |
-| FR-015 | missing | no remediation action cooldown found | add repeated-action cooldown check | unit |
-| FR-016 | missing | no budget/cooldown terminal outcome model found | add denial/escalation reasons | unit |
-| FR-017 | partial | context can carry nested policy, but no action guard enforces it | add nested-remediation policy guard | unit |
-| FR-018 | missing | no default self-healing depth guard found | add default depth=1 behavior | unit |
-| FR-019 | implemented_verified | `prepare_action_request()` performs current target health read | consume target snapshot in guard | unit |
-| FR-020 | partial | snapshot includes run/state/summary but not session identity comparison | extend target snapshot/guard contract as needed | unit |
-| FR-021 | partial | target run change is detected but no action decision consumes it | add no-op/re-diagnose/escalate decision | unit + service-boundary |
-| FR-022 | implemented_unverified | missing target raises bounded `RemediationEvidenceToolError` | add guard coverage for unavailable target health | unit |
-| FR-023 | implemented_verified | existing action result redaction helpers cover parameters/audit | reuse for guard outputs | unit |
-| FR-024 | implemented_verified | raw access paths are denied by action authority | preserve as precondition | unit |
-| FR-025 | missing | new artifacts not yet complete | preserve MM-455 in artifacts and verification | final verify |
-| SC-001 | missing | no lock concurrency test found | add direct service test | unit |
-| SC-002 | missing | no stale/lost lock tests found | add direct service tests | unit |
-| SC-003 | partial | duplicate cache exists but not ledger-named | add ledger duplicate tests | unit |
-| SC-004 | partial | missing idempotency test exists; unsafe reuse not explicit | add guard test | unit |
-| SC-005 | missing | no budget/cooldown tests found | add direct service tests | unit |
-| SC-006 | missing | no nested remediation guard tests found | add direct service tests | unit |
-| SC-007 | partial | target run changed test exists for evidence tool only | add decision test | unit + service-boundary |
-| SC-008 | implemented_unverified | missing target health errors are bounded | add guard-level assertion | unit |
-| SC-009 | partial | action redaction exists; guard outputs do not exist | add serialized guard redaction tests | unit |
-| SC-010 | missing | new artifacts not yet verified | final MoonSpec verify | final verify |
-| DESIGN-REQ-009 | partial | existing context/action boundaries cover target/evidence/action/redaction; lock/nested loops missing | add guard service behavior | unit + service-boundary |
-| DESIGN-REQ-014 | missing | no mutation lock behavior found | add lock model/service | unit |
-| DESIGN-REQ-015 | partial | idempotency cache exists but no explicit ledger | add action-ledger model/result | unit |
-| DESIGN-REQ-016 | missing | no budgets/cooldowns/nested guards found | add budget/cooldown/nested checks | unit |
-| DESIGN-REQ-022 | partial | current health read exists; action decision not connected | add freshness decision inputs | unit |
-| DESIGN-REQ-023 | partial | bounded errors exist in evidence/action services; guard failures missing | add bounded guard outcomes | unit |
+| FR-001 | implemented_verified | `TemporalExecutionRemediationLink` stores target workflow/run; guard tests evaluate linked target inputs | no further implementation | final verify |
+| FR-002 | implemented_verified | `RemediationEvidenceToolService.prepare_action_request()` re-reads bounded target health | no further implementation | final verify |
+| FR-003 | implemented_verified | `RemediationActionAuthorityService` denies unsupported/raw action kinds; guard denies raw-access action kinds | no further implementation | final verify |
+| FR-004 | implemented_verified | `RemediationMutationGuardService` includes lock decision model/service | no further implementation | final verify |
+| FR-005 | implemented_verified | `RemediationMutationGuardPolicy.lock_scope` defaults to `target_execution` | no further implementation | final verify |
+| FR-006 | implemented_verified | `RemediationMutationLockDecision.to_dict()` serializes lock fields | no further implementation | final verify |
+| FR-007 | implemented_verified | guard tests cover idempotent acquisition by holder/target/scope | no further implementation | final verify |
+| FR-008 | implemented_verified | guard tests cover stale lock expiration and recovery | no further implementation | final verify |
+| FR-009 | implemented_verified | guard tests cover lock-loss non-mutating outcome | no further implementation | final verify |
+| FR-010 | implemented_verified | action authority and guard require nonblank idempotency key | no further implementation | final verify |
+| FR-011 | implemented_verified | `RemediationActionLedgerDecision` and ledger entries provide explicit duplicate-suppression output | no further implementation | final verify |
+| FR-012 | implemented_verified | guard tests cover duplicate replay and unsafe idempotency-key reuse | no further implementation | final verify |
+| FR-013 | implemented_verified | guard budget checks enforce max actions per target | no further implementation | final verify |
+| FR-014 | implemented_verified | guard budget checks enforce per-action-kind attempt limit | no further implementation | final verify |
+| FR-015 | implemented_verified | guard budget checks enforce repeated-action cooldown | no further implementation | final verify |
+| FR-016 | implemented_verified | guard returns bounded denial/escalation reasons for budget and cooldown outcomes | no further implementation | final verify |
+| FR-017 | implemented_verified | guard tests cover self-target and nested-remediation policy decisions | no further implementation | final verify |
+| FR-018 | implemented_verified | `RemediationMutationGuardPolicy.max_self_healing_depth` defaults to `1` | no further implementation | final verify |
+| FR-019 | implemented_verified | target health snapshot from `prepare_action_request()` is consumable by guard evaluation | no further implementation | final verify |
+| FR-020 | implemented_verified | target freshness comparison includes run, state, summary, and session identity fields | no further implementation | final verify |
+| FR-021 | implemented_verified | target-change policy maps material changes to no-op, re-diagnosis, or escalation decisions | no further implementation | final verify |
+| FR-022 | implemented_verified | unavailable target freshness produces bounded non-executable guard output | no further implementation | final verify |
+| FR-023 | implemented_verified | guard `to_dict()` output uses existing redaction helpers for parameters and decisions | no further implementation | final verify |
+| FR-024 | implemented_verified | raw-access action kinds are denied without fallback execution | no further implementation | final verify |
+| FR-025 | implemented_verified | MM-455 is preserved in spec, plan, tasks, quickstart, tests, and implementation artifacts | no further implementation | final verify |
+| SC-001 | implemented_verified | tests cover exclusive `target_execution` lock conflict | no further implementation | final verify |
+| SC-002 | implemented_verified | tests cover stale recovery and lost-lock denial | no further implementation | final verify |
+| SC-003 | implemented_verified | tests cover ledger duplicate replay | no further implementation | final verify |
+| SC-004 | implemented_verified | tests cover missing idempotency and unsafe reuse | no further implementation | final verify |
+| SC-005 | implemented_verified | tests cover action budget, per-kind attempt budget, and cooldown denial | no further implementation | final verify |
+| SC-006 | implemented_verified | tests cover self-targeting and nested-remediation guards | no further implementation | final verify |
+| SC-007 | implemented_verified | tests cover target run/state/summary/session freshness decisions | no further implementation | final verify |
+| SC-008 | implemented_verified | tests cover unavailable target-health decision output | no further implementation | final verify |
+| SC-009 | implemented_verified | tests cover redaction-safe guard serialization | no further implementation | final verify |
+| SC-010 | implemented_verified | MoonSpec artifacts preserve MM-455 and mapped design requirements | no further implementation | final verify |
+| DESIGN-REQ-009 | implemented_verified | context/action boundaries cover target/evidence/action/redaction, locks, and nested-loop prevention | no further implementation | final verify |
+| DESIGN-REQ-014 | implemented_verified | mutation lock model/service implements default exclusive target lock behavior | no further implementation | final verify |
+| DESIGN-REQ-015 | implemented_verified | action-ledger result model implements duplicate suppression and unsafe reuse detection | no further implementation | final verify |
+| DESIGN-REQ-016 | implemented_verified | budgets, cooldowns, nested-remediation, and self-healing-depth checks are implemented | no further implementation | final verify |
+| DESIGN-REQ-022 | implemented_verified | target freshness guard consumes current target-health inputs before action execution | no further implementation | final verify |
+| DESIGN-REQ-023 | implemented_verified | guard failures return bounded non-mutating outcomes and redaction-safe output | no further implementation | final verify |
 
 ## Technical Context
 
