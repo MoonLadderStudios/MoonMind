@@ -23,9 +23,10 @@ from pydantic import BaseModel, ValidationError
 
 from moonmind.config.settings import settings
 from moonmind.integrations.pentest.models import (
+    PentestLaunchPolicyError,
     PentestScopeValidationError,
     PentestWorkloadRequest,
-    validate_authorized_scope_for_request,
+    build_pentest_launch_plan,
 )
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
@@ -3130,12 +3131,10 @@ class TemporalAgentRuntimeActivities:
         request_payload = dict(payload.get("request", payload))
         request = PentestWorkloadRequest.model_validate(request_payload)
         try:
-            validate_authorized_scope_for_request(request)
-        except PentestScopeValidationError as exc:
+            launch_plan = build_pentest_launch_plan(request)
+        except (PentestScopeValidationError, PentestLaunchPolicyError) as exc:
             raise TemporalActivityRuntimeError(str(exc)) from exc
-        raise TemporalActivityRuntimeError(
-            "security.pentest.execute runner is not implemented"
-        )
+        return launch_plan.to_activity_output(request)
 
     async def agent_runtime_publish_artifacts(
         self,
