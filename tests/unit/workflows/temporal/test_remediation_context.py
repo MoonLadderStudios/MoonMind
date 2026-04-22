@@ -121,6 +121,26 @@ def _admin_profile(**overrides):
     return RemediationSecurityProfile(**data)
 
 
+def test_remediation_action_authority_lists_policy_compatible_actions():
+    service = RemediationActionAuthorityService(session=object())
+
+    denied = service.list_allowed_actions(
+        permissions=RemediationPermissionSet(can_view_target=True),
+        security_profile=_admin_profile(),
+    )
+    assert denied == ()
+
+    allowed = service.list_allowed_actions(
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(allowed_action_kinds=("restart_worker",)),
+    )
+
+    assert [item["actionKind"] for item in allowed] == ["restart_worker"]
+    assert allowed[0]["riskTier"] == "medium"
+    assert allowed[0]["targetType"] == "workload_container"
+    assert allowed[0]["inputMetadata"]["reason"]["required"] is False
+
+
 @pytest.fixture
 def mock_client_adapter():
     adapter = MagicMock()
@@ -975,6 +995,16 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         assert allowed.decision == "allowed"
         assert allowed.risk == "medium"
         assert allowed.executable is True
+        payload = allowed.to_dict()
+        assert payload["schemaVersion"] == "v1"
+        assert payload["request"]["actionKind"] == "restart_worker"
+        assert payload["request"]["riskTier"] == "medium"
+        assert payload["request"]["dryRun"] is False
+        assert payload["result"]["status"] == "applied"
+        assert payload["result"]["verificationRequired"] is True
+        assert payload["result"]["verificationHint"]
+        assert payload["result"]["sideEffects"] == []
+        assert payload["audit"]["executionPrincipal"] == "service:admin-healer"
 
         high_risk = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
