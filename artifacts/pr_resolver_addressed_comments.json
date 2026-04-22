@@ -1,22 +1,12 @@
 [
   {
-    "id": 3123155677,
+    "id": 3123466318,
     "disposition": "addressed",
-    "rationale": "Changed latest primary report selection to trust the server-filtered latest report response instead of re-filtering returned artifacts by their first report link."
+    "rationale": "Changed _strongest_retention_class to rank the provided values directly and added an EPHEMERAL unpin regression test."
   },
   {
-    "id": 4153793713,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the actionable inline Codex comment is classified separately."
-  },
-  {
-    "id": 3123174860,
+    "id": 4154120748,
     "disposition": "addressed",
-    "rationale": "Refactored artifact response normalization to cast each raw artifact/link once as Record<string, unknown>, reducing repeated type assertions."
-  },
-  {
-    "id": 4153813759,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the actionable inline Gemini comment is classified separately."
+    "rationale": "Duplicate summary review for the same _strongest_retention_class issue; addressed by the helper fix and regression test."
   }
 ]

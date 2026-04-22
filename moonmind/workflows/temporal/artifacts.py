@@ -214,11 +214,11 @@ def _strongest_retention_class(
         db_models.TemporalArtifactRetentionClass.LONG: 2,
         db_models.TemporalArtifactRetentionClass.PINNED: 3,
     }
-    strongest = db_models.TemporalArtifactRetentionClass.STANDARD
-    for value in values:
-        if rank[value] > rank[strongest]:
-            strongest = value
-    return strongest
+    return max(
+        values,
+        key=lambda value: rank[value],
+        default=db_models.TemporalArtifactRetentionClass.STANDARD,
+    )
 
 
 def _normalized_content_type(value: object | None) -> str:

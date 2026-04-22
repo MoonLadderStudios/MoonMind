@@ -499,6 +499,50 @@ async def test_unpin_report_primary_restores_report_retention(tmp_path: Path) ->
             assert unpinned.retention_class is TemporalArtifactRetentionClass.LONG
 
 
+async def test_unpin_ephemeral_artifact_restores_ephemeral_retention(
+    tmp_path: Path,
+) -> None:
+    """MM-463: Unpinning trace artifacts should not upgrade retention."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            artifact, _upload = await service.create(
+                principal="workflow-producer",
+                content_type="application/json",
+                link={
+                    "namespace": "moonmind",
+                    "workflow_id": "wf-trace",
+                    "run_id": "run-trace",
+                    "link_type": "debug.trace",
+                },
+                metadata_json={"artifact_kind": "integration_event"},
+            )
+            assert artifact.retention_class is TemporalArtifactRetentionClass.EPHEMERAL
+
+            await service.pin(
+                artifact_id=artifact.artifact_id,
+                principal="workflow-producer",
+                reason="temporary inspection",
+            )
+            pinned = await repo.get_artifact(artifact.artifact_id)
+            assert pinned.retention_class is TemporalArtifactRetentionClass.PINNED
+
+            await service.unpin(
+                artifact_id=artifact.artifact_id,
+                principal="workflow-producer",
+            )
+            unpinned = await repo.get_artifact(artifact.artifact_id)
+            assert (
+                unpinned.retention_class is TemporalArtifactRetentionClass.EPHEMERAL
+            )
+
+
 async def test_create_rejects_bad_report_link_and_metadata(tmp_path: Path) -> None:
     """MM-460: Report publication should fail before unsafe data is stored."""
 
