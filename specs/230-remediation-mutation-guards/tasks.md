@@ -12,7 +12,7 @@
 ## Source Traceability Summary
 
 - MM-455 is preserved in `spec.md`, `plan.md`, this task file, quickstart, implementation notes, verification output, commit text, and pull request metadata.
-- `DESIGN-REQ-014`, `DESIGN-REQ-015`, `DESIGN-REQ-016`, and parts of `DESIGN-REQ-022`/`DESIGN-REQ-023` require new code and tests.
+- The refreshed `plan.md` classifies FR-001 through FR-025, SC-001 through SC-010, and DESIGN-REQ-009/014/015/016/022/023 as `implemented_verified`; this task file remains the completed execution record for the red-first work that produced that evidence.
 - Existing verified behavior from `RemediationActionAuthorityService` and `RemediationEvidenceToolService` must remain intact.
 
 ## Phase 1: Setup
@@ -59,7 +59,7 @@
 
 - [X] T022 Review `specs/230-remediation-mutation-guards/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/remediation-mutation-guards.md`, and `quickstart.md` for MM-455 and DESIGN-REQ traceability
 - [X] T023 Run full unit verification: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [X] T024 Run `/speckit.verify` equivalent read-only verification for `specs/230-remediation-mutation-guards/spec.md`
+- [X] T024 Run `/moonspec-verify` equivalent read-only verification for `specs/230-remediation-mutation-guards/spec.md`
 
 ## Dependencies And Order
 
@@ -75,4 +75,4 @@
 
 ## Implementation Strategy
 
-Start by proving the missing guard behavior with focused tests, then add a small in-service guard model in `remediation_actions.py`. Keep the guard as a decision boundary only: it returns executable/non-executable outcomes and never performs the underlying side effect.
+The completed path proved the missing guard behavior with focused tests first, then added a small in-service guard model in `remediation_actions.py`. Keep the guard as a decision boundary only: it returns executable/non-executable outcomes and never performs the underlying side effect.
