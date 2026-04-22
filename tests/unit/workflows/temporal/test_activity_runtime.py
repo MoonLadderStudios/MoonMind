@@ -963,6 +963,130 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
     assert "docker attach" not in str(result).lower()
 
 
+async def test_security_pentest_execute_includes_publication_metadata_without_session_artifacts():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            summary_text="Pentest finished with password=hunter2",
+            findings=[
+                {
+                    "finding_id": "finding-1",
+                    "title": "Supported issue",
+                    "severity": "high",
+                    "confidence": "supported",
+                    "target": "https://lab.example.test",
+                    "summary": "Evidence supports issue",
+                }
+            ],
+            provider_snapshot_available=True,
+            wrapper_log_available=True,
+        )
+    )
+
+    publication = result["artifact_publication"]
+    finding_set = result["normalized_findings"]
+    live_logs = result["live_log_events"]
+    artifact_names = {item["name"] for item in publication["artifacts"]}
+
+    assert publication["status"] == "complete"
+    assert {
+        "input.manifest",
+        "input.instructions",
+        "runtime.stdout",
+        "runtime.stderr",
+        "runtime.diagnostics",
+        "output.summary",
+        "output.primary",
+        "output.provider_snapshot",
+        "output.logs",
+        "evidence.bundle",
+    }.issubset(artifact_names)
+    assert "session.summary" not in artifact_names
+    assert "session.step_checkpoint" not in artifact_names
+    assert "session.control_event" not in artifact_names
+    assert "session.reset_boundary" not in artifact_names
+    assert publication["restricted_evidence_refs"]
+    assert finding_set["summary"] == {
+        "findings_count": 1,
+        "confirmed_findings_count": 0,
+        "high_or_critical_count": 1,
+    }
+    assert finding_set["findings"][0]["confidence"] == "supported"
+    assert result["heartbeat_phases"] == [
+        "validating_scope",
+        "waiting_for_profile_slot",
+        "materializing_inputs",
+        "launching_container",
+        "running",
+        "publishing_artifacts",
+        "normalizing_findings",
+        "cleanup",
+    ]
+    assert any(event["event_type"] == "artifact" for event in live_logs)
+    assert any(event["event_type"] == "annotation" for event in live_logs)
+    assert "hunter2" not in str(result)
+    assert "terminal_control" not in str(live_logs)
+    assert "docker attach" not in str(result).lower()
+
+
+async def test_security_pentest_execute_coerces_string_publication_flags():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            provider_snapshot_available="false",
+            wrapper_log_available="0",
+        )
+    )
+
+    publication = result["artifact_publication"]
+    artifact_names = {item["name"] for item in publication["artifacts"]}
+    assert "output.provider_snapshot" not in artifact_names
+    assert "output.logs" not in artifact_names
+    assert publication["omitted_optional_artifacts"] == [
+        "output.provider_snapshot",
+        "output.logs",
+    ]
+
+
+async def test_security_pentest_execute_sources_publication_payload_from_nested_request():
+    activities = TemporalAgentRuntimeActivities()
+    nested_request = _pentest_activity_payload(
+        findings=[
+            {
+                "finding_id": "nested-finding",
+                "title": "Nested finding",
+                "severity": "high",
+                "confidence": "supported",
+                "summary": "Nested request metadata",
+            }
+        ],
+        provider_snapshot_available=False,
+    )["request"]
+    payload = {
+        "request": nested_request,
+        "findings": [
+            {
+                "finding_id": "raw-finding",
+                "title": "Raw finding",
+                "severity": "critical",
+                "confidence": "confirmed",
+                "summary": "Raw payload metadata",
+            }
+        ],
+        "provider_snapshot_available": True,
+    }
+
+    result = await activities.security_pentest_execute(payload)
+
+    publication = result["artifact_publication"]
+    artifact_names = {item["name"] for item in publication["artifacts"]}
+    findings = result["normalized_findings"]["findings"]
+    assert [item["finding_id"] for item in findings] == ["nested-finding"]
+    assert "output.provider_snapshot" not in artifact_names
+
+
 async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval():
     activities = TemporalAgentRuntimeActivities()
 
