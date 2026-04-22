@@ -37,7 +37,7 @@
 
 - [X] T014 Run full unit suite with `./tools/test_unit.sh`
 - [ ] T015 Run hermetic integration suite with `./tools/test_integration.sh` when Docker is available
-- [X] T016 Run `/speckit.verify` equivalent for `specs/227-report-bundle-workflow-publishing/spec.md` and write verification evidence in `specs/227-report-bundle-workflow-publishing/verification.md`
+- [X] T016 Run `/moonspec-verify` equivalent for `specs/227-report-bundle-workflow-publishing/spec.md` and write verification evidence in `specs/227-report-bundle-workflow-publishing/verification.md`
 
 ## Verification Notes
 
