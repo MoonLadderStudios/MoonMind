@@ -197,6 +197,8 @@ Key diagnostics:
 - No new persistent storage; existing task draft and submission payload state only (210-liquid-glass-panel)
 - TypeScript/React for Mission Control UI; Python 3.12 remains present but is not expected in this story + React, TanStack Query, existing Settings entrypoint, Vitest, Testing Library (226-route-claude-auth-actions)
 - No new persistent storage; uses existing provider profile row metadata and optional command/readiness data (226-route-claude-auth-actions)
+- Python 3.12 + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK (226-canonical-remediation-submissions)
+- Existing SQLAlchemy/Alembic database with `execution_remediation_links` already present (226-canonical-remediation-submissions)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
