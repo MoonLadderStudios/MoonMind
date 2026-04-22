@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement MM-458 by verifying and tightening the existing remediation runtime guardrails that keep v1 manual by default, deny raw administrative capability surfaces, keep future self-healing policy inert unless bounded policy support exists, and return structured bounded outcomes for edge cases. Existing remediation action authority, mutation guard, link validation, redaction, and lifecycle helpers already satisfy much of the story; this plan adds focused verification for the remaining unverified policy-only path and preserves fallback implementation tasks if those tests expose gaps.
+Implement MM-458 by verifying and preserving the existing remediation runtime guardrails that keep v1 manual by default, deny raw administrative capability surfaces, keep future self-healing policy inert unless bounded policy support exists, and return structured bounded outcomes for edge cases. Existing remediation action authority, mutation guard, link validation, redaction, and lifecycle helpers satisfy the story with focused verification tests for the policy-only and allowed-action metadata paths.
 
 ## Requirement Status
 

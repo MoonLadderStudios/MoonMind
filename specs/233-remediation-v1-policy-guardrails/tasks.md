@@ -12,8 +12,8 @@
 ## Source Traceability Summary
 
 - MM-458 is preserved in `spec.md`, `plan.md`, this task file, quickstart, implementation notes, verification output, commit text, and pull request metadata.
-- The plan originally classified FR-001, FR-002, FR-019, SC-001, SC-003, and DESIGN-REQ-016 as verification-first; the added tests now verify them without fallback implementation.
-- The plan classifies raw capability denial and bounded outcome behavior as already implemented, with one added catalog metadata verification test.
+- The plan classifies FR-001, FR-002, FR-019, SC-001, SC-003, and DESIGN-REQ-016 as implemented and verified by policy-only metadata tests without fallback implementation.
+- The plan classifies raw capability denial and bounded outcome behavior as implemented and verified, including catalog metadata coverage.
 
 ## Phase 1: Setup
 

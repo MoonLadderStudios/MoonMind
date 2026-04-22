@@ -26,9 +26,9 @@ Test implications: Add a catalog absence assertion for raw capability names.
 
 ## DESIGN-REQ-016 - Manual V1 And Bounded Self-Healing
 
-Decision: Partially implemented and needs verification; v1 has no automatic self-healing creation path, while mutation guard policy already defaults self-healing depth to 1.
-Evidence: `RemediationMutationGuardPolicy.max_self_healing_depth` defaults to 1; `TemporalExecutionService` only creates remediation links for explicit `task.remediation`.
-Rationale: Existing absence of automatic creation should be locked down with a regression test because this is the central MM-458 risk.
+Decision: Implemented and verified; v1 has no automatic self-healing creation path, while mutation guard policy already defaults self-healing depth to 1.
+Evidence: `RemediationMutationGuardPolicy.max_self_healing_depth` defaults to 1; `TemporalExecutionService` only creates remediation links for explicit `task.remediation`; `test_create_execution_keeps_future_remediation_policy_inert` proves `task.remediationPolicy` metadata creates no remediation link.
+Rationale: Existing absence of automatic creation is locked down with a regression test because this is the central MM-458 risk.
 Alternatives considered: Adding automatic policy parsing was rejected as outside this v1 guardrail story.
 Test implications: Unit test verifies `task.remediationPolicy` remains inert and does not create `TemporalExecutionRemediationLink`.
 
@@ -50,11 +50,11 @@ Test implications: Run existing remediation context tests after adding MM-458 fo
 
 ## DESIGN-REQ-024 - Enforced Non-Goals
 
-Decision: Implemented and verified for action authority, with one additional verification test planned for catalog absence.
-Evidence: `RemediationActionAuthorityService` denies raw access action kinds; service validation rejects unsupported authority modes and incompatible policies.
+Decision: Implemented and verified for action authority and allowed-action metadata.
+Evidence: `RemediationActionAuthorityService` denies raw access action kinds; service validation rejects unsupported authority modes and incompatible policies; `test_remediation_action_authority_does_not_advertise_raw_admin_actions` proves raw admin action names are not advertised.
 Rationale: Raw capability absence must be true both for action requests and discoverable action metadata.
 Alternatives considered: UI-only checks were rejected because the runtime action catalog is the primary source.
-Test implications: Add a unit test that allowed action metadata does not expose raw host, Docker, SQL, storage-key, secret-read, or redaction-bypass actions.
+Test implications: Unit test verifies allowed action metadata does not expose raw host, Docker, SQL, storage-key, secret-read, or redaction-bypass actions.
 
 ## Testing Strategy
 
