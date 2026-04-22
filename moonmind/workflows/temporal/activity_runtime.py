@@ -29,6 +29,7 @@ from moonmind.integrations.pentest.models import (
     PentestScopeValidationError,
     PentestWorkloadRequest,
     build_pentest_execution_materialization,
+    build_pentest_publication_result,
     build_pentest_provider_cooldown_diagnostic,
     build_pentest_launch_plan,
     materialize_pentest_provider_profile,
@@ -3226,7 +3227,34 @@ class TemporalAgentRuntimeActivities:
 
         if not self._workflow_docker_enabled:
             raise _docker_workflows_disabled_failure()
-        request_payload = dict(payload.get("request", payload))
+        raw_payload = dict(payload)
+        nested_request = raw_payload.get("request")
+        if nested_request is not None:
+            request_payload = dict(nested_request)
+            publication_source = request_payload
+        else:
+            request_payload = raw_payload
+            publication_source = raw_payload
+        publication_keys = {
+            "findings",
+            "provider_snapshot_available",
+            "wrapper_log_available",
+            "summary_text",
+            "stdout_preview",
+            "stderr_preview",
+            "progress_annotations",
+            "publication_errors",
+        }
+        publication_payload = {
+            key: publication_source[key]
+            for key in publication_keys
+            if key in publication_source
+        }
+        request_payload = {
+            key: value
+            for key, value in request_payload.items()
+            if key not in publication_keys
+        }
         request = PentestWorkloadRequest.model_validate(request_payload)
         try:
             launch_plan = build_pentest_launch_plan(request)
@@ -3254,6 +3282,26 @@ class TemporalAgentRuntimeActivities:
         execution_metadata["instruction_bundle"].pop("content", None)
         execution_metadata["instruction_bundle"].pop("objective", None)
         output.update(execution_metadata)
+        publication = build_pentest_publication_result(
+            request,
+            findings=list(publication_payload.get("findings") or ()),
+            provider_snapshot_available=_coerce_bool(
+                publication_payload.get("provider_snapshot_available"),
+                default=False,
+            ),
+            wrapper_log_available=_coerce_bool(
+                publication_payload.get("wrapper_log_available"),
+                default=False,
+            ),
+            summary_text=publication_payload.get("summary_text"),
+            stdout_preview=publication_payload.get("stdout_preview"),
+            stderr_preview=publication_payload.get("stderr_preview"),
+            progress_annotations=list(
+                publication_payload.get("progress_annotations") or ()
+            ),
+            errors=list(publication_payload.get("publication_errors") or ()),
+        ).model_dump(mode="json")
+        output.update(publication)
         provider_failure = request.provider_failure or {}
         failure_category = str(provider_failure.get("category") or "").strip()
         if failure_category in {"provider_429", "provider_quota"}:
