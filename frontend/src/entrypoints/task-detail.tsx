@@ -3511,14 +3511,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const summaryArtifactRef = execution?.summaryArtifactRef || execution?.summary_artifact_ref || '';
   const explicitTaskRunId = execution?.taskRunId || execution?.task_run_id || '';
   const resolvedTaskRunId = explicitTaskRunId;
-  const shouldFetchRemediationLinks = Boolean(
-    execution &&
-      workflowId &&
-      (isRemediationEligibleTarget(execution) ||
-        /remediation/i.test(
-          `${execution.title || ''} ${execution.summary || ''} ${execution.taskInstructions || ''}`,
-        )),
-  );
+  const shouldFetchRemediationLinks = Boolean(execution && workflowId);
   const sessionTimelineEnabled = shouldEnableSessionTimelineViewer({
     config: cfg,
     targetRuntime: execution?.targetRuntime,

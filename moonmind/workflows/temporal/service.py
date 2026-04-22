@@ -74,6 +74,9 @@ ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
 ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
+PENDING_REMEDIATION_APPROVAL_STATUSES = frozenset(
+    {"awaiting_approval", "approval_required"}
+)
 
 import logging
 
@@ -541,6 +544,20 @@ class TemporalExecutionService:
                 "decision must be 'approved' or 'rejected'."
             )
         record = await self._require_source_execution(remediation_workflow_id)
+        link = await self._session.get(
+            TemporalExecutionRemediationLink,
+            remediation_workflow_id,
+        )
+        expected_request_id = f"{remediation_workflow_id}:approval"
+        if (
+            link is None
+            or link.authority_mode != "approval_gated"
+            or link.status not in PENDING_REMEDIATION_APPROVAL_STATUSES
+            or request_id != expected_request_id
+        ):
+            raise TemporalExecutionValidationError(
+                "request_id must reference a pending approval-gated remediation."
+            )
         detail_parts = [f"requestId={request_id}"]
         if actor:
             detail_parts.append(f"actor={actor}")

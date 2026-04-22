@@ -1,27 +1,37 @@
 [
   {
-    "id": 3123798424,
+    "id": 3124208088,
     "disposition": "addressed",
-    "rationale": "Identifier fields now bypass path-style unsafe string checks, and unit coverage verifies hierarchical target workflow/run IDs are preserved."
+    "rationale": "Pending approval-gated remediation link summaries now include a stable requestId and set canDecide=true so Mission Control can render approve/reject controls."
   },
   {
-    "id": 3123798439,
+    "id": 3124208095,
     "disposition": "addressed",
-    "rationale": "String timestamps are now parsed and normalized to UTC Zulu format, with malformed strings rejected by regression coverage."
+    "rationale": "Remediation relationship queries now run for every loaded execution with a workflow id, independent of status or remediation keywords."
   },
   {
-    "id": 4154502370,
+    "id": 3124208100,
+    "disposition": "addressed",
+    "rationale": "Approval decisions now validate that the workflow has a pending approval-gated remediation link and that the request id matches the pending approval request before writing audit entries."
+  },
+  {
+    "id": 4154944714,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; its two actionable findings are tracked by inline comments 3123798424 and 3123798439."
+    "rationale": "Top-level automated review summary; actionable inline comments from the review are tracked separately."
   },
   {
-    "id": 3123798641,
-    "disposition": "addressed",
-    "rationale": "The lifecycle payload sanitizer now allowlists authorityMode while continuing to drop secret-like keys, and publisher coverage asserts remediation.summary retains authorityMode."
-  },
-  {
-    "id": 4154502596,
+    "id": 3124208843,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper with no additional actionable feedback beyond the inline comments already addressed."
+    "rationale": "The current file already imports datetime from datetime alongside UTC and timedelta, so the reported NameError no longer applies."
+  },
+  {
+    "id": 3124208855,
+    "disposition": "addressed",
+    "rationale": "Remediation link serialization now supplies safe getattr defaults for created_at and updated_at."
+  },
+  {
+    "id": 4154945457,
+    "disposition": "not-applicable",
+    "rationale": "Top-level automated review summary; actionable inline comments from the review are tracked separately."
   }
 ]

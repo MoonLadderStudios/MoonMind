@@ -1355,6 +1355,9 @@ describe('Task Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/executions/test-complete/remediations?direction=')) {
+        return Promise.resolve({ ok: true, json: async () => ({ direction: 'inbound', items: [] }) } as Response);
+      }
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
@@ -1696,7 +1699,8 @@ describe('Task Detail Entrypoint', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Create remediation task' })).toBeNull();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/remediations?direction='))).toBe(false);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/remediations?direction=inbound'))).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/remediations?direction=outbound'))).toBe(true);
   });
 
   it('renders approval-gated remediation as read-only when the operator cannot decide', async () => {

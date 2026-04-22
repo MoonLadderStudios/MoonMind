@@ -117,6 +117,9 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
 _MAX_TASK_TITLE_LENGTH = 150
 _MAX_TASK_SUMMARY_LENGTH = 180
 _TASK_SUMMARY_ELLIPSIS = "..."
+_PENDING_REMEDIATION_APPROVAL_STATUSES = frozenset(
+    {"awaiting_approval", "approval_required"}
+)
 _GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(
     r"^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+$",
     re.IGNORECASE,
@@ -3499,14 +3502,18 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
     authority_mode = str(getattr(link, "authority_mode", "") or "")
     status_value = str(getattr(link, "status", "") or "")
     approval_state: RemediationApprovalStateModel | None = None
+    approval_pending = status_value in _PENDING_REMEDIATION_APPROVAL_STATUSES
     if authority_mode == "approval_gated":
         approval_state = RemediationApprovalStateModel(
-            decision=(
-                "pending"
-                if status_value in {"awaiting_approval", "approval_required"}
-                else "not_required"
+            requestId=(
+                _remediation_approval_request_id(
+                    str(getattr(link, "remediation_workflow_id", ""))
+                )
+                if approval_pending
+                else None
             ),
-            canDecide=False,
+            decision=("pending" if approval_pending else "not_required"),
+            canDecide=approval_pending,
         )
 
     return RemediationLinkSummaryModel(
@@ -3523,9 +3530,13 @@ def _serialize_remediation_link_summary(link: Any) -> RemediationLinkSummaryMode
         resolution=getattr(link, "outcome", None),
         contextArtifactRef=getattr(link, "context_artifact_ref", None),
         approvalState=approval_state,
-        createdAt=getattr(link, "created_at"),
-        updatedAt=getattr(link, "updated_at"),
+        createdAt=getattr(link, "created_at", None),
+        updatedAt=getattr(link, "updated_at", None),
     )
+
+
+def _remediation_approval_request_id(remediation_workflow_id: str) -> str:
+    return f"{remediation_workflow_id}:approval"
 
 
 @router.get(

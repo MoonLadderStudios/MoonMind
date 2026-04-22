@@ -1037,7 +1037,7 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
                 "resolution": None,
                 "contextArtifactRef": "art_context",
                 "approvalState": {
-                    "requestId": None,
+                    "requestId": "mm:remediation-1:approval",
                     "actionKind": None,
                     "riskTier": None,
                     "preconditions": None,
@@ -1045,7 +1045,7 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
                     "decision": "pending",
                     "decisionActor": None,
                     "decisionAt": None,
-                    "canDecide": False,
+                    "canDecide": True,
                     "auditRef": None,
                 },
                 "createdAt": now.isoformat().replace("+00:00", "Z"),
