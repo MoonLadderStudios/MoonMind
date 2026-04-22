@@ -955,6 +955,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/remediations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Execution Remediations */
+        get: operations["list_execution_remediations_api_executions__workflow_id__remediations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{workflow_id}/remediation/approvals/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Remediation Approval Decision */
+        post: operations["record_remediation_approval_decision_api_executions__workflow_id__remediation_approvals__request_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions": {
         parameters: {
             query?: never;
@@ -5067,6 +5101,95 @@ export interface components {
              */
             updatedAt: string;
         };
+        /** RemediationApprovalDecisionRequest */
+        RemediationApprovalDecisionRequest: {
+            /** Decision */
+            decision: string;
+            /** Comment */
+            comment?: string | null;
+        };
+        /** RemediationApprovalDecisionResponse */
+        RemediationApprovalDecisionResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /** Workflowid */
+            workflowId: string;
+            /** Requestid */
+            requestId: string;
+            /** Decision */
+            decision: string;
+        };
+        /** RemediationApprovalStateModel */
+        RemediationApprovalStateModel: {
+            /** Requestid */
+            requestId?: string | null;
+            /** Actionkind */
+            actionKind?: string | null;
+            /** Risktier */
+            riskTier?: string | null;
+            /** Preconditions */
+            preconditions?: string | null;
+            /** Blastradius */
+            blastRadius?: string | null;
+            /** Decision */
+            decision: string;
+            /** Decisionactor */
+            decisionActor?: string | null;
+            /** Decisionat */
+            decisionAt?: string | null;
+            /**
+             * Candecide
+             * @default false
+             */
+            canDecide: boolean;
+            /** Auditref */
+            auditRef?: string | null;
+        };
+        /** RemediationLinkSummaryModel */
+        RemediationLinkSummaryModel: {
+            /** Remediationworkflowid */
+            remediationWorkflowId: string;
+            /** Remediationrunid */
+            remediationRunId: string;
+            /** Targetworkflowid */
+            targetWorkflowId: string;
+            /** Targetrunid */
+            targetRunId: string;
+            /** Mode */
+            mode: string;
+            /** Authoritymode */
+            authorityMode: string;
+            /** Status */
+            status: string;
+            /** Activelockscope */
+            activeLockScope?: string | null;
+            /** Activelockholder */
+            activeLockHolder?: string | null;
+            /** Latestactionsummary */
+            latestActionSummary?: string | null;
+            /** Resolution */
+            resolution?: string | null;
+            /** Contextartifactref */
+            contextArtifactRef?: string | null;
+            approvalState?: components["schemas"]["RemediationApprovalStateModel"] | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** RemediationLinksResponseModel */
+        RemediationLinksResponseModel: {
+            /** Direction */
+            direction: string;
+            /** Items */
+            items: components["schemas"]["RemediationLinkSummaryModel"][];
+        };
         /** RepositorySummarizationRequest */
         RepositorySummarizationRequest: {
             /**
@@ -8475,6 +8598,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionModel"] | components["schemas"]["ScheduleCreatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_execution_remediations_api_executions__workflow_id__remediations_get: {
+        parameters: {
+            query?: {
+                direction?: string;
+            };
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemediationLinksResponseModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_remediation_approval_decision_api_executions__workflow_id__remediation_approvals__request_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemediationApprovalDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemediationApprovalDecisionResponse"];
                 };
             };
             /** @description Validation Error */

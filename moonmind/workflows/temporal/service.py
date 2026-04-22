@@ -74,6 +74,9 @@ ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
 ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
+PENDING_REMEDIATION_APPROVAL_STATUSES = frozenset(
+    {"awaiting_approval", "approval_required"}
+)
 
 import logging
 
@@ -526,6 +529,56 @@ class TemporalExecutionService:
             )
         )
         return await self._scalars_all(stmt)
+
+    async def record_remediation_approval_decision(
+        self,
+        *,
+        remediation_workflow_id: str,
+        request_id: str,
+        decision: str,
+        comment: str | None,
+        actor: str | None,
+    ) -> dict[str, Any]:
+        if decision not in {"approved", "rejected"}:
+            raise TemporalExecutionValidationError(
+                "decision must be 'approved' or 'rejected'."
+            )
+        record = await self._require_source_execution(remediation_workflow_id)
+        link = await self._session.get(
+            TemporalExecutionRemediationLink,
+            remediation_workflow_id,
+        )
+        expected_request_id = f"{remediation_workflow_id}:approval"
+        if (
+            link is None
+            or link.authority_mode != "approval_gated"
+            or link.status not in PENDING_REMEDIATION_APPROVAL_STATUSES
+            or request_id != expected_request_id
+        ):
+            raise TemporalExecutionValidationError(
+                "request_id must reference a pending approval-gated remediation."
+            )
+        detail_parts = [f"requestId={request_id}"]
+        if actor:
+            detail_parts.append(f"actor={actor}")
+        if comment:
+            detail_parts.append(f"comment={comment[:500]}")
+        self._append_intervention_audit(
+            record,
+            action=f"remediation_approval_{decision}",
+            transport="api",
+            summary=f"Remediation approval {decision}.",
+            detail="; ".join(detail_parts),
+        )
+        await self._session.commit()
+        await self._session.refresh(record)
+        await self._sync_projection_best_effort(record)
+        return {
+            "accepted": True,
+            "workflowId": remediation_workflow_id,
+            "requestId": request_id,
+            "decision": decision,
+        }
 
     async def list_prerequisites(
         self, dependent_workflow_id: str
