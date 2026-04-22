@@ -3359,6 +3359,80 @@ async def _resolve_schedule_routing(
     return _ScheduleRouteResult()
 
 
+@router.post(
+    "/{workflow_id}/remediation",
+    response_model=ExecutionModel | ScheduleCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_remediation_execution(
+    workflow_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> ExecutionModel | ScheduleCreatedResponse:
+    body = payload if isinstance(payload, dict) else {}
+    task_payload = (
+        dict(body.get("task")) if isinstance(body.get("task"), Mapping) else {}
+    )
+
+    instructions = str(
+        task_payload.get("instructions") or body.get("instructions") or ""
+    ).strip()
+    if instructions:
+        task_payload["instructions"] = instructions
+
+    runtime_payload = body.get("runtime")
+    if isinstance(runtime_payload, Mapping) and "runtime" not in task_payload:
+        task_payload["runtime"] = dict(runtime_payload)
+
+    remediation_payload = body.get("remediation")
+    if not isinstance(remediation_payload, Mapping):
+        remediation_payload = task_payload.get("remediation")
+    remediation = (
+        dict(remediation_payload) if isinstance(remediation_payload, Mapping) else {}
+    )
+    target = (
+        dict(remediation.get("target"))
+        if isinstance(remediation.get("target"), Mapping)
+        else {}
+    )
+    target["workflowId"] = workflow_id
+    remediation["target"] = target
+    task_payload["remediation"] = remediation
+
+    request_payload: dict[str, Any] = {
+        "repository": body.get("repository"),
+        "integration": body.get("integration"),
+        "requiredCapabilities": body.get("requiredCapabilities"),
+        "task": task_payload,
+    }
+    for key in (
+        "dependsOn",
+        "inputArtifactRef",
+        "planArtifactRef",
+        "manifestArtifactRef",
+        "targetRuntime",
+        "profileId",
+        "providerProfile",
+        "idempotencyKey",
+        "schedule",
+    ):
+        if key in body:
+            request_payload[key] = body[key]
+
+    request = CreateJobRequest.model_validate(
+        {"type": "task", "payload": request_payload}
+    )
+    return await _create_execution_from_task_request(
+        request=request,
+        service=service,
+        user=user,
+        session=session,
+    )
+
+
 @router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_execution(
     payload: dict[str, Any] = Body(...),

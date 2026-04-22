@@ -3,12 +3,12 @@
 **Feature Branch**: `220-remediation-create-links`
 **Created**: 2026-04-21
 **Status**: Draft
-**Input**: Jira Orchestrate for MM-431.
+**Input**: Jira Orchestrate for MM-431 using `docs/tmp/jira-orchestration-inputs/MM-431-moonspec-orchestration-input.md` as the canonical MoonSpec orchestration input.
 
 Source story: STORY-001.
 Source summary: Accept remediation create requests and persist target links.
-Source Jira issue: unknown.
-Original brief reference: not provided.
+Source Jira issue: MM-431.
+Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-431-moonspec-orchestration-input.md`.
 
 Use the existing Jira Orchestrate workflow for this Jira issue. Do not run implementation inline inside the breakdown task.
 
@@ -26,12 +26,16 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 2. **Given** the remediation request omits `target.runId`, **When** creation succeeds, **Then** the persisted link records the target execution's current run ID at create time.
 3. **Given** a malformed remediation request with no target workflow ID, **When** the task is submitted, **Then** creation fails before the workflow starts and no remediation link is written.
 4. **Given** a target workflow that does not exist or is not a `MoonMind.Run`, **When** the task is submitted, **Then** creation fails with a validation error and no remediation link is written.
+5. **Given** a remediation request with unsupported authority mode, incompatible action policy, malformed task run IDs, or a remediation target that is itself a remediation task, **When** the task is submitted, **Then** creation fails with a structured validation error before workflow start.
+6. **Given** a caller submits through the remediation convenience route, **When** the route expands the request, **Then** it produces the same canonical `POST /api/executions` task create contract with `task.remediation.target.workflowId` set to the target workflow.
 
 ### Edge Cases
 
 - A remediation request must not use a target run ID as the workflow target.
 - A caller-provided `target.runId` must match the current known target run because historical run lookup is not available in this slice.
 - Remediation links are relationships, not dependencies, so they must not add `dependsOn` gates or dependency fan-out behavior.
+- `target.taskRunIds` must be a list of non-empty strings when supplied.
+- Nested remediation targets are rejected in this slice because automatic remediation of remediation tasks is disabled by default.
 
 ## Assumptions
 
@@ -44,7 +48,9 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 - **DESIGN-REQ-001** (`docs/Tasks/TaskRemediation.md` section 7.4): Create-time validation must require `task.remediation.target.workflowId`. Scope: in scope, mapped to FR-001 and FR-004.
 - **DESIGN-REQ-002** (`docs/Tasks/TaskRemediation.md` sections 6 and 8.1): Create time must resolve and persist a concrete target run ID. Scope: in scope, mapped to FR-002.
 - **DESIGN-REQ-003** (`docs/Tasks/TaskRemediation.md` sections 5.2 and 8.2): Remediation is a directed relationship, not a dependency, and must support forward and reverse lookup. Scope: in scope, mapped to FR-003 and FR-006.
-- **DESIGN-REQ-004** (`docs/Tasks/TaskRemediation.md` sections 10 and 9): Evidence context, action execution, locks, and live follow are typed later-stage surfaces. Scope: out of scope for this persistence slice.
+- **DESIGN-REQ-004** (`docs/Tasks/TaskRemediation.md` sections 7.4 and 7.3): Create-time validation must reject unsupported target types, malformed task run IDs, unsupported authority modes, incompatible action policy references, and disallowed nested remediation. Scope: in scope, mapped to FR-004, FR-008, FR-009, FR-010, and FR-011.
+- **DESIGN-REQ-005** (`docs/Tasks/TaskRemediation.md` section 7.5): The remediation convenience route expands into the same canonical execution create contract as `POST /api/executions`. Scope: in scope, mapped to FR-012.
+- **DESIGN-REQ-024** (`docs/Tasks/TaskRemediation.md` sections 8.3 and 8.4): Canonical remediation link data remains upstream of derived read models and includes compact status/action/outcome fields. Scope: in scope for durable link fields, mapped to FR-003.
 
 ## Requirements *(mandatory)*
 
@@ -57,6 +63,11 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 - **FR-005**: Remediation link persistence MUST occur in the same create transaction as the canonical execution source record so failed validation or persistence cannot leave orphan links.
 - **FR-006**: The service layer MUST provide forward lookup from remediation workflow to target and reverse lookup from target workflow to remediation workflows.
 - **FR-007**: Remediation create handling MUST NOT create dependency edges or alter dependency wait behavior.
+- **FR-008**: Remediation create validation MUST reject unsupported `authorityMode` values.
+- **FR-009**: Remediation create validation MUST reject unsupported or incompatible `actionPolicyRef` values.
+- **FR-010**: Remediation create validation MUST reject malformed `target.taskRunIds` values.
+- **FR-011**: Remediation create validation MUST reject nested remediation targets when the target execution is itself a remediation task.
+- **FR-012**: The convenience route `POST /api/executions/{workflowId}/remediation` MUST expand into the canonical task-shaped create contract without introducing a second durable payload shape.
 
 ### Key Entities
 
@@ -72,3 +83,5 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 - **SC-002**: Unit tests prove malformed, missing, run-ID, and non-run targets fail before workflow start.
 - **SC-003**: Unit tests prove remediation links are queryable in both outbound and inbound directions.
 - **SC-004**: Existing dependency create tests continue to pass, proving remediation links do not change dependency semantics.
+- **SC-005**: Unit tests prove unsupported authority modes, incompatible action policies, malformed task run IDs, and nested remediation targets fail before workflow start.
+- **SC-006**: Router unit tests prove the remediation convenience route expands into canonical task-shaped execution creation.
