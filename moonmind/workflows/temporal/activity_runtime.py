@@ -798,6 +798,24 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                                 },
                             },
                         },
+                        "provider_runtime_state": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "object",
+                                "properties": {
+                                    "profile_id": {"type": "string"},
+                                    "current_leases": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "available_slots": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                    },
+                                    "cooldown_until": {"type": "string"},
+                                },
+                            },
+                        },
                         "time_budget_minutes": {
                             "type": "integer",
                             "minimum": 1,
@@ -840,10 +858,24 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                     "properties": {
                         "status": {
                             "type": "string",
-                            "enum": ["launch_plan_ready"],
+                            "enum": ["launch_plan_ready", "provider_cooldown"],
                         },
                         "target": {"type": "string"},
                         "runner_profile_id": {"type": "string"},
+                        "provider_profile": {"type": "object"},
+                        "provider_lease": {"type": "object"},
+                        "provider_cooldown": {
+                            "type": "object",
+                            "properties": {
+                                "profile_id": {"type": "string"},
+                                "cooldown_seconds": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                },
+                                "failure_category": {"type": "string"},
+                                "retry_allowed": {"type": "boolean"},
+                            },
+                        },
                         "launch_plan": {
                             "type": "object",
                             "required": [
@@ -3182,6 +3214,7 @@ class TemporalAgentRuntimeActivities:
             provider_profile = resolve_pentest_provider_profile(
                 execution_profile_ref=request.execution_profile_ref,
                 provider_selector=request.provider_selector,
+                runtime_state=request.provider_runtime_state,
             )
             provider_materialization = materialize_pentest_provider_profile(
                 provider_profile

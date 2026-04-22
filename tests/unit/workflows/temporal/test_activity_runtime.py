@@ -647,6 +647,12 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
         "tags_any",
         "tags_all",
     }
+    assert (
+        input_schema["properties"]["provider_runtime_state"][
+            "additionalProperties"
+        ]["properties"]["available_slots"]["minimum"]
+        == 0
+    )
     assert input_schema["properties"]["time_budget_minutes"] == {
         "type": "integer",
         "minimum": 1,
@@ -669,8 +675,13 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
     ]
     assert output_schema["properties"]["status"] == {
         "type": "string",
-        "enum": ["launch_plan_ready"],
+        "enum": ["launch_plan_ready", "provider_cooldown"],
     }
+    assert "provider_profile" in output_schema["properties"]
+    assert "provider_lease" in output_schema["properties"]
+    assert output_schema["properties"]["provider_cooldown"]["properties"][
+        "cooldown_seconds"
+    ] == {"type": "integer", "minimum": 0}
     launch_plan_schema = output_schema["properties"]["launch_plan"]
     assert launch_plan_schema["required"] == [
         "profile_id",
@@ -841,13 +852,38 @@ async def test_security_pentest_execute_includes_secret_safe_provider_preparatio
     assert provider_profile["secret_env"] == {
         "ANTHROPIC_API_KEY": "anthropic_api_key"
     }
+    assert provider_profile["secret_refs"] == {
+        "anthropic_api_key": {
+            "secret_id": "sec_pentestgpt_anthropic_team",
+            "backend_type": "db_encrypted",
+        }
+    }
     assert provider_profile["clear_env_keys"] == ["OPENROUTER_API_KEY"]
     assert provider_profile["force_non_interactive"] is True
     assert result["provider_lease"]["runtime_id"] == "pentestgpt"
     assert result["provider_lease"]["profile_id"] == "pentestgpt_anthropic_api_team"
     assert result["provider_lease"]["lease_required"] is True
-    assert "sec_pentestgpt_anthropic_team" not in str(result)
     assert "sk-" not in str(result)
+
+
+async def test_security_pentest_execute_filters_provider_runtime_state():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            execution_profile_ref=None,
+            provider_selector={"tags_any": ["api-key"]},
+            provider_runtime_state={
+                "pentestgpt_anthropic_api_team": {
+                    "profile_id": "pentestgpt_anthropic_api_team",
+                    "current_leases": ["wf-1", "wf-2"],
+                }
+            },
+        )
+    )
+
+    assert result["provider_profile"]["profile_id"] == "pentestgpt_openrouter_default"
+    assert result["provider_lease"]["profile_id"] == "pentestgpt_openrouter_default"
 
 
 async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
