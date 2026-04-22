@@ -1,0 +1,522 @@
+{
+  "source": {
+    "title": "Claude Anthropic OAuth in Settings",
+    "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+    "referencePath": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+    "originalDesignText": "# Claude Anthropic OAuth in Settings\n\n**Status:** Desired state  \n**Scope:** Mission Control Settings -> Providers & Secrets -> Provider Profiles  \n**Target OAuth profile:** `claude_anthropic`\n\nThis document defines the OAuth-backed Claude Code authentication path for\nAnthropic accounts. It covers the case where the operator authenticates Claude\nCode through Claude's own interactive login flow in a MoonMind browser terminal,\nand MoonMind persists the resulting Claude home credentials in an auth volume.\n\nThis document does **not** define Anthropic API-key enrollment. API-key auth is a\nseparate credential method that should remain easy to choose from the same\nSettings surface.\n\n## 1. Product Intent\n\nOperators should be able to configure Claude Code credentials from:\n\n- `Settings`\n- `Providers & Secrets`\n- `Provider Profiles`\n\nFor Claude Code with Anthropic, the operator should be able to choose between\ntwo first-class credential methods:\n\n1. **Connect with Claude OAuth**: open a MoonMind browser terminal, run Claude's\n   interactive account login flow, and store the resulting Claude home files in a\n   durable auth volume.\n2. **Use Anthropic API key**: store an Anthropic API key in Managed Secrets and\n   materialize it as `ANTHROPIC_API_KEY` at launch.\n\nThe OAuth path is the subject of this document. The API-key path is mentioned\nonly to clarify that OAuth is not the only valid Claude Anthropic credential\nmethod.\n\n## 2. OAuth Profile Shape\n\nThe OAuth-backed `claude_anthropic` provider profile uses a volume-backed Claude\nhome:\n\n```yaml\nprofile_id: claude_anthropic\nruntime_id: claude_code\nprovider_id: anthropic\nprovider_label: \"Anthropic\"\n\ncredential_source: oauth_volume\nruntime_materialization_mode: oauth_home\n\nvolume_ref: claude_auth_volume\nvolume_mount_path: /home/app/.claude\n\nenabled: true\naccount_label: \"Claude Anthropic OAuth\"\ntags: [\"default\", \"anthropic\", \"oauth\"]\n\nclear_env_keys:\n  - ANTHROPIC_API_KEY\n  - CLAUDE_API_KEY\n  - OPENAI_API_KEY\n```\n\nThe auth volume contains Claude's reusable account-auth material. Raw credential\nfiles are never copied into workflow payloads, logs, artifacts, browser\nresponses, or provider profile rows.\n\n## 3. Settings UX\n\n### 3.1 Placement\n\nClaude Anthropic OAuth enrollment stays inside the existing Provider Profiles\ntable. MoonMind should not create a separate Claude auth page.\n\n### 3.2 Row Actions\n\nFor a Claude Anthropic profile, the row should expose auth actions that make the\ncredential method clear:\n\n- `Connect with Claude OAuth` for OAuth volume enrollment or repair.\n- `Use Anthropic API key` for the separate API-key enrollment path.\n- `Validate OAuth` when an OAuth volume is present and can be checked.\n- `Disconnect OAuth` when supported by the provider-profile lifecycle policy.\n\nClaude rows must not reuse Codex-specific labels where the behavior is Claude\nspecific. Codex OAuth behavior remains available for `codex_default`.\n\n### 3.3 OAuth Terminal Flow\n\nWhen the operator chooses `Connect with Claude OAuth`, Mission Control opens an\nOAuth terminal session anchored to the provider profile row:\n\n```text\nSettings Provider Profile row\n  -> OAuth Session API\n  -> MoonMind.OAuthSession workflow\n  -> short-lived Claude auth-runner container\n  -> MoonMind PTY/WebSocket bridge\n  -> browser terminal\n  -> claude login\n  -> claude_auth_volume mounted as CLAUDE_HOME\n  -> volume verification\n  -> provider profile registration/update\n```\n\nThe terminal is for credential enrollment and repair only. It is not the normal\ntask execution surface for Claude runs.\n\n### 3.4 Claude Sign-In Ceremony\n\nClaude OAuth uses the same browser-terminal infrastructure as Codex OAuth, but\nthe operator ceremony is different.\n\nCodex uses device-code auth. Claude's interactive flow prints or opens a Claude\nauthentication URL, then expects the operator to paste the returned auth token or\nauthorization code back into the terminal.\n\nThe Claude OAuth ceremony is:\n\n1. Operator selects `Connect with Claude OAuth` from the Settings provider\n   profile row.\n2. MoonMind creates an OAuth session for `runtime_id = \"claude_code\"` and opens\n   the in-browser terminal view.\n3. The terminal attaches to a short-lived auth-runner container with\n   `claude_auth_volume` mounted as `CLAUDE_HOME`.\n4. MoonMind starts Claude's interactive login command in that PTY.\n5. Claude prints an authentication URL in the terminal.\n6. Operator opens the URL in a normal browser tab or window and signs in with\n   Anthropic.\n7. Claude/Anthropic returns an auth token or authorization code to the operator.\n8. Operator pastes that token or code back into the MoonMind browser terminal.\n9. The PTY bridge forwards the pasted input to the Claude CLI process.\n10. Claude CLI writes the resulting account-auth material into the mounted\n    Claude home.\n11. Operator or UI finalization triggers volume verification.\n12. MoonMind registers or updates the `claude_anthropic` provider profile.\n\nDuring this ceremony, the OAuth session should remain in an operator-waiting\nstate such as `awaiting_user` while the operator completes the external\nAnthropic sign-in step. The terminal must remain attached long enough for the\noperator to paste the returned token or code.\n\nThe pasted token or code is transient terminal input. MoonMind must not store it\nas a Managed Secret, return it through API responses, write it to artifacts, or\npersist it in provider profile rows. The durable credential output of the flow\nis the Claude auth material written by the Claude CLI into the auth volume.\n\n## 4. OAuth Session Backend\n\nClaude OAuth should use the same OAuth Session API and workflow family as other\nvolume-backed CLI OAuth runtimes:\n\n- `POST /api/v1/oauth-sessions`\n- `POST /api/v1/oauth-sessions/{session_id}/terminal/attach`\n- WebSocket terminal attach\n- `POST /api/v1/oauth-sessions/{session_id}/finalize`\n- cancel, retry, and history endpoints where available\n\nFor `runtime_id = \"claude_code\"`, the provider registry should define:\n\n```yaml\nruntime_id: claude_code\nauth_mode: oauth\nsession_transport: moonmind_pty_ws\ndefault_volume_name: claude_auth_volume\ndefault_mount_path: /home/app/.claude\nprovider_id: anthropic\nprovider_label: Anthropic\nbootstrap_command:\n  - claude\n  - login\nsuccess_check: claude_config_exists\n```\n\nThe auth runner must set Claude-specific home environment variables so the\ninteractive login writes into the mounted auth volume:\n\n- `HOME=/home/app`\n- `CLAUDE_HOME=/home/app/.claude`\n- `CLAUDE_VOLUME_PATH=/home/app/.claude`\n\nThe runner should clear competing API-key environment variables during OAuth\nenrollment so the login state comes from the account-auth flow, not an ambient\nkey:\n\n- `ANTHROPIC_API_KEY`\n- `CLAUDE_API_KEY`\n\n## 5. Verification\n\nFinalization verifies the auth volume before registering or updating the\nprovider profile.\n\nFor Claude OAuth, verification should check for Claude account-auth material\nunder the mounted Claude home. The verifier may accept known Claude credential\nartifacts such as:\n\n- `credentials.json`\n- `settings.json` when it contains evidence that Claude completed account setup\n- any other stable Claude CLI account-auth artifact explicitly documented by the\nruntime adapter\n\nVerification must return only secret-free metadata, such as:\n\n- `verified`\n- `status`\n- `reason`\n- credential artifact counts\n- timestamps\n\nIt must not return credential file contents, tokens, environment dumps, or raw\ndirectory listings that could expose secrets.\n\n## 6. Profile Registration\n\nAfter verification succeeds, MoonMind registers or updates the OAuth-backed\nprovider profile with:\n\n```yaml\ncredential_source: oauth_volume\nruntime_materialization_mode: oauth_home\nvolume_ref: claude_auth_volume\nvolume_mount_path: /home/app/.claude\n```\n\nThe Provider Profile Manager is then synced for `runtime_id = \"claude_code\"` so\nnew runs can select the updated profile.\n\n## 7. Runtime Launch Behavior\n\nAt Claude task launch, MoonMind resolves the selected provider profile and\nmaterializes the OAuth home into the runtime container according to the\nprovider-profile materialization contract:\n\n1. Resolve `claude_anthropic`.\n2. Apply `clear_env_keys`.\n3. Mount or project `claude_auth_volume` at the configured Claude home path.\n4. Set Claude home environment variables consistently for the runtime.\n5. Launch `claude_code`.\n\nThe launch path must not place raw credential file contents in workflow history,\nlogs, or artifacts.\n\n## 8. API-Key Auth Is Separate\n\nThe same Settings surface should also make API-key auth easy to choose. That\npath uses a different provider profile shape:\n\n```yaml\ncredential_source: secret_ref\nruntime_materialization_mode: api_key_env\nenv_template:\n  ANTHROPIC_API_KEY:\n    from_secret_ref: anthropic_api_key\n```\n\nAPI-key enrollment stores the key in Managed Secrets and binds the provider\nprofile to that secret. It is not an OAuth session and should not run through\nthe browser terminal.\n\n## 9. Security Requirements\n\n- Only authorized operators can start, attach to, cancel, finalize, or repair\n  Claude OAuth sessions.\n- Browser terminal attach tokens are short-lived and single-use.\n- Raw credentials are never returned to the browser after login.\n- Terminal output, failure reasons, logs, and artifacts are redacted for\n  secret-like values.\n- Provider profile rows store refs and metadata only, never credential file\n  contents.\n- OAuth auth volumes are credential stores, not task workspaces or audit\n  artifacts.\n\n## 10. Related Documents\n\n- `docs/ManagedAgents/OAuthTerminal.md`\n- `docs/Security/ProviderProfiles.md`\n- `docs/UI/SettingsTab.md`\n- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`\n"
+  },
+  "extractedAt": "2026-04-22T21:51:30Z",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "outputMode": "jira",
+  "designSummary": "ClaudeAnthropicOAuth.md defines the desired Settings and runtime contract for Claude Code authentication against Anthropic accounts. The design keeps Claude OAuth inside the existing Provider Profiles surface, separates OAuth-volume enrollment from API-key secrets, reuses the OAuth Session API and PTY/WebSocket browser terminal for Claude's URL-plus-pasted-code ceremony, verifies auth volumes without exposing credential contents, registers oauth_home provider profiles, and materializes the selected profile into Claude task launches with strict authorization and redaction boundaries.",
+  "coveragePoints": {
+    "DESIGN-REQ-001": {
+      "title": "Settings Provider Profiles placement",
+      "type": "requirement",
+      "source_section": "1. Product Intent; 3.1 Placement",
+      "explanation": "Claude Anthropic credential configuration belongs in Settings -> Providers & Secrets -> Provider Profiles, not a separate Claude auth page."
+    },
+    "DESIGN-REQ-002": {
+      "title": "Two first-class credential methods",
+      "type": "requirement",
+      "source_section": "1. Product Intent; 8. API-Key Auth Is Separate",
+      "explanation": "Operators can choose either Connect with Claude OAuth or Use Anthropic API key from the same Settings surface, with API-key enrollment remaining separate from OAuth terminal sessions."
+    },
+    "DESIGN-REQ-003": {
+      "title": "OAuth-backed provider profile shape",
+      "type": "state-model",
+      "source_section": "2. OAuth Profile Shape",
+      "explanation": "The claude_anthropic profile uses runtime_id claude_code, provider_id anthropic, credential_source oauth_volume, runtime_materialization_mode oauth_home, claude_auth_volume, /home/app/.claude, enabled metadata, tags, and clear_env_keys."
+    },
+    "DESIGN-REQ-004": {
+      "title": "No raw auth material in persisted surfaces",
+      "type": "security",
+      "source_section": "2. OAuth Profile Shape; 7. Runtime Launch Behavior; 9. Security Requirements",
+      "explanation": "Claude credential files, tokens, environment dumps, and raw volume listings must not appear in workflow payloads, logs, artifacts, browser responses, or provider profile rows."
+    },
+    "DESIGN-REQ-005": {
+      "title": "Claude-specific Settings row actions",
+      "type": "requirement",
+      "source_section": "3.2 Row Actions",
+      "explanation": "Claude Anthropic rows expose Connect with Claude OAuth, Use Anthropic API key, Validate OAuth, and Disconnect OAuth where supported, using Claude-specific labels rather than Codex-specific copy."
+    },
+    "DESIGN-REQ-006": {
+      "title": "OAuth terminal flow architecture",
+      "type": "integration",
+      "source_section": "3.3 OAuth Terminal Flow; 4. OAuth Session Backend",
+      "explanation": "Connect with Claude OAuth opens an OAuth session anchored to the provider profile row and flows through the OAuth Session API, MoonMind.OAuthSession workflow, auth-runner container, PTY/WebSocket bridge, browser terminal, claude login, volume verification, and profile registration/update."
+    },
+    "DESIGN-REQ-007": {
+      "title": "Claude sign-in ceremony",
+      "type": "requirement",
+      "source_section": "3.4 Claude Sign-In Ceremony",
+      "explanation": "Claude OAuth uses a URL plus pasted token or authorization code ceremony, not Codex device-code behavior, and the terminal remains attached while the operator completes external Anthropic sign-in."
+    },
+    "DESIGN-REQ-008": {
+      "title": "Operator-waiting OAuth state",
+      "type": "state-model",
+      "source_section": "3.4 Claude Sign-In Ceremony",
+      "explanation": "The OAuth session remains in an operator-waiting state such as awaiting_user while the operator signs in externally and returns a token or code to the terminal."
+    },
+    "DESIGN-REQ-009": {
+      "title": "Transient pasted token handling",
+      "type": "security",
+      "source_section": "3.4 Claude Sign-In Ceremony",
+      "explanation": "The pasted token or code is transient PTY input only and is never stored as a Managed Secret, returned through APIs, written to artifacts, or persisted in provider profile rows."
+    },
+    "DESIGN-REQ-010": {
+      "title": "OAuth Session API reuse",
+      "type": "integration",
+      "source_section": "4. OAuth Session Backend",
+      "explanation": "Claude OAuth reuses the existing OAuth Session API and workflow family, including create, terminal attach, WebSocket attach, finalize, cancel, retry, and history endpoints where available."
+    },
+    "DESIGN-REQ-011": {
+      "title": "Claude provider registry entry",
+      "type": "integration",
+      "source_section": "4. OAuth Session Backend",
+      "explanation": "The provider registry entry for runtime_id claude_code declares oauth mode, moonmind_pty_ws transport, claude_auth_volume, /home/app/.claude, Anthropic provider metadata, claude login bootstrap command, and claude_config_exists success check."
+    },
+    "DESIGN-REQ-012": {
+      "title": "Claude auth-runner environment",
+      "type": "requirement",
+      "source_section": "4. OAuth Session Backend",
+      "explanation": "The auth runner sets HOME, CLAUDE_HOME, and CLAUDE_VOLUME_PATH to the mounted Claude home and clears ANTHROPIC_API_KEY and CLAUDE_API_KEY during OAuth enrollment."
+    },
+    "DESIGN-REQ-013": {
+      "title": "Secret-free volume verification",
+      "type": "verification",
+      "source_section": "5. Verification",
+      "explanation": "Finalization verifies Claude account-auth material in the mounted Claude home using known artifacts while returning only secret-free metadata such as verified, status, reason, counts, and timestamps."
+    },
+    "DESIGN-REQ-014": {
+      "title": "OAuth profile registration and sync",
+      "type": "integration",
+      "source_section": "6. Profile Registration",
+      "explanation": "After verification succeeds, MoonMind registers or updates claude_anthropic with oauth_volume materialization fields and syncs Provider Profile Manager for runtime_id claude_code."
+    },
+    "DESIGN-REQ-015": {
+      "title": "Claude runtime launch materialization",
+      "type": "requirement",
+      "source_section": "7. Runtime Launch Behavior",
+      "explanation": "Claude task launch resolves claude_anthropic, applies clear_env_keys, mounts or projects claude_auth_volume at the configured Claude home, sets Claude home environment variables, and launches claude_code without leaking credential file contents."
+    },
+    "DESIGN-REQ-016": {
+      "title": "Authorized OAuth lifecycle operations",
+      "type": "security",
+      "source_section": "9. Security Requirements",
+      "explanation": "Only authorized operators can start, attach to, cancel, finalize, or repair Claude OAuth sessions; browser terminal attach tokens are short-lived and single-use."
+    },
+    "DESIGN-REQ-017": {
+      "title": "OAuth volume boundary",
+      "type": "constraint",
+      "source_section": "3.3 OAuth Terminal Flow; 9. Security Requirements",
+      "explanation": "The OAuth terminal is only for credential enrollment and repair, not ordinary Claude task execution; OAuth auth volumes are credential stores, not task workspaces or audit artifacts."
+    },
+    "DESIGN-REQ-018": {
+      "title": "Related-contract alignment",
+      "type": "constraint",
+      "source_section": "10. Related Documents",
+      "explanation": "Implementation must align with OAuth terminal, Provider Profiles, Settings tab, and Managed/External Agent execution model contracts."
+    }
+  },
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Claude Settings Credential Method Actions",
+      "shortName": "claude-settings-actions",
+      "description": "As an operator, I can manage Claude Anthropic credentials from the existing Provider Profiles table and choose either OAuth enrollment or API-key enrollment without confusing the two credential methods.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "Claude Anthropic OAuth in Settings",
+        "sections": [
+          "1. Product Intent",
+          "3. Settings UX",
+          "3.1 Placement",
+          "3.2 Row Actions",
+          "8. API-Key Auth Is Separate"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-005"
+        ]
+      },
+      "independentTest": "Render or query the Settings Provider Profiles surface with a Claude Anthropic profile and assert the row exposes Claude-specific OAuth, validation, disconnect, and API-key actions while API-key enrollment routes through Managed Secrets instead of OAuth session APIs.",
+      "acceptanceCriteria": [
+        "Given the operator opens Settings -> Providers & Secrets -> Provider Profiles, then the claude_anthropic row is available from that table rather than a separate Claude auth page.",
+        "Given the Claude Anthropic row is rendered, then it exposes Connect with Claude OAuth and Use Anthropic API key as distinct first-class actions.",
+        "Given an OAuth volume is present and provider policy permits checks, then Validate OAuth is available for the row.",
+        "Given disconnect is supported by the provider-profile lifecycle policy, then Disconnect OAuth is available for the row.",
+        "Given the operator chooses Use Anthropic API key, then the flow stores an Anthropic API key in Managed Secrets and does not create an OAuth terminal session.",
+        "Given Claude-specific behavior is shown, then Codex-specific labels are not reused for the Claude Anthropic row."
+      ],
+      "requirements": [
+        "Keep Claude Anthropic credential setup inside the existing Provider Profiles table.",
+        "Expose distinct OAuth and API-key enrollment actions for Claude Anthropic.",
+        "Route API-key enrollment to Managed Secrets with ANTHROPIC_API_KEY materialization, not through the browser terminal.",
+        "Use Claude-specific labels for Claude actions while preserving Codex OAuth behavior for codex_default."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the Settings Provider Profiles placement requirement.",
+        "DESIGN-REQ-002": "Owns the operator-facing choice between OAuth volume and API-key secret_ref methods.",
+        "DESIGN-REQ-005": "Owns Claude-specific row actions and labels."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "The existing Settings Provider Profiles table can support provider-specific action metadata."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Claude OAuth Provider Registry and Session Backend",
+      "shortName": "claude-oauth-backend",
+      "description": "As an operator, when I choose Connect with Claude OAuth, MoonMind creates a Claude-specific OAuth session that starts a short-lived auth runner with the correct mounted Claude home and bootstrap command.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "Claude Anthropic OAuth in Settings",
+        "sections": [
+          "2. OAuth Profile Shape",
+          "3.3 OAuth Terminal Flow",
+          "4. OAuth Session Backend"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "Create a Claude OAuth session through the OAuth Session API using runtime_id = claude_code and assert the workflow/activity payloads, registry lookup, runner command, volume mount, environment, and clear-env behavior match the Claude contract without starting an ordinary task run.",
+      "acceptanceCriteria": [
+        "Given Connect with Claude OAuth is invoked for claude_anthropic, then POST /api/v1/oauth-sessions creates a session anchored to that provider profile row.",
+        "Given runtime_id = claude_code, then the provider registry resolves auth_mode oauth, session_transport moonmind_pty_ws, default volume claude_auth_volume, mount path /home/app/.claude, provider_id anthropic, provider_label Anthropic, bootstrap command claude login, and success_check claude_config_exists.",
+        "Given the auth runner starts, then it mounts claude_auth_volume as the Claude home used for enrollment.",
+        "Given the auth runner environment is built, then HOME=/home/app, CLAUDE_HOME=/home/app/.claude, and CLAUDE_VOLUME_PATH=/home/app/.claude are set.",
+        "Given ambient API-key variables are present, then ANTHROPIC_API_KEY and CLAUDE_API_KEY are cleared for the OAuth enrollment runner.",
+        "Given the session is for OAuth enrollment or repair, then it is not treated as the normal task execution surface for Claude runs."
+      ],
+      "requirements": [
+        "Reuse the OAuth Session API and MoonMind.OAuthSession workflow family for Claude OAuth.",
+        "Define a Claude provider registry entry for runtime_id claude_code with the documented transport, volume, provider metadata, bootstrap command, and success check.",
+        "Start a short-lived auth runner with Claude-specific home environment variables and clear competing API-key variables.",
+        "Keep OAuth terminal sessions scoped to credential enrollment and repair."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Carries the profile shape fields that drive backend enrollment and later materialization.",
+        "DESIGN-REQ-006": "Owns the backend portion of the OAuth terminal flow architecture.",
+        "DESIGN-REQ-010": "Owns OAuth Session API and workflow reuse for Claude.",
+        "DESIGN-REQ-011": "Owns the runtime registry contract for claude_code OAuth.",
+        "DESIGN-REQ-012": "Owns auth-runner Claude home and clear-env behavior.",
+        "DESIGN-REQ-017": "Keeps the runner/session scoped to auth enrollment or repair only.",
+        "DESIGN-REQ-018": "Requires alignment with related OAuth terminal and provider-profile contracts."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "The existing OAuth session workflow can accept a provider registry entry for claude_code without a new workflow family."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Claude Browser Terminal Sign-In Ceremony",
+      "shortName": "claude-terminal-ceremony",
+      "description": "As an operator, I can complete Claude OAuth in a MoonMind browser terminal by opening Claude's authentication URL externally and pasting the returned token or code back into the terminal while the session waits for me.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "Claude Anthropic OAuth in Settings",
+        "sections": [
+          "3.3 OAuth Terminal Flow",
+          "3.4 Claude Sign-In Ceremony",
+          "4. OAuth Session Backend",
+          "9. Security Requirements"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "independentTest": "Run a fake Claude login process through the PTY/WebSocket bridge that prints a URL, waits for pasted input, receives a synthetic code, and assert session status, terminal attachment lifetime, and persisted records treat the code as transient input only.",
+      "acceptanceCriteria": [
+        "Given a Claude OAuth session is created, then Mission Control opens the in-browser terminal view attached to the short-lived auth runner.",
+        "Given Claude prints an authentication URL, then the terminal remains attached and the session moves to or remains in an operator-waiting state such as awaiting_user.",
+        "Given the operator pastes a returned token or authorization code, then the PTY bridge forwards it only to the Claude CLI process.",
+        "Given terminal input contains a token or code, then MoonMind does not store it as a Managed Secret, return it through an API response, write it to an artifact, or persist it in a provider profile row.",
+        "Given attach tokens are issued for the browser terminal, then they are short-lived and single-use.",
+        "Given the OAuth terminal is active, then it cannot be used as a generic Claude task execution terminal."
+      ],
+      "requirements": [
+        "Support Claude's URL plus pasted token or authorization-code ceremony instead of Codex device-code semantics.",
+        "Keep the terminal attached while the operator completes external Anthropic sign-in.",
+        "Represent operator wait time with an explicit awaiting_user-style state.",
+        "Treat pasted tokens or codes as transient terminal input only.",
+        "Enforce terminal attach token lifetime, single use, and session ownership."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-006": "Owns the browser terminal and PTY/WebSocket portion of the OAuth flow.",
+        "DESIGN-REQ-007": "Owns Claude-specific sign-in ceremony behavior.",
+        "DESIGN-REQ-008": "Owns awaiting_user-style operator waiting state during external sign-in.",
+        "DESIGN-REQ-009": "Owns transient handling of pasted tokens or authorization codes.",
+        "DESIGN-REQ-010": "Uses OAuth session terminal attach and WebSocket attach endpoints.",
+        "DESIGN-REQ-016": "Owns short-lived single-use terminal attach tokens for the sign-in flow.",
+        "DESIGN-REQ-017": "Keeps the terminal scoped to enrollment and repair."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Tests can use a fake Claude CLI process to avoid external Anthropic credentials."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Claude OAuth Verification and Profile Registration",
+      "shortName": "claude-oauth-verify-profile",
+      "description": "As an operator, I can finalize a Claude OAuth session and have MoonMind verify the auth volume, register or update the OAuth-backed provider profile, and expose only secret-free verification metadata.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "Claude Anthropic OAuth in Settings",
+        "sections": [
+          "5. Verification",
+          "6. Profile Registration",
+          "9. Security Requirements"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "Finalize a Claude OAuth session against a temporary Claude home containing representative credential artifacts and assert the verifier returns secret-free metadata, then assert the claude_anthropic profile is registered or updated with oauth_volume fields and Provider Profile Manager sync occurs.",
+      "acceptanceCriteria": [
+        "Given finalization runs after Claude login, then MoonMind verifies account-auth material under the mounted Claude home before profile registration.",
+        "Given known artifacts such as credentials.json or qualifying settings.json are present, then verification can return verified status using only metadata.",
+        "Given verification output is returned or persisted, then it includes only secret-free fields such as verified, status, reason, artifact counts, and timestamps.",
+        "Given verification succeeds, then claude_anthropic is registered or updated with credential_source oauth_volume, runtime_materialization_mode oauth_home, volume_ref claude_auth_volume, and volume_mount_path /home/app/.claude.",
+        "Given profile registration succeeds, then Provider Profile Manager is synced for runtime_id claude_code.",
+        "Given an unauthorized operator attempts finalize or repair, then the operation is rejected."
+      ],
+      "requirements": [
+        "Verify Claude account-auth material before registering or updating the provider profile.",
+        "Accept only explicitly documented Claude credential artifacts as proof of account setup.",
+        "Return and persist secret-free verification metadata only.",
+        "Register or update the OAuth-backed claude_anthropic provider profile after successful verification.",
+        "Sync Provider Profile Manager for claude_code after successful registration."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Owns the persisted OAuth-backed profile fields after successful verification.",
+        "DESIGN-REQ-004": "Ensures verifier and profile registration do not expose raw auth material.",
+        "DESIGN-REQ-013": "Owns the secret-free volume verification contract.",
+        "DESIGN-REQ-014": "Owns profile registration/update and Provider Profile Manager sync.",
+        "DESIGN-REQ-016": "Owns authorization checks for finalize and repair operations.",
+        "DESIGN-REQ-018": "Keeps verification aligned with related provider-profile contracts."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [
+        "The runtime adapter will document the accepted stable Claude credential artifacts before implementation completes."
+      ],
+      "needsClarification": [
+        "Which Claude CLI account-auth artifact set is stable enough for claude_config_exists verification?"
+      ]
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Claude OAuth Runtime Launch Materialization",
+      "shortName": "claude-oauth-launch",
+      "description": "As a task operator, when a Claude run uses the OAuth-backed profile, MoonMind launches claude_code with the Claude auth volume materialized as the runtime home and competing API-key variables cleared.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "Claude Anthropic OAuth in Settings",
+        "sections": [
+          "2. OAuth Profile Shape",
+          "7. Runtime Launch Behavior",
+          "9. Security Requirements"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "Build a Claude task launch from a selected claude_anthropic profile and inspect the workflow/activity or adapter-bound payload to confirm clear_env_keys, auth volume mount/projection, Claude home environment variables, launch command, and redaction behavior.",
+      "acceptanceCriteria": [
+        "Given a Claude task selects claude_anthropic, then launch resolves that provider profile before container or runtime startup.",
+        "Given the selected profile contains clear_env_keys, then ANTHROPIC_API_KEY, CLAUDE_API_KEY, and OPENAI_API_KEY are removed from the launch environment before claude_code starts.",
+        "Given oauth_home materialization is selected, then claude_auth_volume is mounted or projected at /home/app/.claude according to the provider-profile materialization contract.",
+        "Given the runtime environment is built, then Claude home environment variables are set consistently for the runtime.",
+        "Given workflow history, logs, or artifacts are inspected after launch, then raw credential file contents are absent.",
+        "Given a workload or audit artifact path is requested, then the auth volume is not treated as a task workspace or audit artifact."
+      ],
+      "requirements": [
+        "Resolve claude_anthropic at Claude task launch.",
+        "Apply clear_env_keys exactly as defined by the selected profile.",
+        "Materialize claude_auth_volume at the configured Claude home path for oauth_home profiles.",
+        "Set Claude home environment variables consistently before launching claude_code.",
+        "Keep raw credential file contents out of workflow history, logs, and artifacts."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Consumes the OAuth-backed profile shape at launch.",
+        "DESIGN-REQ-004": "Ensures launch payloads and evidence surfaces do not contain raw credential contents.",
+        "DESIGN-REQ-015": "Owns runtime launch materialization for Claude OAuth profiles.",
+        "DESIGN-REQ-017": "Preserves the boundary between auth volumes, task workspaces, and audit artifacts.",
+        "DESIGN-REQ-018": "Keeps launch behavior aligned with the managed/external execution model and provider-profile contracts."
+      },
+      "dependencies": [
+        "STORY-004"
+      ],
+      "assumptions": [
+        "The provider-profile materialization contract already defines mount versus projection behavior for oauth_home profiles."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Claude OAuth Authorization and Redaction Guardrails",
+      "shortName": "claude-oauth-guardrails",
+      "description": "As an operator and platform maintainer, I can rely on Claude OAuth lifecycle operations, terminal output, errors, logs, artifacts, and profile rows to enforce authorization and redact secret-like values across the full flow.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "Claude Anthropic OAuth in Settings",
+        "sections": [
+          "2. OAuth Profile Shape",
+          "3.4 Claude Sign-In Ceremony",
+          "5. Verification",
+          "7. Runtime Launch Behavior",
+          "9. Security Requirements"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "Exercise unauthorized lifecycle calls and inject secret-like values into terminal output, failure reasons, logs, and artifact-producing paths, then assert access is denied where required and every externally visible surface is redacted.",
+      "acceptanceCriteria": [
+        "Given an unauthenticated or unauthorized operator attempts to start, attach to, cancel, finalize, or repair a Claude OAuth session, then MoonMind denies the operation.",
+        "Given a browser terminal attach token is reused or expired, then attach fails.",
+        "Given terminal output, failure reasons, logs, or artifacts contain secret-like values, then externally visible output is redacted.",
+        "Given provider profile rows are read, then they contain refs and metadata only, never credential file contents.",
+        "Given OAuth auth volume metadata is surfaced, then the volume is described as a credential store and not exposed as a task workspace or audit artifact.",
+        "Given guardrail tests run, then they cover the real API/workflow/activity or adapter boundary rather than only isolated helpers."
+      ],
+      "requirements": [
+        "Enforce authorization across Claude OAuth start, attach, cancel, finalize, and repair operations.",
+        "Make browser terminal attach tokens short-lived and single-use.",
+        "Redact secret-like values from terminal output, failure reasons, logs, and artifacts.",
+        "Keep provider profile rows limited to refs and metadata.",
+        "Treat OAuth auth volumes strictly as credential stores."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-004": "Owns cross-surface no-raw-credential enforcement.",
+        "DESIGN-REQ-009": "Reinforces transient handling for pasted tokens or authorization codes.",
+        "DESIGN-REQ-013": "Ensures verifier metadata remains secret-free under adversarial content.",
+        "DESIGN-REQ-016": "Owns authorization and attach-token security for lifecycle operations.",
+        "DESIGN-REQ-017": "Enforces auth volume and terminal scope boundaries.",
+        "DESIGN-REQ-018": "Requires guardrails to hold across related contract boundaries."
+      },
+      "dependencies": [
+        "STORY-002",
+        "STORY-003",
+        "STORY-004",
+        "STORY-005"
+      ],
+      "assumptions": [
+        "Existing redaction utilities can be reused for Claude OAuth surfaces."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-002",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-004",
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-004",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-002",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006"
+    ]
+  }
+}
