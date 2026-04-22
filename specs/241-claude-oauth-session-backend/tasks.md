@@ -71,7 +71,7 @@
 - [X] T011 Update `moonmind/workflows/temporal/runtime/providers/registry.py` so `claude_code` uses `moonmind_pty_ws` and `["claude", "login"]` for FR-002, FR-003, DESIGN-REQ-010.
 - [X] T012 Update `moonmind/workflows/temporal/runtime/terminal_bridge.py` to emit runtime-specific OAuth runner environment variables and empty Claude API-key variables for FR-004, FR-005, FR-009, DESIGN-REQ-011, DESIGN-REQ-012.
 - [X] T013 Update `api_service/main.py` seeded `claude_anthropic` profile to include `CLAUDE_API_KEY` in `clear_env_keys` for FR-006, FR-007, DESIGN-REQ-003, DESIGN-REQ-018.
-- [X] T014 Run focused tests for provider registry, OAuth activities, terminal bridge, OAuth sessions route, and provider profile auto-seed; fix failures.
+- [X] T014 Run focused tests for provider registry, OAuth activities, terminal bridge, OAuth sessions route, and provider profile auto-seed, including OAuth terminal scope coverage for FR-008; fix failures.
 
 **Checkpoint**: Claude OAuth backend behavior is implemented and covered by focused tests.
 
