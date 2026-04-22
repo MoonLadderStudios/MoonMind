@@ -1,32 +1,27 @@
 [
   {
-    "id": 3123698888,
+    "id": 3123798424,
     "disposition": "addressed",
-    "rationale": "Removed the redundant report.primary check after report-mode classification and switched the unsupported report link error to f-string formatting."
+    "rationale": "Identifier fields now bypass path-style unsafe string checks, and unit coverage verifies hierarchical target workflow/run IDs are preserved."
   },
   {
-    "id": 3123698898,
+    "id": 3123798439,
     "disposition": "addressed",
-    "rationale": "Switched the unsupported observability link error to f-string formatting."
+    "rationale": "String timestamps are now parsed and normalized to UTC Zulu format, with malformed strings rejected by regression coverage."
   },
   {
-    "id": 3123698904,
-    "disposition": "addressed",
-    "rationale": "Removed the redundant projection key loop because validate_report_bundle_result already enforces allowed bundle keys."
-  },
-  {
-    "id": 4154383632,
+    "id": 4154502370,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the specific inline feedback from this review was addressed separately."
+    "rationale": "Top-level review summary only; its two actionable findings are tracked by inline comments 3123798424 and 3123798439."
   },
   {
-    "id": 3123703552,
+    "id": 3123798641,
     "disposition": "addressed",
-    "rationale": "Added fallback validation that rejects any non-generic link type when allow_generic_fallback=True, with unit coverage for runtime.stdout rejection."
+    "rationale": "The lifecycle payload sanitizer now allowlists authorityMode while continuing to drop secret-like keys, and publisher coverage asserts remediation.summary retains authorityMode."
   },
   {
-    "id": 4154389563,
+    "id": 4154502596,
     "disposition": "not-applicable",
-    "rationale": "Informational Codex review body; the actionable inline comment from this review was addressed separately."
+    "rationale": "Automated review wrapper with no additional actionable feedback beyond the inline comments already addressed."
   }
 ]
