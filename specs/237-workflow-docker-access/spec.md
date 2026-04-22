@@ -87,7 +87,7 @@ Needs Clarification
 1. **Given** no override is configured, **When** settings load, **Then** workflow Docker access is enabled by default.
 2. **Given** `MOONMIND_WORKFLOW_DOCKER_ENABLED=true`, **When** a workflow invokes an approved Docker-backed tool, **Then** MoonMind validates the approved runner profile and may route the request to the Docker-capable workload launcher.
 3. **Given** `MOONMIND_WORKFLOW_DOCKER_ENABLED=false`, **When** a workflow invokes any Docker-backed workload tool, **Then** MoonMind fails fast with a policy-denied error containing `docker_workflows_disabled` before validating or launching a container.
-4. **Given** a workflow invokes the curated integration-CI tool, **When** Docker workflow access is enabled, **Then** MoonMind maps the request to `./tools/test_integration.sh` in a Docker-visible workspace and returns normal workload result artifact references and bounded diagnostics.
+4. **Given** a workflow invokes the curated integration-CI tool, **When** Docker workflow access is enabled, **Then** MoonMind maps the request to `./tools/test_integration.sh` in a Docker-visible workspace and returns normal workload result artifact references and bounded diagnostics, including failure diagnostics such as compose-log context when the runner emits them.
 5. **Given** a normal agent/session container is launched, **When** workflow Docker access is enabled, **Then** the setting does not grant raw `/var/run/docker.sock` access to that agent/session container.
 
 ### Edge Cases
@@ -114,7 +114,7 @@ Needs Clarification
 - **FR-006**: The setting MUST gate DooD capability routing and workflow workload activities, not direct socket mounts.
 - **FR-007**: Normal agent/session containers MUST NOT receive raw `/var/run/docker.sock` access because this setting is enabled.
 - **FR-008**: MoonMind MUST expose a curated integration-CI Docker-backed tool that runs `./tools/test_integration.sh` from a Docker-visible workspace.
-- **FR-009**: The integration-CI tool MUST return artifact-backed stdout, stderr, diagnostics, output refs, workload metadata, and compact status summary through the existing workload result contract.
+- **FR-009**: The integration-CI tool MUST return artifact-backed stdout, stderr, diagnostics, output refs, workload metadata, and compact status summary through the existing workload result contract; failure diagnostics MUST be able to carry compose-log context when the integration runner emits it.
 - **FR-010**: Existing human and GitHub Actions usage of `./tools/test_integration.sh` MUST remain unchanged.
 - **FR-011**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve Jira issue key `MM-476`.
 
@@ -122,7 +122,7 @@ Needs Clarification
 
 - **Workflow Docker Access Setting**: Runtime configuration value that decides whether workflow-requested Docker-backed tools may proceed.
 - **Docker-Backed Workflow Tool**: An approved executable tool or activity that requires the Docker workload plane, including generic DooD tools and curated wrappers.
-- **Integration-CI Tool Result**: Existing workload result metadata carrying status, artifact refs, output refs, and bounded diagnostics.
+- **Integration-CI Tool Result**: Existing workload result metadata carrying status, artifact refs, output refs, and bounded diagnostics, including failure context emitted by the integration runner.
 
 ## Success Criteria *(mandatory)*
 

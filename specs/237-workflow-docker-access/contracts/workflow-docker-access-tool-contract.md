@@ -66,6 +66,11 @@ The tool returns the existing workload result envelope:
 }
 ```
 
+Failure context emitted by the integration runner, including compose-log context
+when present, is carried by `diagnosticsRef` and/or named entries in
+`outputRefs`. The curated tool does not add a separate compose-log-specific
+top-level field.
+
 ## Failure
 
 When `MOONMIND_WORKFLOW_DOCKER_ENABLED=false`, the tool fails before registry validation or launcher invocation:

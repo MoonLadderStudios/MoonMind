@@ -61,13 +61,13 @@
 
 - [X] T006 [P] Add failing settings tests for default enabled and `MOONMIND_WORKFLOW_DOCKER_ENABLED=false` in `tests/unit/config/test_settings.py` covering FR-001, FR-002, SC-001
 - [X] T007 [P] Add failing workload bridge tests proving disabled `container.run_workload` and `moonmind.integration_ci` raise `docker_workflows_disabled` before registry or launcher calls in `tests/unit/workloads/test_workload_tool_bridge.py` covering FR-004, FR-005, FR-006, SC-002
-- [X] T008 [P] Add failing workload bridge tests proving `moonmind.integration_ci` maps to profile `moonmind-integration-ci`, command `./tools/test_integration.sh`, and existing workload result outputs in `tests/unit/workloads/test_workload_tool_bridge.py` covering FR-008, FR-009, SC-004
+- [X] T008 [P] Add failing workload bridge tests proving `moonmind.integration_ci` maps to profile `moonmind-integration-ci`, command `./tools/test_integration.sh`, and existing workload result outputs including diagnostics/output refs for runner-emitted failure context in `tests/unit/workloads/test_workload_tool_bridge.py` covering FR-008, FR-009, SC-004
 - [X] T009 [P] Add failing activity tests proving direct `workload.run` denial happens before registry or launcher calls in `tests/unit/workflows/temporal/test_workload_run_activity.py` covering FR-004, FR-005, FR-006, SC-002
 - [X] T010 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/config/test_settings.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py` and confirm T006-T009 fail for missing MM-476 behavior before implementation
 
 ### Integration Tests (write first)
 
-- [X] T011 [P] Add failing integration/activity-boundary test for `moonmind.integration_ci` dispatcher routing in `tests/integration/temporal/test_integration_ci_tool_contract.py` covering FR-008, FR-009, SC-003, SC-004
+- [X] T011 [P] Add failing integration/activity-boundary test for `moonmind.integration_ci` dispatcher routing and artifact-backed diagnostics/output refs in `tests/integration/temporal/test_integration_ci_tool_contract.py` covering FR-008, FR-009, SC-003, SC-004
 - [X] T012 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/integration/temporal/test_integration_ci_tool_contract.py` and confirm T011 fails for missing MM-476 behavior before implementation
 
 ### Implementation

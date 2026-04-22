@@ -19,7 +19,7 @@ Implement MM-476 by adding a workflow-level Docker access setting, enforcing it 
 | FR-006 | implemented_verified | generic tool handlers, direct `workload.run`, and Pentest Docker-backed boundary are gated | no remaining work | unit + integration boundary |
 | FR-007 | implemented_verified | managed-session launch code was not changed; existing managed-session tests pass in full unit suite | no remaining work | unit |
 | FR-008 | implemented_verified | `moonmind.integration_ci` tool/profile and request mapping are implemented | no remaining work | unit + integration boundary |
-| FR-009 | implemented_verified | integration-CI tests assert existing workload refs and metadata result shape | no remaining work | unit |
+| FR-009 | implemented_verified | integration-CI tests assert existing workload refs and metadata result shape; failure context is carried through `diagnosticsRef` and `outputRefs` when emitted by the runner | no remaining work | unit + integration boundary |
 | FR-010 | implemented_verified | `./tools/test_integration.sh` remains a standalone script | do not modify script | final verify |
 | FR-011 | implemented_verified | MM-476 is present in orchestration input, spec, plan, tasks, and final verification evidence | no remaining work | final verify |
 | SC-001 | implemented_verified | settings tests cover default and env override | no remaining work | unit |
