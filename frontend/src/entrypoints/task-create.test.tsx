@@ -5589,10 +5589,15 @@ describe("Task Create Entrypoint", () => {
     expect(instructions.closest(".queue-step-section")).not.toBeNull();
     expect(instructions.closest(".queue-floating-bar")).toBeNull();
     expect(floatingBars).toHaveLength(1);
-    expect(floatingBars[0].closest('[data-canonical-create-section="Submit"]')).toBe(
+    const floatingBar = floatingBars.item(0);
+    expect(floatingBar).not.toBeNull();
+    if (!floatingBar) {
+      throw new Error("Expected one floating launch rail");
+    }
+    expect(floatingBar.closest('[data-canonical-create-section="Submit"]')).toBe(
       submitSection,
     );
-    expect(within(floatingBars[0]).getByRole("button", { name: "Create" })).toBe(
+    expect(within(floatingBar).getByRole("button", { name: "Create" })).toBe(
       createButton,
     );
     expect(createButton.getAttribute("title")).toBe("Create this task");
