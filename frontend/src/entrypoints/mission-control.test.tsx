@@ -584,6 +584,20 @@ describe('Mission Control shared entry', () => {
     );
   });
 
+  it('keeps the mobile navigation layer above route content panels', async () => {
+    const mastheadBlock = cssRuleBlock(missionControlCss, '.masthead');
+    expect(mastheadBlock).toContain('position: relative;');
+    expect(mastheadBlock).toContain('z-index: 50;');
+    expect(mastheadBlock).toContain('isolation: isolate;');
+
+    const navBlocks = cssRuleBlocks(missionControlCss, '.route-nav');
+    expect(
+      navBlocks.some(
+        (block) => block.includes('position: absolute;') && block.includes('z-index: 30;'),
+      ),
+    ).toBe(true);
+  });
+
   it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
     const { readFileSync } = await import('node:fs');
     const missionControlCss = readFileSync(
