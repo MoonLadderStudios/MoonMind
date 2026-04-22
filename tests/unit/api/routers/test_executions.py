@@ -812,6 +812,70 @@ def test_create_task_shaped_execution_prefers_task_depends_on(
     assert "dependsOn" not in kwargs["initial_parameters"]["task"]
 
 
+def test_create_task_shaped_execution_preserves_remediation_payload(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "task": {
+                    "instructions": "Investigate the failed run.",
+                    "runtime": {"mode": "codex"},
+                    "remediation": {
+                        "target": {"workflowId": "mm:target-workflow"},
+                        "mode": "snapshot_then_follow",
+                        "authorityMode": "observe_only",
+                        "trigger": {"type": "manual"},
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    service.create_execution.assert_awaited_once()
+    kwargs = service.create_execution.call_args.kwargs
+    assert kwargs["initial_parameters"]["task"]["remediation"] == {
+        "target": {"workflowId": "mm:target-workflow"},
+        "mode": "snapshot_then_follow",
+        "authorityMode": "observe_only",
+        "trigger": {"type": "manual"},
+    }
+
+
+def test_create_task_shaped_execution_preserves_malformed_remediation_for_service_validation(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "task": {
+                    "instructions": "Investigate the failed run.",
+                    "runtime": {"mode": "codex"},
+                    "remediation": "mm:target-workflow",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    service.create_execution.assert_awaited_once()
+    kwargs = service.create_execution.call_args.kwargs
+    assert kwargs["initial_parameters"]["task"]["remediation"] == "mm:target-workflow"
+
+
 def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1994,7 +2058,7 @@ def test_signal_execution_routes_skip_dependency_wait(monkeypatch: pytest.Monkey
     assert called["signal_name"] == "SkipDependencyWait"
     assert called["payload"] == {}
     body = response.json()
-    assert body["actions"]["canSkipDependencyWait"] is True
+    assert body["actions"]["canSkipDependencyWait"] is False
     assert body["interventionAudit"][0]["action"] == "skip_dependency_wait"
 
 

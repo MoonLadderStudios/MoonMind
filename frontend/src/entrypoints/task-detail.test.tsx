@@ -2553,7 +2553,7 @@ describe('Task Detail Entrypoint', () => {
     confirmSpy.mockRestore();
   });
 
-  it('supports manually skipping dependency waiting from the Intervention panel', async () => {
+  it('does not show the obsolete dependency wait skip action in the Intervention panel', async () => {
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
@@ -2582,25 +2582,12 @@ describe('Task Detail Entrypoint', () => {
       interventionAudit: [],
     };
 
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/artifacts')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ artifacts: [] }),
-        } as Response);
-      }
-      if (url.endsWith('/signal')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            ...mockExecution,
-            state: 'executing',
-            rawState: 'executing',
-            summary: 'Dependency wait skipped by operator.',
-          }),
         } as Response);
       }
       return Promise.resolve({
@@ -2611,22 +2598,10 @@ describe('Task Detail Entrypoint', () => {
 
     renderWithClient(<TaskDetailPage payload={actionPayload} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Skip Dependency Wait' }));
-
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/executions/test-123/signal',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({
-            signalName: 'SkipDependencyWait',
-            payload: {},
-          }),
-        }),
-      );
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
     });
-
-    confirmSpy.mockRestore();
+    expect(screen.queryByRole('button', { name: 'Skip Dependency Wait' })).toBeNull();
   });
 
   it('renders a Session Continuity panel for Codex managed-session task runs', async () => {
