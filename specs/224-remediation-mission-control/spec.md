@@ -3,14 +3,111 @@
 **Feature Branch**: `224-remediation-mission-control`
 **Created**: 2026-04-22
 **Status**: Draft
-**Input**: Jira Orchestrate for MM-437.
+**Input**: Jira Orchestrate for MM-457 using the Jira preset brief preserved below from `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
 
-Source story: STORY-007.
-Source summary: Show remediation creation, evidence, links, and approvals in Mission Control.
-Source Jira issue: unknown.
-Original brief reference: not provided.
+Source summary: Show task remediation creation, evidence, locks, approvals, and links in Mission Control.
+Source Jira issue: MM-457.
+Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
+Source coverage IDs: DESIGN-REQ-005, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022, DESIGN-REQ-023.
 
-Use the existing Jira Orchestrate workflow for this Jira issue. Do not run implementation inline inside the breakdown task.
+Use the Jira preset brief for MM-457 as the canonical Moon Spec orchestration input. Runtime mode is selected, so implementation and verification work should proceed from this artifact set.
+
+**Original Jira Preset Brief**:
+
+```markdown
+# MM-457 MoonSpec Orchestration Input
+
+## Source
+
+- Jira issue: MM-457
+- Jira project key: MM
+- Issue type: Story
+- Current status at fetch time: In Progress
+- Summary: Show task remediation creation, evidence, locks, approvals, and links in Mission Control
+- Labels: `moonmind-workflow-mm-4fcd9c9b-785c-42de-a6ca-ed60359eadf6`
+- Trusted fetch tool: `jira.get_issue`
+- Canonical source: normalized Jira preset brief synthesized from trusted Jira tool response fields because the MCP issue response did not expose `recommendedImports.presetInstructions`, `normalizedPresetBrief`, `presetBrief`, or `presetInstructions`.
+
+## Canonical MoonSpec Feature Request
+
+Jira issue: MM-457 from MM project
+Summary: Show task remediation creation, evidence, locks, approvals, and links in Mission Control
+Issue type: Story
+Current Jira status: In Progress
+Jira project key: MM
+
+Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-457 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+
+MM-457: Show task remediation creation, evidence, locks, approvals, and links in Mission Control
+
+Source Reference
+- Source document: `docs/Tasks/TaskRemediation.md`
+- Source title: Task Remediation
+- Source sections:
+  - 15. Mission Control UX
+  - 8.5 Reverse lookup API
+  - 14.4 Target-side linkage summary
+- Coverage IDs:
+  - DESIGN-REQ-005
+  - DESIGN-REQ-020
+  - DESIGN-REQ-021
+  - DESIGN-REQ-022
+  - DESIGN-REQ-023
+
+User Story
+As an operator in Mission Control, I can create remediation tasks from relevant target surfaces and inspect target/remediator relationships, evidence, live observation, lock state, actions, approvals, and outcomes.
+
+Acceptance Criteria
+- Operators can start remediation from target task/problem surfaces and the submission payload matches the canonical contract.
+- Target detail shows inbound remediators and active lock/action/resolution metadata.
+- Remediation detail shows target identity, pinned run, selected steps, current state, evidence, action policy, approval, and lock information.
+- Evidence links open through artifact/log APIs and honor redaction and visibility rules.
+- Live follow UI is clearly non-authoritative, resumes sequence position where possible, and falls back to durable artifacts.
+- Approval decisions for gated/high-risk actions are captured and visible in the audit trail.
+
+Requirements
+- Mission Control makes remediation relationships visible in both directions.
+- UI cannot imply raw host/admin shell access; action surfaces are typed and policy-bound.
+- Partial evidence and live-follow unavailability must be visible without deadlocking the user flow.
+
+Relevant Implementation Notes
+- Preserve MM-457 in downstream MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+- Use `docs/Tasks/TaskRemediation.md` as the source design reference for remediation task creation, reverse lookup, target-side linkage summaries, remediation detail surfaces, evidence presentation, live follow behavior, approvals, and bounded operator handoff.
+- Expose create-remediation entry points from task detail, failed task banners, attention-required surfaces, stuck task surfaces, and provider-slot or session problem surfaces where applicable.
+- Ensure the create flow lets operators choose the pinned target run, choose all or selected steps, choose troubleshooting-only or admin remediation, choose live-follow mode, choose or review the action policy, and preview attached evidence.
+- Show target-side remediation relationships through a Remediation Tasks panel with links, status, authority mode, last action, resolution, and active lock state.
+- Show remediation-side target context with target execution link, pinned target run id, selected steps, current target state, evidence bundle link, allowed actions, approval state, and lock state.
+- Provide direct access to remediation context artifacts, referenced target logs and diagnostics, remediation decision logs, action request/result artifacts, and verification artifacts through existing artifact/log APIs.
+- Clearly label live-follow data as non-authoritative live observation, preserve sequence position where possible, make managed-session epoch boundaries explicit, and fall back to durable artifacts when streaming is unavailable.
+- Capture approval-gated and high-risk action decisions with proposed action, preconditions, expected blast radius, approve/reject result, and audit-trail visibility.
+- Implement reverse lookup surfaces for inbound and outbound remediation relationships, such as `GET /api/executions/{workflowId}/remediations?direction=inbound` and `GET /api/executions/{workflowId}/remediations?direction=outbound`, or equivalent repository-local API patterns.
+- Keep host/admin shell capability out of the UI language and behavior; action surfaces must remain typed, policy-bound, and auditable.
+- Surface partial evidence and unavailable live-follow streams as degraded states instead of blocking navigation or hiding remediation context.
+
+Non-Goals
+- Granting raw host/admin shell access from Mission Control remediation surfaces.
+- Treating live-follow streams as authoritative durable evidence.
+- Hiding partial evidence or unavailable streams behind loading states that deadlock the operator flow.
+- Replacing artifact/log APIs or audit trails with remediation-specific ad hoc data paths.
+- Dropping bidirectional target/remediator visibility when only one side of the relationship is currently active.
+
+Validation
+- Verify operators can start remediation from target task/problem surfaces and the submission payload matches the canonical contract.
+- Verify target detail shows inbound remediators and active lock/action/resolution metadata.
+- Verify remediation detail shows target identity, pinned run, selected steps, current state, evidence, action policy, approval, and lock information.
+- Verify evidence links open through artifact/log APIs and honor redaction and visibility rules.
+- Verify live follow UI is clearly non-authoritative, resumes sequence position where possible, and falls back to durable artifacts.
+- Verify approval decisions for gated/high-risk actions are captured and visible in the audit trail.
+- Verify inbound and outbound remediation lookup surfaces expose target/remediator relationships without relying on raw workflow history inspection.
+- Verify partial evidence and unavailable live-follow states are visible to operators without deadlocking the user flow.
+
+Dependencies
+- Trusted Jira link metadata at fetch time shows MM-457 blocks MM-456, whose embedded status is Code Review.
+- Trusted Jira link metadata at fetch time shows MM-457 is blocked by MM-458, whose embedded status is Backlog.
+
+Needs Clarification
+- None
+```
 
 ## User Story - Remediation Mission Control Surfaces
 
@@ -43,7 +140,7 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 - This story implements Mission Control visibility and operator handoff surfaces only; it does not create a new remediation execution workflow type.
 - Existing remediation create, context artifact, and evidence-tool slices provide the canonical backend foundations where already implemented.
 - Approval decision persistence may reuse an existing audit/control-event surface if one is available; otherwise this story adds only the narrow API/UI contract needed for approval-gated remediation display and decision submission.
-- The source Jira issue key is unknown in the task instruction, so artifacts preserve MM-437 as the orchestration target while recording the issue field as unknown.
+- The source Jira issue key is MM-457; artifacts, implementation notes, verification output, commit text, and pull request metadata preserve that key.
 
 ## Source Design Requirements
 
@@ -72,7 +169,7 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 - **FR-010**: Missing remediation links, context artifacts, evidence refs, live-follow support, or approval audit rows MUST render explicit degraded or empty states without breaking task detail rendering.
 - **FR-011**: Remediation creation, link, evidence, and approval surfaces MUST retain Mission Control accessibility, reduced-motion, mobile containment, and fallback styling guarantees.
 - **FR-012**: Existing task-list, task-detail, artifact, timeline, live-log, and execution create behavior MUST remain unchanged for non-remediation executions.
-- **FR-013**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve MM-437, STORY-007, the source summary, and the unknown Jira issue status from the orchestration input.
+- **FR-013**: MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata MUST preserve MM-457, the source summary, and source coverage IDs DESIGN-REQ-005, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022, and DESIGN-REQ-023 from the orchestration input.
 
 ### Key Entities
 
@@ -93,4 +190,4 @@ Use the existing Jira Orchestrate workflow for this Jira issue. Do not run imple
 - **SC-005**: UI/API tests prove approval-gated remediation shows proposed action, preconditions, blast radius, risk tier, current decision, and permission-correct approve/reject controls.
 - **SC-006**: UI tests prove missing or degraded remediation data renders explicit empty/degraded states and does not break existing task detail rendering.
 - **SC-007**: Existing task-list, task-detail, artifact, live-log, and create-page tests continue to pass for non-remediation executions.
-- **SC-008**: Traceability verification confirms MM-437, STORY-007, source summary, and DESIGN-REQ-001 through DESIGN-REQ-008 are preserved in the MoonSpec artifacts.
+- **SC-008**: Traceability verification confirms MM-457, the source summary, source coverage IDs DESIGN-REQ-005, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022, DESIGN-REQ-023, and generated design mappings DESIGN-REQ-001 through DESIGN-REQ-008 are preserved in the MoonSpec artifacts.

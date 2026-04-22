@@ -199,6 +199,8 @@ Key diagnostics:
 - No new persistent storage; uses existing provider profile row metadata and optional command/readiness data (226-route-claude-auth-actions)
 - Python 3.12 + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK (226-canonical-remediation-submissions)
 - Existing SQLAlchemy/Alembic database with `execution_remediation_links` already present (226-canonical-remediation-submissions)
+- Python 3.12 + SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK service boundaries, existing Temporal artifact service, existing remediation context/action services (232-remediation-lifecycle-audit)
+- Existing Temporal execution records, `execution_remediation_links`, Temporal artifact metadata/content store, and existing execution memo/search/projection paths; no new persistent database table planned unless audit events cannot reuse an existing control-event mechanism (232-remediation-lifecycle-audit)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

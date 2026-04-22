@@ -624,6 +624,110 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
 
 
 @pytest.mark.asyncio
+async def test_record_remediation_approval_decision_appends_bounded_audit(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        mock_client_adapter.start_workflow.return_value = SimpleNamespace(
+            run_id="remediation-temporal-run"
+        )
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "remediation": {
+                        "target": {"workflowId": target.workflow_id},
+                        "mode": "snapshot",
+                        "authorityMode": "approval_gated",
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        link.status = "awaiting_approval"
+        await session.commit()
+
+        result = await service.record_remediation_approval_decision(
+            remediation_workflow_id=remediation.workflow_id,
+            request_id=f"{remediation.workflow_id}:approval",
+            decision="approved",
+            comment="Reviewed blast radius.",
+            actor="ops@example.com",
+        )
+
+        assert result == {
+            "accepted": True,
+            "workflowId": remediation.workflow_id,
+            "requestId": f"{remediation.workflow_id}:approval",
+            "decision": "approved",
+        }
+        record = await service.describe_execution(remediation.workflow_id)
+        audit = record.memo["intervention_audit"]
+        assert audit[-1]["action"] == "remediation_approval_approved"
+        assert audit[-1]["transport"] == "api"
+        assert audit[-1]["summary"] == "Remediation approval approved."
+        assert f"{remediation.workflow_id}:approval" in audit[-1]["detail"]
+        assert "ops@example.com" in audit[-1]["detail"]
+
+
+@pytest.mark.asyncio
+async def test_record_remediation_approval_decision_rejects_non_pending_target(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        execution = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Ordinary execution",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="pending approval-gated remediation",
+        ):
+            await service.record_remediation_approval_decision(
+                remediation_workflow_id=execution.workflow_id,
+                request_id=f"{execution.workflow_id}:approval",
+                decision="approved",
+                comment=None,
+                actor="ops@example.com",
+            )
+
+
+@pytest.mark.asyncio
 async def test_create_execution_persists_supplied_matching_remediation_run_id(
     tmp_path, mock_client_adapter
 ):
@@ -937,6 +1041,54 @@ async def test_create_execution_rejects_incompatible_remediation_action_policy(
                 },
                 idempotency_key=None,
             )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_keeps_future_remediation_policy_inert(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        execution = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Policy-only task",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "instructions": "Normal task with future policy metadata.",
+                    "remediationPolicy": {
+                        "enabled": True,
+                        "triggers": ["failed", "attention_required", "stuck"],
+                        "createMode": "proposal",
+                        "templateRef": "admin_healer_default",
+                        "authorityMode": "approval_gated",
+                        "maxActiveRemediations": 1,
+                        "maxSelfHealingDepth": 1,
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+
+        record = await session.get(
+            TemporalExecutionCanonicalRecord, execution.workflow_id
+        )
+        link = await session.get(
+            TemporalExecutionRemediationLink, execution.workflow_id
+        )
+
+        assert record is not None
+        assert record.parameters["task"]["remediationPolicy"]["enabled"] is True
+        assert link is None
+        mock_client_adapter.start_workflow.assert_awaited_once()
+        start_args = mock_client_adapter.start_workflow.await_args.kwargs["input_args"]
+        assert "remediation" not in start_args["initial_parameters"]["task"]
 
 
 @pytest.mark.asyncio

@@ -358,6 +358,48 @@ const ExecutionDetailSchema = z
   })
   .passthrough();
 
+const RemediationApprovalStateSchema = z
+  .object({
+    requestId: z.string().nullable().optional(),
+    actionKind: z.string().nullable().optional(),
+    riskTier: z.string().nullable().optional(),
+    preconditions: z.string().nullable().optional(),
+    blastRadius: z.string().nullable().optional(),
+    decision: z.string().default('not_required'),
+    decisionActor: z.string().nullable().optional(),
+    decisionAt: z.string().nullable().optional(),
+    canDecide: z.boolean().default(false),
+    auditRef: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const RemediationLinkSchema = z
+  .object({
+    remediationWorkflowId: z.string(),
+    remediationRunId: z.string(),
+    targetWorkflowId: z.string(),
+    targetRunId: z.string(),
+    mode: z.string(),
+    authorityMode: z.string(),
+    status: z.string(),
+    activeLockScope: z.string().nullable().optional(),
+    activeLockHolder: z.string().nullable().optional(),
+    latestActionSummary: z.string().nullable().optional(),
+    resolution: z.string().nullable().optional(),
+    contextArtifactRef: z.string().nullable().optional(),
+    approvalState: RemediationApprovalStateSchema.nullable().optional(),
+    createdAt: z.string().nullable().optional(),
+    updatedAt: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const RemediationLinksSchema = z
+  .object({
+    direction: z.string().default('inbound'),
+    items: z.array(RemediationLinkSchema).default([]),
+  })
+  .passthrough();
+
 const ArtifactSummarySchema = z
   .object({
     artifactId: z.string(),
@@ -365,7 +407,25 @@ const ArtifactSummarySchema = z
     sizeBytes: z.number().nullable().optional(),
     status: z.string().optional(),
     downloadUrl: z.string().nullable().optional(),
+    defaultReadRef: z
+      .object({
+        artifactId: z.string(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+    rawAccessAllowed: z.boolean().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
+    links: z
+      .array(
+        z
+          .object({
+            linkType: z.string(),
+            label: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .default([]),
   })
   .passthrough();
 
@@ -503,18 +563,44 @@ const ArtifactListSchema = z.object({
           status: z.string().optional(),
           downloadUrl: z.string().nullable().optional(),
           download_url: z.string().nullable().optional(),
+          defaultReadRef: z.unknown().optional(),
+          default_read_ref: z.unknown().optional(),
+          rawAccessAllowed: z.boolean().nullable().optional(),
+          raw_access_allowed: z.boolean().nullable().optional(),
         })
         .passthrough()
-        .transform((artifact) =>
-          ArtifactSummarySchema.parse({
-            ...artifact,
-            artifactId: artifact.artifactId ?? artifact.artifact_id,
-            contentType: artifact.contentType ?? artifact.content_type ?? null,
-          sizeBytes: artifact.sizeBytes ?? artifact.size_bytes ?? null,
-          downloadUrl: artifact.downloadUrl ?? artifact.download_url ?? null,
-          metadata: artifact.metadata ?? {},
+        .transform((artifact) => {
+          const rawArtifact = artifact as Record<string, unknown>;
+          const defaultReadRefRaw = rawArtifact.defaultReadRef ?? rawArtifact.default_read_ref;
+          const defaultReadRef =
+            defaultReadRefRaw && typeof defaultReadRefRaw === 'object'
+              ? {
+                  ...(defaultReadRefRaw as Record<string, unknown>),
+                  artifactId:
+                    (defaultReadRefRaw as Record<string, unknown>).artifactId ??
+                    (defaultReadRefRaw as Record<string, unknown>).artifact_id,
+                }
+              : null;
+          const links = (Array.isArray(rawArtifact.links) ? rawArtifact.links : []).map((link) => {
+            const rawLink = link as Record<string, unknown>;
+            return {
+              ...rawLink,
+              linkType: rawLink.linkType ?? rawLink.link_type,
+              label: rawLink.label ?? null,
+            };
+          });
+          return ArtifactSummarySchema.parse({
+            ...rawArtifact,
+            artifactId: rawArtifact.artifactId ?? rawArtifact.artifact_id,
+            contentType: rawArtifact.contentType ?? rawArtifact.content_type ?? null,
+            sizeBytes: rawArtifact.sizeBytes ?? rawArtifact.size_bytes ?? null,
+            downloadUrl: rawArtifact.downloadUrl ?? rawArtifact.download_url ?? null,
+            defaultReadRef,
+            rawAccessAllowed: rawArtifact.rawAccessAllowed ?? rawArtifact.raw_access_allowed ?? null,
+            metadata: rawArtifact.metadata ?? {},
+            links,
+          });
         }),
-      ),
     )
     .default([]),
 });
@@ -1466,6 +1552,17 @@ function artifactDownloadHref(
   return buildArtifactDownloadHref(apiBase, artifact.artifactId);
 }
 
+function reportOpenHref(
+  apiBase: string,
+  artifact: z.infer<typeof ArtifactSummarySchema>,
+): string {
+  const defaultReadArtifactId = artifact.defaultReadRef?.artifactId;
+  if (defaultReadArtifactId) {
+    return buildArtifactDownloadHref(apiBase, defaultReadArtifactId);
+  }
+  return artifactDownloadHref(apiBase, artifact);
+}
+
 function metadataString(metadata: Record<string, unknown>, ...keys: string[]): string {
   for (const key of keys) {
     const value = metadata[key];
@@ -1477,6 +1574,49 @@ function metadataString(metadata: Record<string, unknown>, ...keys: string[]): s
     }
   }
   return '';
+}
+
+function artifactReportLinkType(
+  artifact: z.infer<typeof ArtifactSummarySchema>,
+): string | null {
+  return artifact.links.find((link) => link.linkType.startsWith('report.'))?.linkType ?? null;
+}
+
+function artifactReportLinkLabel(
+  artifact: z.infer<typeof ArtifactSummarySchema>,
+): string {
+  return artifact.links.find((link) => link.linkType.startsWith('report.'))?.label || '';
+}
+
+function reportArtifactTitle(artifact: z.infer<typeof ArtifactSummarySchema>): string {
+  return (
+    metadataString(artifact.metadata, 'title', 'name') ||
+    artifactReportLinkLabel(artifact) ||
+    artifact.artifactId
+  );
+}
+
+function reportViewerLabel(artifact: z.infer<typeof ArtifactSummarySchema>): string {
+  const renderHint = metadataString(artifact.metadata, 'render_hint', 'renderHint').toLowerCase();
+  if (renderHint) return renderHint;
+  const contentType = String(artifact.contentType || '').toLowerCase();
+  if (contentType.includes('markdown')) return 'markdown';
+  if (contentType.includes('json')) return 'json';
+  if (contentType.startsWith('text/x-diff')) return 'diff';
+  if (contentType.startsWith('text/')) return 'text';
+  if (contentType.startsWith('image/')) return 'image';
+  if (contentType.includes('pdf')) return 'pdf';
+  return 'download';
+}
+
+function relatedReportArtifacts(
+  artifacts: z.infer<typeof ArtifactSummarySchema>[],
+): z.infer<typeof ArtifactSummarySchema>[] {
+  const relatedTypes = new Set(['report.summary', 'report.structured', 'report.evidence']);
+  return artifacts.filter((artifact) => {
+    const linkType = artifactReportLinkType(artifact);
+    return linkType ? relatedTypes.has(linkType) : false;
+  });
 }
 
 type InputImageArtifact = {
@@ -1610,6 +1750,86 @@ function InputImagesSection({
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+function ReportPresentationSection({
+  primaryReport,
+  relatedArtifacts,
+  apiBase,
+}: {
+  primaryReport: z.infer<typeof ArtifactSummarySchema> | null;
+  relatedArtifacts: z.infer<typeof ArtifactSummarySchema>[];
+  apiBase: string;
+}) {
+  if (!primaryReport) {
+    return null;
+  }
+
+  const reportType = metadataString(primaryReport.metadata, 'report_type', 'reportType');
+  const reportScope = metadataString(primaryReport.metadata, 'report_scope', 'reportScope');
+
+  return (
+    <section className="stack td-report-region td-evidence-region">
+      <div>
+        <h3>Report</h3>
+        <p className="small">
+          Canonical final report selected from server report artifact linkage.
+        </p>
+      </div>
+      <div className="td-evidence-slab stack">
+        <div className="grid-2">
+          <Card label="Title">{reportArtifactTitle(primaryReport)}</Card>
+          <Card label="Viewer">{reportViewerLabel(primaryReport)}</Card>
+          {reportType ? <Card label="Report Type">{reportType}</Card> : null}
+          {reportScope ? <Card label="Report Scope">{reportScope}</Card> : null}
+        </div>
+        <div className="actions">
+          <a
+            className="button secondary"
+            href={reportOpenHref(apiBase, primaryReport)}
+            title="Open report"
+          >
+            Open report
+          </a>
+        </div>
+      </div>
+      {relatedArtifacts.length > 0 ? (
+        <div className="stack">
+          <h4>Related Report Content</h4>
+          <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Content</th>
+                  <th>Type</th>
+                  <th>Viewer</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {relatedArtifacts.map((artifact) => (
+                  <tr key={artifact.artifactId}>
+                    <td>{reportArtifactTitle(artifact)}</td>
+                    <td>{artifactReportLinkType(artifact) || 'report'}</td>
+                    <td>{reportViewerLabel(artifact)}</td>
+                    <td>
+                      <a
+                        className="button secondary"
+                        href={reportOpenHref(apiBase, artifact)}
+                        title={`Open ${artifactReportLinkLabel(artifact) || 'report content'}`}
+                      >
+                        Open {artifactReportLinkLabel(artifact) || 'content'}
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2976,6 +3196,259 @@ function renderMissingTaskRunCopy(state: MissingTaskRunState): string {
   return 'Waiting for managed runtime launch to create live logs.';
 }
 
+function isRemediationEligibleTarget(execution: z.infer<typeof ExecutionDetailSchema>): boolean {
+  const state = (execution.rawState || execution.state || execution.status || '').toLowerCase();
+  return (
+    execution.attentionRequired === true ||
+    Boolean(execution.waitingReason) ||
+    state.includes('failed') ||
+    state.includes('stuck') ||
+    state === 'awaiting_external'
+  );
+}
+
+function remediationArtifactType(artifact: z.infer<typeof ArtifactSummarySchema>): string | null {
+  const metadataType = metadataString(artifact.metadata, 'artifact_type', 'artifactType');
+  if (metadataType.startsWith('remediation.')) return metadataType;
+  return artifact.links.find((link) => link.linkType.startsWith('remediation.'))?.linkType ?? null;
+}
+
+function remediationArtifactLabel(type: string): string {
+  const labels: Record<string, string> = {
+    'remediation.context': 'Context',
+    'remediation.plan': 'Plan',
+    'remediation.decision_log': 'Decision Log',
+    'remediation.action_request': 'Action Request',
+    'remediation.action_result': 'Action Result',
+    'remediation.verification': 'Verification',
+    'remediation.summary': 'Summary',
+  };
+  return labels[type] ?? type.replace(/^remediation\./, '').replaceAll('_', ' ');
+}
+
+function RemediationApprovalSummary({
+  approval,
+}: {
+  approval: z.infer<typeof RemediationApprovalStateSchema>;
+}) {
+  const hasDetails = Boolean(
+    approval.actionKind ||
+      approval.riskTier ||
+      approval.preconditions ||
+      approval.blastRadius ||
+      approval.auditRef ||
+      approval.decision,
+  );
+
+  if (!hasDetails) return null;
+
+  return (
+    <div className="td-remediation-approval">
+      <div className="grid-2">
+        <Card label="Action">{approval.actionKind || '—'}</Card>
+        <Card label="Risk">{approval.riskTier || '—'}</Card>
+        <Card label="Decision">{approval.decision || 'not_required'}</Card>
+        <Card label="Audit">{approval.auditRef || '—'}</Card>
+        <Card label="Preconditions">{approval.preconditions || '—'}</Card>
+        <Card label="Blast Radius">{approval.blastRadius || '—'}</Card>
+      </div>
+      {approval.requestId && !approval.canDecide && approval.decision === 'pending' ? (
+        <p className="notice subtle">Approval is read-only for this operator.</p>
+      ) : null}
+    </div>
+  );
+}
+
+function RemediationRelationshipsPanel({
+  inbound,
+  outbound,
+  inboundError,
+  outboundError,
+  onApprovalDecision,
+  approvalBusy,
+  showEmpty,
+}: {
+  inbound: z.infer<typeof RemediationLinksSchema> | undefined;
+  outbound: z.infer<typeof RemediationLinksSchema> | undefined;
+  inboundError: Error | null;
+  outboundError: Error | null;
+  onApprovalDecision: (workflowId: string, requestId: string, decision: 'approved' | 'rejected') => void;
+  approvalBusy: boolean;
+  showEmpty: boolean;
+}) {
+  const inboundItems = inbound?.items ?? [];
+  const outboundItems = outbound?.items ?? [];
+  const hasData = inboundItems.length > 0 || outboundItems.length > 0;
+
+  if (!hasData && !inboundError && !outboundError && !showEmpty) return null;
+
+  return (
+    <section className="stack td-remediation-region td-evidence-region">
+      <div>
+        <h3>Remediation</h3>
+        <p className="small">Target and remediator relationships are shown from bounded remediation link metadata.</p>
+      </div>
+      {inboundError || outboundError ? (
+        <div className="notice error">
+          Remediation relationship data is degraded. Existing task detail remains available.
+        </div>
+      ) : null}
+      {inboundItems.length > 0 ? (
+        <div className="stack">
+          <h4>Remediation Tasks</h4>
+          <ul className="td-remediation-list">
+            {inboundItems.map((item) => (
+              <li key={item.remediationWorkflowId} className="card">
+                <a href={dependencyHref(item.remediationWorkflowId)}>
+                  <code className="text-xs break-all">{item.remediationWorkflowId}</code>
+                </a>
+                <div className="grid-2">
+                  <Card label="Status">{item.status || '—'}</Card>
+                  <Card label="Authority">{item.authorityMode || '—'}</Card>
+                  <Card label="Latest Action">{item.latestActionSummary || '—'}</Card>
+                  <Card label="Resolution">{item.resolution || '—'}</Card>
+                  <Card label="Lock">{item.activeLockScope || 'None'}</Card>
+                  <Card label="Updated">{formatWhen(item.updatedAt)}</Card>
+                </div>
+                {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
+                {item.approvalState?.canDecide && item.approvalState.requestId ? (
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={approvalBusy}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
+                    >
+                      Approve remediation action
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={approvalBusy}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
+                    >
+                      Reject remediation action
+                    </button>
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : showEmpty && !inboundError ? (
+        <p className="notice subtle">No inbound remediation tasks linked yet.</p>
+      ) : null}
+      {outboundItems.length > 0 ? (
+        <div className="stack">
+          <h4>Remediation Target</h4>
+          <ul className="td-remediation-list">
+            {outboundItems.map((item) => (
+              <li key={item.targetWorkflowId} className="card">
+                <a href={dependencyHref(item.targetWorkflowId)}>
+                  <code className="text-xs break-all">{item.targetWorkflowId}</code>
+                </a>
+                <div className="grid-2">
+                  <Card label="Pinned Run"><code className="text-xs break-all">{item.targetRunId || '—'}</code></Card>
+                  <Card label="Mode">{item.mode || '—'}</Card>
+                  <Card label="Authority">{item.authorityMode || '—'}</Card>
+                  <Card label="Status">{item.status || '—'}</Card>
+                  <Card label="Evidence Bundle">{item.contextArtifactRef || 'Missing'}</Card>
+                  <Card label="Approval">{item.approvalState?.decision || 'not_required'}</Card>
+                </div>
+                {!item.contextArtifactRef ? (
+                  <p className="notice subtle">Evidence bundle is missing.</p>
+                ) : null}
+                {item.mode?.includes('follow') && !item.contextArtifactRef ? (
+                  <p className="notice subtle">
+                    Live follow is unavailable; durable remediation artifacts remain authoritative.
+                  </p>
+                ) : null}
+                {item.approvalState ? <RemediationApprovalSummary approval={item.approvalState} /> : null}
+                {item.approvalState?.canDecide && item.approvalState.requestId ? (
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={approvalBusy}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'approved')}
+                    >
+                      Approve remediation action
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={approvalBusy}
+                      onClick={() => onApprovalDecision(item.remediationWorkflowId, item.approvalState!.requestId!, 'rejected')}
+                    >
+                      Reject remediation action
+                    </button>
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : showEmpty && !outboundError ? (
+        <p className="notice subtle">No outbound remediation target linked yet.</p>
+      ) : null}
+    </section>
+  );
+}
+
+function RemediationEvidencePanel({
+  artifacts,
+  apiBase,
+  showEmpty,
+}: {
+  artifacts: z.infer<typeof ArtifactSummarySchema>[];
+  apiBase: string;
+  showEmpty: boolean;
+}) {
+  const remediationArtifacts = artifacts
+    .map((artifact) => ({ artifact, type: remediationArtifactType(artifact) }))
+    .filter((item): item is { artifact: z.infer<typeof ArtifactSummarySchema>; type: string } => Boolean(item.type));
+
+  if (remediationArtifacts.length === 0) {
+    if (!showEmpty) return null;
+    return (
+      <section className="stack td-remediation-region td-evidence-region">
+        <h3>Remediation Evidence</h3>
+        <p className="notice subtle">No remediation evidence artifacts linked yet.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="stack td-remediation-region td-evidence-region">
+      <h3>Remediation Evidence</h3>
+      <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
+        <table>
+          <thead>
+            <tr>
+              <th>Evidence</th>
+              <th>Artifact</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {remediationArtifacts.map(({ artifact, type }) => (
+              <tr key={artifact.artifactId}>
+                <td>{remediationArtifactLabel(type)}</td>
+                <td><code>{artifact.artifactId}</code></td>
+                <td>
+                  <a className="button secondary" href={artifactDownloadHref(apiBase, artifact)}>
+                    Open Evidence
+                  </a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const cfg = readDashboardConfig(payload);
@@ -3012,6 +3485,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const [liveUpdates, setLiveUpdates] = useState(true);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
+  const [remediationMode, setRemediationMode] = useState('snapshot_then_follow');
+  const [remediationAuthority, setRemediationAuthority] = useState('approval_gated');
+  const [remediationActionPolicy, setRemediationActionPolicy] = useState('admin_healer_default');
 
   const detailQuery = useQuery({
     queryKey: ['task-detail', encodedTaskId, sourceTemporal],
@@ -3035,6 +3511,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   const summaryArtifactRef = execution?.summaryArtifactRef || execution?.summary_artifact_ref || '';
   const explicitTaskRunId = execution?.taskRunId || execution?.task_run_id || '';
   const resolvedTaskRunId = explicitTaskRunId;
+  const shouldFetchRemediationLinks = Boolean(execution && workflowId);
   const sessionTimelineEnabled = shouldEnableSessionTimelineViewer({
     config: cfg,
     targetRuntime: execution?.targetRuntime,
@@ -3090,11 +3567,49 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     refetchInterval: liveUpdates && namespace && workflowId && latestRunId ? detailPoll : false,
   });
 
+  const latestReportQuery = useQuery({
+    queryKey: ['task-detail-latest-report', namespace, workflowId, latestRunId],
+    queryFn: async () => {
+      const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(latestRunId)}/artifacts?link_type=report.primary&latest_only=true`;
+      const response = await fetch(path);
+      if (!response.ok) {
+        throw new Error(`Report: ${response.statusText}`);
+      }
+      return ArtifactListSchema.parse(await response.json());
+    },
+    enabled:
+      Boolean(namespace && workflowId && latestRunId)
+      && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
+    refetchInterval: liveUpdates && namespace && workflowId && latestRunId ? detailPoll : false,
+  });
+
   const runSummaryQuery = useQuery({
     queryKey: ['task-detail-run-summary', summaryArtifactRef],
     queryFn: () => fetchRunSummaryArtifact(payload.apiBase, summaryArtifactRef),
     enabled: Boolean(summaryArtifactRef),
     refetchInterval: liveUpdates && summaryArtifactRef ? detailPoll : false,
+  });
+  const inboundRemediationsQuery = useQuery({
+    queryKey: ['task-detail-remediations', workflowId, 'inbound'],
+    queryFn: async () => {
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediations?direction=inbound`,
+      );
+      if (!response.ok) throw new Error(`Remediations: ${response.statusText}`);
+      return RemediationLinksSchema.parse(await response.json());
+    },
+    enabled: shouldFetchRemediationLinks,
+  });
+  const outboundRemediationsQuery = useQuery({
+    queryKey: ['task-detail-remediations', workflowId, 'outbound'],
+    queryFn: async () => {
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediations?direction=outbound`,
+      );
+      if (!response.ok) throw new Error(`Remediations: ${response.statusText}`);
+      return RemediationLinksSchema.parse(await response.json());
+    },
+    enabled: shouldFetchRemediationLinks,
   });
   const runSummary = runSummaryQuery.data;
   const displayedMergeAutomation =
@@ -3139,7 +3654,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     void queryClient.invalidateQueries({ queryKey: ['task-detail', encodedTaskId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-steps', workflowId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-artifacts', namespace, workflowId, latestRunId] });
+    void queryClient.invalidateQueries({ queryKey: ['task-detail-latest-report', namespace, workflowId, latestRunId] });
     void queryClient.invalidateQueries({ queryKey: ['task-detail-run-summary', summaryArtifactRef] });
+    void queryClient.invalidateQueries({ queryKey: ['task-detail-remediations', workflowId] });
   };
 
   const updateMutation = useMutation({
@@ -3214,6 +3731,74 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     onError: (error: Error) => setActionError(error.message),
   });
 
+  const createRemediationMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          repository: execution?.repository ?? null,
+          instructions: `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
+          remediation: {
+            mode: remediationMode,
+            authorityMode: remediationAuthority,
+            target: {
+              runId: latestRunId || runId || undefined,
+            },
+            actionPolicyRef: remediationActionPolicy.trim() || undefined,
+            evidencePolicy: {
+              includeStepLedger: true,
+              includeDiagnostics: true,
+              tailLines: 2000,
+            },
+            trigger: { type: 'manual' },
+          },
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      setActionNotice('Remediation task creation submitted.');
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
+  const remediationApprovalMutation = useMutation({
+    mutationFn: async ({
+      remediationWorkflowId,
+      requestId,
+      decision,
+    }: {
+      remediationWorkflowId: string;
+      requestId: string;
+      decision: 'approved' | 'rejected';
+    }) => {
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(remediationWorkflowId)}/remediation/approvals/${encodeURIComponent(requestId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ decision }),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      setActionNotice('Remediation approval decision recorded.');
+      invalidate();
+    },
+    onError: (error: Error) => setActionError(error.message),
+  });
+
   const onRename = () => {
     setActionError(null);
     const title = window.prompt('New task title', execution?.title || '');
@@ -3267,7 +3852,12 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
   };
 
   const actions = execution?.actions;
-  const busy = updateMutation.isPending || signalMutation.isPending || cancelMutation.isPending;
+  const busy =
+    updateMutation.isPending ||
+    signalMutation.isPending ||
+    cancelMutation.isPending ||
+    createRemediationMutation.isPending ||
+    remediationApprovalMutation.isPending;
   const editHref = workflowId ? taskEditHref(workflowId) : '';
   const rerunHref = workflowId ? taskRerunHref(workflowId) : '';
   const onTaskEditingNavigation = (
@@ -3285,8 +3875,9 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
     });
   };
   const isTerminalExecution = TERMINAL_STATES.has(execution?.rawState || execution?.state || '');
+  const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
   const hasTaskEditingActions = taskEditingOn && Boolean(actions?.canUpdateInputs || actions?.canRerun);
-  const hasTaskActions = Boolean(actions?.canSetTitle || hasTaskEditingActions);
+  const hasTaskActions = Boolean(actions?.canSetTitle || hasTaskEditingActions || canCreateRemediation);
   const taskInstructions = execution?.taskInstructions?.trim() || '';
   const hasTaskInstructions = taskInstructions.length > 0;
   const hasInterventionSection = Boolean(
@@ -3307,6 +3898,8 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
       [logicalStepId]: !prev[logicalStepId],
     }));
   };
+  const primaryReport = latestReportQuery.data?.artifacts[0] ?? null;
+  const relatedReports = relatedReportArtifacts(artifactsQuery.data?.artifacts || []);
 
   return (
     <div className="stack task-detail-page">
@@ -3695,6 +4288,19 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
+          <RemediationRelationshipsPanel
+            inbound={inboundRemediationsQuery.data}
+            outbound={outboundRemediationsQuery.data}
+            inboundError={inboundRemediationsQuery.isError ? (inboundRemediationsQuery.error as Error) : null}
+            outboundError={outboundRemediationsQuery.isError ? (outboundRemediationsQuery.error as Error) : null}
+            approvalBusy={remediationApprovalMutation.isPending}
+            showEmpty={shouldFetchRemediationLinks && (inboundRemediationsQuery.isSuccess || outboundRemediationsQuery.isSuccess)}
+            onApprovalDecision={(remediationWorkflowId, requestId, decision) => {
+              setActionError(null);
+              remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision });
+            }}
+          />
+
           {actionsOn && actions && hasTaskActions ? (
             <section className="stack td-actions-region">
               <div>
@@ -3702,6 +4308,57 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                 <p className="small">Workflow editing actions stay separate from intervention controls.</p>
               </div>
               <div className="actions">
+                {canCreateRemediation ? (
+                  <div className="stack td-remediation-create-preview">
+                    <h4>Remediation create preview</h4>
+                    <div className="grid-2">
+                      <label>
+                        Remediation mode
+                        <select
+                          value={remediationMode}
+                          onChange={(event) => setRemediationMode(event.target.value)}
+                        >
+                          <option value="snapshot_then_follow">Snapshot then follow</option>
+                          <option value="snapshot">Snapshot only</option>
+                          <option value="live_follow">Live follow</option>
+                        </select>
+                      </label>
+                      <label>
+                        Remediation authority
+                        <select
+                          value={remediationAuthority}
+                          onChange={(event) => setRemediationAuthority(event.target.value)}
+                        >
+                          <option value="approval_gated">Approval-gated admin remediation</option>
+                          <option value="observe_only">Troubleshooting only</option>
+                          <option value="admin_auto">Admin remediation</option>
+                        </select>
+                      </label>
+                      <label>
+                        Remediation action policy
+                        <input
+                          value={remediationActionPolicy}
+                          onChange={(event) => setRemediationActionPolicy(event.target.value)}
+                        />
+                      </label>
+                      <Card label="Pinned Run"><code className="text-xs break-all">{latestRunId || runId || '—'}</code></Card>
+                    </div>
+                    <p className="small">
+                      Evidence preview: step ledger, diagnostics, and 2000 log lines.
+                    </p>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() => {
+                        setActionError(null);
+                        createRemediationMutation.mutate();
+                      }}
+                    >
+                      Create remediation task
+                    </button>
+                  </div>
+                ) : null}
                 {actions.canSetTitle ? (
                   <button type="button" disabled={busy} className="secondary" onClick={onRename}>
                     Rename
@@ -3761,6 +4418,18 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
           <InputImagesSection
             artifacts={artifactsQuery.data?.artifacts || []}
             apiBase={payload.apiBase}
+          />
+
+          <ReportPresentationSection
+            primaryReport={primaryReport}
+            relatedArtifacts={relatedReports}
+            apiBase={payload.apiBase}
+          />
+
+          <RemediationEvidencePanel
+            artifacts={artifactsQuery.data?.artifacts || []}
+            apiBase={payload.apiBase}
+            showEmpty={shouldFetchRemediationLinks && artifactsQuery.isSuccess}
           />
 
           <section className="stack td-timeline-region td-evidence-region">

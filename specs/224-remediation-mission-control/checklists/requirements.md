@@ -36,5 +36,6 @@
 
 ## Notes
 
-- The source Jira issue is explicitly unknown in the task instruction; the spec preserves MM-437 and STORY-007 traceability without inventing a Jira issue key.
-- Implementation is intentionally not run in this breakdown/orchestration task.
+- The source Jira issue is MM-457 and the spec preserves the original Jira preset brief directly in `spec.md` from `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
+- Implementation-oriented wording appears only inside the preserved original preset brief source block required for verification traceability; the generated user-facing specification remains behavior-focused.
+- Runtime implementation is in scope after artifact alignment.

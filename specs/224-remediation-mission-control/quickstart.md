@@ -26,11 +26,11 @@ Expected result:
 ## Traceability Check
 
 ```bash
-rg -n "MM-437|STORY-007|Remediation Mission Control|DESIGN-REQ-00[1-8]" specs/224-remediation-mission-control
+rg -n "MM-457|Remediation Mission Control|DESIGN-REQ-00[1-8]|DESIGN-REQ-0(20|21|22|23)" specs/224-remediation-mission-control
 ```
 
 Expected result:
-- The orchestration target, story ID, source summary, and source design mappings are present in spec, plan, tasks, and verification artifacts.
+- The orchestration target, source summary, and source design mappings are present in spec, plan, tasks, and verification artifacts.
 
 ## Final Verification
 
