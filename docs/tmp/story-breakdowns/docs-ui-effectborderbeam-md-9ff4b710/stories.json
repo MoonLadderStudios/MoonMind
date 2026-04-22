@@ -1,0 +1,425 @@
+{
+  "source": {
+    "title": "Masked Conic Border Beam — Declarative Design",
+    "path": "docs/UI/EffectBorderBeam.md",
+    "referencePath": "docs/UI/EffectBorderBeam.md",
+    "originalDesignText": "# Masked Conic Border Beam — Declarative Design\n\n## Goal\nCreate a **standalone status effect** for an `executing` state: a subtle, premium-looking beam that appears to travel **only along the border** of an element. The beam should feel alive and directional without turning the whole surface into a spinner.\n\nThis spec defines **only the border-beam effect in isolation**.\n\n---\n\n## Design intent\n- Convey **active execution**.\n- Read as **intentional motion on the perimeter**, not as a full-card shimmer.\n- Feel **precise, modern, and slightly magical**.\n- Stay legible around content and work on both dark and light themes.\n- Avoid looking like a loading spinner or an error pulse.\n\n---\n\n## Effect summary\nThe effect is a **rotating conic highlight** that is:\n- clipped to the **border ring only**,\n- visible through a **mask**,\n- softened with a slight glow,\n- optionally paired with a faint secondary trailing beam.\n\nVisually, the user perceives:\n1. a dim resting border,\n2. a brighter traveling glint,\n3. a soft bloom that spills just outside the edge,\n4. a continuous orbit with no visible seam.\n\n---\n\n## Component contract\n\n### Name\n`MaskedConicBorderBeam`\n\n### Inputs\n- `active: boolean`\n- `borderRadius: token | px`\n- `borderWidth: token | px`\n- `speed: slow | medium | fast | seconds`\n- `intensity: subtle | normal | vivid`\n- `theme: neutral | brand | success | custom`\n- `direction: clockwise | counterclockwise`\n- `trail: none | soft | defined`\n- `glow: off | low | medium`\n- `reducedMotion: auto | off | minimal`\n\n### Output\nA border-only animated visual treatment suitable for wrapping any rectangular UI surface.\n\n---\n\n## Visual model\n\n### Base layers\n1. **Host surface**\n   - The actual content container.\n   - No animation required.\n\n2. **Resting border ring**\n   - A low-contrast stroke defining the perimeter.\n   - Always visible while `active = true`.\n\n3. **Animated conic beam**\n   - A conic gradient rotated around the center.\n   - Most of the gradient is transparent.\n   - Only a narrow bright wedge is visible.\n\n4. **Outer glow layer**\n   - Optional soft bloom derived from the same beam.\n   - Slight blur and lower opacity.\n   - Sits outside or straddles the border edge.\n\n5. **Optional trailing beam**\n   - A second broader, dimmer wedge behind the main glint.\n   - Adds motion richness without increasing speed.\n\n---\n\n## Geometry and masking\n\n### Ring shape\nThe animated beam must be visible **only in the border ring**.\n\nUse a mask that subtracts the inner rectangle from the outer rectangle:\n- **Outer shape** = full rounded rect\n- **Inner shape** = inset rounded rect\n- **Visible region** = outer minus inner\n\n### Inset rule\n- Inner inset equals `borderWidth`.\n- Inner radius should be adjusted so corners remain optically consistent.\n\n### Beam arc size\nRecommended visible arc for the bright head:\n- **8° to 18°** for a sharp premium glint\n- **20° to 36°** for a softer beam\n\nDefault:\n- bright head: **12°**\n- trailing tail: **28°**\n\n### Mask constraint\nThe beam must never fill the interior content area.\nThe effect should still read correctly on a transparent or blurred card.\n\n---\n\n## Motion behavior\n\n### Primary motion\n- The conic beam rotates around the component center.\n- Motion is linear and continuous.\n- Preferred default direction: **clockwise**.\n\n### Recommended timing\n- `slow` = 4.8s per orbit\n- `medium` = 3.6s per orbit\n- `fast` = 2.8s per orbit\n\nDefault:\n- **3.6s linear infinite**\n\n### Acceleration\nAvoid easing for the orbit itself.\nA constant sweep reads as a circulating energy path rather than an object speeding up and slowing down.\n\n### Entry / exit\nWhen activated:\n- fade beam opacity from 0 to target over **160–240ms**\n- optionally ramp glow slightly later by **40–80ms**\n\nWhen deactivated:\n- fade beam and glow out over **120–180ms**\n\n### Optional secondary modulation\nA very slight opacity breathing can make the effect feel less mechanical:\n- amplitude: ±8% opacity\n- duration: 1.8–2.4s\n- keep subtle enough that the beam still feels continuous\n\n---\n\n## Color behavior\n\n### Resting border\n- neutral and low contrast\n- should establish the perimeter even when the beam is on the far side\n\n### Beam head\n- highest luminance point\n- should read like a polished glint rather than a solid neon band\n\n### Tail\n- broader and dimmer than the head\n- should fade smoothly into transparency\n\n### Suggested token roles\n- `--beam-border-base`\n- `--beam-head-color`\n- `--beam-tail-color`\n- `--beam-glow-color`\n- `--beam-opacity`\n- `--beam-glow-opacity`\n\n### Theme guidance\n- **neutral**: white or cool silver on dark; charcoal/silver on light\n- **brand**: use a single brand hue with white-hot center\n- **success**: cool green/cyan hybrid works well for “executing” without implying completion\n\n---\n\n## Recommended default tuning\n\n```yaml\nMaskedConicBorderBeam:\n  active: true\n  borderRadius: 16px\n  borderWidth: 1.5px\n  speed: 3.6s\n  direction: clockwise\n  intensity: normal\n  trail: soft\n  glow: low\n  reducedMotion: auto\n  colors:\n    borderBase: \"color-mix(in oklab, currentColor 18%, transparent)\"\n    head: \"rgba(255,255,255,0.95)\"\n    tail: \"rgba(255,255,255,0.28)\"\n    glow: \"rgba(255,255,255,0.22)\"\n  beam:\n    headArc: 12deg\n    tailArc: 28deg\n    transparentGap: 320deg\n  transitions:\n    enter: 200ms ease-out\n    exit: 140ms ease-in\n```\n\n---\n\n## Declarative rendering rules\n\n### Rule 1 — rest state\nIf `active = false`:\n- show no moving beam\n- allow the host border to remain static if desired\n\n### Rule 2 — active state\nIf `active = true`:\n- render the resting border ring\n- render one conic-gradient beam masked to the ring\n- rotate the beam continuously around center\n- optionally render one softened glow companion layer\n\n### Rule 3 — border-only visibility\nAt all times:\n- mask out the full interior of the component\n- preserve content readability\n- avoid overlaying text with the animated beam\n\n### Rule 4 — subtlety threshold\nThe effect is decorative status communication, not the primary focus target.\nIt must not outshine primary buttons, selected states, or error states.\n\n### Rule 5 — optical continuity\nAt corners:\n- motion must appear smooth\n- border radius must be honored\n- beam thickness must remain visually consistent around the full perimeter\n\n---\n\n## Pseudostructure\n\n```md\nComponent: MaskedConicBorderBeam\n\nHost\n  Content Surface\n  Border Ring (static)\n  Beam Layer (animated conic gradient)\n    Mask: outer rounded rect - inner rounded rect\n  Glow Layer (optional, blurred)\n    Mask: same ring or slightly expanded ring\n```\n\n---\n\n## Gradient composition\n\n### Main beam\nConstruct a conic gradient with:\n- large transparent region\n- soft lead-in\n- bright narrow head\n- soft trailing fade\n- return to transparency\n\nExample conceptual stop sequence:\n- 0°–300° transparent\n- 300°–320° soft tail rise\n- 320°–332° bright head\n- 332°–360° fade out\n\nThis sequence then rotates as a whole.\n\n### Glow beam\nSame angular footprint, but:\n- lower opacity\n- slightly wider head/tail\n- blurred\n- optionally expanded 1–2px beyond the border bounds\n\n---\n\n## Motion variants\n\n### Variant A — precision glint\n- narrow bright head\n- minimal tail\n- subtle glow\n- best for premium, technical UI\n\n### Variant B — energized beam\n- wider tail\n- more obvious outer bloom\n- slightly faster orbit\n- best when execution state should be more noticeable\n\n### Variant C — dual-phase orbit\n- one bright head\n- one very faint offset companion 120°–180° behind\n- richer but still elegant\n\nPreferred default for MoonMind-style execution state:\n- **Variant A with a soft trail**\n\n---\n\n## Reduced motion behavior\n\nIf `reducedMotion = auto` and the user prefers reduced motion:\n- stop orbital rotation\n- keep a static illuminated segment on one edge or corner\n- optionally pulse opacity very gently every 2.4–3.2s\n\nIf `reducedMotion = minimal`:\n- no movement\n- slightly brighter static border ring only\n\nDo not replace the beam with rapid pulsing.\n\n---\n\n## Accessibility and UX constraints\n- The effect must never be the only indicator of execution state.\n- Pair with a text label such as `Executing`.\n- Avoid strong red/orange pulses that may imply warning.\n- Keep average luminance low enough to prevent distraction in dense lists.\n- The animation should remain distinguishable at small sizes without becoming noisy.\n\n---\n\n## Performance guidance\n- Prefer a single rotating pseudo-element or composited layer.\n- Animate **transform/rotation** or an equivalent angle variable when possible.\n- Avoid layout-triggering animation.\n- Blur/glow should remain modest to prevent excessive paint cost.\n- The effect should degrade gracefully on lower-power devices by disabling the glow first.\n\n---\n\n## Acceptance criteria\n- The center/content area remains fully unaffected by the animated beam.\n- The border visibly communicates ongoing activity.\n- The beam travels smoothly around all four sides and rounded corners.\n- The beam reads as a glint/energy sweep, not a spinner.\n- The effect works on dark and light surfaces.\n- Reduced-motion mode yields a static but still meaningful active state.\n\n---\n\n## Non-goals\n- No full-card shimmer\n- No filling background gradient\n- No spinner icon replacement\n- No completion pulse or success burst\n- No content-area masking beyond the border ring\n\n---\n\n## Implementation note\nThe cleanest mental model is:\n> “Render a conic-gradient highlight over the full box, then mask it down to just the border ring.”\n\nThat model preserves portability across CSS, canvas, SVG, and motion systems while keeping the effect definition declarative.\n"
+  },
+  "extractedAt": "2026-04-22T16:53:50Z",
+  "requestedOutputMode": "jira",
+  "designSummary": "The design defines a standalone MaskedConicBorderBeam status effect for executing state. It uses a masked rotating conic-gradient glint confined to a rounded border ring, with optional glow and trail layers, configurable motion/color controls, reduced-motion behavior, accessibility guardrails, and performance constraints. The effect is explicitly decorative and must not become a full-card shimmer, spinner replacement, completion signal, or content-area overlay.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Standalone executing status border effect",
+      "type": "requirement",
+      "source_section": "Goal; Component contract",
+      "explanation": "Define MaskedConicBorderBeam as an isolated active/executing visual treatment for wrapping rectangular UI surfaces."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Intentional perimeter-only motion",
+      "type": "requirement",
+      "source_section": "Design intent; Effect summary",
+      "explanation": "The effect must convey active execution through directional perimeter motion without reading as a full-card shimmer, spinner, error pulse, or primary focus treatment."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Configurable public inputs",
+      "type": "integration",
+      "source_section": "Component contract / Inputs",
+      "explanation": "The component contract exposes active, radius, width, speed, intensity, theme, direction, trail, glow, and reduced-motion controls."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Layered visual model",
+      "type": "state-model",
+      "source_section": "Visual model; Pseudostructure",
+      "explanation": "The effect is composed from host content, resting border, animated conic beam, optional glow, and optional trailing beam layers."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Border-ring geometry and masking",
+      "type": "constraint",
+      "source_section": "Geometry and masking; Declarative rendering rules",
+      "explanation": "The animated beam must be clipped to the outer-minus-inner rounded rectangle ring, using borderWidth as the inset and preserving corner geometry."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Beam arc composition",
+      "type": "requirement",
+      "source_section": "Geometry and masking; Gradient composition",
+      "explanation": "The conic gradient uses mostly transparent stops, a soft lead-in, a narrow bright head, trailing fade, and recommended/default head and tail arc sizes."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Continuous linear orbit and direction",
+      "type": "requirement",
+      "source_section": "Motion behavior",
+      "explanation": "The primary beam rotates around the center linearly and continuously, defaults clockwise, and avoids easing for orbital movement."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Timing, entry, exit, and subtle modulation",
+      "type": "requirement",
+      "source_section": "Motion behavior / Recommended timing; Entry / exit; Optional secondary modulation",
+      "explanation": "Named speed presets and default 3.6s orbit are defined, with fade-in/fade-out timings and optional low-amplitude opacity breathing."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Themeable color tokens and intensity",
+      "type": "requirement",
+      "source_section": "Color behavior; Recommended default tuning",
+      "explanation": "Resting border, head, tail, glow, opacity, theme guidance, and default color token roles must support dark and light surfaces."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Declarative active and inactive states",
+      "type": "state-model",
+      "source_section": "Declarative rendering rules",
+      "explanation": "Inactive state shows no moving beam, while active state shows the resting border, masked rotating beam, and optional glow companion."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Subtlety and optical continuity guardrails",
+      "type": "constraint",
+      "source_section": "Declarative rendering rules",
+      "explanation": "The effect must preserve content readability, avoid outshining higher-priority UI states, honor border radius, and keep consistent thickness around corners."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Motion variants and MoonMind default",
+      "type": "requirement",
+      "source_section": "Motion variants",
+      "explanation": "Precision glint, energized beam, and dual-phase orbit variants are defined, with Variant A plus soft trail preferred for MoonMind execution state."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Reduced motion behavior",
+      "type": "accessibility",
+      "source_section": "Reduced motion behavior",
+      "explanation": "Reduced-motion auto stops orbital rotation and uses a static illuminated segment or gentle pulse; minimal uses no movement and a brighter static ring."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Accessibility and UX constraints",
+      "type": "accessibility",
+      "source_section": "Accessibility and UX constraints",
+      "explanation": "The visual effect cannot be the only execution indicator, should pair with text, avoid warning colors, remain low distraction, and stay legible at small sizes."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Performance and degradation guidance",
+      "type": "constraint",
+      "source_section": "Performance guidance",
+      "explanation": "Prefer a single composited rotating layer, avoid layout-triggering animation, keep glow modest, and disable glow first on lower-power devices."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Explicit non-goals",
+      "type": "non-goal",
+      "source_section": "Non-goals",
+      "explanation": "Exclude full-card shimmer, background-gradient fill, spinner replacement, completion pulse, success burst, and content-area masking beyond the border ring."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Define MaskedConicBorderBeam border-only contract",
+      "shortName": "border beam contract",
+      "description": "As a UI engineer, I need a standalone MaskedConicBorderBeam contract that exposes the required execution-state controls while rendering no content-area animation, so product surfaces can apply a consistent executing treatment without coupling it to a specific card implementation.",
+      "sourceReference": {
+        "path": "docs/UI/EffectBorderBeam.md",
+        "title": "Masked Conic Border Beam — Declarative Design",
+        "sections": [
+          "Goal",
+          "Design intent",
+          "Component contract",
+          "Declarative rendering rules",
+          "Non-goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-016"
+        ]
+      },
+      "scope": [
+        "Define the standalone MaskedConicBorderBeam delivery surface and accepted input values.",
+        "Map active and inactive states to decorative border-only output.",
+        "Codify that this is status decoration and not a spinner, full-card shimmer, completion signal, or content overlay."
+      ],
+      "outOfScope": [
+        "Implementing a specific product card integration.",
+        "Creating Jira issues or downstream Moon Spec files during breakdown."
+      ],
+      "independentTest": "Render the component with active true and false across representative input combinations and assert that the public contract maps to the expected static or animated border-only layers without changing host content.",
+      "acceptanceCriteria": [
+        "A MaskedConicBorderBeam surface exists with active, borderRadius, borderWidth, speed, intensity, theme, direction, trail, glow, and reducedMotion inputs.",
+        "When active is false, no moving beam is rendered while a host/static border may remain available.",
+        "When active is true, the resting border and masked beam treatment are rendered as a wrapper for rectangular UI content.",
+        "The component documentation or tests explicitly reject full-card shimmer, background fills, spinner replacement, completion pulse, success burst, and content-area masking."
+      ],
+      "requirements": [
+        "Expose all declared component inputs with deterministic defaults.",
+        "Keep the effect standalone and suitable for wrapping arbitrary rectangular UI surfaces.",
+        "Represent executing state decoratively without becoming the only execution indicator."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the standalone component scope and output contract.",
+        "DESIGN-REQ-002": "Owns the perimeter-motion intent and anti-spinner/anti-shimmer framing.",
+        "DESIGN-REQ-003": "Owns the complete public input contract.",
+        "DESIGN-REQ-010": "Owns active and inactive rendering state semantics.",
+        "DESIGN-REQ-016": "Owns the explicit exclusions as guardrails."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "Downstream implementation may choose CSS, SVG, canvas, or another rendering system as long as the contract is preserved."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Render masked conic beam geometry and layers",
+      "shortName": "masked beam geometry",
+      "description": "As a UI engineer, I need the beam rendered as layered conic-gradient geometry clipped to the border ring, so the active execution glint travels around the perimeter while the content area remains unaffected.",
+      "sourceReference": {
+        "path": "docs/UI/EffectBorderBeam.md",
+        "title": "Masked Conic Border Beam — Declarative Design",
+        "sections": [
+          "Visual model",
+          "Geometry and masking",
+          "Pseudostructure",
+          "Gradient composition",
+          "Declarative rendering rules"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "scope": [
+        "Implement or specify the host, resting border, animated beam, optional glow, and optional trailing-beam layer model.",
+        "Apply an outer-minus-inner rounded-rectangle mask using borderWidth as the inset.",
+        "Compose the main conic beam from transparent, tail, bright-head, and fade stops.",
+        "Preserve radius, thickness, and corner continuity."
+      ],
+      "outOfScope": [
+        "Choosing product-specific colors or state labels.",
+        "Reduced-motion replacement behavior, except that geometry must still support a static segment."
+      ],
+      "independentTest": "Mount the effect around content and inspect computed structure or visual snapshots to confirm the interior area is masked out, the border ring remains visible, and the beam/glow honor the configured radius and width at corners.",
+      "acceptanceCriteria": [
+        "The animated beam is visible only in the border ring defined by the outer rounded rectangle minus the inset inner rounded rectangle.",
+        "The inner inset equals borderWidth, and corner radius is adjusted so the ring remains optically consistent.",
+        "The beam uses a mostly transparent conic gradient with a soft tail, narrow bright head, and fade back to transparency.",
+        "Optional glow derives from the beam footprint, remains lower opacity and blurred, and may straddle or expand slightly beyond the border.",
+        "Content readability is preserved because the animated treatment never fills or overlays the interior content area."
+      ],
+      "requirements": [
+        "Render a static resting border ring while active.",
+        "Support default bright head and trailing tail arcs of 12deg and 28deg, with acceptable ranges described by the source design.",
+        "Support optional soft or defined trailing beam behavior without changing orbital speed.",
+        "Maintain smooth motion continuity around all sides and rounded corners."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-004": "Owns the layered visual model.",
+        "DESIGN-REQ-005": "Owns border-ring masking and inset geometry.",
+        "DESIGN-REQ-006": "Owns conic-gradient arc and stop composition.",
+        "DESIGN-REQ-011": "Owns content readability, radius honoring, and consistent thickness constraints."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Visual regression or DOM/CSS assertions will be available in the downstream implementation environment."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Tune motion, theme, and intensity presets",
+      "shortName": "beam motion presets",
+      "description": "As a product designer or UI engineer, I need the beam to provide predictable speed, direction, color, intensity, trail, glow, and variant tuning, so the same effect can communicate execution across dark and light MoonMind surfaces without overpowering other UI states.",
+      "sourceReference": {
+        "path": "docs/UI/EffectBorderBeam.md",
+        "title": "Masked Conic Border Beam — Declarative Design",
+        "sections": [
+          "Motion behavior",
+          "Color behavior",
+          "Recommended default tuning",
+          "Motion variants",
+          "Declarative rendering rules"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "scope": [
+        "Define and validate slow, medium, fast, and explicit-second speed behavior.",
+        "Support clockwise and counterclockwise rotation with linear continuous motion.",
+        "Map neutral, brand, success, custom, subtle, normal, vivid, trail, and glow controls to tokenized visual output.",
+        "Preserve the MoonMind-style default of precision glint with a soft trail."
+      ],
+      "outOfScope": [
+        "Runtime performance degradation policy beyond glow controls.",
+        "Accessibility reduced-motion substitutions."
+      ],
+      "independentTest": "Render active examples for each speed preset, direction, theme, intensity, trail, and glow mode and assert that tokens, duration, direction, and layer opacity/visibility match the declared contract.",
+      "acceptanceCriteria": [
+        "Default active motion is a 3.6s linear infinite clockwise orbit.",
+        "Slow, medium, and fast presets map to 4.8s, 3.6s, and 2.8s per orbit, while explicit seconds are honored.",
+        "Orbital animation avoids easing and reads as a continuous circulation path.",
+        "Activation fades beam opacity to target over 160-240ms and deactivation fades beam and glow out over 120-180ms.",
+        "Theme and intensity controls set resting border, head, tail, glow, and opacity token values that work on dark and light surfaces.",
+        "The preferred default is Variant A precision glint with a soft trail and low glow."
+      ],
+      "requirements": [
+        "Support optional secondary opacity breathing at plus/minus 8% over 1.8-2.4s without breaking continuous motion.",
+        "Keep the effect subtle enough that it does not outshine primary buttons, selected states, or error states.",
+        "Support precision glint, energized beam, and dual-phase orbit variants as configurable outcomes or documented mappings."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-007": "Owns primary orbit, direction, and linearity.",
+        "DESIGN-REQ-008": "Owns speed presets, entry/exit transitions, and optional breathing.",
+        "DESIGN-REQ-009": "Owns color token roles, themes, and dark/light compatibility.",
+        "DESIGN-REQ-012": "Owns motion variants and preferred MoonMind default.",
+        "DESIGN-REQ-011": "Owns the subtlety threshold against higher-priority UI states."
+      },
+      "dependencies": [
+        "STORY-002"
+      ],
+      "assumptions": [
+        "The implementation platform can represent either transform rotation or an equivalent animatable angle variable."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Support reduced motion, accessibility, and performance guardrails",
+      "shortName": "beam guardrails",
+      "description": "As an operator and end user, I need the border beam to respect reduced-motion preferences, remain accessible as a secondary status cue, and avoid expensive animation behavior, so execution state is visible without harming usability or dense-list performance.",
+      "sourceReference": {
+        "path": "docs/UI/EffectBorderBeam.md",
+        "title": "Masked Conic Border Beam — Declarative Design",
+        "sections": [
+          "Reduced motion behavior",
+          "Accessibility and UX constraints",
+          "Performance guidance",
+          "Acceptance criteria",
+          "Non-goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016"
+        ]
+      },
+      "scope": [
+        "Implement reducedMotion auto, off, and minimal semantics.",
+        "Require the beam to be paired with a non-visual execution indicator such as text.",
+        "Keep warning-like colors, rapid pulsing, and noisy small-size behavior out of the effect.",
+        "Prefer compositor-friendly animation and graceful glow degradation."
+      ],
+      "outOfScope": [
+        "Designing the full parent status component or copy system.",
+        "Implementing device benchmarking infrastructure."
+      ],
+      "independentTest": "Simulate reduced-motion preference and lower-power/degraded settings, then verify orbital movement stops or is minimized, the active state remains meaningful, text status remains available, and no layout-triggering animation is required.",
+      "acceptanceCriteria": [
+        "With reducedMotion auto and user preference enabled, orbital rotation stops and a static illuminated segment or very gentle 2.4-3.2s opacity pulse remains.",
+        "With reducedMotion minimal, there is no movement and the active state is represented by a slightly brighter static border ring only.",
+        "The effect is never the only indicator of execution state and is paired with an accessible label such as Executing.",
+        "The visual treatment avoids strong red/orange pulses that imply warning and keeps average luminance low for dense lists.",
+        "Animation uses transform/rotation or an equivalent composited angle where possible and avoids layout-triggering animation.",
+        "Glow remains modest and is the first optional layer disabled for lower-power degradation."
+      ],
+      "requirements": [
+        "Respect reducedMotion modes without replacing the beam with rapid pulsing.",
+        "Remain distinguishable at small sizes without becoming noisy.",
+        "Keep all non-goals enforced under accessibility and performance modes."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-013": "Owns reduced-motion active-state substitutions.",
+        "DESIGN-REQ-014": "Owns accessibility and UX constraints.",
+        "DESIGN-REQ-015": "Owns performance and degradation guidance.",
+        "DESIGN-REQ-016": "Owns non-goal enforcement under guardrail modes."
+      },
+      "dependencies": [
+        "STORY-003"
+      ],
+      "assumptions": [
+        "The parent surface or downstream consumer provides the non-visual execution label when integrating the effect."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-001",
+      "STORY-004"
+    ]
+  },
+  "outOfScope": [
+    "Creating or modifying Moon Spec spec.md files during breakdown.",
+    "Creating directories under specs/ during breakdown.",
+    "Implementing the UI component in this breakdown step.",
+    "Replacing text or semantic execution indicators with the visual effect alone."
+  ]
+}
