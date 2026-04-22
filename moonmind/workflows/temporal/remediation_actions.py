@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -38,8 +39,24 @@ _RAW_ACCESS_ACTION_KINDS = frozenset(
     }
 )
 _ACTION_CATALOG: dict[str, dict[str, Any]] = {
-    "restart_worker": {"risk": "medium", "enabled": True},
-    "terminate_session": {"risk": "high", "enabled": True},
+    "restart_worker": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "workload_container",
+        "input_metadata": {
+            "reason": {"type": "string", "required": False},
+        },
+        "verification_hint": "verify helper container health and target state",
+    },
+    "terminate_session": {
+        "risk": "high",
+        "enabled": True,
+        "target_type": "managed_session",
+        "input_metadata": {
+            "reason": {"type": "string", "required": False},
+        },
+        "verification_hint": "verify session termination state and target run status",
+    },
 }
 _DEFAULT_AUTO_ALLOWED_RISK = "medium"
 _SUPPORTED_AUTHORITY_MODES = frozenset(
@@ -94,7 +111,11 @@ class RemediationActionAuthorityResult:
     audit: Mapping[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
+        result_status = _result_status(self.decision, self.reason)
+        verification_hint = _verification_hint(self.action_kind)
+        verification_required = self.executable and self.reason != "dry_run"
         return {
+            "schemaVersion": "v1",
             "remediationWorkflowId": self.remediation_workflow_id,
             "targetWorkflowId": self.target_workflow_id,
             "authorityMode": self.authority_mode,
@@ -107,6 +128,31 @@ class RemediationActionAuthorityResult:
             "approvalRef": self.approval_ref,
             "executable": self.executable,
             "redactedParameters": dict(self.redacted_parameters),
+            "request": {
+                "schemaVersion": "v1",
+                "actionId": self.idempotency_key,
+                "actionKind": self.action_kind,
+                "requester": self.audit.get("requestingPrincipal"),
+                "target": {
+                    "workflowId": self.target_workflow_id,
+                    "resourceKind": _target_type(self.action_kind),
+                },
+                "riskTier": self.risk,
+                "dryRun": self.reason == "dry_run",
+                "idempotencyKey": self.idempotency_key,
+                "params": dict(self.redacted_parameters),
+            },
+            "result": {
+                "schemaVersion": "v1",
+                "actionId": self.idempotency_key,
+                "status": result_status,
+                "appliedAt": None,
+                "beforeStateRef": None,
+                "afterStateRef": None,
+                "verificationRequired": verification_required,
+                "verificationHint": verification_hint if verification_required else None,
+                "sideEffects": [],
+            },
             "audit": dict(self.audit),
         }
 
@@ -117,6 +163,41 @@ class RemediationActionAuthorityService:
     def __init__(self, *, session: AsyncSession) -> None:
         self._session = session
         self._decisions: dict[tuple[str, str], RemediationActionAuthorityResult] = {}
+
+    def list_allowed_actions(
+        self,
+        *,
+        permissions: RemediationPermissionSet,
+        security_profile: RemediationSecurityProfile | None,
+    ) -> tuple[Mapping[str, Any], ...]:
+        """Return enabled action metadata allowed by caller permissions and profile."""
+
+        if (
+            not permissions.can_view_target
+            or not permissions.can_request_admin_profile
+            or security_profile is None
+            or not security_profile.enabled
+        ):
+            return ()
+
+        allowed_by_profile = set(security_profile.allowed_action_kinds)
+        actions: list[Mapping[str, Any]] = []
+        for action_kind, action_info in _ACTION_CATALOG.items():
+            if not action_info.get("enabled", False):
+                continue
+            if action_kind not in allowed_by_profile:
+                continue
+            actions.append(
+                {
+                    "actionKind": action_kind,
+                    "riskTier": action_info["risk"],
+                    "targetType": action_info["target_type"],
+                    "inputMetadata": deepcopy(action_info.get("input_metadata") or {}),
+                    "verificationRequired": True,
+                    "verificationHint": action_info["verification_hint"],
+                }
+            )
+        return tuple(actions)
 
     async def evaluate_action_request(
         self,
@@ -524,6 +605,38 @@ def _redact_text(value: str | None) -> str:
     redacted = _PRESIGNED_URL_PATTERN.sub("[REDACTED_URL]", redacted)
     redacted = _ABSOLUTE_PATH_PATTERN.sub("[REDACTED_PATH]", redacted)
     return redacted
+
+
+def _target_type(action_kind: str) -> str | None:
+    action_info = _ACTION_CATALOG.get(action_kind)
+    if action_info is None:
+        return None
+    return str(action_info.get("target_type") or "")
+
+
+def _verification_hint(action_kind: str) -> str | None:
+    action_info = _ACTION_CATALOG.get(action_kind)
+    if action_info is None:
+        return None
+    return str(action_info.get("verification_hint") or "")
+
+
+def _result_status(decision: RemediationActionDecision, reason: str) -> str:
+    if reason == "dry_run":
+        return "no_op"
+    if decision == "allowed":
+        return "applied"
+    if decision == "approval_required":
+        return "approval_required"
+    if reason in {
+        "target_view_permission_required",
+        "security_profile_action_not_allowed",
+        "unsupported_authority_mode",
+    }:
+        return "precondition_failed"
+    if decision in {"denied", "dry_run_only"}:
+        return "rejected"
+    return "failed"
 
 
 __all__ = [

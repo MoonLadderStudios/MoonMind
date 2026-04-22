@@ -121,6 +121,33 @@ def _admin_profile(**overrides):
     return RemediationSecurityProfile(**data)
 
 
+def test_remediation_action_authority_lists_policy_compatible_actions():
+    service = RemediationActionAuthorityService(session=object())
+
+    denied = service.list_allowed_actions(
+        permissions=RemediationPermissionSet(can_view_target=True),
+        security_profile=_admin_profile(),
+    )
+    assert denied == ()
+
+    allowed = service.list_allowed_actions(
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(allowed_action_kinds=("restart_worker",)),
+    )
+
+    assert [item["actionKind"] for item in allowed] == ["restart_worker"]
+    assert allowed[0]["riskTier"] == "medium"
+    assert allowed[0]["targetType"] == "workload_container"
+    assert allowed[0]["inputMetadata"]["reason"]["required"] is False
+
+    allowed[0]["inputMetadata"]["reason"]["required"] = True
+    listed_again = service.list_allowed_actions(
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(allowed_action_kinds=("restart_worker",)),
+    )
+    assert listed_again[0]["inputMetadata"]["reason"]["required"] is False
+
+
 @pytest.fixture
 def mock_client_adapter():
     adapter = MagicMock()
@@ -865,6 +892,11 @@ async def test_remediation_action_authority_enforces_authority_modes(
         )
         assert dry_run.decision == "dry_run_only"
         assert dry_run.executable is False
+        dry_run_payload = dry_run.to_dict()
+        assert dry_run_payload["request"]["dryRun"] is True
+        assert dry_run_payload["result"]["status"] == "no_op"
+        assert dry_run_payload["result"]["verificationRequired"] is False
+        assert dry_run_payload["result"]["verificationHint"] is None
 
         denied = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
@@ -975,6 +1007,16 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         assert allowed.decision == "allowed"
         assert allowed.risk == "medium"
         assert allowed.executable is True
+        payload = allowed.to_dict()
+        assert payload["schemaVersion"] == "v1"
+        assert payload["request"]["actionKind"] == "restart_worker"
+        assert payload["request"]["riskTier"] == "medium"
+        assert payload["request"]["dryRun"] is False
+        assert payload["result"]["status"] == "applied"
+        assert payload["result"]["verificationRequired"] is True
+        assert payload["result"]["verificationHint"]
+        assert payload["result"]["sideEffects"] == []
+        assert payload["audit"]["executionPrincipal"] == "service:admin-healer"
 
         high_risk = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
@@ -1074,6 +1116,11 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         assert high_risk.reason == "high_risk_requires_approval"
         assert dry_run.decision == "allowed"
         assert dry_run is not allowed
+        dry_run_payload = dry_run.to_dict()
+        assert dry_run_payload["request"]["dryRun"] is True
+        assert dry_run_payload["result"]["status"] == "no_op"
+        assert dry_run_payload["result"]["verificationRequired"] is False
+        assert dry_run_payload["result"]["verificationHint"] is None
 
 
 @pytest.mark.asyncio

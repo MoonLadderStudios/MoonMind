@@ -1,7 +1,7 @@
 # Tasks: Mission Control Report Presentation
 
-**Input**: `specs/229-mission-control-report-presentation/spec.md`
-**Plan**: `specs/229-mission-control-report-presentation/plan.md`
+**Input**: `specs/230-mission-control-report-presentation/spec.md`
+**Plan**: `specs/230-mission-control-report-presentation/plan.md`
 **Unit Test Command**: `./tools/test_unit.sh`
 **Focused UI Test Command**: `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx`
 **Focused API Contract Command**: `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py`
@@ -19,7 +19,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm active feature context points to `specs/229-mission-control-report-presentation` in `.specify/feature.json` (MM-462).
+- [X] T001 Confirm active feature context points to `specs/230-mission-control-report-presentation` in `.specify/feature.json` (MM-462).
 - [X] T002 Inspect existing artifact list parsing and rendering in `frontend/src/entrypoints/task-detail.tsx` before editing (FR-001 through FR-007).
 - [X] T003 Inspect existing task detail and artifact API tests in `frontend/src/entrypoints/task-detail.test.tsx` and `tests/contract/test_temporal_artifact_api.py` before adding failures (FR-001 through FR-007).
 
@@ -33,7 +33,7 @@ Integration/contract test plan: API contract coverage verifies the execution art
 - [X] T006 [P] Add failing frontend unit test in `frontend/src/entrypoints/task-detail.test.tsx` asserting no report panel/status is fabricated when latest `report.primary` returns empty but generic artifacts exist (FR-004, FR-007, SC-003).
 - [X] T007 [P] Add failing frontend unit test in `frontend/src/entrypoints/task-detail.test.tsx` asserting report open targets use `default_read_ref` and viewer labels reflect `render_hint` or `content_type` for markdown, JSON, text, diff, image, and binary/PDF cases (FR-005, SC-004, DESIGN-REQ-013).
 - [X] T008 [P] Add failing API contract regression in `tests/contract/test_temporal_artifact_api.py` asserting the execution artifact list can be called with `link_type=report.primary&latest_only=true` and returns links/default read refs needed by Mission Control (FR-001, FR-006, DESIGN-REQ-011, DESIGN-REQ-022).
-- [X] T009 Run focused failing tests for T004-T008 and capture red-first evidence in `specs/229-mission-control-report-presentation/tasks.md` or verification notes.
+- [X] T009 Run focused failing tests for T004-T008 and capture red-first evidence in `specs/230-mission-control-report-presentation/tasks.md` or verification notes.
 
 ## Phase 3: Implementation
 
@@ -49,12 +49,12 @@ Integration/contract test plan: API contract coverage verifies the execution art
 
 - [X] T017 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx` and fix failures (FR-001 through FR-007).
 - [X] T018 Run `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py` and fix failures (FR-001, FR-006).
-- [X] T019 Run traceability check `rg -n "MM-462|DESIGN-REQ-011|DESIGN-REQ-012|DESIGN-REQ-013|DESIGN-REQ-014|DESIGN-REQ-020|DESIGN-REQ-022" specs/229-mission-control-report-presentation docs/tmp/jira-orchestration-inputs/MM-462-moonspec-orchestration-input.md` (FR-008, SC-006).
+- [X] T019 Run traceability check `rg -n "MM-462|DESIGN-REQ-011|DESIGN-REQ-012|DESIGN-REQ-013|DESIGN-REQ-014|DESIGN-REQ-020|DESIGN-REQ-022" specs/230-mission-control-report-presentation docs/tmp/jira-orchestration-inputs/MM-462-moonspec-orchestration-input.md` (FR-008, SC-006).
 - [X] T020 Run final `./tools/test_unit.sh` unless blocked by environment constraints.
 
 ## Phase 5: Verify
 
-- [X] T021 Run `/speckit.verify` equivalent through `moonspec-verify` for `specs/229-mission-control-report-presentation/spec.md` and record verdict in `specs/229-mission-control-report-presentation/verification.md`.
+- [X] T021 Run `/speckit.verify` equivalent through `moonspec-verify` for `specs/230-mission-control-report-presentation/spec.md` and record verdict in `specs/230-mission-control-report-presentation/verification.md`.
 - [X] T022 Mark completed tasks `[X]` only after implementation and verification evidence exists.
 
 ## Dependencies And Order
