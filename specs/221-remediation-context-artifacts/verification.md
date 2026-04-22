@@ -14,10 +14,12 @@
 | FR-005 | Tail-line clamp and task-run limit assertions in `test_remediation_context_builder_creates_bounded_linked_artifact` | VERIFIED |
 | FR-006 | Serialized payload assertions excluding local paths, storage keys, presigned references, and secret-like fields | VERIFIED |
 | FR-007 | `test_remediation_context_builder_rejects_non_remediation_workflow` | VERIFIED |
-| DESIGN-REQ-001 | Complete `remediation.context` artifact linked as `reports/remediation_context.json` | VERIFIED |
-| DESIGN-REQ-002 | Payload contains target identity, selectors, evidence refs, policies, and live-follow state | VERIFIED |
-| DESIGN-REQ-003 | Payload is bounded and ref-only; no raw artifact/log/storage access | VERIFIED |
-| DESIGN-REQ-004 | Out of scope for this slice; no action/live-follow tooling added | VERIFIED |
+| DESIGN-REQ-006 | Complete `remediation.context` artifact linked as `reports/remediation_context.json` | VERIFIED |
+| DESIGN-REQ-011 | Payload contains target identity, selectors, observability refs, bounded summaries, policies, and live-follow state | VERIFIED |
+| DESIGN-REQ-019 | Payload is bounded and ref-only; no raw artifact/log/storage access, URLs, local paths, or secret-like fields | VERIFIED |
+| DESIGN-REQ-022 | Artifact linkage uses safe metadata and artifact refs under normal artifact presentation/redaction contracts | VERIFIED |
+| DESIGN-REQ-023 | Missing optional evidence degrades to bounded empty refs and non-remediation targets fail before artifact creation | VERIFIED |
+| DESIGN-REQ-024 | Out of scope for this slice; no action/live-follow tooling added | VERIFIED |
 
 ## Tests
 

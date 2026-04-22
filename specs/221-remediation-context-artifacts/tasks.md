@@ -9,7 +9,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py`
 - Integration tests: Not required for this bounded service/artifact slice; no compose-backed boundary is introduced.
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Phase 1: Setup
 
@@ -25,7 +25,7 @@
 
 **Independent Test**: Create a target execution and remediation execution, run the context builder, then assert the generated artifact is linked, complete, bounded, and ref-only.
 
-**Traceability IDs**: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003.
+**Traceability IDs**: FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, DESIGN-REQ-006, DESIGN-REQ-011, DESIGN-REQ-019, DESIGN-REQ-022, DESIGN-REQ-023.
 
 - [X] T003 Add failing unit tests for valid context artifact generation, execution linkage, remediation link context ref, target identity, selectors, refs, policies, and boundedness in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-001 through FR-006.
 - [X] T004 Add a failing unit test for non-remediation workflow IDs failing before artifact creation in `tests/unit/workflows/temporal/test_remediation_context.py` for FR-007.
@@ -36,4 +36,4 @@
 ## Final Phase: Polish And Verification
 
 - [X] T008 Run relevant unit verification from `specs/221-remediation-context-artifacts/quickstart.md`.
-- [X] T009 Run `/speckit.verify` by auditing implementation against `specs/221-remediation-context-artifacts/spec.md` and recording the result.
+- [X] T009 Run `/moonspec-verify` by auditing implementation against `specs/221-remediation-context-artifacts/spec.md` and recording the result.

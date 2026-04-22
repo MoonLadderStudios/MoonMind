@@ -18,10 +18,12 @@ Implement MM-432 by adding a narrow Remediation Context Builder at the Temporal 
 | FR-005 | missing | No remediation evidence bounding exists | Clamp tail lines and task run IDs | unit |
 | FR-006 | missing | No context payload exists | Add redaction-safe payload assertions | unit |
 | FR-007 | missing | No builder exists | Fail on missing remediation link before artifact write | unit |
-| DESIGN-REQ-001 | missing | Desired-state docs only | Generate `remediation.context` artifact | unit |
-| DESIGN-REQ-002 | missing | Desired-state docs only | Include compact identity, selectors, refs, policies, live-follow state | unit |
-| DESIGN-REQ-003 | missing | Desired-state docs only | Enforce bounded/ref-only payload shape | unit |
-| DESIGN-REQ-004 | implemented_verified | Out-of-scope in `spec.md` | No implementation | final verify |
+| DESIGN-REQ-006 | missing | Desired-state docs only | Generate `remediation.context` artifact as the stable evidence entrypoint | unit |
+| DESIGN-REQ-011 | missing | Desired-state docs only | Include compact identity, selectors, observability refs, summaries, policies, and live-follow state | unit |
+| DESIGN-REQ-019 | missing | Desired-state docs only | Enforce bounded/ref-only payload shape with no raw logs, secrets, URLs, storage keys, or local paths | unit |
+| DESIGN-REQ-022 | missing | Desired-state docs only | Store safe artifact metadata and refs that follow artifact presentation/redaction contracts | unit |
+| DESIGN-REQ-023 | missing | Desired-state docs only | Represent missing and partial evidence as bounded degradation or fail-fast validation | unit |
+| DESIGN-REQ-024 | implemented_verified | Out-of-scope in `spec.md` | No implementation | final verify |
 
 ## Technical Context
 
