@@ -5,7 +5,7 @@
 
 ## Summary
 
-Add distinct Claude Anthropic credential method actions to the existing Settings Provider Profiles table while preserving Codex OAuth behavior. Repo inspection shows `frontend/src/components/settings/ProviderProfilesManager.tsx` already owns provider-profile row actions, Codex OAuth session startup, and Claude API-key/manual-auth submission. The current Claude action model is manual-token oriented (`Connect Claude`, `Replace token`, `Validate`, `Disconnect`) and does not expose the MM-477 labels or route `Connect with Claude OAuth` through the OAuth session lifecycle. The planned slice updates the provider-profile auth classifier and focused UI tests so `claude_anthropic` can show OAuth, API-key, validation, and disconnect actions from trusted row metadata or canonical OAuth profile shape.
+Add distinct Claude Anthropic credential method actions to the existing Settings Provider Profiles table while preserving Codex OAuth behavior. Repo inspection shows `frontend/src/components/settings/ProviderProfilesManager.tsx` owns provider-profile row actions, Codex OAuth session startup, and Claude API-key/manual-auth submission. The implemented slice updates the provider-profile auth classifier, row action labels, API-key enrollment copy, and focused UI tests so `claude_anthropic` can show OAuth, API-key, validation, and disconnect actions from trusted row metadata or canonical OAuth profile shape.
 
 ## Requirement Status
 
@@ -13,21 +13,21 @@ Add distinct Claude Anthropic credential method actions to the existing Settings
 | --- | --- | --- | --- | --- |
 | FR-001 | implemented_verified | `ProviderProfilesManager.tsx` renders profiles inside Settings Provider Profiles; existing tests cover table placement | preserve row-level placement | unit UI |
 | FR-002 | implemented_verified | No standalone Claude auth page exists in `frontend/src/entrypoints`; existing row-local tests cover prior Claude actions | preserve no-page behavior | unit UI |
-| FR-003 | partial | Claude rows can show `Connect Claude`, but not `Connect with Claude OAuth`; OAuth-capable `claude_anthropic` seed profile lacks supported UI classification | add OAuth-specific action label and classifier support | unit + integration-style UI |
-| FR-004 | partial | Claude manual/API-key drawer exists behind `Connect Claude`, but the distinct `Use Anthropic API key` label is absent | add API-key action label and route to existing Managed Secrets-backed flow | unit + integration-style UI |
-| FR-005 | missing | Current Claude connect action opens manual token drawer; OAuth session startup is Codex-only | route Claude OAuth action through existing OAuth session mutation | integration-style UI |
-| FR-006 | partial | Manual-auth commit path exists and avoids OAuth sessions, but the API-key method is not separately selectable | expose API-key action and preserve no OAuth request behavior | integration-style UI |
-| FR-007 | missing | Current labels are generic `Validate`; no OAuth-specific validation action | add metadata-driven `Validate OAuth` label | unit UI |
-| FR-008 | missing | Current labels are generic `Disconnect`; no OAuth-specific disconnect action | add metadata-driven `Disconnect OAuth` label | unit UI |
-| FR-009 | implemented_unverified | Unsupported metadata tests exist for manual actions; new credential-method action set needs coverage | add unsupported Claude credential-method regression | unit UI |
-| FR-010 | partial | Existing tests prevent Codex `Auth` label on Claude manual rows; new OAuth/API-key labels need coverage | update labels and assertions | unit UI |
-| FR-011 | implemented_unverified | Backend manual-auth commit stores Anthropic key as a Managed Secret and sets `ANTHROPIC_API_KEY` materialization | verify API-key action reaches this path | integration-style UI |
-| FR-012 | implemented_unverified | Existing manual-auth tests assert no OAuth request; new `Use Anthropic API key` action needs equivalent coverage | add API-key no-OAuth regression | integration-style UI |
+| FR-003 | implemented_verified | Claude credential-method rows expose `Connect with Claude OAuth` from trusted metadata or the canonical `claude_anthropic` OAuth profile shape | preserve OAuth-specific action label and classifier support | unit + integration-style UI |
+| FR-004 | implemented_verified | Claude credential-method rows expose `Use Anthropic API key` and route it to the existing Managed Secrets-backed API-key enrollment flow | preserve API-key action label and route | unit + integration-style UI |
+| FR-005 | implemented_verified | `Connect with Claude OAuth` starts the existing OAuth session mutation for `runtime_id = "claude_code"` and does not open the API-key drawer | preserve Claude OAuth action routing | integration-style UI |
+| FR-006 | implemented_verified | `Use Anthropic API key` opens the API-key drawer and preserves no OAuth request behavior | preserve API-key no-OAuth behavior | integration-style UI |
+| FR-007 | implemented_verified | Trusted OAuth validation metadata maps to the `Validate OAuth` row action | preserve metadata-driven `Validate OAuth` label | unit UI |
+| FR-008 | implemented_verified | Trusted disconnect metadata maps to the `Disconnect OAuth` row action | preserve metadata-driven `Disconnect OAuth` label | unit UI |
+| FR-009 | implemented_verified | Unsupported or metadata-free Claude rows hide misleading Claude credential-method actions | preserve unsupported-row regression coverage | unit UI |
+| FR-010 | implemented_verified | Claude actions use Claude/Anthropic labels while Codex OAuth labels remain unchanged | preserve label regression coverage | unit UI |
+| FR-011 | implemented_verified | Backend API-key commit stores Anthropic keys as Managed Secrets and sets `ANTHROPIC_API_KEY` materialization metadata | preserve backend API-key commit coverage | unit + integration-style UI |
+| FR-012 | implemented_verified | API-key row action coverage confirms no `/api/v1/oauth-sessions` request is created | preserve API-key no-OAuth regression | integration-style UI |
 | FR-013 | implemented_verified | Existing Codex OAuth tests cover `/api/v1/oauth-sessions` payloads and terminal launch | keep Codex tests passing | unit + integration-style UI |
-| FR-014 | missing | New artifacts preserve MM-477; final verification not yet run | carry traceability through tasks and verification | final verify |
+| FR-014 | implemented_verified | MoonSpec artifacts preserve MM-477 and final verification completed against the source design mappings | carry traceability through tasks, verification, commit text, and PR metadata | final verify |
 | DESIGN-REQ-001 | implemented_verified | Settings Provider Profiles table exists and no standalone page is needed | preserve placement | unit UI |
-| DESIGN-REQ-002 | partial | Existing Claude labels are not the required OAuth/API-key method labels | implement distinct method labels and metadata mapping | unit + integration-style UI |
-| DESIGN-REQ-005 | partial | API-key commit path exists; row-level method selection is absent | route API-key method to Managed Secrets-backed flow and not OAuth | integration-style UI |
+| DESIGN-REQ-002 | implemented_verified | Distinct Claude OAuth/API-key/validate/disconnect labels render from trusted metadata while preserving Codex behavior | preserve distinct method labels and metadata mapping | unit + integration-style UI |
+| DESIGN-REQ-005 | implemented_verified | API-key selection routes to the Managed Secrets-backed flow and does not create an OAuth terminal session | preserve API-key routing and no-OAuth assertions | integration-style UI |
 
 ## Technical Context
 
