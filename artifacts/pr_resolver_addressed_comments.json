@@ -1,37 +1,27 @@
 [
   {
-    "id": 3122683153,
+    "id": 3125731282,
     "disposition": "addressed",
-    "rationale": "Claude enrollment progress now uses asynchronous transitions through saving_secret and updating_profile before ready, so the lifecycle states can render visibly."
+    "rationale": "Changed the MaskedConicBorderBeam content wrapper from span to div so arbitrary block-level children are validly nested."
   },
   {
-    "id": 3122683164,
-    "disposition": "addressed",
-    "rationale": "Manual Claude token submission now uses a TanStack useMutation with mutation callbacks for loading, success, and error state management."
-  },
-  {
-    "id": 3122683174,
-    "disposition": "addressed",
-    "rationale": "The Claude enrollment surface now renders as a fixed drawer overlay with dialog semantics, modal backdrop behavior, initial focus, and Escape/backdrop close handling."
-  },
-  {
-    "id": 3122702328,
-    "disposition": "addressed",
-    "rationale": "Enrollment mutation callbacks are scoped to the submitting profile and ignore stale responses after another profile drawer is opened."
-  },
-  {
-    "id": 3122702335,
-    "disposition": "addressed",
-    "rationale": "Submitted tokens are cleared when submission starts and remain cleared on failed retry entry."
-  },
-  {
-    "id": 4153274362,
+    "id": 4156629488,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; the referenced actionable items are tracked by their individual review comments."
+    "rationale": "Top-level bot review summary; its actionable wrapper feedback is addressed by inline comments 3125731282 and 3125738170."
   },
   {
-    "id": 4153297608,
+    "id": 3125738162,
+    "disposition": "addressed",
+    "rationale": "Applied the border-ring mask to the glow layer and added CSS contract coverage so the conic glow is not painted as a full-box fill."
+  },
+  {
+    "id": 3125738170,
+    "disposition": "addressed",
+    "rationale": "Changed the content wrapper to a div and added a component test asserting the wrapper element is DIV."
+  },
+  {
+    "id": 4156636448,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the actionable Codex comments are tracked by their individual review comments."
+    "rationale": "Top-level automated review body; actionable Codex findings are represented by inline comments 3125738162 and 3125738170."
   }
 ]

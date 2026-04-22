@@ -1333,9 +1333,14 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .masked-conic-border-beam__glow {
+  padding: var(--beam-border-width);
   opacity: var(--beam-glow-opacity);
   background: conic-gradient(from 0deg, transparent 0deg 292deg, var(--beam-glow-color) 318deg, var(--beam-head-color) 334deg, transparent 360deg);
   filter: blur(5px);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
   animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
 }
 

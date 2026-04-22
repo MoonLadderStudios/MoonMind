@@ -104,7 +104,7 @@ export function MaskedConicBorderBeam({
           data-testid="masked-conic-border-beam-glow"
         />
       ) : null}
-      <span className="masked-conic-border-beam__content">{children}</span>
+      <div className="masked-conic-border-beam__content">{children}</div>
     </div>
   );
 }

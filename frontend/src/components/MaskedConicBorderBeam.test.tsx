@@ -94,7 +94,9 @@ describe('MaskedConicBorderBeam', () => {
     expect(wrapper.style.getPropertyValue('--beam-border-radius')).toBe('12px');
     expect(wrapper.style.getPropertyValue('--beam-border-width')).toBe('2px');
     expect(wrapper.style.getPropertyValue('--beam-speed')).toBe('2.8s');
-    expect(screen.getByText('Surface content').closest('.masked-conic-border-beam__content')).toBeTruthy();
+    const contentWrapper = screen.getByText('Surface content').closest('.masked-conic-border-beam__content');
+    expect(contentWrapper).toBeTruthy();
+    expect(contentWrapper?.tagName).toBe('DIV');
   });
 
   it('does not render moving beam or glow layers when inactive', () => {
@@ -125,6 +127,7 @@ describe('MaskedConicBorderBeam', () => {
 
   it('defines the conic beam as a masked border-ring layer instead of content animation', () => {
     const layerBlock = cssRuleBlock('.masked-conic-border-beam__layer');
+    const glowBlock = cssRuleBlock('.masked-conic-border-beam__glow');
     const contentBlock = cssRuleBlock('.masked-conic-border-beam__content');
 
     expect(layerBlock).toContain('position: absolute;');
@@ -132,6 +135,10 @@ describe('MaskedConicBorderBeam', () => {
     expect(layerBlock).toContain('conic-gradient');
     expect(layerBlock).toMatch(/mask-composite:\s*exclude/);
     expect(layerBlock).toMatch(/-webkit-mask-composite:\s*xor/);
+    expect(glowBlock).toContain('padding: var(--beam-border-width);');
+    expect(glowBlock).toContain('conic-gradient');
+    expect(glowBlock).toMatch(/mask-composite:\s*exclude/);
+    expect(glowBlock).toMatch(/-webkit-mask-composite:\s*xor/);
     expect(contentBlock).not.toMatch(/animation:/);
     expect(contentBlock).not.toContain('mask');
   });
