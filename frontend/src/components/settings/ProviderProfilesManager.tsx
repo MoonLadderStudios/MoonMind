@@ -273,7 +273,7 @@ function isCodexOAuthProfile(profile: ProviderProfile): boolean {
 
 function isClaudeManualAuthProfile(profile: ProviderProfile): boolean {
   return (
-    profile.runtime_id === 'claude_cli' &&
+    profile.runtime_id === 'claude_code' &&
     profile.provider_id === 'anthropic' &&
     commandBehaviorString(profile, 'auth_strategy') === 'claude_manual_token'
   );
@@ -294,10 +294,6 @@ function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
       return label ? { id: actionId, label } : null;
     })
     .filter((action): action is ClaudeAuthAction => action !== null);
-
-  if (actions.length === 0) {
-    return { kind: 'none' };
-  }
 
   return {
     kind: 'claude_manual',

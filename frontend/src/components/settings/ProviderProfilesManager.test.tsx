@@ -309,7 +309,7 @@ describe('ProviderProfilesManager form controls', () => {
   const claudeManualProfile: ProviderProfile = {
     ...profile,
     profile_id: 'claude-anthropic',
-    runtime_id: 'claude_cli',
+    runtime_id: 'claude_code',
     provider_id: 'anthropic',
     credential_source: 'secret_ref',
     runtime_materialization_mode: 'api_key_env',
@@ -608,6 +608,27 @@ describe('ProviderProfilesManager form controls', () => {
       },
     ]);
 
+    expect(screen.queryByRole('button', { name: /Connect Claude/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Replace token/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Validate/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Disconnect/ })).toBeNull();
+  });
+
+  it('shows Claude status without lifecycle actions when metadata has no actions', () => {
+    renderProviderProfilesManager([
+      {
+        ...claudeManualProfile,
+        profile_id: 'claude-status-only',
+        command_behavior: {
+          auth_strategy: 'claude_manual_token',
+          auth_state: 'enrollment_pending',
+          auth_actions: [],
+          auth_status_label: 'Claude enrollment pending',
+        },
+      },
+    ]);
+
+    expect(screen.getByText('Claude enrollment pending')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Connect Claude/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Replace token/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Validate/ })).toBeNull();
