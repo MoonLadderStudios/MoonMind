@@ -1,27 +1,22 @@
 [
   {
-    "id": 3126903925,
+    "id": 3126996678,
     "disposition": "addressed",
-    "rationale": "Merged scope-specific prohibited actions with the baseline Pentest safety defaults so global prohibitions remain present."
+    "rationale": "Secret aliases consumed by file_templates and home_path_overrides are now collected before default environment injection, so they are not leaked as top-level environment variables."
   },
   {
-    "id": 4157934270,
+    "id": 3126996680,
+    "disposition": "addressed",
+    "rationale": "Alias collection now detects {{ alias }} template-string references in addition to from_secret_ref dictionaries."
+  },
+  {
+    "id": 4158029300,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; the actionable child finding is tracked separately."
+    "rationale": "Top-level bot review summary; the two actionable inline findings it summarized were addressed separately."
   },
   {
-    "id": 4157939366,
-    "disposition": "not-applicable",
-    "rationale": "Top-level automated Codex review summary with no requested code change."
-  },
-  {
-    "id": 3126908901,
+    "id": 3127016069,
     "disposition": "addressed",
-    "rationale": "Removed raw objective text from wrapper environment metadata and durable activity output."
-  },
-  {
-    "id": 3126908903,
-    "disposition": "addressed",
-    "rationale": "Normalized Pentest artifact roots with path-aware joins and rejected relative, root, double-slash, and parent-traversal roots."
+    "rationale": "Suppressed secret aliases are now removed from inherited base_env before the child process environment is returned."
   }
 ]
