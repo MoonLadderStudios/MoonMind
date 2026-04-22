@@ -1332,7 +1332,6 @@ tr[data-proposal-id].proposal-consuming td {
 
 .masked-conic-border-beam__layer {
   padding: var(--beam-inner-inset);
-  border-radius: var(--beam-inner-radius);
   opacity: var(--beam-opacity);
   background: conic-gradient(
     from 0deg,
@@ -1350,7 +1349,6 @@ tr[data-proposal-id].proposal-consuming td {
 
 .masked-conic-border-beam__glow {
   padding: var(--beam-inner-inset);
-  border-radius: var(--beam-inner-radius);
   opacity: var(--beam-glow-opacity);
   background: conic-gradient(
     from 0deg,
@@ -1373,7 +1371,7 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .masked-conic-border-beam[data-trail="none"] .masked-conic-border-beam__layer {
-  background: conic-gradient(from 0deg, transparent 0deg var(--beam-head-start), var(--beam-head-color) var(--beam-head-end), transparent calc(var(--beam-head-end) + var(--beam-head-arc)) 360deg);
+  background: conic-gradient(from 0deg, transparent 0deg var(--beam-head-start), var(--beam-head-color) var(--beam-head-start) var(--beam-head-end), transparent calc(var(--beam-head-end) + var(--beam-head-arc)) 360deg);
 }
 
 .masked-conic-border-beam[data-trail="defined"] .masked-conic-border-beam__layer {

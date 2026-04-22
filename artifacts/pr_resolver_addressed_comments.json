@@ -1,27 +1,27 @@
 [
   {
-    "id": 3125840616,
+    "id": 3126021003,
     "disposition": "addressed",
-    "rationale": "Registered security.pentest.execute in the Temporal catalog and worker binding metadata so the curated pentest tool resolves to a supported agent-runtime activity route."
+    "rationale": "Removed inline derived --beam-inner-inset and --beam-inner-radius assignments so mission-control.css derives them from primary beam radius and width variables."
   },
   {
-    "id": 4156750665,
+    "id": 3126021015,
+    "disposition": "addressed",
+    "rationale": "Changed the data-trail=none conic gradient to use solid --beam-head-color stops from --beam-head-start through --beam-head-end."
+  },
+  {
+    "id": 4156958082,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated Codex review summary; actionable feedback is tracked by inline comment 3125840616."
+    "rationale": "Bot review summary only; its actionable points are tracked by the inline comments addressed separately."
   },
   {
-    "id": 4156766456,
+    "id": 3126026516,
+    "disposition": "addressed",
+    "rationale": "Removed inner-radius overrides from the masked beam and glow layers so they inherit the host outer ring radius while padding defines the content-box mask."
+  },
+  {
+    "id": 4156964203,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review summary; actionable findings are tracked by inline comments 3125854787 and 3125854793."
-  },
-  {
-    "id": 3125854787,
-    "disposition": "addressed",
-    "rationale": "Added security.pentest.execute to _ACTIVITY_HANDLER_ATTRS and implemented the TemporalAgentRuntimeActivities handler boundary so worker binding recognizes the curated activity."
-  },
-  {
-    "id": 3125854793,
-    "disposition": "addressed",
-    "rationale": "Added artifacts_dir to the security.pentest.run input schema so the registry-visible contract aligns with the typed PentestWorkloadRequest activity payload."
+    "rationale": "Bot review summary/metadata only; the actionable Codex inline comment is addressed separately."
   }
 ]

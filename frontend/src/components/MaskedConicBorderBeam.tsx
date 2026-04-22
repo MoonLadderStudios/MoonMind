@@ -77,8 +77,6 @@ export function MaskedConicBorderBeam({
     ...style,
     '--beam-border-radius': resolvedBorderRadius,
     '--beam-border-width': resolvedBorderWidth,
-    '--beam-inner-inset': resolvedBorderWidth,
-    '--beam-inner-radius': `calc(${resolvedBorderRadius} - ${resolvedBorderWidth})`,
     '--beam-head-arc': '12deg',
     '--beam-tail-arc': '28deg',
     '--beam-speed': cssSpeed(speed),

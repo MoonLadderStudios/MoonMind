@@ -94,8 +94,8 @@ describe('MaskedConicBorderBeam', () => {
     expect(wrapper.style.getPropertyValue('--beam-border-radius')).toBe('12px');
     expect(wrapper.style.getPropertyValue('--beam-border-width')).toBe('2px');
     expect(wrapper.style.getPropertyValue('--beam-speed')).toBe('2.8s');
-    expect(wrapper.style.getPropertyValue('--beam-inner-inset')).toBe('2px');
-    expect(wrapper.style.getPropertyValue('--beam-inner-radius')).toBe('calc(12px - 2px)');
+    expect(wrapper.style.getPropertyValue('--beam-inner-inset')).toBe('');
+    expect(wrapper.style.getPropertyValue('--beam-inner-radius')).toBe('');
     const contentWrapper = screen.getByText('Surface content').closest('.masked-conic-border-beam__content');
     expect(contentWrapper).toBeTruthy();
     expect(contentWrapper?.tagName).toBe('DIV');
@@ -141,8 +141,8 @@ describe('MaskedConicBorderBeam', () => {
     const wrapper = screen.getByTestId('beam');
     expect(wrapper.style.getPropertyValue('--beam-head-arc')).toBe('12deg');
     expect(wrapper.style.getPropertyValue('--beam-tail-arc')).toBe('28deg');
-    expect(wrapper.style.getPropertyValue('--beam-inner-inset')).toBe('1.5px');
-    expect(wrapper.style.getPropertyValue('--beam-inner-radius')).toBe('calc(16px - 1.5px)');
+    expect(wrapper.style.getPropertyValue('--beam-inner-inset')).toBe('');
+    expect(wrapper.style.getPropertyValue('--beam-inner-radius')).toBe('');
   });
 
   it('keeps active layered geometry separate from nested content', () => {
@@ -177,16 +177,18 @@ describe('MaskedConicBorderBeam', () => {
     expect(rootBlock).toContain('--beam-inner-inset: var(--beam-border-width);');
     expect(rootBlock).toContain('--beam-inner-radius: calc(var(--beam-border-radius) - var(--beam-border-width));');
     expect(layerBlock).toContain('position: absolute;');
+    expect(layerBlock).toContain('border-radius: inherit;');
     expect(layerBlock).toContain('padding: var(--beam-inner-inset);');
-    expect(layerBlock).toContain('border-radius: var(--beam-inner-radius);');
+    expect(layerBlock).not.toContain('border-radius: var(--beam-inner-radius);');
     expect(layerBlock).toContain('conic-gradient');
     expect(layerBlock).toContain('var(--beam-tail-start)');
     expect(layerBlock).toContain('var(--beam-tail-end)');
     expect(layerBlock).toContain('var(--beam-head-end)');
     expect(layerBlock).toMatch(/mask-composite:\s*exclude/);
     expect(layerBlock).toMatch(/-webkit-mask-composite:\s*xor/);
+    expect(glowBlock).toContain('border-radius: inherit;');
     expect(glowBlock).toContain('padding: var(--beam-inner-inset);');
-    expect(glowBlock).toContain('border-radius: var(--beam-inner-radius);');
+    expect(glowBlock).not.toContain('border-radius: var(--beam-inner-radius);');
     expect(glowBlock).toContain('conic-gradient');
     expect(glowBlock).toContain('filter: blur(5px);');
     expect(glowBlock).toContain('opacity: var(--beam-glow-opacity);');
@@ -204,6 +206,7 @@ describe('MaskedConicBorderBeam', () => {
 
     expect(layerBlock).toContain('animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;');
     expect(noTrailBlock).toContain('background: conic-gradient');
+    expect(noTrailBlock).toContain('var(--beam-head-color) var(--beam-head-start) var(--beam-head-end)');
     expect(definedTrailBlock).toContain('background: conic-gradient');
     expect(noTrailBlock).not.toContain('animation:');
     expect(definedTrailBlock).not.toContain('animation:');
