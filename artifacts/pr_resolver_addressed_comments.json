@@ -1,57 +1,27 @@
 [
   {
-    "id": 3120762036,
+    "id": 4151732435,
     "disposition": "addressed",
-    "rationale": "Replaced the protocol ellipsis body with an explicit NotImplementedError so the statement is no longer a no-op."
+    "rationale": "Addressed the review summary by passing priority, maxAttempts, and schedule through the remediation convenience route and standardizing top-level field precedence."
   },
   {
-    "id": 3120762042,
+    "id": 3121231598,
     "disposition": "addressed",
-    "rationale": "Replaced the protocol ellipsis body with an explicit NotImplementedError so the statement is no longer a no-op."
+    "rationale": "The remediation route now includes priority, maxAttempts, snake-case max_attempts fallback, and schedule in the CreateJobRequest model validation input."
   },
   {
-    "id": 3120762046,
+    "id": 3121231606,
     "disposition": "addressed",
-    "rationale": "Added an explanatory comment to the tolerant maxTailLines parse fallback."
+    "rationale": "The remediation convenience route now consistently lets top-level instructions, runtime, and remediation override nested task defaults."
   },
   {
-    "id": 3120762392,
+    "id": 3121238803,
     "disposition": "addressed",
-    "rationale": "Exported RemediationLiveFollower from remediation_tools.__all__."
+    "rationale": "The convenience route now rejects non-object remediation values with a 422 invalid_execution_request response instead of coercing them to an empty object."
   },
   {
-    "id": 3120762405,
-    "disposition": "addressed",
-    "rationale": "Changed maxTailLines parsing to preserve an explicit zero instead of replacing it with the default."
-  },
-  {
-    "id": 3120762409,
-    "disposition": "addressed",
-    "rationale": "Cached parsed remediation context payloads by workflow ID and context artifact ref within the service instance."
-  },
-  {
-    "id": 3120762414,
-    "disposition": "addressed",
-    "rationale": "Imported RemediationLiveFollower in moonmind.workflows.temporal.__init__."
-  },
-  {
-    "id": 3120762415,
-    "disposition": "addressed",
-    "rationale": "Added RemediationLiveFollower to the package root __all__ list."
-  },
-  {
-    "id": 4151239835,
+    "id": 4151740844,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary; its actionable inline comments were handled individually."
-  },
-  {
-    "id": 3120768401,
-    "disposition": "addressed",
-    "rationale": "Updated _bounded_tail_lines so explicit tail_lines are clamped by both boundedness.maxTailLines and policies.evidencePolicy.tailLines."
-  },
-  {
-    "id": 4151247216,
-    "disposition": "not-applicable",
-    "rationale": "Top-level automated review wrapper; its actionable inline comment was handled individually."
+    "rationale": "Automated Codex review metadata only; no actionable code request beyond the inline comments already handled."
   }
 ]
