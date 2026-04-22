@@ -13,7 +13,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - Integration tests: focused route/workflow boundary tests through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh <target>`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -80,7 +80,7 @@
 ## Phase 4: Polish & Verification
 
 - [X] T015 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit verification.
-- [X] T016 Run `/speckit.verify` equivalent and record results in `specs/241-claude-oauth-session-backend/verification.md`.
+- [X] T016 Run `/moonspec-verify` equivalent and record results in `specs/241-claude-oauth-session-backend/verification.md`.
 - [X] T017 Review diff for MM-478 traceability, secret hygiene, and absence of unrelated changes.
 
 ---
