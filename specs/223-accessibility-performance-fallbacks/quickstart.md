@@ -28,7 +28,7 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypo
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx
 ```
 
-5. Run final verification and record results in `verification.md`.
+5. Run `moonspec-verify` and record results in `verification.md`.
 
 ## Expected End State
 

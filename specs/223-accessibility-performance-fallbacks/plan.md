@@ -11,22 +11,22 @@ Implement and verify the MM-429 accessibility, reduced-motion, fallback, and per
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | implemented_unverified | `frontend/src/styles/mission-control.css` defines readable ink/panel/control tokens and existing visual-token tests cover selected surfaces | add explicit MM-429 contrast-bearing selector coverage; adjust CSS if any class lacks readable token usage | unit + integration-style UI |
-| FR-002 | implemented_unverified | focus-visible rules exist for inputs, buttons, task controls, table sort, live log links, attachment controls, and task-detail toggles | add representative all-interactive-surface focus contract test; add missing focus selectors if exposed | unit + integration-style UI |
-| FR-003 | partial | `@media (prefers-reduced-motion: reduce)` suppresses routine controls, but running step pulse and other live-effect selectors need explicit MM-429 coverage | add red-first reduced-motion test for pulse/live effects and extend CSS suppression if needed | unit |
-| FR-004 | implemented_unverified | `@supports not ((backdrop-filter...))` fallback exists for glass controls, liquid hero, and floating bar | add explicit fallback contract test for glass and floating surfaces; adjust fallback selectors if gaps appear | unit |
-| FR-005 | implemented_unverified | liquidGL hook fails safely and `.queue-floating-bar--liquid-glass` keeps CSS shell present before initialization | add contract coverage for liquidGL disabled/unavailable CSS shell and existing hook behavior | unit + integration-style UI |
-| FR-006 | implemented_unverified | liquidGL is opt-in and tests assert it is absent from default dense surfaces | add MM-429 premium-effect limit assertions for dense/evidence/table/editing selectors | unit |
-| FR-007 | implemented_verified | MM-428 task detail/evidence and dense-surface work keeps evidence/log/form regions matte/readable | preserve with regression tests | unit + integration-style UI |
-| FR-008 | partial | quieter reduced-motion posture exists for controls only | extend quiet-mode CSS/tests to live pulses and nonessential visual effects | unit |
-| FR-009 | implemented_unverified | existing task-list/create/detail tests cover behavior | run targeted UI regression after CSS changes | unit + integration-style UI |
-| FR-010 | missing | no MM-429-specific test names/evidence yet | add focused tests before implementation | unit |
-| FR-011 | implemented_verified | `spec.md` preserves MM-429 brief and source IDs | preserve through tasks and verification | final verify |
-| DESIGN-REQ-003 | implemented_unverified | backdrop-filter fallback and CSS shell exist | add explicit MM-429 fallback tests | unit |
-| DESIGN-REQ-006 | partial | routine control reduced-motion suppression exists, running pulse suppression gap remains | extend reduced-motion coverage and CSS | unit |
-| DESIGN-REQ-015 | implemented_unverified | token-based contrast exists but needs explicit requirement coverage | add contrast selector tests | unit |
-| DESIGN-REQ-022 | implemented_unverified | focus and fallback rules exist but need broader coverage | add focus/fallback tests | unit + integration-style UI |
-| DESIGN-REQ-023 | implemented_unverified | liquidGL opt-in/dense-surface tests exist | add premium-effect limit tests and preserve dense matte posture | unit |
+| FR-001 | implemented_verified | MM-429 contrast contract tests in `frontend/src/entrypoints/mission-control.test.tsx`; readable token CSS in `frontend/src/styles/mission-control.css` | completed | unit + integration-style UI |
+| FR-002 | implemented_verified | MM-429 focus-visible coverage tests in `frontend/src/entrypoints/mission-control.test.tsx`; focus CSS in `frontend/src/styles/mission-control.css` | completed | unit + integration-style UI |
+| FR-003 | implemented_verified | MM-429 reduced-motion tests in `frontend/src/entrypoints/mission-control.test.tsx`; reduced-motion pulse and premium-surface CSS in `frontend/src/styles/mission-control.css` | completed | unit |
+| FR-004 | implemented_verified | MM-429 fallback shell tests in `frontend/src/entrypoints/mission-control.test.tsx`; `@supports not` fallback CSS in `frontend/src/styles/mission-control.css` | completed | unit |
+| FR-005 | implemented_verified | MM-429 liquidGL fallback tests in `frontend/src/entrypoints/task-create.test.tsx` and `frontend/src/lib/liquidGL/useLiquidGL.test.tsx`; CSS shell in `frontend/src/styles/mission-control.css` | completed | unit + integration-style UI |
+| FR-006 | implemented_verified | MM-429 premium-effect containment tests in `frontend/src/entrypoints/mission-control.test.tsx` | completed | unit |
+| FR-007 | implemented_verified | MM-428 task detail/evidence and dense-surface work plus MM-429 route regression validation | completed | unit + integration-style UI |
+| FR-008 | implemented_verified | MM-429 reduced-motion tests and quiet-mode CSS in `frontend/src/styles/mission-control.css` | completed | unit |
+| FR-009 | implemented_verified | Route regression tests for task list, create page, and task detail passed after CSS changes | completed | unit + integration-style UI |
+| FR-010 | implemented_verified | MM-429-specific tests exist in `mission-control.test.tsx`, `task-create.test.tsx`, and `useLiquidGL.test.tsx` | completed | unit |
+| FR-011 | implemented_verified | `spec.md`, `tasks.md`, and `verification.md` preserve MM-429 brief and source IDs | completed | final verify |
+| DESIGN-REQ-003 | implemented_verified | Backdrop-filter and liquidGL fallback tests/CSS | completed | unit |
+| DESIGN-REQ-006 | implemented_verified | Reduced-motion pulse and premium-surface tests/CSS | completed | unit |
+| DESIGN-REQ-015 | implemented_verified | Contrast selector tests/CSS | completed | unit |
+| DESIGN-REQ-022 | implemented_verified | Focus-visible and fallback tests/CSS | completed | unit + integration-style UI |
+| DESIGN-REQ-023 | implemented_verified | Premium-effect containment tests/CSS | completed | unit |
 
 ## Technical Context
 

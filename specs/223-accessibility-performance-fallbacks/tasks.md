@@ -11,7 +11,7 @@
 
 **Test Commands**:
 
-- Unit tests: `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx frontend/src/lib/liquidGL/useLiquidGL.test.tsx`
+- Unit tests: `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/task-create.test.tsx frontend/src/lib/liquidGL/useLiquidGL.test.tsx`
 - Integration tests: `npm run ui:test -- frontend/src/entrypoints/tasks-list.test.tsx frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx`
 - Final verification: `moonspec-verify` (`/speckit.verify` user-facing equivalent)
 
