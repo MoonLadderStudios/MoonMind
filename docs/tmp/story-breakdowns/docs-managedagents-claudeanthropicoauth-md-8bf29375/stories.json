@@ -1,0 +1,539 @@
+{
+  "source": {
+    "title": "MoonMind Design: claude_anthropic Settings Authentication (Repo-Backed)",
+    "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+    "referencePath": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+    "originalDesignText": "# MoonMind Design: `claude_anthropic` Settings Authentication (Repo-Backed)\n\nStatus: Proposed design based on current MoonMind repo state  \nScope: Mission Control Settings → Providers & Secrets  \nTarget profile: `claude_anthropic`\n\n## 1. Why this design is needed\n\nMoonMind already has the right architectural home for this feature:\n\n- `Settings` → `Providers & Secrets` is the canonical home for provider profiles, secret-health, OAuth-backed lifecycle entry points, and provider credential readiness feedback.\n- `Provider Profiles` already distinguish between `oauth_volume` and `secret_ref` credential sources, and already explicitly model both `Claude Code + Anthropic OAuth` and `Claude Code + Anthropic API key` as valid shapes.\n- The current OAuth terminal design is explicitly Codex-focused, even though Claude can already have auth volumes and provider profiles.\n\nThe repo also already contains a Claude helper script, `tools/auth-claude-volume.sh`, that assumes a volume-backed Claude auth flow and registers the default profile as:\n\n- `profile_id = claude_anthropic`\n- `credential_source = oauth_volume`\n- `runtime_materialization_mode = oauth_home`\n- `volume_ref = claude_auth_volume`\n- `volume_mount_path = /home/app/.claude`\n\nThat means the repo already contains partial Claude planning and implementation. However, that current path is still shaped around a Claude home directory / auth-volume model. It is not yet a good match for the workflow described here, where the user follows a link externally and then pastes a returned token back into MoonMind.\n\n## 2. Current repo state\n\n### 2.1 Settings surface\n\nThe Settings architecture already supports this feature cleanly.\n\n`docs/UI/SettingsTab.md` makes `Providers & Secrets` the primary configuration surface for:\n\n- Provider Profiles\n- Managed Secrets\n- secret bindings\n- OAuth-backed lifecycle entry points when applicable\n- provider credential health, readiness, and validation feedback\n\nThis is exactly where `claude_anthropic` auth should live.\n\n### 2.2 Provider profile architecture\n\n`docs/Security/ProviderProfiles.md` already supports the semantics needed for the new flow:\n\n- multiple profiles per runtime\n- multiple providers per runtime\n- multiple credential source classes per provider\n- `oauth_volume`, `secret_ref`, and `none`\n- `oauth_home`, `api_key_env`, `env_bundle`, `config_bundle`, and `composite`\n- no raw secrets in workflow payloads or provider profile rows\n\nIt also already shows two relevant Claude examples:\n\n1. Claude Code + Anthropic OAuth → `oauth_volume` + `oauth_home`\n2. Claude Code + Anthropic API key → `secret_ref` + `api_key_env`\n\nThat means MoonMind does **not** need a new provider profile concept to support the Anthropic paste-back-token workflow. The data model is already compatible.\n\n### 2.3 Current Settings UI implementation\n\nThe current `ProviderProfilesManager.tsx` implementation does **not** yet treat Claude as auth-capable in the inline Settings flow. The helper `isCodexOAuthCapable(profile)` currently returns `true` only when `profile.runtime_id === 'codex_cli'`.\n\nSo today:\n\n- `codex_default` gets the inline `Auth` button and OAuth session lifecycle\n- `claude_anthropic` does not\n\nThis is the first concrete gap that must be closed.\n\n### 2.4 Current OAuth session backend\n\nThe current `/api/v1/oauth-sessions` backend is also shaped around the Codex-style flow:\n\n- `create_oauth_session` requires `volume_ref` and `volume_mount_path`\n- `finalize_oauth_session` verifies credentials by checking files in a mounted Docker volume\n- successful finalization always registers the resulting provider profile as:\n  - `credential_source = oauth_volume`\n  - `runtime_materialization_mode = oauth_home`\n\nThat is a good fit for `codex_default`, but not for a workflow where the real credential handoff is a token pasted back into MoonMind.\n\n### 2.5 Current Claude helper path\n\n`tools/auth-claude-volume.sh` confirms the repo currently treats Claude auth as volume-backed. It supports:\n\n- `--sync` from host `~/.claude`\n- `--login` via `claude login` inside a container\n- `--check` by looking for `credentials.json`\n- `--register` as an `oauth_volume` / `oauth_home` provider profile\n\nThis script is useful as proof that Claude auth was already being thought about, but it should not dictate the new Settings flow if Anthropic’s real operator UX is “open link externally, then paste token back.”\n\n## 3. Design decision\n\n## Use a provider-profile-backed **manual token enrollment flow** for `claude_anthropic`, not the current volume-first OAuth session flow.\n\nThat means:\n\n- keep the existing Settings / Provider Profiles architecture\n- do **not** force Anthropic paste-back auth through the existing `/oauth-sessions` finalize path\n- store the returned Anthropic token in the Secrets System\n- bind the `claude_anthropic` provider profile to that secret through `secret_ref`\n- materialize the credential for launch using `api_key_env` (or a narrowly-scoped Claude token env mode if the runtime eventually needs a distinct name)\n\nThis is the cleanest fit with MoonMind’s own architecture.\n\n## 4. Desired profile shape\n\nThe repo’s existing desired-state Provider Profiles document already gives the right shape to target.\n\nThe recommended resulting `claude_anthropic` profile should look like this conceptually:\n\n```yaml\nprofile_id: claude_anthropic\nruntime_id: claude_code\nprovider_id: anthropic\nprovider_label: \"Anthropic\"\n\ncredential_source: secret_ref\nruntime_materialization_mode: api_key_env\n\nenabled: true\naccount_label: \"Claude Anthropic\"\ntags: [\"default\", \"anthropic\", \"manual-token\"]\npriority: 100\n\nsecret_refs:\n  anthropic_api_key: db://claude_anthropic_token\n\nclear_env_keys:\n  - ANTHROPIC_AUTH_TOKEN\n  - ANTHROPIC_BASE_URL\n  - OPENAI_API_KEY\n\nenv_template:\n  ANTHROPIC_API_KEY:\n    from_secret_ref: anthropic_api_key\n```\n\nNotes:\n\n- The token itself belongs in the Secrets System, not in the provider profile row.\n- The profile row stores only the binding.\n- This matches the provider-profile rule that raw credentials must not live in profile rows.\n\n## 5. Settings UX design\n\n### 5.1 Placement\n\nKeep this inside:\n\n- `Settings`\n- `Providers & Secrets`\n- `Provider Profiles`\n\nDo not create a separate Claude auth page.\n\n### 5.2 Row-level action model\n\nFor a `claude_anthropic` profile, the current generic `Auth` action should be replaced by a Claude-specific flow.\n\nRecommended button label:\n\n- `Connect Claude`\n\nSecondary variants after enrollment:\n\n- `Replace token`\n- `Validate`\n- `Disconnect`\n\nDo **not** reuse the Codex label if the flow is not actually the same.\n\n### 5.3 Modal / drawer flow\n\nWhen the operator clicks `Connect Claude`, Mission Control should open a focused enrollment drawer or modal with these steps:\n\n1. Explain that Claude Anthropic enrollment is completed externally.\n2. Provide the link or command/instructions needed to start the Anthropic flow.\n3. Let the operator open that flow in a new tab/window.\n4. Provide a secure paste field for the returned token.\n5. Validate the token.\n6. Save/update the secret.\n7. Save/update the provider profile binding.\n8. Show readiness / failure state.\n\nSuggested UX states:\n\n- `not_connected`\n- `awaiting_external_step`\n- `awaiting_token_paste`\n- `validating_token`\n- `saving_secret`\n- `updating_profile`\n- `ready`\n- `failed`\n\nThese states should be shown in the profile row’s Status column the same way Codex currently shows OAuth session status, but they should not pretend to be terminal OAuth states.\n\n### 5.4 Validation feedback\n\nThe row should show:\n\n- connected / not connected\n- last validated timestamp\n- failure reason if validation failed\n- whether the backing secret exists\n- whether the provider profile is launch-ready\n\nThis directly matches the Settings doc’s requirement that provider credential health, readiness, and validation feedback live in this Settings subsection.\n\n## 6. Backend design\n\n### 6.1 Do not reuse `/api/v1/oauth-sessions` as-is\n\nThe existing backend is too volume-shaped for this use case.\n\nToday it assumes all of the following:\n\n- a Docker auth volume exists\n- the runtime can be finalized by verifying files in that volume\n- the resulting profile is `oauth_volume` + `oauth_home`\n\nThat is exactly wrong for a token pasted into MoonMind.\n\n### 6.2 Add a separate manual-auth path\n\nAdd a dedicated provider-profile auth API for manual token enrollment.\n\nRecommended shape:\n\n- `POST /api/v1/provider-profiles/{profile_id}/manual-auth/start`\n- `POST /api/v1/provider-profiles/{profile_id}/manual-auth/validate`\n- `POST /api/v1/provider-profiles/{profile_id}/manual-auth/commit`\n- `DELETE /api/v1/provider-profiles/{profile_id}/manual-auth`\n\nOr a simpler collapsed API:\n\n- `POST /api/v1/provider-profiles/{profile_id}/connect-claude-anthropic`\n\nwith payload:\n\n```json\n{\n  \"token\": \"...\",\n  \"account_label\": \"optional label override\"\n}\n```\n\nand server behavior:\n\n1. validate caller permission\n2. validate token format\n3. perform a safe upstream validation probe\n4. write/update the managed secret\n5. create/update the provider profile using `secret_ref` + `api_key_env`\n6. sync the `ProviderProfileManager`\n7. return a secret-free readiness summary\n\n### 6.3 Optional audit/session record\n\nIf MoonMind wants parity with the current session-history UX, it can still create an auth-session record for this flow, but it should not be forced into the `oauth_terminal` shape.\n\nIf you want auditability, add an auth session kind such as:\n\n- `auth_kind = oauth_terminal`\n- `auth_kind = manual_token`\n\nThen the Claude flow can still show a history timeline without reusing PTY/terminal assumptions.\n\n## 7. Secrets handling\n\nThis flow should lean into the repo’s Provider Profiles and Secrets architecture.\n\n### 7.1 Required rules\n\n- token is never stored in the provider profile row\n- token is never returned to the browser after submission\n- token is never placed in workflow payloads\n- token is redacted from logs, notices, validation failures, and artifacts\n\n### 7.2 Secret ownership\n\nThe secret should be managed under the authenticated operator or workspace scope already used by the Secrets System.\n\nRecommended binding example:\n\n```json\n{\n  \"secret_refs\": {\n    \"anthropic_api_key\": \"db://claude_anthropic_token\"\n  }\n}\n```\n\n## 8. Runtime launch behavior\n\nNo new runtime-selection concept is required.\n\nThe launcher already supports profile-driven materialization. For `claude_anthropic`, this design simply changes the auth source from volume-backed to secret-backed.\n\nAt launch:\n\n1. resolve provider profile\n2. apply `clear_env_keys`\n3. resolve `secret_refs`\n4. inject `ANTHROPIC_API_KEY`\n5. launch `claude_code`\n\nThis remains fully aligned with the materialization pipeline in `ProviderProfiles.md`.\n\n## 9. Why this is better than extending the current Claude volume flow\n\nThe repo’s existing Claude path is:\n\n- sync host `~/.claude`\n- or run `claude login`\n- verify volume files\n- register `oauth_volume` profile\n\nThat is still useful for local/operator tooling, but it is the wrong primary Settings experience when the intended auth ceremony is:\n\n- open external link\n- complete auth externally\n- paste returned token into MoonMind\n\nIf MoonMind forced that pasted token back into a generated Claude home directory just to preserve `oauth_volume`, it would:\n\n- add format-coupling to Claude’s private file layout\n- add ambiguity about which files are authoritative\n- preserve a misleading “OAuth session” abstraction even though MoonMind never truly completed the auth inside its own terminal bridge\n\nUsing `secret_ref` is cleaner, more explicit, and more faithful to the real operator workflow.\n\n## 10. Concrete implementation changes\n\n### 10.1 Frontend\n\nUpdate `frontend/src/components/settings/ProviderProfilesManager.tsx` to:\n\n- stop hardcoding auth capability to Codex only\n- add per-profile auth action dispatch by runtime + provider + credential strategy\n- add a `claude_anthropic` enrollment modal/drawer\n- show `Connect Claude` / `Replace token` instead of generic `Auth`\n- surface validation/readiness state in the Status column\n\n### 10.2 Backend\n\nAdd a non-volume-based manual auth endpoint and service path that:\n\n- validates token\n- writes managed secret\n- updates provider profile\n- syncs `ProviderProfileManager`\n- returns secret-free readiness metadata\n\n### 10.3 Optional schema/session work\n\nIf you want audit/history parity, extend auth sessions to support multiple auth kinds rather than only volume-based OAuth-terminal flows.\n\n### 10.4 Docs\n\nUpdate these docs:\n\n- `docs/UI/SettingsTab.md`\n- `docs/Security/ProviderProfiles.md`\n- `docs/ManagedAgents/OAuthTerminal.md`\n\nAnd likely add a focused doc such as:\n\n- `docs/ManagedAgents/ClaudeAnthropicSettingsAuth.md`\n\n## 11. Final recommendation\n\nMoonMind should treat `claude_anthropic` Settings auth as a **provider-profile-backed manual token enrollment flow**.\n\nIt should:\n\n- live in `Settings` → `Providers & Secrets`\n- reuse the Provider Profiles shell and readiness UX\n- store the returned Anthropic token in Managed Secrets\n- bind that secret to `claude_anthropic` using `secret_ref`\n- launch Claude using `api_key_env`\n- avoid forcing this flow through the current volume-based `/oauth-sessions` pipeline\n\nThat approach fits MoonMind’s existing architecture, explains the current repo state honestly, and cleanly separates the Codex terminal OAuth flow from Anthropic’s paste-back token flow.\n"
+  },
+  "extractedAt": "2026-04-22T07:15:57Z",
+  "outputMode": "jira",
+  "designSummary": "The design moves claude_anthropic authentication into the existing Settings -> Providers & Secrets provider-profile surface as a manual token enrollment flow. Instead of forcing Anthropic paste-back authentication through the current volume-shaped OAuth terminal session path, MoonMind should validate a pasted token, store it in Managed Secrets, bind the claude_anthropic profile through secret_ref, and launch Claude Code by materializing ANTHROPIC_API_KEY through api_key_env. The design preserves existing Provider Profiles architecture, separates Claude from Codex terminal OAuth semantics, requires secret-safe readiness feedback and logging behavior, and leaves session-history parity as optional manual-token audit work.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Settings Providers & Secrets remains the home",
+      "type": "requirement",
+      "source_section": "1. Why this design is needed; 2.1 Settings surface; 5.1 Placement",
+      "explanation": "Claude Anthropic authentication must live inside Settings -> Providers & Secrets -> Provider Profiles, not in a separate Claude auth page."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Provider Profiles model already supports target shape",
+      "type": "state-model",
+      "source_section": "2.2 Provider profile architecture; 3. Design decision; 4. Desired profile shape",
+      "explanation": "The implementation should use the existing provider profile concepts for runtime_id, provider_id, credential_source, runtime_materialization_mode, secret_refs, env_template, clear_env_keys, tags, priority, and account label."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Claude must become Settings-auth capable",
+      "type": "requirement",
+      "source_section": "2.3 Current Settings UI implementation; 10.1 Frontend",
+      "explanation": "ProviderProfilesManager must stop limiting inline auth actions to Codex and must dispatch auth actions by runtime, provider, and credential strategy so claude_anthropic can expose its own enrollment flow."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Do not reuse volume-first OAuth session finalization",
+      "type": "constraint",
+      "source_section": "2.4 Current OAuth session backend; 3. Design decision; 6.1 Do not reuse /api/v1/oauth-sessions as-is",
+      "explanation": "The Anthropic paste-back-token flow must not be forced through a backend path that requires Docker volumes, mounted credential files, oauth_volume, or oauth_home finalization."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Manual token enrollment is the primary Claude flow",
+      "type": "requirement",
+      "source_section": "3. Design decision; 5.3 Modal / drawer flow; 6.2 Add a separate manual-auth path",
+      "explanation": "Mission Control should guide the operator through opening the external Anthropic flow, pasting the returned token, validating it, saving it, updating the profile, and showing readiness or failure."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Target profile uses secret_ref and api_key_env",
+      "type": "state-model",
+      "source_section": "4. Desired profile shape; 8. Runtime launch behavior",
+      "explanation": "The resulting claude_anthropic profile should use credential_source=secret_ref, runtime_materialization_mode=api_key_env, a secret ref such as anthropic_api_key, clear_env_keys, and an env template that injects ANTHROPIC_API_KEY from the secret."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Claude-specific row actions and labels",
+      "type": "requirement",
+      "source_section": "5.2 Row-level action model; 10.1 Frontend",
+      "explanation": "The row action should use Claude-specific labels and behavior such as Connect Claude, Replace token, Validate, and Disconnect instead of a generic or Codex-labeled Auth flow."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Enrollment UI state machine",
+      "type": "state-model",
+      "source_section": "5.3 Modal / drawer flow",
+      "explanation": "The Settings flow should expose states including not_connected, awaiting_external_step, awaiting_token_paste, validating_token, saving_secret, updating_profile, ready, and failed without presenting them as terminal OAuth session states."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Validation and readiness feedback",
+      "type": "observability",
+      "source_section": "5.4 Validation feedback; 10.1 Frontend; 10.2 Backend",
+      "explanation": "Settings must show connected state, last validated timestamp, failure reason, backing secret existence, and whether the profile is launch-ready."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Manual-auth API validates and commits secret-free readiness",
+      "type": "integration",
+      "source_section": "6.2 Add a separate manual-auth path; 10.2 Backend",
+      "explanation": "A dedicated provider-profile manual auth endpoint or equivalent service path must validate caller permission and token format, run a safe validation probe, write/update Managed Secrets, create/update the provider profile, sync ProviderProfileManager, and return a secret-free readiness summary."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Optional manual-token audit/session kind",
+      "type": "artifact",
+      "source_section": "6.3 Optional audit/session record; 10.3 Optional schema/session work",
+      "explanation": "If session-history parity is included, auth sessions should distinguish auth_kind values such as oauth_terminal and manual_token instead of reusing PTY or terminal assumptions."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Strict secret handling",
+      "type": "security",
+      "source_section": "7. Secrets handling; 7.1 Required rules; 7.2 Secret ownership",
+      "explanation": "The token must live in the Secrets System, never in provider profile rows, never be returned to the browser after submission, never enter workflow payloads, and must be redacted from logs, notices, validation failures, and artifacts."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Profile-driven Claude launch",
+      "type": "integration",
+      "source_section": "8. Runtime launch behavior",
+      "explanation": "Launching Claude Code should resolve the provider profile, apply clear_env_keys, resolve secret_refs, inject ANTHROPIC_API_KEY, and launch claude_code without introducing a new runtime-selection concept."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Avoid private Claude home format coupling",
+      "type": "constraint",
+      "source_section": "9. Why this is better than extending the current Claude volume flow",
+      "explanation": "The Settings flow should avoid generating or treating Claude home-directory files as authoritative for paste-back tokens, because that would couple MoonMind to Claude private file layout and muddy source-of-truth semantics."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Documentation updates explain the new flow",
+      "type": "artifact",
+      "source_section": "10.4 Docs; 11. Final recommendation",
+      "explanation": "The relevant Settings, Provider Profiles, OAuth Terminal, and focused Claude Settings Auth documentation should describe the manual-token flow, profile shape, separation from Codex terminal OAuth, and operator behavior."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Existing Claude volume tooling remains secondary",
+      "type": "non-goal",
+      "source_section": "2.5 Current Claude helper path; 9. Why this is better than extending the current Claude volume flow",
+      "explanation": "The existing tools/auth-claude-volume.sh path may remain useful for local/operator tooling but should not define the primary Settings auth experience for Anthropic paste-back token enrollment."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Route claude_anthropic Settings auth actions to a Claude enrollment flow",
+      "shortName": "claude-settings-auth",
+      "description": "As an operator configuring provider profiles, I can start Claude Anthropic authentication from the existing Providers & Secrets table and see Claude-specific actions instead of a Codex-shaped Auth control.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "MoonMind Design: claude_anthropic Settings Authentication (Repo-Backed)",
+        "sections": [
+          "2.1 Settings surface",
+          "2.3 Current Settings UI implementation",
+          "5.1 Placement",
+          "5.2 Row-level action model",
+          "10.1 Frontend"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-007"
+        ]
+      },
+      "why": "This is the smallest visible change that exposes claude_anthropic as an auth-capable profile in the canonical Settings surface.",
+      "scope": [
+        "Update ProviderProfilesManager auth capability detection to use runtime/provider/credential strategy instead of Codex-only logic.",
+        "Render Claude-specific row actions for claude_anthropic, including Connect Claude before enrollment and Replace token, Validate, and Disconnect after enrollment.",
+        "Keep the flow inside Settings -> Providers & Secrets -> Provider Profiles."
+      ],
+      "outOfScope": [
+        "Backend token validation and secret writes.",
+        "Runtime credential materialization.",
+        "Creating a separate Claude authentication page."
+      ],
+      "independentTest": "Render ProviderProfilesManager with codex_default, claude_anthropic, and a non-auth-capable profile; verify only the correct rows expose the appropriate action labels and clicking claude_anthropic opens the Claude enrollment surface.",
+      "acceptanceCriteria": [
+        "claude_anthropic exposes a Connect Claude action when not connected.",
+        "Connected claude_anthropic rows expose Replace token, Validate, and Disconnect actions where supported by returned capability/readiness metadata.",
+        "Codex OAuth behavior remains available for codex_default without reusing Codex labels for Claude.",
+        "No new standalone Claude auth page or specs directory is created by this story."
+      ],
+      "requirements": [
+        "Auth capability is derived from profile metadata or explicit strategy, not hardcoded to profile.runtime_id === codex_cli.",
+        "The provider profile row remains the entry point for Claude enrollment.",
+        "Action labels distinguish manual Claude enrollment from terminal OAuth."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the Settings placement and prevents a separate page.",
+        "DESIGN-REQ-003": "Owns removal of the Codex-only auth capability assumption.",
+        "DESIGN-REQ-007": "Owns Claude-specific row action labels and dispatch."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "The existing Settings test harness can render provider profiles with mocked API responses."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Provide a Claude manual token enrollment drawer with explicit lifecycle states",
+      "shortName": "claude-token-drawer",
+      "description": "As an operator connecting Claude Anthropic, I can follow an external enrollment instruction, paste the returned token into a secure field, and watch the flow progress through validation, save, profile update, ready, or failed states.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "MoonMind Design: claude_anthropic Settings Authentication (Repo-Backed)",
+        "sections": [
+          "3. Design decision",
+          "5.3 Modal / drawer flow",
+          "5.4 Validation feedback",
+          "10.1 Frontend"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009"
+        ]
+      },
+      "why": "The manual-token UX is different from terminal OAuth and needs an independently testable operator flow before the backend is wired end to end.",
+      "scope": [
+        "Add a focused modal or drawer for claude_anthropic manual token enrollment.",
+        "Show the external-step instruction/link area, secure token paste field, validation progress, save/update progress, ready state, and failure state.",
+        "Reflect readiness metadata in the Provider Profiles Status column."
+      ],
+      "outOfScope": [
+        "Choosing the final upstream Anthropic validation implementation.",
+        "Persisting audit/session history.",
+        "Changing provider profile materialization semantics."
+      ],
+      "independentTest": "Using frontend tests, simulate opening Connect Claude, entering a token, mocking validate/commit responses, and verifying state transitions, secure token clearing, row status updates, and failure feedback.",
+      "acceptanceCriteria": [
+        "The modal or drawer includes states equivalent to not_connected, awaiting_external_step, awaiting_token_paste, validating_token, saving_secret, updating_profile, ready, and failed.",
+        "The UI does not describe Claude manual enrollment as a terminal OAuth session.",
+        "Validation failures show a redacted failure reason without echoing the submitted token.",
+        "The status column can display connected/not connected, last validated timestamp, failure reason, backing secret existence, and launch readiness when provided by the backend."
+      ],
+      "requirements": [
+        "Operators can paste a returned token into a secure input.",
+        "The pasted token is cleared from local UI state after successful commit or cancellation.",
+        "Readiness and validation metadata are surfaced in the same Settings subsection as provider profiles."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Owns the operator-facing manual token flow.",
+        "DESIGN-REQ-008": "Owns explicit lifecycle states.",
+        "DESIGN-REQ-009": "Owns row-level readiness and validation feedback presentation."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "A generic secure input component or existing password input can be reused."
+      ],
+      "needsClarification": [
+        "Exact Anthropic enrollment URL or command text may need product confirmation before final UI copy is locked."
+      ]
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Add secret-safe Claude manual auth API and service behavior",
+      "shortName": "claude-manual-auth-api",
+      "description": "As Mission Control, I can submit a Claude Anthropic token to a dedicated manual-auth backend path that validates it, stores it as a Managed Secret, binds claude_anthropic to that secret, syncs provider profile state, and returns only secret-free readiness metadata.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "MoonMind Design: claude_anthropic Settings Authentication (Repo-Backed)",
+        "sections": [
+          "3. Design decision",
+          "4. Desired profile shape",
+          "6.1 Do not reuse /api/v1/oauth-sessions as-is",
+          "6.2 Add a separate manual-auth path",
+          "7. Secrets handling",
+          "10.2 Backend"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "why": "The backend is the security and source-of-truth boundary for the paste-back token workflow.",
+      "scope": [
+        "Add a dedicated provider-profile manual-auth endpoint or equivalent collapsed connect-claude-anthropic endpoint.",
+        "Validate caller permission, token format, and the token through a safe upstream probe.",
+        "Write or update the token in Managed Secrets under the applicable operator or workspace scope.",
+        "Create or update claude_anthropic as secret_ref + api_key_env with the expected secret_refs, env_template, clear_env_keys, labels/tags, and enabled state.",
+        "Sync ProviderProfileManager and return secret-free readiness metadata.",
+        "Ensure logs, errors, artifacts, and browser responses never include the raw token."
+      ],
+      "outOfScope": [
+        "Volume-backed credential finalization.",
+        "Generating Claude home-directory credential files.",
+        "Runtime launch execution beyond profile state needed for materialization."
+      ],
+      "independentTest": "Call the new route or service with mocked permission, validation probe, secret store, and profile manager; verify persisted profile shape, secret write/update, sync call, redacted responses/errors, and rejection of invalid token or unauthorized caller.",
+      "acceptanceCriteria": [
+        "The Claude manual auth path does not require volume_ref, volume_mount_path, mounted Docker files, oauth_volume, or oauth_home finalization.",
+        "Successful commit stores the token only in Managed Secrets and stores only secret references in the provider profile row.",
+        "The returned response contains readiness, validation timestamp/status, secret existence, and profile readiness without returning the token.",
+        "Invalid tokens, failed upstream validation, and unauthorized callers fail without leaking submitted token material.",
+        "Tests prove no raw token appears in profile rows, workflow-shaped payloads, route responses, logs captured by the test, or validation failure messages."
+      ],
+      "requirements": [
+        "Dedicated backend behavior must be separate from the existing volume-first oauth-sessions finalize path.",
+        "The resulting profile must target credential_source=secret_ref and runtime_materialization_mode=api_key_env.",
+        "Secret refs should include anthropic_api_key bound to a managed secret such as db://claude_anthropic_token.",
+        "clear_env_keys must remove conflicting Anthropic/OpenAI keys before launch materialization."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-002": "Owns use of the existing Provider Profiles model.",
+        "DESIGN-REQ-004": "Owns separation from volume-first oauth-sessions finalization.",
+        "DESIGN-REQ-006": "Owns the target secret_ref/api_key_env profile shape.",
+        "DESIGN-REQ-010": "Owns the manual-auth endpoint/service contract.",
+        "DESIGN-REQ-012": "Owns backend secret-safety guarantees.",
+        "DESIGN-REQ-014": "Owns avoiding private Claude home file coupling."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "A Managed Secrets service API already exists for writing scoped secrets from backend services."
+      ],
+      "needsClarification": [
+        "The exact safe Anthropic validation probe may need confirmation against provider API behavior and rate limits."
+      ]
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Launch Claude Code from the secret_ref provider profile",
+      "shortName": "claude-secret-launch",
+      "description": "As MoonMind launching a Claude Code managed runtime, I can resolve the claude_anthropic provider profile, clear conflicting environment keys, resolve the managed secret, inject ANTHROPIC_API_KEY, and start claude_code without adding a new runtime-selection model.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "MoonMind Design: claude_anthropic Settings Authentication (Repo-Backed)",
+        "sections": [
+          "4. Desired profile shape",
+          "8. Runtime launch behavior",
+          "10.2 Backend",
+          "11. Final recommendation"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-013"
+        ]
+      },
+      "why": "The auth work is only complete when the saved provider profile can actually materialize credentials for Claude runtime launch.",
+      "scope": [
+        "Verify or update profile-driven materialization so claude_anthropic secret_refs produce ANTHROPIC_API_KEY for claude_code.",
+        "Apply clear_env_keys before injecting the secret-derived environment variable.",
+        "Fail fast if the profile is missing the expected secret binding or the secret cannot be resolved.",
+        "Keep runtime selection based on the existing profile-driven launch path."
+      ],
+      "outOfScope": [
+        "Adding a new runtime selector concept.",
+        "Changing Codex or volume-backed OAuth materialization behavior except where shared tests need updated fixtures.",
+        "Running live Claude provider verification by default."
+      ],
+      "independentTest": "Use unit or adapter-boundary tests around the launch/materialization service with a claude_anthropic secret_ref profile and mocked secret resolver; assert clear_env_keys behavior, ANTHROPIC_API_KEY injection, missing-secret failure, and absence of raw secrets in workflow payload fixtures.",
+      "acceptanceCriteria": [
+        "claude_anthropic launches through the existing profile-driven materialization path.",
+        "ANTHROPIC_API_KEY is injected from the managed secret referenced by anthropic_api_key.",
+        "ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, and OPENAI_API_KEY are cleared before launch when configured.",
+        "No new runtime-selection concept is introduced.",
+        "Missing or unreadable secret bindings produce actionable failure output without exposing secret values."
+      ],
+      "requirements": [
+        "Runtime launch must resolve provider profile, apply clear_env_keys, resolve secret_refs, inject ANTHROPIC_API_KEY, and launch claude_code.",
+        "Workflow or activity payloads must carry compact refs/metadata rather than raw token values."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-006": "Owns launch use of the target profile fields.",
+        "DESIGN-REQ-013": "Owns profile-driven Claude Code launch behavior."
+      },
+      "dependencies": [
+        "STORY-003"
+      ],
+      "assumptions": [
+        "Existing launch materialization tests can be extended without requiring live Claude credentials."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Document Claude Anthropic manual-token Settings authentication",
+      "shortName": "claude-auth-docs",
+      "description": "As an operator or maintainer, I can read the canonical Settings, Provider Profiles, OAuth Terminal, and Claude-specific docs to understand that claude_anthropic uses manual token enrollment backed by Managed Secrets rather than Codex-style terminal OAuth or Claude auth-volume files.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "MoonMind Design: claude_anthropic Settings Authentication (Repo-Backed)",
+        "sections": [
+          "2.5 Current Claude helper path",
+          "9. Why this is better than extending the current Claude volume flow",
+          "10.4 Docs",
+          "11. Final recommendation"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016"
+        ]
+      },
+      "why": "The feature changes operator guidance and architecture semantics, so canonical docs need to distinguish desired state from old helper paths and optional local tooling.",
+      "scope": [
+        "Update docs/UI/SettingsTab.md with Claude manual enrollment behavior and readiness feedback.",
+        "Update docs/Security/ProviderProfiles.md with the secret_ref/api_key_env claude_anthropic shape.",
+        "Update docs/ManagedAgents/OAuthTerminal.md to clarify that Claude manual token enrollment is separate from terminal OAuth.",
+        "Add or update a focused Claude Anthropic Settings Auth doc.",
+        "State that tools/auth-claude-volume.sh remains secondary local/operator tooling and not the primary Settings flow."
+      ],
+      "outOfScope": [
+        "Migration checklist content in canonical docs beyond concise desired-state notes.",
+        "Spec creation under specs/.",
+        "Live provider instructions that require undocumented provider behavior."
+      ],
+      "independentTest": "Run documentation checks or targeted link/grep review to confirm all referenced docs describe manual token enrollment, secret_ref profile binding, separation from Codex terminal OAuth, and secondary status of auth-claude-volume.sh without contradictory volume-first Settings guidance.",
+      "acceptanceCriteria": [
+        "Docs show claude_anthropic as a provider-profile-backed manual token enrollment flow in Settings -> Providers & Secrets.",
+        "Docs show the target profile shape using secret_ref and api_key_env without raw credentials in profile rows.",
+        "OAuth terminal docs no longer imply Claude paste-back tokens should use the volume-based oauth-sessions finalize path.",
+        "Docs identify the Claude volume helper as optional/local tooling, not the primary Settings UX.",
+        "Canonical docs remain desired-state focused; any phased migration details stay under docs/tmp if needed."
+      ],
+      "requirements": [
+        "Documentation must cover Settings placement, Provider Profiles semantics, OAuth terminal separation, and final recommendation.",
+        "Every doc update must preserve the security rule that raw credentials stay out of provider profile rows and workflow payloads."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-015": "Owns required documentation updates.",
+        "DESIGN-REQ-016": "Owns the non-goal that existing Claude volume tooling should not drive the primary Settings flow."
+      },
+      "dependencies": [
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Canonical docs can describe the target behavior once implementation stories land."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Optionally record Claude manual-token auth history without terminal assumptions",
+      "shortName": "manual-auth-history",
+      "description": "As an operator who wants auth history parity, I can see Claude manual-token enrollment events recorded as manual_token audit/session history without pretending the flow used a PTY terminal OAuth session.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ClaudeAnthropicOAuth.md",
+        "title": "MoonMind Design: claude_anthropic Settings Authentication (Repo-Backed)",
+        "sections": [
+          "6.3 Optional audit/session record",
+          "10.3 Optional schema/session work"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-011"
+        ]
+      },
+      "why": "The design marks session-history parity as optional, but if implemented it needs explicit ownership so it does not distort OAuth terminal semantics.",
+      "scope": [
+        "Introduce or extend auth-session metadata with an auth_kind that can distinguish oauth_terminal from manual_token.",
+        "Record Claude manual enrollment start, validation, commit, failure, replace, and disconnect events without storing token values.",
+        "Expose history in the existing session-history UX only when the product includes that parity surface."
+      ],
+      "outOfScope": [
+        "Making audit/session history required for the first usable Claude connection.",
+        "Reusing PTY, terminal bridge, or Docker-volume assumptions for manual token history.",
+        "Persisting raw tokens or full provider responses in history records."
+      ],
+      "independentTest": "If implemented, run backend schema/service tests that create both oauth_terminal and manual_token records and verify Claude manual-token events appear in history with redacted metadata and no terminal-specific fields required.",
+      "acceptanceCriteria": [
+        "Manual-token history, when enabled, uses an explicit manual_token auth kind or equivalent discriminator.",
+        "History records never store or return the raw token.",
+        "Codex oauth_terminal history remains distinguishable from Claude manual-token history.",
+        "The core Claude manual auth flow can ship without this story if product chooses to defer audit/session parity."
+      ],
+      "requirements": [
+        "Do not force Claude manual enrollment into the existing oauth_terminal shape.",
+        "Any audit/session record must preserve the separation between terminal OAuth and paste-back token enrollment."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-011": "Owns the optional audit/session parity and auth_kind distinction."
+      },
+      "dependencies": [
+        "STORY-003"
+      ],
+      "assumptions": [
+        "This Jira story may be marked optional or scheduled after the core connection path."
+      ],
+      "needsClarification": [
+        "Whether auth-history parity is required for initial release or should remain a follow-up."
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-005"
+    ]
+  },
+  "recommendedFirstStory": "STORY-003",
+  "outOfScope": [
+    {
+      "item": "Creating spec.md files or specs/ directories during breakdown",
+      "rationale": "Breakdown output feeds later /speckit.specify runs; specify owns spec creation."
+    },
+    {
+      "item": "Forcing Claude paste-back tokens into Docker auth volumes or generated Claude home files",
+      "rationale": "The design explicitly rejects private file-layout coupling for this Settings flow."
+    },
+    {
+      "item": "Live provider verification during breakdown",
+      "rationale": "Breakdown is read-only analysis of the declarative design and does not require external credentials."
+    }
+  ]
+}
