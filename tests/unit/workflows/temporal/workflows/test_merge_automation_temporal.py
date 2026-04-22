@@ -220,8 +220,16 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         "execute_child_workflow",
         fake_execute_child_workflow,
     )
-    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
-    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "upsert_search_attributes",
@@ -261,7 +269,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
 
 
 @pytest.mark.asyncio
-async def test_merge_automation_refreshes_head_before_resolver_launch(
+async def test_merge_automation_tracks_current_head_when_checks_are_still_running(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindMergeAutomationWorkflow()
@@ -276,7 +284,8 @@ async def test_merge_automation_refreshes_head_before_resolver_launch(
         **_kwargs: Any,
     ) -> dict[str, Any]:
         nonlocal readiness_calls
-        assert activity_type == "merge_automation.evaluate_readiness"
+        if activity_type != "merge_automation.evaluate_readiness":
+            raise RuntimeError(activity_type)
         readiness_calls += 1
         if readiness_calls == 1:
             return {
@@ -337,8 +346,16 @@ async def test_merge_automation_refreshes_head_before_resolver_launch(
         "wait_condition",
         fake_wait_condition,
     )
-    monkeypatch.setattr(merge_automation_module.workflow, "now", lambda: datetime.now(timezone.utc))
-    monkeypatch.setattr(merge_automation_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "upsert_search_attributes",
