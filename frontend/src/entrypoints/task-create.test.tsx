@@ -5568,6 +5568,61 @@ describe("Task Create Entrypoint", () => {
     expect(payload).not.toHaveProperty("mergeAutomation");
   });
 
+  it("renders the create page as matte step cards with one bottom launch rail", async () => {
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const instructions = await screen.findByLabelText("Instructions");
+    const stepsSection = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Steps"]',
+    );
+    const submitSection = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Submit"]',
+    );
+    const floatingBars = document.querySelectorAll<HTMLElement>(
+      ".queue-floating-bar.queue-floating-bar--liquid-glass.queue-step-submit-actions",
+    );
+    const createButton = screen.getByRole("button", { name: "Create" });
+
+    expect(stepsSection).not.toBeNull();
+    expect(stepsSection?.classList.contains("card")).toBe(true);
+    expect(stepsSection?.classList.contains("panel--floating")).toBe(false);
+    expect(instructions.closest(".queue-step-section")).not.toBeNull();
+    expect(instructions.closest(".queue-floating-bar")).toBeNull();
+    expect(floatingBars).toHaveLength(1);
+    const floatingBar = floatingBars.item(0);
+    expect(floatingBar).not.toBeNull();
+    if (!floatingBar) {
+      throw new Error("Expected one floating launch rail");
+    }
+    expect(floatingBar.closest('[data-canonical-create-section="Submit"]')).toBe(
+      submitSection,
+    );
+    expect(within(floatingBar).getByRole("button", { name: "Create" })).toBe(
+      createButton,
+    );
+    expect(createButton.getAttribute("title")).toBe("Create this task");
+  });
+
+  it("keeps create page instruction textareas matte and outside the glass rail", async () => {
+    const { readFileSync } = await import("node:fs");
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      "utf8",
+    );
+
+    renderWithClient(<TaskCreatePage payload={mockPayload} />);
+
+    const instructions = await screen.findByLabelText("Instructions");
+    expect(instructions.closest(".queue-floating-bar")).toBeNull();
+    expect(instructions.classList.contains("queue-step-instructions")).toBe(true);
+    expect(missionControlCss).toMatch(
+      /\.queue-step-instructions,\s*\.queue-step-skill-args\s*\{[^}]*background:\s*var\(--mm-input-well\);/s,
+    );
+    expect(missionControlCss).toMatch(
+      /\.queue-floating-bar\s*\{[^}]*background:\s*var\(--mm-glass-fill\);/s,
+    );
+  });
+
   it("keeps step authoring inside Steps and submission controls in one Submit floating bar", async () => {
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
@@ -5705,7 +5760,7 @@ describe("Task Create Entrypoint", () => {
     );
 
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar\s*\{[^}]*width:\s*min\(100% - 1\.5rem,\s*72rem\)/s,
+      /\.queue-floating-bar\s*\{[^}]*width:\s*min\(100% - 1\.5rem,\s*72rem\)[^}]*justify-content:\s*stretch/s,
     );
     expect(missionControlCss).toMatch(
       /\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.35fr\)\s*minmax\(0,\s*1\.35fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto/s,

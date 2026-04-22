@@ -32,6 +32,7 @@ from api_service.db.models import (
     TemporalExecutionProjectionSourceMode,
     TemporalExecutionProjectionSyncState,
     TemporalExecutionRecord,
+    TemporalExecutionRemediationLink,
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
 )
@@ -347,6 +348,95 @@ class TemporalExecutionService:
             return True
         return (record.owner_id or None) == owner_id
 
+    async def _validate_remediation_link(
+        self,
+        *,
+        remediation: Mapping[str, Any],
+        new_workflow_id: str,
+        new_run_id: str,
+        owner_id: str | None,
+        owner_type: TemporalExecutionOwnerType,
+    ) -> TemporalExecutionRemediationLink:
+        target = remediation.get("target")
+        if not isinstance(target, Mapping):
+            raise TemporalExecutionValidationError(
+                "task.remediation.target.workflowId is required."
+            )
+
+        target_workflow_id = str(
+            target.get("workflowId") or target.get("workflow_id") or ""
+        ).strip()
+        if not target_workflow_id:
+            raise TemporalExecutionValidationError(
+                "task.remediation.target.workflowId is required."
+            )
+        if not target_workflow_id.startswith("mm:"):
+            if await self._dependency_identifier_is_run_id(target_workflow_id):
+                raise TemporalExecutionValidationError(
+                    f"Remediation target {target_workflow_id} must use workflowId, not runId."
+                )
+            raise TemporalExecutionValidationError(
+                f"Remediation target {target_workflow_id} must be a workflowId."
+            )
+        if target_workflow_id == new_workflow_id:
+            raise TemporalExecutionValidationError(
+                f"Workflow cannot remediate itself: {new_workflow_id}"
+            )
+
+        target_record = await self._session.get(
+            TemporalExecutionCanonicalRecord, target_workflow_id
+        )
+        if target_record is None:
+            raise TemporalExecutionValidationError(
+                f"Remediation target not found: {target_workflow_id}"
+            )
+        if not self._can_reference_dependency_target(
+            target_record,
+            owner_id=owner_id,
+            owner_type=owner_type,
+        ):
+            raise TemporalExecutionValidationError(
+                f"Remediation target unauthorized: {target_workflow_id}"
+            )
+        if getattr(target_record, "workflow_type", None) is not TemporalWorkflowType.RUN:
+            wf_type_value = getattr(
+                getattr(target_record, "workflow_type", None),
+                "value",
+                getattr(target_record, "workflow_type", "unknown"),
+            )
+            raise TemporalExecutionValidationError(
+                f"Remediation target {target_workflow_id} is a {wf_type_value} "
+                "workflow, not a MoonMind.Run workflow."
+            )
+
+        requested_run_id = str(target.get("runId") or target.get("run_id") or "").strip()
+        if requested_run_id and requested_run_id != target_record.run_id:
+            raise TemporalExecutionValidationError(
+                "task.remediation.target.runId must match the current target runId."
+            )
+
+        trigger = remediation.get("trigger")
+        trigger_type = None
+        if isinstance(trigger, Mapping):
+            trigger_type = str(trigger.get("type") or "").strip() or None
+
+        return TemporalExecutionRemediationLink(
+            remediation_workflow_id=new_workflow_id,
+            remediation_run_id=new_run_id,
+            target_workflow_id=target_record.workflow_id,
+            target_run_id=target_record.run_id,
+            mode=str(remediation.get("mode") or "snapshot_then_follow").strip()
+            or "snapshot_then_follow",
+            authority_mode=str(
+                remediation.get("authorityMode")
+                or remediation.get("authority_mode")
+                or "observe_only"
+            ).strip()
+            or "observe_only",
+            status="created",
+            trigger_type=trigger_type,
+        )
+
     async def _write_dependency_edges(
         self,
         *,
@@ -363,6 +453,34 @@ class TemporalExecutionService:
                     ordinal=ordinal,
                 )
             )
+
+    async def list_remediation_targets(
+        self, remediation_workflow_id: str
+    ) -> list[TemporalExecutionRemediationLink]:
+        stmt = (
+            select(TemporalExecutionRemediationLink)
+            .where(
+                TemporalExecutionRemediationLink.remediation_workflow_id
+                == remediation_workflow_id
+            )
+            .order_by(TemporalExecutionRemediationLink.created_at.asc())
+        )
+        return await self._scalars_all(stmt)
+
+    async def list_remediations_for_target(
+        self, target_workflow_id: str
+    ) -> list[TemporalExecutionRemediationLink]:
+        stmt = (
+            select(TemporalExecutionRemediationLink)
+            .where(
+                TemporalExecutionRemediationLink.target_workflow_id == target_workflow_id
+            )
+            .order_by(
+                TemporalExecutionRemediationLink.created_at.asc(),
+                TemporalExecutionRemediationLink.remediation_workflow_id.asc(),
+            )
+        )
+        return await self._scalars_all(stmt)
 
     async def list_prerequisites(
         self, dependent_workflow_id: str
@@ -590,13 +708,29 @@ class TemporalExecutionService:
         workflow_id = f"mm:{uuid4()}"
         run_id = str(uuid4())
         normalized_depends_on: list[str] = []
+        remediation_link: TemporalExecutionRemediationLink | None = None
 
         if workflow_type_enum is TemporalWorkflowType.RUN:
-            depends_on = (initial_parameters or {}).get("task", {}).get("dependsOn")
+            raw_task = (initial_parameters or {}).get("task")
+            task_mapping = raw_task if isinstance(raw_task, Mapping) else {}
+            depends_on = task_mapping.get("dependsOn")
             if isinstance(depends_on, list) and depends_on:
                 normalized_depends_on = await self._validate_dependencies(
                     depends_on=depends_on,
                     new_workflow_id=workflow_id,
+                    owner_id=owner,
+                    owner_type=owner_type_enum,
+                )
+            remediation = task_mapping.get("remediation")
+            if remediation is not None:
+                if not isinstance(remediation, Mapping):
+                    raise TemporalExecutionValidationError(
+                        "task.remediation must be an object."
+                    )
+                remediation_link = await self._validate_remediation_link(
+                    remediation=remediation,
+                    new_workflow_id=workflow_id,
+                    new_run_id=run_id,
                     owner_id=owner,
                     owner_type=owner_type_enum,
                 )
@@ -635,6 +769,19 @@ class TemporalExecutionService:
                 params["task"] = task_params
             else:
                 params.pop("task", None)
+        if remediation_link is not None:
+            remediation_params = task_params.get("remediation")
+            if isinstance(remediation_params, Mapping):
+                pinned_remediation = dict(remediation_params)
+                target_params = pinned_remediation.get("target")
+                pinned_target = (
+                    dict(target_params) if isinstance(target_params, Mapping) else {}
+                )
+                pinned_target["workflowId"] = remediation_link.target_workflow_id
+                pinned_target["runId"] = remediation_link.target_run_id
+                pinned_remediation["target"] = pinned_target
+                task_params["remediation"] = pinned_remediation
+                params["task"] = task_params
 
         resolved_title = title or self._default_title_for_type(workflow_type_enum)
         memo = {
@@ -710,6 +857,8 @@ class TemporalExecutionService:
                 dependent_workflow_id=workflow_id,
                 prerequisite_workflow_ids=normalized_depends_on,
             )
+        if remediation_link is not None:
+            self._session.add(remediation_link)
         if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
             initialize_manifest_projection(record)
         try:
@@ -768,6 +917,8 @@ class TemporalExecutionService:
                 and start_run_id != record.run_id
             ):
                 record.run_id = start_run_id
+                if remediation_link is not None:
+                    remediation_link.remediation_run_id = start_run_id
                 await self._session.commit()
                 await self._session.refresh(record)
         except Exception as exc:
