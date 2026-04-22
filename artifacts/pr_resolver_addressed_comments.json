@@ -1,27 +1,57 @@
 [
   {
-    "id": 3120172516,
+    "id": 3120762036,
     "disposition": "addressed",
-    "rationale": "Included the resolved push_head_sha in the no_commits result path and added focused unit coverage."
+    "rationale": "Replaced the protocol ellipsis body with an explicit NotImplementedError so the statement is no longer a no-op."
   },
   {
-    "id": 3120172519,
+    "id": 3120762042,
     "disposition": "addressed",
-    "rationale": "Updated _resolve_workspace_head_sha to kill and reap the rev-parse subprocess on timeout and added focused unit coverage."
+    "rationale": "Replaced the protocol ellipsis body with an explicit NotImplementedError so the statement is no longer a no-op."
   },
   {
-    "id": 4150632918,
+    "id": 3120762046,
+    "disposition": "addressed",
+    "rationale": "Added an explanatory comment to the tolerant maxTailLines parse fallback."
+  },
+  {
+    "id": 3120762392,
+    "disposition": "addressed",
+    "rationale": "Exported RemediationLiveFollower from remediation_tools.__all__."
+  },
+  {
+    "id": 3120762405,
+    "disposition": "addressed",
+    "rationale": "Changed maxTailLines parsing to preserve an explicit zero instead of replacing it with the default."
+  },
+  {
+    "id": 3120762409,
+    "disposition": "addressed",
+    "rationale": "Cached parsed remediation context payloads by workflow ID and context artifact ref within the service instance."
+  },
+  {
+    "id": 3120762414,
+    "disposition": "addressed",
+    "rationale": "Imported RemediationLiveFollower in moonmind.workflows.temporal.__init__."
+  },
+  {
+    "id": 3120762415,
+    "disposition": "addressed",
+    "rationale": "Added RemediationLiveFollower to the package root __all__ list."
+  },
+  {
+    "id": 4151239835,
     "disposition": "not-applicable",
-    "rationale": "Review summary comment only; its two concrete findings are tracked and addressed by comments 3120172516 and 3120172519."
+    "rationale": "Top-level review summary; its actionable inline comments were handled individually."
   },
   {
-    "id": 3120179522,
+    "id": 3120768401,
     "disposition": "addressed",
-    "rationale": "Duplicate timeout-resource-leak finding; fixed by killing and awaiting the timed-out rev-parse subprocess."
+    "rationale": "Updated _bounded_tail_lines so explicit tail_lines are clamped by both boundedness.maxTailLines and policies.evidencePolicy.tailLines."
   },
   {
-    "id": 4150640657,
+    "id": 4151247216,
     "disposition": "not-applicable",
-    "rationale": "Automated review wrapper/informational comment; the concrete actionable suggestion is tracked separately as comment 3120179522."
+    "rationale": "Top-level automated review wrapper; its actionable inline comment was handled individually."
   }
 ]

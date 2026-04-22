@@ -1,6 +1,6 @@
 # Verification: Mission Control Shared Interaction Language
 
-**Feature**: `specs/215-mission-control-interaction-language`  
+**Feature**: `specs/219-mission-control-interaction-language`  
 **Jira**: MM-427  
 **Verdict**: FULLY_IMPLEMENTED
 
@@ -18,7 +18,7 @@
 | FR-008 | Reduced-motion media query suppresses transform on shared routine controls. | VERIFIED | Covered by CSS contract tests. |
 | FR-009 | Existing app-shell and task-list behavior tests pass. | VERIFIED | Focused task-list regressions cover filters, sorting, pagination, mobile cards, and composition. |
 | FR-010 | New MM-427 tests cover tokens, no-lift routine control behavior, compact controls, focus, disabled, and reduced motion. | VERIFIED | Red-first failure was observed before CSS implementation. |
-| FR-011 | MM-427 source brief is preserved in `spec.md`, `tasks.md`, this verification file, and `docs/tmp/jira-orchestration-inputs/MM-427-moonspec-orchestration-input.md`. | VERIFIED | Commit message will include MM-427. |
+| FR-011 | The trusted MM-427 Jira preset brief is preserved in `spec.md`, `tasks.md`, this verification file, and `docs/tmp/jira-orchestration-inputs/MM-427-moonspec-orchestration-input.md`. | VERIFIED | Commit and PR metadata must preserve MM-427 when those outputs are requested. |
 
 ## Test Results
 
@@ -27,7 +27,7 @@
 | `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/mission-control.test.tsx` before CSS implementation | FAIL | Expected red-first failure: missing interaction tokens, legacy `translateY` controls, and layout-only compact controls. |
 | `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx` | BLOCKED | The npm script shell could not resolve `vitest`; direct local binary was used for the same focused files. |
 | `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx` | PASS | 2 files, 28 tests. |
-| `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx` | PASS | 3663 Python tests passed, 1 xpassed, 16 subtests passed; targeted UI tests passed, 2 files and 28 tests. |
+| `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/tasks-list.test.tsx` | PASS | 3696 Python tests passed, 1 xpassed, 16 subtests passed; targeted UI tests passed, 2 files and 33 tests. |
 
 ## Acceptance Scenario Coverage
 

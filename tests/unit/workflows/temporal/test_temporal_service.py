@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, call
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -26,6 +27,7 @@ from api_service.db.models import (
     TemporalExecutionProjectionSourceMode,
     TemporalExecutionProjectionSyncState,
     TemporalExecutionRecord,
+    TemporalExecutionRemediationLink,
     TemporalWorkflowType,
 )
 from moonmind.workflows.temporal.service import (
@@ -528,6 +530,322 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
         )
         assert snapshot[dep1.workflow_id].title == "Dependency 1"
         assert snapshot[dep2.workflow_id].workflow_type == "MoonMind.Run"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_persists_remediation_link_and_supports_lookups(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        mock_client_adapter.start_workflow.side_effect = [
+            SimpleNamespace(run_id="target-temporal-run"),
+            SimpleNamespace(run_id="remediation-temporal-run"),
+        ]
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "instructions": "Investigate the target",
+                    "remediation": {
+                        "target": {"workflowId": target.workflow_id},
+                        "mode": "snapshot",
+                        "authorityMode": "approval_gated",
+                        "trigger": {"type": "manual"},
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        assert link.remediation_run_id == remediation.run_id
+        assert link.target_workflow_id == target.workflow_id
+        assert link.target_run_id == target.run_id
+        assert link.mode == "snapshot"
+        assert link.authority_mode == "approval_gated"
+        assert link.status == "created"
+        assert link.trigger_type == "manual"
+
+        remediation_record = await session.get(
+            TemporalExecutionCanonicalRecord, remediation.workflow_id
+        )
+        assert remediation_record is not None
+        assert remediation_record.parameters["task"]["remediation"]["target"] == {
+            "workflowId": target.workflow_id,
+            "runId": target.run_id,
+        }
+        start_kwargs = mock_client_adapter.start_workflow.await_args_list[1].kwargs
+        assert start_kwargs["input_args"]["initial_parameters"]["task"][
+            "remediation"
+        ]["target"] == {
+            "workflowId": target.workflow_id,
+            "runId": target.run_id,
+        }
+
+        outbound = await service.list_remediation_targets(remediation.workflow_id)
+        assert [item.target_workflow_id for item in outbound] == [target.workflow_id]
+
+        inbound = await service.list_remediations_for_target(target.workflow_id)
+        assert [item.remediation_workflow_id for item in inbound] == [
+            remediation.workflow_id
+        ]
+
+        prerequisites = await service.list_prerequisites(remediation.workflow_id)
+        assert prerequisites == []
+
+
+@pytest.mark.asyncio
+async def test_create_execution_persists_supplied_matching_remediation_run_id(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "instructions": "Investigate the target",
+                    "remediation": {
+                        "target": {
+                            "workflowId": target.workflow_id,
+                            "runId": target.run_id,
+                        },
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        assert link.target_run_id == target.run_id
+        assert link.mode == "snapshot_then_follow"
+        assert link.authority_mode == "observe_only"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_missing_remediation_target_workflow_id(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="task.remediation.target.workflowId is required",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title="Remediate target",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"remediation": {"target": {}}}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_remediation_run_id_identifier(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="must use workflowId, not runId",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title="Remediate target",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "task": {"remediation": {"target": {"workflowId": target.run_id}}}
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_missing_remediation_target(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Remediation target not found",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title="Remediate target",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "task": {
+                        "remediation": {
+                            "target": {"workflowId": "mm:missing-remediation-target"}
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_non_run_remediation_target(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.ManifestIngest",
+            owner_id=owner_id,
+            title="Manifest target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref="artifact://manifest/1",
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="not a MoonMind.Run workflow",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title="Remediate target",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "task": {
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id}
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_mismatched_remediation_target_run_id(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="target.runId must match",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title="Remediate target",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "task": {
+                        "remediation": {
+                            "target": {
+                                "workflowId": target.workflow_id,
+                                "runId": "not-current-run",
+                            }
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
 
 
 @pytest.mark.asyncio
