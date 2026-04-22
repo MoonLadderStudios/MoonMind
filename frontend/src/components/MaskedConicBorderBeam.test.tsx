@@ -94,6 +94,8 @@ describe('MaskedConicBorderBeam', () => {
     expect(wrapper.style.getPropertyValue('--beam-border-radius')).toBe('12px');
     expect(wrapper.style.getPropertyValue('--beam-border-width')).toBe('2px');
     expect(wrapper.style.getPropertyValue('--beam-speed')).toBe('2.8s');
+    expect(wrapper.style.getPropertyValue('--beam-inner-inset')).toBe('2px');
+    expect(wrapper.style.getPropertyValue('--beam-inner-radius')).toBe('calc(12px - 2px)');
     const contentWrapper = screen.getByText('Surface content').closest('.masked-conic-border-beam__content');
     expect(contentWrapper).toBeTruthy();
     expect(contentWrapper?.tagName).toBe('DIV');
@@ -112,35 +114,101 @@ describe('MaskedConicBorderBeam', () => {
     expect(screen.getByText('Idle content')).toBeTruthy();
   });
 
-  it('keeps MM-465 traceability on the exported contract', () => {
+  it('keeps MM-465 and MM-466 traceability on the exported contract', () => {
     expect(MASKED_CONIC_BORDER_BEAM_TRACEABILITY).toEqual({
-      jiraIssueKey: 'MM-465',
+      jiraIssueKeys: ['MM-465', 'MM-466'],
       designRequirements: [
         'DESIGN-REQ-001',
         'DESIGN-REQ-002',
         'DESIGN-REQ-003',
+        'DESIGN-REQ-004',
+        'DESIGN-REQ-005',
+        'DESIGN-REQ-006',
         'DESIGN-REQ-010',
+        'DESIGN-REQ-011',
         'DESIGN-REQ-016',
       ],
     });
   });
 
+  it('exposes MM-466 geometry defaults for the border-ring mask and beam footprint', () => {
+    render(
+      <MaskedConicBorderBeam data-testid="beam">
+        <span>Geometry defaults</span>
+      </MaskedConicBorderBeam>,
+    );
+
+    const wrapper = screen.getByTestId('beam');
+    expect(wrapper.style.getPropertyValue('--beam-head-arc')).toBe('12deg');
+    expect(wrapper.style.getPropertyValue('--beam-tail-arc')).toBe('28deg');
+    expect(wrapper.style.getPropertyValue('--beam-inner-inset')).toBe('1.5px');
+    expect(wrapper.style.getPropertyValue('--beam-inner-radius')).toBe('calc(16px - 1.5px)');
+  });
+
+  it('keeps active layered geometry separate from nested content', () => {
+    render(
+      <MaskedConicBorderBeam data-testid="beam">
+        <button type="button">Retry execution</button>
+        <span>Readable child copy</span>
+      </MaskedConicBorderBeam>,
+    );
+
+    const wrapper = screen.getByTestId('beam');
+    const layer = screen.getByTestId('masked-conic-border-beam-layer');
+    const glow = screen.getByTestId('masked-conic-border-beam-glow');
+    const contentWrapper = screen.getByText('Readable child copy').closest('.masked-conic-border-beam__content');
+
+    expect(wrapper.firstElementChild).toBe(layer);
+    expect(layer.nextElementSibling).toBe(glow);
+    expect(glow.nextElementSibling).toBe(contentWrapper);
+    expect(layer.getAttribute('aria-hidden')).toBe('true');
+    expect(glow.getAttribute('aria-hidden')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Retry execution' })).toBeTruthy();
+  });
+
   it('defines the conic beam as a masked border-ring layer instead of content animation', () => {
+    const rootBlock = cssRuleBlock('.masked-conic-border-beam');
     const layerBlock = cssRuleBlock('.masked-conic-border-beam__layer');
     const glowBlock = cssRuleBlock('.masked-conic-border-beam__glow');
     const contentBlock = cssRuleBlock('.masked-conic-border-beam__content');
 
+    expect(rootBlock).toContain('--beam-head-arc: 12deg;');
+    expect(rootBlock).toContain('--beam-tail-arc: 28deg;');
+    expect(rootBlock).toContain('--beam-inner-inset: var(--beam-border-width);');
+    expect(rootBlock).toContain('--beam-inner-radius: calc(var(--beam-border-radius) - var(--beam-border-width));');
     expect(layerBlock).toContain('position: absolute;');
-    expect(layerBlock).toContain('padding: var(--beam-border-width);');
+    expect(layerBlock).toContain('padding: var(--beam-inner-inset);');
+    expect(layerBlock).toContain('border-radius: var(--beam-inner-radius);');
     expect(layerBlock).toContain('conic-gradient');
+    expect(layerBlock).toContain('var(--beam-tail-start)');
+    expect(layerBlock).toContain('var(--beam-tail-end)');
+    expect(layerBlock).toContain('var(--beam-head-end)');
     expect(layerBlock).toMatch(/mask-composite:\s*exclude/);
     expect(layerBlock).toMatch(/-webkit-mask-composite:\s*xor/);
-    expect(glowBlock).toContain('padding: var(--beam-border-width);');
+    expect(glowBlock).toContain('padding: var(--beam-inner-inset);');
+    expect(glowBlock).toContain('border-radius: var(--beam-inner-radius);');
     expect(glowBlock).toContain('conic-gradient');
+    expect(glowBlock).toContain('filter: blur(5px);');
+    expect(glowBlock).toContain('opacity: var(--beam-glow-opacity);');
     expect(glowBlock).toMatch(/mask-composite:\s*exclude/);
     expect(glowBlock).toMatch(/-webkit-mask-composite:\s*xor/);
+    expect(contentBlock).toContain('border-radius: var(--beam-inner-radius);');
     expect(contentBlock).not.toMatch(/animation:/);
     expect(contentBlock).not.toContain('mask');
+  });
+
+  it('keeps trail variants on the beam footprint without changing orbital speed', () => {
+    const layerBlock = cssRuleBlock('.masked-conic-border-beam__layer');
+    const noTrailBlock = cssRuleBlock('.masked-conic-border-beam[data-trail="none"] .masked-conic-border-beam__layer');
+    const definedTrailBlock = cssRuleBlock('.masked-conic-border-beam[data-trail="defined"] .masked-conic-border-beam__layer');
+
+    expect(layerBlock).toContain('animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;');
+    expect(noTrailBlock).toContain('background: conic-gradient');
+    expect(definedTrailBlock).toContain('background: conic-gradient');
+    expect(noTrailBlock).not.toContain('animation:');
+    expect(definedTrailBlock).not.toContain('animation:');
+    expect(noTrailBlock).not.toContain('--beam-speed');
+    expect(definedTrailBlock).not.toContain('--beam-speed');
   });
 
   it('defines reduced-motion behavior and excludes shimmer, spinner, and completion effects', () => {

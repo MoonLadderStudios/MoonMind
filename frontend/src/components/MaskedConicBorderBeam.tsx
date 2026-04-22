@@ -23,12 +23,16 @@ export interface MaskedConicBorderBeamProps extends HTMLAttributes<HTMLDivElemen
 }
 
 export const MASKED_CONIC_BORDER_BEAM_TRACEABILITY = {
-  jiraIssueKey: 'MM-465',
+  jiraIssueKeys: ['MM-465', 'MM-466'],
   designRequirements: [
     'DESIGN-REQ-001',
     'DESIGN-REQ-002',
     'DESIGN-REQ-003',
+    'DESIGN-REQ-004',
+    'DESIGN-REQ-005',
+    'DESIGN-REQ-006',
     'DESIGN-REQ-010',
+    'DESIGN-REQ-011',
     'DESIGN-REQ-016',
   ],
 } as const;
@@ -67,10 +71,16 @@ export function MaskedConicBorderBeam({
   children,
   ...rest
 }: MaskedConicBorderBeamProps) {
+  const resolvedBorderRadius = cssLength(borderRadius);
+  const resolvedBorderWidth = cssLength(borderWidth);
   const beamStyle = {
     ...style,
-    '--beam-border-radius': cssLength(borderRadius),
-    '--beam-border-width': cssLength(borderWidth),
+    '--beam-border-radius': resolvedBorderRadius,
+    '--beam-border-width': resolvedBorderWidth,
+    '--beam-inner-inset': resolvedBorderWidth,
+    '--beam-inner-radius': `calc(${resolvedBorderRadius} - ${resolvedBorderWidth})`,
+    '--beam-head-arc': '12deg',
+    '--beam-tail-arc': '28deg',
     '--beam-speed': cssSpeed(speed),
   } as CSSProperties;
 

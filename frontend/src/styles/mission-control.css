@@ -1276,6 +1276,15 @@ tr[data-proposal-id].proposal-consuming td {
 .masked-conic-border-beam {
   --beam-border-radius: 16px;
   --beam-border-width: 1.5px;
+  --beam-inner-inset: var(--beam-border-width);
+  --beam-inner-radius: calc(var(--beam-border-radius) - var(--beam-border-width));
+  --beam-head-arc: 12deg;
+  --beam-tail-arc: 28deg;
+  --beam-head-end: 332deg;
+  --beam-head-start: calc(var(--beam-head-end) - var(--beam-head-arc));
+  --beam-tail-start: calc(var(--beam-head-start) - var(--beam-tail-arc));
+  --beam-tail-end: var(--beam-head-start);
+  --beam-fade-end: 360deg;
   --beam-speed: 3.6s;
   --beam-border-base: rgb(var(--mm-border) / 0.74);
   --beam-head-color: rgb(255 255 255 / 0.95);
@@ -1322,9 +1331,16 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .masked-conic-border-beam__layer {
-  padding: var(--beam-border-width);
+  padding: var(--beam-inner-inset);
+  border-radius: var(--beam-inner-radius);
   opacity: var(--beam-opacity);
-  background: conic-gradient(from 0deg, transparent 0deg 300deg, var(--beam-tail-color) 320deg, var(--beam-head-color) 332deg, transparent 360deg);
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg var(--beam-tail-start),
+    var(--beam-tail-color) var(--beam-tail-end),
+    var(--beam-head-color) var(--beam-head-start) var(--beam-head-end),
+    transparent var(--beam-fade-end)
+  );
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
@@ -1333,9 +1349,16 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .masked-conic-border-beam__glow {
-  padding: var(--beam-border-width);
+  padding: var(--beam-inner-inset);
+  border-radius: var(--beam-inner-radius);
   opacity: var(--beam-glow-opacity);
-  background: conic-gradient(from 0deg, transparent 0deg 292deg, var(--beam-glow-color) 318deg, var(--beam-head-color) 334deg, transparent 360deg);
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg calc(var(--beam-tail-start) - 8deg),
+    var(--beam-glow-color) calc(var(--beam-tail-end) - 2deg),
+    var(--beam-head-color) var(--beam-head-start) calc(var(--beam-head-end) + 2deg),
+    transparent var(--beam-fade-end)
+  );
   filter: blur(5px);
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
@@ -1350,11 +1373,11 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .masked-conic-border-beam[data-trail="none"] .masked-conic-border-beam__layer {
-  background: conic-gradient(from 0deg, transparent 0deg 318deg, var(--beam-head-color) 330deg, transparent 342deg 360deg);
+  background: conic-gradient(from 0deg, transparent 0deg var(--beam-head-start), var(--beam-head-color) var(--beam-head-end), transparent calc(var(--beam-head-end) + var(--beam-head-arc)) 360deg);
 }
 
 .masked-conic-border-beam[data-trail="defined"] .masked-conic-border-beam__layer {
-  background: conic-gradient(from 0deg, transparent 0deg 284deg, var(--beam-tail-color) 318deg, var(--beam-head-color) 334deg, transparent 360deg);
+  background: conic-gradient(from 0deg, transparent 0deg calc(var(--beam-tail-start) - 8deg), var(--beam-tail-color) var(--beam-tail-end), var(--beam-head-color) var(--beam-head-start) calc(var(--beam-head-end) + 2deg), transparent 360deg);
 }
 
 .masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__layer,
@@ -1367,7 +1390,7 @@ tr[data-proposal-id].proposal-consuming td {
   position: relative;
   z-index: 1;
   display: block;
-  border-radius: calc(var(--beam-border-radius) - var(--beam-border-width));
+  border-radius: var(--beam-inner-radius);
 }
 
 @keyframes masked-conic-border-beam-orbit {
