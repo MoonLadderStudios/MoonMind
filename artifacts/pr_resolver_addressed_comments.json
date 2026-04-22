@@ -1,37 +1,27 @@
 [
   {
-    "id": 4158134143,
+    "id": 3127250580,
+    "disposition": "addressed",
+    "rationale": "Updated Pentest orphan cleanup name fallback so it is used only when no explicit task, step, or runner-profile selector filter is requested; added a regression assertion for filtered lookup."
+  },
+  {
+    "id": 4158282600,
     "disposition": "not-applicable",
-    "rationale": "Review summary; no separate code action beyond the line comments."
+    "rationale": "Automated review summary with no distinct actionable request beyond the inline review comments."
   },
   {
-    "id": 3127101654,
+    "id": 3127256646,
     "disposition": "addressed",
-    "rationale": "Merged provider evidence_artifact_refs with the required evidence.bundle artifact ref instead of overwriting them."
+    "rationale": "Changed PentestExecutionPolicy max_attempts and automatic_retries_enabled from Literal constants to standard int/bool fields with conservative defaults."
   },
   {
-    "id": 3127101658,
+    "id": 3127256656,
     "disposition": "addressed",
-    "rationale": "Blank required finding summaries now normalize to a deterministic fallback string while optional text fields can remain absent."
+    "rationale": "Changed failure-classification diagnostics to dict[str, Any] and added recursive string redaction that preserves structured metadata."
   },
   {
-    "id": 3127101660,
-    "disposition": "addressed",
-    "rationale": "Publication metadata is now sourced from one unambiguous payload object: nested request when present, otherwise the flat payload."
-  },
-  {
-    "id": 3127102522,
-    "disposition": "addressed",
-    "rationale": "Stringly typed publication flags now use bool coercion instead of Python truthiness."
-  },
-  {
-    "id": 3127102524,
-    "disposition": "addressed",
-    "rationale": "Secret redaction now covers spaced equals and colon assignment formats, including prefixed API key names."
-  },
-  {
-    "id": 4158134981,
+    "id": 4158288444,
     "disposition": "not-applicable",
-    "rationale": "Automated review container comment; actionable suggestions are represented by the individual line comments."
+    "rationale": "Human-readable review summary whose actionable points are covered by inline comments 3127256646 and 3127256656."
   }
 ]
