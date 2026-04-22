@@ -132,6 +132,7 @@ Needs Clarification
 ## Classification
 
 - Input type: Single-story feature request.
+- Breakdown decision: `moonspec-breakdown` was not run because the Jira preset brief defines one independently testable operator story and does not require processing multiple specs.
 - Selected mode: Runtime.
 - Source design: `docs/Artifacts/ReportArtifacts.md` is treated as runtime source requirements because the Jira brief points at implementation behavior, not documentation-only work.
 - Resume decision: No existing Moon Spec artifacts for MM-462 were found under `specs/`; specification is the first incomplete stage.
