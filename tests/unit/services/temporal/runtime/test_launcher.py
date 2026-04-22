@@ -1254,6 +1254,160 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_launch_materializes_claude_anthropic_secret_ref_profile(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-anthropic-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "ambient-auth-token")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://ambient.example")
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-openai-key")
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        profile_id="claude_anthropic",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        command_template=["claude", "-p", "hello"],
+        clear_env_keys=[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "OPENAI_API_KEY",
+        ],
+        secret_refs={"anthropic_api_key": "db://claude_anthropic_token"},
+        env_template={"ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}},
+        passthrough_env_keys=[],
+    )
+    request = _make_request(execution_profile_ref="claude_anthropic")
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1003) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_env: dict[str, str] = {}
+    resolved_refs: list[str] = []
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.update(env)
+        return _FakeProcess()
+
+    async def _fake_resolve(secret_name: str) -> str:
+        resolved_refs.append(secret_name)
+        assert secret_name == "db://claude_anthropic_token"
+        return "resolved-claude-anthropic-key"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.shutil.which",
+        lambda command: "/usr/bin/gh" if command == "gh" else None,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _fake_resolve,
+    )
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-claude-anthropic-secret-ref-1",
+        request=request,
+        profile=profile,
+    )
+    await process.wait()
+
+    assert resolved_refs == ["db://claude_anthropic_token"]
+    assert captured_env["ANTHROPIC_API_KEY"] == "resolved-claude-anthropic-key"
+    assert "anthropic_api_key" not in captured_env
+    assert "ANTHROPIC_AUTH_TOKEN" not in captured_env
+    assert "ANTHROPIC_BASE_URL" not in captured_env
+    assert "OPENAI_API_KEY" not in captured_env
+    assert "MANAGED_API_KEY_REF" not in captured_env
+    assert "MANAGED_API_KEY_TARGET_ENV" not in captured_env
+
+
+@pytest.mark.asyncio
+async def test_launch_claude_anthropic_missing_secret_ref_fails_before_process(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        profile_id="claude_anthropic",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        command_template=["claude", "-p", "hello"],
+        clear_env_keys=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+        secret_refs={"anthropic_api_key": "db://missing-claude-token"},
+        env_template={"ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}},
+        passthrough_env_keys=[],
+    )
+    request = _make_request(execution_profile_ref="claude_anthropic")
+
+    class _FakeGitProcess:
+        def __init__(self) -> None:
+            self.pid = 1004
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        if args and args[0] == "git":
+            return _FakeGitProcess()
+        raise AssertionError(
+            "runtime process should not start when secret resolution fails"
+        )
+
+    async def _fake_resolve(secret_name: str) -> str:
+        assert secret_name == "db://missing-claude-token"
+        raise ValueError(
+            "Unable to resolve MANAGED_API_KEY_REF='db://missing-claude-token': missing"
+        )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _fake_resolve,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        await launcher.launch(
+            run_id="run-claude-anthropic-secret-ref-missing",
+            request=request,
+            profile=profile,
+        )
+
+    message = str(exc_info.value)
+    assert "missing" in message
+    assert "resolved-claude-anthropic-key" not in message
+    assert "ambient-anthropic-key" not in message
+
+
+@pytest.mark.asyncio
 async def test_launch_resolves_github_token_from_secret_ref_setting(
     tmp_path, monkeypatch
 ):

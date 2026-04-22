@@ -5,31 +5,50 @@ import pytest
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
 from moonmind.workflows.adapters.materializer import ProviderProfileMaterializer
 
+
 class MockSecretResolver:
     async def resolve_secrets(self, secret_refs):
         return {k: f"decrypted_{v}" for k, v in secret_refs.items()}
+
+
+class StaticSecretResolver:
+    def __init__(self, resolved):
+        self.resolved = resolved
+
+    async def resolve_secrets(self, secret_refs):
+        return {
+            k: self.resolved[v]
+            for k, v in secret_refs.items()
+            if v in self.resolved
+        }
+
 
 @pytest.mark.asyncio
 async def test_materializer_generates_correct_env():
     base_env = {"SOME_PATH": "/usr/bin", "TO_BE_CLEARED": "bad_token"}
     resolver = MockSecretResolver()
-    
-    materializer = ProviderProfileMaterializer(base_env=base_env, secret_resolver=resolver)
-    
+
+    materializer = ProviderProfileMaterializer(
+        base_env=base_env, secret_resolver=resolver
+    )
+
     profile = ManagedRuntimeProfile(
         profile_id="test_profile",
         runtime_id="claude_code",
         provider_id="anthropic",
         clear_env_keys=["TO_BE_CLEARED"],
         secret_refs={"ANTHROPIC_API_KEY": "1234"},
-        env_template={"API_URL": "https://api.anthropic.com/v1", "KEY_ECHO": "{{ANTHROPIC_API_KEY}}"},
+        env_template={
+            "API_URL": "https://api.anthropic.com/v1",
+            "KEY_ECHO": "{{ANTHROPIC_API_KEY}}",
+        },
         env_overrides={"OVERRIDE_VAR": "new_val"},
         file_templates=[],
-        command_template=["claude", "start"]
+        command_template=["claude", "start"],
     )
-    
+
     env, cmd = await materializer.materialize(profile)
-    
+
     assert "SOME_PATH" in env
     assert "TO_BE_CLEARED" not in env
     assert env["ANTHROPIC_API_KEY"] == "decrypted_1234"
@@ -37,6 +56,74 @@ async def test_materializer_generates_correct_env():
     assert env["OVERRIDE_VAR"] == "new_val"
     assert cmd == ["claude", "start"]
 
+
+@pytest.mark.asyncio
+async def test_materializer_launches_claude_anthropic_from_secret_ref_alias():
+    base_env = {
+        "PATH": "/usr/bin",
+        "ANTHROPIC_API_KEY": "ambient-key",
+        "ANTHROPIC_AUTH_TOKEN": "ambient-token",
+        "ANTHROPIC_BASE_URL": "https://ambient.example",
+        "OPENAI_API_KEY": "ambient-openai",
+    }
+    materializer = ProviderProfileMaterializer(
+        base_env=base_env,
+        secret_resolver=StaticSecretResolver(
+            {"db://claude_anthropic_token": "resolved-claude-key"}
+        ),
+    )
+
+    profile = ManagedRuntimeProfile(
+        profile_id="claude_anthropic",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        clear_env_keys=[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "OPENAI_API_KEY",
+        ],
+        secret_refs={"anthropic_api_key": "db://claude_anthropic_token"},
+        env_template={"ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}},
+        command_template=["claude", "-p", "hello"],
+    )
+
+    env, cmd = await materializer.materialize(profile)
+
+    assert env["PATH"] == "/usr/bin"
+    assert env["ANTHROPIC_API_KEY"] == "resolved-claude-key"
+    assert "anthropic_api_key" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+    assert "ANTHROPIC_BASE_URL" not in env
+    assert "OPENAI_API_KEY" not in env
+    assert cmd == ["claude", "-p", "hello"]
+
+
+@pytest.mark.asyncio
+async def test_materializer_missing_claude_secret_ref_alias_fails_secret_free():
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=StaticSecretResolver({}),
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="claude_anthropic",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        secret_refs={"anthropic_api_key": "db://missing-claude-token"},
+        env_template={"ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}},
+        command_template=["claude", "-p", "hello"],
+    )
+
+    with pytest.raises(ValueError, match="anthropic_api_key") as exc_info:
+        await materializer.materialize(profile)
+
+    message = str(exc_info.value)
+    assert "db://missing-claude-token" not in message
+    assert "resolved-claude-key" not in message
 
 
 @pytest.mark.asyncio
@@ -46,7 +133,9 @@ async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_pa
     base_env = {}
     resolver = MockSecretResolver()
 
-    materializer = ProviderProfileMaterializer(base_env=base_env, secret_resolver=resolver)
+    materializer = ProviderProfileMaterializer(
+        base_env=base_env, secret_resolver=resolver
+    )
 
     profile = ManagedRuntimeProfile(
         profile_id="test_file_templates",
