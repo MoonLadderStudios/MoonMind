@@ -306,42 +306,44 @@ describe('ProviderProfilesManager form controls', () => {
     account_label: 'Codex account',
   };
 
-  const claudeManualProfile: ProviderProfile = {
+  const claudeCredentialProfile: ProviderProfile = {
     ...profile,
     profile_id: 'claude-anthropic',
     runtime_id: 'claude_code',
     provider_id: 'anthropic',
-    credential_source: 'secret_ref',
-    runtime_materialization_mode: 'api_key_env',
+    credential_source: 'oauth_volume',
+    runtime_materialization_mode: 'oauth_home',
     secret_refs: {},
+    volume_ref: 'claude_auth_volume',
+    volume_mount_path: '/home/app/.claude',
+    account_label: 'Claude Anthropic OAuth',
     command_behavior: {
-      auth_strategy: 'claude_manual_token',
+      auth_strategy: 'claude_credential_methods',
       auth_state: 'not_connected',
-      auth_actions: ['connect'],
-      auth_status_label: 'Claude token not connected',
+      auth_actions: ['connect_oauth', 'use_api_key'],
+      auth_status_label: 'Claude credentials not connected',
     },
   };
 
-  const connectedClaudeManualProfile: ProviderProfile = {
-    ...claudeManualProfile,
+  const connectedClaudeCredentialProfile: ProviderProfile = {
+    ...claudeCredentialProfile,
     profile_id: 'claude-anthropic-connected',
-    secret_refs: { ANTHROPIC_AUTH_TOKEN: 'db://claude-token' },
     command_behavior: {
-      auth_strategy: 'claude_manual_token',
+      auth_strategy: 'claude_credential_methods',
       auth_state: 'connected',
-      auth_actions: ['replace_token', 'validate', 'disconnect'],
-      auth_status_label: 'Claude token ready',
+      auth_actions: ['connect_oauth', 'use_api_key', 'validate_oauth', 'disconnect_oauth'],
+      auth_status_label: 'Claude OAuth ready',
     },
   };
 
-  const readyClaudeManualProfile: ProviderProfile = {
-    ...connectedClaudeManualProfile,
+  const readyClaudeCredentialProfile: ProviderProfile = {
+    ...connectedClaudeCredentialProfile,
     profile_id: 'claude-anthropic-ready',
     command_behavior: {
-      auth_strategy: 'claude_manual_token',
+      auth_strategy: 'claude_credential_methods',
       auth_state: 'connected',
-      auth_actions: ['replace_token', 'validate', 'disconnect'],
-      auth_status_label: 'Claude token ready',
+      auth_actions: ['connect_oauth', 'use_api_key', 'validate_oauth', 'disconnect_oauth'],
+      auth_status_label: 'Claude OAuth ready',
       auth_readiness: {
         connected: true,
         last_validated_at: '2026-04-22T08:30:00Z',
@@ -597,48 +599,56 @@ describe('ProviderProfilesManager form controls', () => {
     });
   });
 
-  it('shows a Claude-specific connect action for disconnected claude_anthropic rows', () => {
-    renderProviderProfilesManager([claudeManualProfile]);
+  it('shows distinct Claude credential method actions for supported claude_anthropic rows', () => {
+    renderProviderProfilesManager([claudeCredentialProfile]);
 
-    expect(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Connect with Claude OAuth claude-anthropic' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Auth claude-anthropic' })).toBeNull();
-    expect(screen.getByText('Claude token not connected')).toBeTruthy();
+    expect(screen.getByText('Claude credentials not connected')).toBeTruthy();
   });
 
-  it('shows supported Claude lifecycle actions for connected claude_anthropic rows', () => {
-    renderProviderProfilesManager([connectedClaudeManualProfile]);
+  it('shows supported Claude OAuth lifecycle actions for connected claude_anthropic rows', () => {
+    renderProviderProfilesManager([connectedClaudeCredentialProfile]);
 
     expect(
-      screen.getByRole('button', { name: 'Replace token claude-anthropic-connected' }),
+      screen.getByRole('button', { name: 'Connect with Claude OAuth claude-anthropic-connected' }),
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Validate claude-anthropic-connected' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Disconnect claude-anthropic-connected' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic-connected' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Validate OAuth claude-anthropic-connected' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Disconnect OAuth claude-anthropic-connected' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Auth claude-anthropic-connected' })).toBeNull();
-    expect(screen.getByText('Claude token ready')).toBeTruthy();
+    expect(screen.getByText('Claude OAuth ready')).toBeTruthy();
   });
 
   it('does not show Claude auth actions without trusted Claude metadata', () => {
     renderProviderProfilesManager([
       {
-        ...claudeManualProfile,
+        ...claudeCredentialProfile,
         profile_id: 'claude-without-metadata',
+        credential_source: 'secret_ref',
+        runtime_materialization_mode: 'api_key_env',
+        volume_ref: null,
+        volume_mount_path: null,
         command_behavior: {},
       },
     ]);
 
-    expect(screen.queryByRole('button', { name: /Connect Claude/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Replace token/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Validate/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Disconnect/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Connect with Claude OAuth/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Use Anthropic API key/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Validate OAuth/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Disconnect OAuth/ })).toBeNull();
   });
 
   it('shows Claude status without lifecycle actions when metadata has no actions', () => {
     renderProviderProfilesManager([
       {
-        ...claudeManualProfile,
+        ...claudeCredentialProfile,
         profile_id: 'claude-status-only',
         command_behavior: {
-          auth_strategy: 'claude_manual_token',
+          auth_strategy: 'claude_credential_methods',
           auth_state: 'enrollment_pending',
           auth_actions: [],
           auth_status_label: 'Claude enrollment pending',
@@ -647,53 +657,93 @@ describe('ProviderProfilesManager form controls', () => {
     ]);
 
     expect(screen.getByText('Claude enrollment pending')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Connect Claude/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Replace token/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Validate/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Disconnect/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Connect with Claude OAuth/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Use Anthropic API key/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Validate OAuth/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Disconnect OAuth/ })).toBeNull();
   });
 
-  it('opens a Claude manual enrollment drawer without terminal OAuth wording', () => {
-    renderProviderProfilesManager([claudeManualProfile]);
+  it('starts a Claude OAuth session from the OAuth credential method action', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        session_id: 'oas_claude_settings_auth',
+        runtime_id: 'claude_code',
+        profile_id: 'claude-anthropic',
+        status: 'pending',
+        session_transport: 'moonmind_pty_ws',
+      }),
+    } as Response);
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
+    renderProviderProfilesManager([claudeCredentialProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect with Claude OAuth claude-anthropic' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/oauth-sessions',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    const [, requestInit] = fetchSpy.mock.calls[0] ?? [];
+    const payload = JSON.parse(String((requestInit as RequestInit).body));
+    expect(payload).toMatchObject({
+      runtime_id: 'claude_code',
+      profile_id: 'claude-anthropic',
+      volume_ref: 'claude_auth_volume',
+      volume_mount_path: '/home/app/.claude',
+      account_label: 'Claude Anthropic OAuth',
+    });
+    expect(openSpy).toHaveBeenCalledWith(
+      '/oauth-terminal?session_id=oas_claude_settings_auth',
+      '_blank',
+      'noopener,noreferrer',
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('opens an Anthropic API-key enrollment drawer without terminal OAuth wording', () => {
+    renderProviderProfilesManager([claudeCredentialProfile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
 
     const dialog = screen.getByRole('dialog', {
-      name: 'Claude manual token enrollment for claude-anthropic',
+      name: 'Anthropic API key enrollment for claude-anthropic',
     });
     expect(dialog).toBeTruthy();
     expect(screen.getByText('not_connected')).toBeTruthy();
     expect(screen.getByText('awaiting_external_step')).toBeTruthy();
-    expect(screen.getByText(/Claude enrollment is completed externally/i)).toBeTruthy();
+    expect(screen.getByText(/Use an Anthropic API key for Claude Code launches/i)).toBeTruthy();
     expect(dialog.textContent).not.toMatch(/terminal OAuth/i);
   });
 
   it('advances to secure token paste and blocks empty submission', async () => {
-    const { onNotice } = renderProviderProfilesManager([claudeManualProfile]);
+    const { onNotice } = renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
 
     expect(screen.getByText('awaiting_token_paste')).toBeTruthy();
-    expect((screen.getByLabelText('Returned Claude token') as HTMLInputElement).type).toBe('password');
+    expect((screen.getByLabelText('Anthropic API key') as HTMLInputElement).type).toBe('password');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Claude token' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Anthropic API key' }));
 
     await waitFor(() => {
       expect(onNotice).toHaveBeenCalledWith({
         level: 'error',
-        text: 'Returned Claude token is required.',
+        text: 'Anthropic API key is required.',
       });
     });
   });
 
-  it('submits the manual token through lifecycle states and never calls Codex OAuth', async () => {
+  it('submits the Anthropic API key through lifecycle states and never calls OAuth sessions', async () => {
     const submittedToken = 'sk-ant-test-token';
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => ({
         status: 'ready',
-        status_label: 'Claude token ready',
+        status_label: 'Anthropic API key ready',
         readiness: {
           connected: true,
           last_validated_at: '2026-04-22T08:30:00Z',
@@ -703,14 +753,14 @@ describe('ProviderProfilesManager form controls', () => {
       }),
     } as Response);
 
-    renderProviderProfilesManager([claudeManualProfile]);
+    renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
-    fireEvent.change(screen.getByLabelText('Returned Claude token'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: submittedToken },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Claude token' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Anthropic API key' }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -729,7 +779,7 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByText('updating_profile')).toBeTruthy();
     expect(await screen.findByText('ready')).toBeTruthy();
     expect(screen.queryByDisplayValue(submittedToken)).toBeNull();
-    expect(await screen.findByText('Claude token ready')).toBeTruthy();
+    expect(await screen.findByText('Anthropic API key ready')).toBeTruthy();
   });
 
   it('ignores stale Claude enrollment responses after another profile is opened', async () => {
@@ -744,20 +794,20 @@ describe('ProviderProfilesManager form controls', () => {
         }),
     );
     const secondClaudeProfile: ProviderProfile = {
-      ...claudeManualProfile,
+      ...claudeCredentialProfile,
       profile_id: 'claude-anthropic-secondary',
     };
     const { onNotice } = renderProviderProfilesManager([
-      claudeManualProfile,
+      claudeCredentialProfile,
       secondClaudeProfile,
     ]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
-    fireEvent.change(screen.getByLabelText('Returned Claude token'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: submittedToken },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Claude token' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Anthropic API key' }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -767,14 +817,14 @@ describe('ProviderProfilesManager form controls', () => {
     });
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Connect Claude claude-anthropic-secondary' }),
+      screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic-secondary' }),
     );
 
     resolveCommit({
       ok: true,
       json: async () => ({
         status: 'ready',
-        status_label: 'Stale Claude token ready',
+        status_label: 'Stale Anthropic API key ready',
         readiness: { connected: true },
       }),
     } as Response);
@@ -783,31 +833,31 @@ describe('ProviderProfilesManager form controls', () => {
 
     expect(
       screen.getByRole('dialog', {
-        name: 'Claude manual token enrollment for claude-anthropic-secondary',
+        name: 'Anthropic API key enrollment for claude-anthropic-secondary',
       }),
     ).toBeTruthy();
-    expect(screen.queryByText('Stale Claude token ready')).toBeNull();
+    expect(screen.queryByText('Stale Anthropic API key ready')).toBeNull();
     expect(onNotice).not.toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('claude-anthropic"') }),
     );
   });
 
   it('clears pasted token state after cancellation', () => {
-    renderProviderProfilesManager([claudeManualProfile]);
+    renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
-    fireEvent.change(screen.getByLabelText('Returned Claude token'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: 'sk-ant-cancelled-token' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel Claude enrollment' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel API key enrollment' }));
 
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
 
-    expect((screen.getByLabelText('Returned Claude token') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Anthropic API key') as HTMLInputElement).value).toBe('');
   });
 
   it('redacts validation failure text before rendering it', async () => {
@@ -821,14 +871,14 @@ describe('ProviderProfilesManager form controls', () => {
       }),
     } as Response);
 
-    renderProviderProfilesManager([claudeManualProfile]);
+    renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Connect Claude claude-anthropic' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to token paste' }));
-    fireEvent.change(screen.getByLabelText('Returned Claude token'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: submittedToken },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Claude token' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Anthropic API key' }));
 
     expect(await screen.findByText(/Validation failed for/)).toBeTruthy();
     expect(screen.getByText(/REDACTED/)).toBeTruthy();
@@ -836,15 +886,15 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByText(/sk-ant-provider-secret/)).toBeNull();
     expect(screen.getByText('failed')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Return to token paste' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Return to API key paste' }));
 
-    expect((screen.getByLabelText('Returned Claude token') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Anthropic API key') as HTMLInputElement).value).toBe('');
   });
 
   it('renders structured Claude readiness metadata in the status column', () => {
-    renderProviderProfilesManager([readyClaudeManualProfile]);
+    renderProviderProfilesManager([readyClaudeCredentialProfile]);
 
-    expect(screen.getByText('Claude token ready')).toBeTruthy();
+    expect(screen.getByText('Claude OAuth ready')).toBeTruthy();
     expect(screen.getByText('Claude connection: Connected')).toBeTruthy();
     expect(screen.getByText('Last validated: 2026-04-22T08:30:00Z')).toBeTruthy();
     expect(screen.getByText('Backing secret: Present')).toBeTruthy();

@@ -401,7 +401,7 @@ async def commit_claude_manual_auth(
             "provider_profile_id": profile.profile_id,
             "runtime_id": profile.runtime_id,
             "provider_id": profile.provider_id,
-            "auth_strategy": "claude_manual_token",
+            "auth_strategy": "claude_credential_methods",
             "last_validated_at": validated_at.isoformat(),
         },
     )
@@ -434,10 +434,10 @@ async def commit_claude_manual_auth(
     behavior = dict(profile.command_behavior or {})
     behavior.update(
         {
-            "auth_strategy": "claude_manual_token",
+            "auth_strategy": "claude_credential_methods",
             "auth_state": "connected",
-            "auth_actions": ["replace_token", "validate", "disconnect"],
-            "auth_status_label": "Claude token ready",
+            "auth_actions": ["use_api_key"],
+            "auth_status_label": "Anthropic API key ready",
             "auth_readiness": {
                 "connected": True,
                 "last_validated_at": validated_at.isoformat(),
@@ -456,7 +456,7 @@ async def commit_claude_manual_auth(
 
     return {
         "status": "ready",
-        "status_label": "Claude token ready",
+        "status_label": "Anthropic API key ready",
         "profile_id": profile.profile_id,
         "secret_ref": secret_ref,
         "readiness": {

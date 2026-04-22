@@ -625,7 +625,7 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert submitted_token not in response_text
     payload = response.json()
     assert payload["status"] == "ready"
-    assert payload["status_label"] == "Claude token ready"
+    assert payload["status_label"] == "Anthropic API key ready"
     assert payload["readiness"]["connected"] is True
     assert payload["readiness"]["backing_secret_exists"] is True
     assert payload["readiness"]["launch_ready"] is True
@@ -655,8 +655,10 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert "OPENAI_API_KEY" in profile_payload["clear_env_keys"]
     assert "CUSTOM_ENV" in profile_payload["clear_env_keys"]
     assert profile_payload["clear_env_keys"].count("OPENAI_API_KEY") == 1
-    assert profile_payload["command_behavior"]["auth_strategy"] == "claude_manual_token"
+    assert profile_payload["command_behavior"]["auth_strategy"] == "claude_credential_methods"
     assert profile_payload["command_behavior"]["auth_state"] == "connected"
+    assert profile_payload["command_behavior"]["auth_actions"] == ["use_api_key"]
+    assert profile_payload["command_behavior"]["auth_status_label"] == "Anthropic API key ready"
 
     async with db_base.async_session_maker() as session:
         result = await session.execute(
