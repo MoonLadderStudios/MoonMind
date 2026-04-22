@@ -665,18 +665,32 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
         "status",
         "target",
         "runner_profile_id",
-        "stdout_artifact_ref",
-        "stderr_artifact_ref",
-        "diagnostics_artifact_ref",
-        "summary_artifact_ref",
-        "findings_artifact_ref",
+        "launch_plan",
+    ]
+    assert output_schema["properties"]["status"] == {
+        "type": "string",
+        "enum": ["launch_plan_ready"],
+    }
+    launch_plan_schema = output_schema["properties"]["launch_plan"]
+    assert launch_plan_schema["required"] == [
+        "profile_id",
+        "container_name",
+        "image",
+        "entrypoint",
+        "workdir",
+        "network_policy",
+        "linux_capabilities",
+        "devices",
+        "labels",
+        "cleanup_selector",
     ]
     assert {
-        "evidence_bundle_artifact_ref",
-        "provider_snapshot_artifact_ref",
-        "findings_count",
-        "confirmed_findings_count",
-    }.issubset(output_schema["properties"])
+        "mounts",
+        "env_keys",
+        "resources",
+        "timeout_seconds",
+        "cleanup",
+    }.issubset(launch_plan_schema["properties"])
 
     assert definition["policies"] == {
         "timeouts": {
@@ -780,13 +794,52 @@ async def test_security_pentest_execute_fails_closed_before_runner_without_scope
     assert "runner is not implemented" not in message
 
 
-async def test_security_pentest_execute_reaches_runner_boundary_after_scope_validation():
+async def test_security_pentest_execute_reaches_launch_plan_after_scope_validation():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(_pentest_activity_payload())
+
+    assert result["status"] == "launch_plan_ready"
+    assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+
+
+async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_validation():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(_pentest_activity_payload())
+
+    assert result["status"] == "launch_plan_ready"
+    assert result["target"] == "https://lab.example.test"
+    assert result["runner_profile_id"] == "pentestgpt-safe"
+    launch_plan = result["launch_plan"]
+    assert launch_plan["profile_id"] == "pentestgpt-safe"
+    assert launch_plan["container_name"] == "mm-pentest-run-123-step-pentest-1"
+    assert launch_plan["network_policy"] == "restricted_egress"
+    assert launch_plan["linux_capabilities"] == []
+    assert launch_plan["devices"] == []
+    assert launch_plan["labels"]["moonmind.tool_name"] == "security.pentest.run"
+    assert launch_plan["labels"]["moonmind.operation_mode"] == "validate_hypothesis"
+
+
+async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval():
     activities = TemporalAgentRuntimeActivities()
 
     with pytest.raises(TemporalActivityRuntimeError) as exc_info:
-        await activities.security_pentest_execute(_pentest_activity_payload())
+        await activities.security_pentest_execute(
+            _pentest_activity_payload(
+                runner_profile_id="pentestgpt-vpn-lab",
+                approved_scope={
+                    **_approved_pentest_scope(),
+                    "allowed_runner_profiles": ["pentestgpt-vpn-lab"],
+                    "required_network_attachment_type": "vpn",
+                },
+            )
+        )
 
-    assert "security.pentest.execute runner is not implemented" in str(exc_info.value)
+    message = str(exc_info.value)
+    assert "PERMISSION_DENIED" in message
+    assert "network_attachment_required" in message
+    assert "launch_plan_ready" not in message
 
 
 async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(

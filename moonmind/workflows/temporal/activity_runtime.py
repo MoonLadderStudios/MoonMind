@@ -23,9 +23,10 @@ from pydantic import BaseModel, ValidationError
 
 from moonmind.config.settings import settings
 from moonmind.integrations.pentest.models import (
+    PentestLaunchPolicyError,
     PentestScopeValidationError,
     PentestWorkloadRequest,
-    validate_authorized_scope_for_request,
+    build_pentest_launch_plan,
 )
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
@@ -829,26 +830,68 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                         "status",
                         "target",
                         "runner_profile_id",
-                        "stdout_artifact_ref",
-                        "stderr_artifact_ref",
-                        "diagnostics_artifact_ref",
-                        "summary_artifact_ref",
-                        "findings_artifact_ref",
+                        "launch_plan",
                     ],
                     "properties": {
-                        "status": {"type": "string"},
+                        "status": {
+                            "type": "string",
+                            "enum": ["launch_plan_ready"],
+                        },
                         "target": {"type": "string"},
                         "runner_profile_id": {"type": "string"},
-                        "execution_profile_ref": {"type": "string"},
-                        "stdout_artifact_ref": {"type": "string"},
-                        "stderr_artifact_ref": {"type": "string"},
-                        "diagnostics_artifact_ref": {"type": "string"},
-                        "summary_artifact_ref": {"type": "string"},
-                        "findings_artifact_ref": {"type": "string"},
-                        "evidence_bundle_artifact_ref": {"type": "string"},
-                        "provider_snapshot_artifact_ref": {"type": "string"},
-                        "findings_count": {"type": "integer"},
-                        "confirmed_findings_count": {"type": "integer"},
+                        "launch_plan": {
+                            "type": "object",
+                            "required": [
+                                "profile_id",
+                                "container_name",
+                                "image",
+                                "entrypoint",
+                                "workdir",
+                                "network_policy",
+                                "linux_capabilities",
+                                "devices",
+                                "labels",
+                                "cleanup_selector",
+                            ],
+                            "properties": {
+                                "profile_id": {"type": "string"},
+                                "container_name": {"type": "string"},
+                                "image": {"type": "string"},
+                                "entrypoint": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "workdir": {"type": "string"},
+                                "mounts": {
+                                    "type": "array",
+                                    "items": {"type": "object"},
+                                },
+                                "env_keys": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "network_policy": {"type": "string"},
+                                "linux_capabilities": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "devices": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "resources": {"type": "object"},
+                                "timeout_seconds": {"type": "integer"},
+                                "cleanup": {"type": "object"},
+                                "labels": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                },
+                                "cleanup_selector": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                },
+                            },
+                        },
                     },
                 }
             },
@@ -3130,12 +3173,10 @@ class TemporalAgentRuntimeActivities:
         request_payload = dict(payload.get("request", payload))
         request = PentestWorkloadRequest.model_validate(request_payload)
         try:
-            validate_authorized_scope_for_request(request)
-        except PentestScopeValidationError as exc:
+            launch_plan = build_pentest_launch_plan(request)
+        except (PentestScopeValidationError, PentestLaunchPolicyError) as exc:
             raise TemporalActivityRuntimeError(str(exc)) from exc
-        raise TemporalActivityRuntimeError(
-            "security.pentest.execute runner is not implemented"
-        )
+        return launch_plan.to_activity_output(request)
 
     async def agent_runtime_publish_artifacts(
         self,

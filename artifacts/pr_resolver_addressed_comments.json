@@ -1,17 +1,22 @@
 [
   {
-    "id": 4157254325,
-    "disposition": "not-applicable",
-    "rationale": "Bot review summary explicitly reported no feedback to address."
-  },
-  {
-    "id": 3126297003,
+    "id": 3126394695,
     "disposition": "addressed",
-    "rationale": "Kept beam and glow layers mounted while inactive and moved fade-out visibility to CSS, with Vitest coverage for the inactive fade contract."
+    "rationale": "Aligned the security.pentest.run registry output schema with the current launch_plan_ready activity output, including the required launch_plan object, so downstream JSON-pointer resolution no longer expects absent artifact refs."
   },
   {
-    "id": 4157264371,
+    "id": 4157371395,
     "disposition": "not-applicable",
-    "rationale": "Bot review wrapper without additional actionable feedback beyond the linked review comment."
+    "rationale": "Automated review summary body only; the actionable child review comment is tracked separately."
+  },
+  {
+    "id": 3126411835,
+    "disposition": "addressed",
+    "rationale": "Moved the shared agent_workspaces mount definition to a module-level _PENTEST_AGENT_WORKSPACES_MOUNT constant and reused it in both approved runner profiles."
+  },
+  {
+    "id": 4157390624,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary body only; the actionable child review comment is tracked separately."
   }
 ]
