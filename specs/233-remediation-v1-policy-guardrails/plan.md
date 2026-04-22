@@ -33,7 +33,7 @@ Implement MM-458 by verifying and tightening the existing remediation runtime gu
 | FR-020 | implemented_verified | MM-458 is preserved in spec, plan, tasks, quickstart, tests, and implementation evidence | no further implementation | final verify |
 | FR-021 | implemented_verified | Spec, plan, and tests distinguish current v1 guarantees from future extension behavior | no further implementation | final verify |
 | SC-001 | implemented_verified | `test_create_execution_keeps_future_remediation_policy_inert` verifies policy-only metadata does not spawn remediation | no further implementation | final verify |
-| SC-002 | implemented_verified | raw action denial tests and catalog boundaries exist | add allowed catalog absence check | unit |
+| SC-002 | implemented_verified | raw action denial tests and `test_remediation_action_authority_does_not_advertise_raw_admin_actions` cover catalog boundaries | no further implementation | final verify |
 | SC-003 | implemented_verified | `test_create_execution_keeps_future_remediation_policy_inert` verifies future policy fields remain inert | no further implementation | final verify |
 | SC-004 | implemented_verified | `test_create_execution_keeps_future_remediation_policy_inert` proves enabled self-healing policy metadata does not proceed in v1 without supported bounded runtime validation | no further implementation | final verify |
 | SC-005 | implemented_verified | existing remediation context/action tests cover bounded outcomes | no further implementation | final verify |
