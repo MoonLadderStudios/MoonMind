@@ -140,6 +140,13 @@ def test_remediation_action_authority_lists_policy_compatible_actions():
     assert allowed[0]["targetType"] == "workload_container"
     assert allowed[0]["inputMetadata"]["reason"]["required"] is False
 
+    allowed[0]["inputMetadata"]["reason"]["required"] = True
+    listed_again = service.list_allowed_actions(
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(allowed_action_kinds=("restart_worker",)),
+    )
+    assert listed_again[0]["inputMetadata"]["reason"]["required"] is False
+
 
 @pytest.fixture
 def mock_client_adapter():
@@ -885,6 +892,11 @@ async def test_remediation_action_authority_enforces_authority_modes(
         )
         assert dry_run.decision == "dry_run_only"
         assert dry_run.executable is False
+        dry_run_payload = dry_run.to_dict()
+        assert dry_run_payload["request"]["dryRun"] is True
+        assert dry_run_payload["result"]["status"] == "no_op"
+        assert dry_run_payload["result"]["verificationRequired"] is False
+        assert dry_run_payload["result"]["verificationHint"] is None
 
         denied = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
@@ -1104,6 +1116,11 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         assert high_risk.reason == "high_risk_requires_approval"
         assert dry_run.decision == "allowed"
         assert dry_run is not allowed
+        dry_run_payload = dry_run.to_dict()
+        assert dry_run_payload["request"]["dryRun"] is True
+        assert dry_run_payload["result"]["status"] == "no_op"
+        assert dry_run_payload["result"]["verificationRequired"] is False
+        assert dry_run_payload["result"]["verificationHint"] is None
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -112,6 +113,7 @@ class RemediationActionAuthorityResult:
     def to_dict(self) -> dict[str, Any]:
         result_status = _result_status(self.decision, self.reason)
         verification_hint = _verification_hint(self.action_kind)
+        verification_required = self.executable and self.reason != "dry_run"
         return {
             "schemaVersion": "v1",
             "remediationWorkflowId": self.remediation_workflow_id,
@@ -147,8 +149,8 @@ class RemediationActionAuthorityResult:
                 "appliedAt": None,
                 "beforeStateRef": None,
                 "afterStateRef": None,
-                "verificationRequired": self.executable,
-                "verificationHint": verification_hint if self.executable else None,
+                "verificationRequired": verification_required,
+                "verificationHint": verification_hint if verification_required else None,
                 "sideEffects": [],
             },
             "audit": dict(self.audit),
@@ -190,7 +192,7 @@ class RemediationActionAuthorityService:
                     "actionKind": action_kind,
                     "riskTier": action_info["risk"],
                     "targetType": action_info["target_type"],
-                    "inputMetadata": dict(action_info.get("input_metadata") or {}),
+                    "inputMetadata": deepcopy(action_info.get("input_metadata") or {}),
                     "verificationRequired": True,
                     "verificationHint": action_info["verification_hint"],
                 }
@@ -620,6 +622,8 @@ def _verification_hint(action_kind: str) -> str | None:
 
 
 def _result_status(decision: RemediationActionDecision, reason: str) -> str:
+    if reason == "dry_run":
+        return "no_op"
     if decision == "allowed":
         return "applied"
     if decision == "approval_required":
