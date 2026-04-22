@@ -1556,6 +1556,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         session_controller=session_controller,
         workload_registry=workload_registry,
         workload_launcher=workload_launcher,
+        workflow_docker_enabled=True,
     )
     mock_build_bindings.assert_called_once_with(
         fleet=AGENT_RUNTIME_FLEET,

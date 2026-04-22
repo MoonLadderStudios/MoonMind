@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio import exceptions as temporal_exceptions
 
 from api_service.db.models import Base
 from moonmind.config.settings import settings
@@ -805,6 +806,19 @@ async def test_security_pentest_execute_fails_closed_before_runner_without_scope
     assert "runner is not implemented" not in message
 
 
+async def test_security_pentest_execute_denies_without_retry_when_workflow_docker_disabled():
+    activities = TemporalAgentRuntimeActivities(workflow_docker_enabled=False)
+
+    with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
+        await activities.security_pentest_execute(_pentest_activity_payload())
+
+    message = str(exc_info.value)
+    assert "docker_workflows_disabled" in message
+    assert "policy_denied" in message
+    assert exc_info.value.type == "docker_workflows_disabled"
+    assert exc_info.value.non_retryable is True
+
+
 async def test_security_pentest_execute_reaches_launch_plan_after_scope_validation():
     activities = TemporalAgentRuntimeActivities()
 
@@ -906,6 +920,47 @@ async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
     assert result["provider_lease"]["release_required"] is True
     assert "OPENROUTER_API_KEY" not in str(result["provider_cooldown"])
     assert "token" not in str(result).lower()
+
+
+async def test_security_pentest_execute_includes_instruction_materialization_metadata():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(_pentest_activity_payload())
+
+    bundle = result["instruction_bundle"]
+    paths = result["runtime_paths"]
+    invocation = result["wrapper_invocation"]
+
+    assert bundle["target"] == "https://lab.example.test"
+    assert "objective" not in bundle
+    assert bundle["operation_mode"] == "validate_hypothesis"
+    assert "content" not in bundle
+    assert len(bundle["sha256"]) == 64
+    assert paths["instruction_file"] == "/tmp/artifacts/pentest/inputs/instruction.txt"
+    assert paths["stdout_file"] == "/tmp/artifacts/pentest/runtime/stdout.log"
+    assert paths["stderr_file"] == "/tmp/artifacts/pentest/runtime/stderr.log"
+    assert paths["diagnostics_file"] == "/tmp/artifacts/pentest/runtime/diagnostics.json"
+    assert paths["raw_evidence_file"] == (
+        "/tmp/artifacts/pentest/evidence/pentestgpt-session-export.json"
+    )
+    assert paths["normalizer_input_file"] == (
+        "/tmp/artifacts/pentest/findings/findings.normalizer-input.json"
+    )
+    assert invocation["command"][0] == "/usr/local/bin/moonmind-pentestgpt-run"
+    assert "--non-interactive" in invocation["command"]
+    assert "--instruction-file" in invocation["command"]
+    assert invocation["env"] == {
+        "MM_PENTEST_TARGET": "https://lab.example.test",
+        "MM_PENTEST_MODE": "validate_hypothesis",
+        "MM_PENTEST_INSTRUCTION_FILE": paths["instruction_file"],
+        "LANGFUSE_ENABLED": "false",
+    }
+    assert "Validate auth bypass hypothesis" not in str(result)
+    assert "Objective:" not in str(invocation["command"])
+    assert "Objective:" not in str(invocation["env"])
+    assert "Objective:" not in str(result["launch_plan"]["labels"])
+    assert "make connect" not in str(result).lower()
+    assert "docker attach" not in str(result).lower()
 
 
 async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval():

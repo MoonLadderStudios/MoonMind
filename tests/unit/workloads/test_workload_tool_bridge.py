@@ -9,6 +9,8 @@ from moonmind.schemas.workload_models import RunnerProfile, WorkloadResult
 from moonmind.workflows.skills.skill_plan_contracts import SkillFailure, SkillResult
 from moonmind.workloads.registry import RunnerProfileRegistry
 from moonmind.workloads.tool_bridge import (
+    INTEGRATION_CI_PROFILE_ID,
+    INTEGRATION_CI_TOOL,
     build_dood_tool_definition_payload,
     build_workload_tool_handler,
 )
@@ -179,6 +181,22 @@ class _FakeLauncher:
         )
 
 
+class _FailingRegistry:
+    def validate_request(self, _request: object) -> object:
+        raise AssertionError("registry validation should not run")
+
+
+class _FailingLauncher:
+    async def run(self, _validated: object) -> object:
+        raise AssertionError("launcher should not run")
+
+    async def start_helper(self, _validated: object) -> object:
+        raise AssertionError("launcher should not run")
+
+    async def stop_helper(self, _validated: object, *, reason: str) -> object:
+        raise AssertionError("launcher should not run")
+
+
 def test_container_run_workload_tool_definition_routes_to_docker_workload() -> None:
     definition = build_dood_tool_definition_payload(
         name="container.run_workload",
@@ -325,6 +343,107 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
         "status": "complete"
     }
     assert "session.summary" not in result.outputs["outputRefs"]
+
+
+def test_integration_ci_tool_definition_routes_to_docker_workload() -> None:
+    definition = build_dood_tool_definition_payload(
+        name=INTEGRATION_CI_TOOL,
+        version="1.0",
+    )
+
+    assert definition["name"] == INTEGRATION_CI_TOOL
+    assert definition["type"] == "skill"
+    assert definition["executor"]["activity_type"] == "mm.tool.execute"
+    assert definition["requirements"]["capabilities"] == ["docker_workload"]
+    assert definition["inputs"]["schema"]["required"] == ["repoDir", "artifactsDir"]
+    properties = definition["inputs"]["schema"]["properties"]
+    assert "profileId" not in properties
+    assert "command" not in properties
+    assert "image" not in properties
+    assert "mounts" not in properties
+    assert "devices" not in properties
+
+
+@pytest.mark.asyncio
+async def test_workload_tool_handler_denies_when_workflow_docker_disabled() -> None:
+    handler = build_workload_tool_handler(
+        tool_name="container.run_workload",
+        registry=_FailingRegistry(),
+        launcher=_FailingLauncher(),
+        workflow_docker_enabled=False,
+    )
+
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "profileId": "local-python",
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                "command": ["python", "-V"],
+            },
+            {"workflow_id": "task-1", "node_id": "step-test"},
+        )
+
+    assert exc_info.value.error_code == "PERMISSION_DENIED"
+    assert exc_info.value.details["reason"] == "docker_workflows_disabled"
+    assert "docker_workflows_disabled" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_integration_ci_tool_denies_when_workflow_docker_disabled() -> None:
+    handler = build_workload_tool_handler(
+        tool_name=INTEGRATION_CI_TOOL,
+        registry=_FailingRegistry(),
+        launcher=_FailingLauncher(),
+        workflow_docker_enabled=False,
+    )
+
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/integration-ci",
+            },
+            {"workflow_id": "task-1", "node_id": "integration-ci"},
+        )
+
+    assert exc_info.value.error_code == "PERMISSION_DENIED"
+    assert exc_info.value.details["reason"] == "docker_workflows_disabled"
+
+
+@pytest.mark.asyncio
+async def test_integration_ci_tool_maps_to_curated_profile_and_script() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload(INTEGRATION_CI_PROFILE_ID))],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name=INTEGRATION_CI_TOOL,
+        registry=registry,
+        launcher=launcher,
+    )
+
+    result = await handler(
+        {
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/integration-ci",
+            "timeoutSeconds": 300,
+            "envOverrides": {"CI": "1"},
+        },
+        {"workflow_id": "task-1", "node_id": "integration-ci"},
+    )
+
+    assert launcher.validated is not None
+    assert launcher.validated.request.tool_name == INTEGRATION_CI_TOOL
+    assert launcher.validated.request.profile_id == INTEGRATION_CI_PROFILE_ID
+    assert launcher.validated.request.command == ("./tools/test_integration.sh",)
+    assert result.status == "COMPLETED"
+    assert result.outputs["profileId"] == INTEGRATION_CI_PROFILE_ID
+    assert result.outputs["stdoutRef"].endswith("stdout.log")
+    assert result.outputs["stderrRef"].endswith("stderr.log")
+    assert result.outputs["diagnosticsRef"].endswith("diagnostics.json")
+    assert result.outputs["workloadMetadata"]["toolName"] == INTEGRATION_CI_TOOL
 
 
 @pytest.mark.asyncio

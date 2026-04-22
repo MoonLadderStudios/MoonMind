@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
+from temporalio import exceptions as temporal_exceptions
 
 from moonmind.config.settings import settings
 from moonmind.integrations.pentest.models import (
@@ -27,6 +28,7 @@ from moonmind.integrations.pentest.models import (
     PentestProviderMaterializationError,
     PentestScopeValidationError,
     PentestWorkloadRequest,
+    build_pentest_execution_materialization,
     build_pentest_provider_cooldown_diagnostic,
     build_pentest_launch_plan,
     materialize_pentest_provider_profile,
@@ -310,6 +312,14 @@ def _managed_runtime_artifact_root() -> Path:
 
 class TemporalActivityRuntimeError(RuntimeError):
     """Raised when one of the Temporal activity helpers cannot complete."""
+
+
+def _docker_workflows_disabled_failure() -> temporal_exceptions.ApplicationError:
+    return temporal_exceptions.ApplicationError(
+        "policy_denied: docker_workflows_disabled",
+        type="docker_workflows_disabled",
+        non_retryable=True,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -876,6 +886,9 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                                 "retry_allowed": {"type": "boolean"},
                             },
                         },
+                        "instruction_bundle": {"type": "object"},
+                        "runtime_paths": {"type": "object"},
+                        "wrapper_invocation": {"type": "object"},
                         "launch_plan": {
                             "type": "object",
                             "required": [
@@ -2835,6 +2848,7 @@ class TemporalAgentRuntimeActivities:
         session_controller: ManagedSessionController | None = None,
         workload_launcher: Any | None = None,
         workload_registry: Any | None = None,
+        workflow_docker_enabled: bool = True,
         client_adapter: Any = None,
     ) -> None:
         self._artifact_service = artifact_service
@@ -2844,6 +2858,7 @@ class TemporalAgentRuntimeActivities:
         self._session_controller = session_controller
         self._workload_launcher = workload_launcher
         self._workload_registry = workload_registry
+        self._workflow_docker_enabled = workflow_docker_enabled
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
@@ -3171,6 +3186,8 @@ class TemporalAgentRuntimeActivities:
     ) -> dict[str, Any]:
         """Run one validated Docker workload on the agent_runtime fleet."""
 
+        if not self._workflow_docker_enabled:
+            raise _docker_workflows_disabled_failure()
         if self._workload_registry is None or self._workload_launcher is None:
             raise TemporalActivityRuntimeError(
                 "workload registry and launcher are required for workload.run"
@@ -3207,6 +3224,8 @@ class TemporalAgentRuntimeActivities:
         silently falling back to the generic tool executor.
         """
 
+        if not self._workflow_docker_enabled:
+            raise _docker_workflows_disabled_failure()
         request_payload = dict(payload.get("request", payload))
         request = PentestWorkloadRequest.model_validate(request_payload)
         try:
@@ -3219,6 +3238,9 @@ class TemporalAgentRuntimeActivities:
             provider_materialization = materialize_pentest_provider_profile(
                 provider_profile
             )
+            execution_materialization = build_pentest_execution_materialization(
+                request
+            )
         except (
             PentestScopeValidationError,
             PentestLaunchPolicyError,
@@ -3228,6 +3250,10 @@ class TemporalAgentRuntimeActivities:
         output = launch_plan.to_activity_output(request)
         output["provider_profile"] = provider_materialization.model_dump(mode="json")
         output["provider_lease"] = pentest_provider_lease_metadata(provider_profile)
+        execution_metadata = execution_materialization.model_dump(mode="json")
+        execution_metadata["instruction_bundle"].pop("content", None)
+        execution_metadata["instruction_bundle"].pop("objective", None)
+        output.update(execution_metadata)
         provider_failure = request.provider_failure or {}
         failure_category = str(provider_failure.get("category") or "").strip()
         if failure_category in {"provider_429", "provider_quota"}:
