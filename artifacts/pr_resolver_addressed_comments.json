@@ -1,27 +1,27 @@
 [
   {
-    "id": 3120694528,
+    "id": 4151732435,
     "disposition": "addressed",
-    "rationale": "Re-indented the FactGroup block inside td-facts-region so children match the new nesting level."
+    "rationale": "Addressed the review summary by passing priority, maxAttempts, and schedule through the remediation convenience route and standardizing top-level field precedence."
   },
   {
-    "id": 3120694532,
+    "id": 3121231598,
     "disposition": "addressed",
-    "rationale": "Added .td-facts-region to the overflow-wrap:anywhere rule for long workflow and run metadata."
+    "rationale": "The remediation route now includes priority, maxAttempts, snake-case max_attempts fallback, and schedule in the CreateJobRequest model validation input."
   },
   {
-    "id": 4151166434,
-    "disposition": "not-applicable",
-    "rationale": "Summary review; its two actionable findings are tracked by review comments 3120694528 and 3120694532."
+    "id": 3121231606,
+    "disposition": "addressed",
+    "rationale": "The remediation convenience route now consistently lets top-level instructions, runtime, and remediation override nested task defaults."
   },
   {
-    "id": 4292917999,
-    "disposition": "not-applicable",
-    "rationale": "Review trigger comment only; no requested code change."
+    "id": 3121238803,
+    "disposition": "addressed",
+    "rationale": "The convenience route now rejects non-object remediation values with a 422 invalid_execution_request response instead of coercing them to an empty object."
   },
   {
-    "id": 4292927279,
+    "id": 4151740844,
     "disposition": "not-applicable",
-    "rationale": "Informational Codex review result with no actionable finding."
+    "rationale": "Automated Codex review metadata only; no actionable code request beyond the inline comments already handled."
   }
 ]
