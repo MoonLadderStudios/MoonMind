@@ -224,8 +224,82 @@ function summarizeSecretRefs(secretRefs: Record<string, string>): string {
   return entries.map(([key, value]) => `${key}: ${value}`).join(', ');
 }
 
-function isCodexOAuthCapable(profile: ProviderProfile): boolean {
-  return profile.runtime_id === 'codex_cli';
+type ProviderAuthActionLabel = 'Connect Claude' | 'Replace token' | 'Validate' | 'Disconnect';
+
+interface ClaudeAuthAction {
+  id: string;
+  label: ProviderAuthActionLabel;
+}
+
+type ProviderAuthModel =
+  | { kind: 'codex_oauth' }
+  | { kind: 'claude_manual'; statusLabel: string | null; actions: ClaudeAuthAction[] }
+  | { kind: 'none' };
+
+const CLAUDE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
+  connect: 'Connect Claude',
+  replace_token: 'Replace token',
+  validate: 'Validate',
+  disconnect: 'Disconnect',
+};
+
+function commandBehaviorValue(profile: ProviderProfile, key: string): unknown {
+  const commandBehavior = profile.command_behavior;
+  if (!commandBehavior || typeof commandBehavior !== 'object' || Array.isArray(commandBehavior)) {
+    return undefined;
+  }
+  return commandBehavior[key];
+}
+
+function commandBehaviorString(profile: ProviderProfile, key: string): string | null {
+  const value = commandBehaviorValue(profile, key);
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+}
+
+function commandBehaviorStringArray(profile: ProviderProfile, key: string): string[] {
+  const value = commandBehaviorValue(profile, key);
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
+}
+
+function isCodexOAuthProfile(profile: ProviderProfile): boolean {
+  return (
+    profile.runtime_id === 'codex_cli' &&
+    (profile.credential_source === 'oauth_volume' ||
+      profile.runtime_materialization_mode === 'oauth_home' ||
+      Boolean(profile.volume_ref || profile.volume_mount_path))
+  );
+}
+
+function isClaudeManualAuthProfile(profile: ProviderProfile): boolean {
+  return (
+    profile.runtime_id === 'claude_code' &&
+    profile.provider_id === 'anthropic' &&
+    commandBehaviorString(profile, 'auth_strategy') === 'claude_manual_token'
+  );
+}
+
+function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
+  if (isCodexOAuthProfile(profile)) {
+    return { kind: 'codex_oauth' };
+  }
+
+  if (!isClaudeManualAuthProfile(profile)) {
+    return { kind: 'none' };
+  }
+
+  const actions = commandBehaviorStringArray(profile, 'auth_actions')
+    .map((actionId) => {
+      const label = CLAUDE_AUTH_ACTION_LABELS[actionId];
+      return label ? { id: actionId, label } : null;
+    })
+    .filter((action): action is ClaudeAuthAction => action !== null);
+
+  return {
+    kind: 'claude_manual',
+    statusLabel: commandBehaviorString(profile, 'auth_status_label'),
+    actions,
+  };
 }
 
 function oauthStatusLabel(status: OAuthSessionStatus): string {
@@ -738,7 +812,8 @@ export function ProviderProfilesManager({
             ) : (
               profiles.map((profile) => {
                 const oauthSession = oauthSessions[profile.profile_id];
-                const canStartOAuth = isCodexOAuthCapable(profile);
+                const authModel = providerAuthModel(profile);
+                const canStartOAuth = authModel.kind === 'codex_oauth';
                 return (
                 <tr key={profile.profile_id} role="row">
                   <td
@@ -828,6 +903,11 @@ export function ProviderProfilesManager({
                         {oauthSession.failureReason}
                       </div>
                     ) : null}
+                    {authModel.kind === 'claude_manual' && authModel.statusLabel ? (
+                      <div className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-400">
+                        {authModel.statusLabel}
+                      </div>
+                    ) : null}
                   </td>
                   <td
                     className="px-3 py-4"
@@ -847,6 +927,24 @@ export function ProviderProfilesManager({
                           Auth
                         </button>
                       ) : null}
+                      {authModel.kind === 'claude_manual'
+                        ? authModel.actions.map((action) => (
+                            <button
+                              key={action.id}
+                              type="button"
+                              className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                              onClick={() =>
+                                onNotice({
+                                  level: 'ok',
+                                  text: `${action.label} selected for "${profile.profile_id}".`,
+                                })
+                              }
+                              aria-label={`${action.label} ${profile.profile_id}`}
+                            >
+                              {action.label}
+                            </button>
+                          ))
+                        : null}
                       {oauthSession && isActiveOAuthStatus(oauthSession.status) ? (
                         <button
                           type="button"
