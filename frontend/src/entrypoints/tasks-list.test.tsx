@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 
 import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
+import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
 import { TasksListPage } from './tasks-list';
 import '../styles/mission-control.css';
 
@@ -105,8 +106,12 @@ describe('Tasks List Entrypoint', () => {
     for (const pill of executingPills) {
       expect(pill.dataset.state).toBe('executing');
       expect(pill.className).toContain('is-executing');
+      expect(pill.className).toContain('status-running');
+      expect(pill.childElementCount).toBe(0);
       expect(pill.textContent).toBe('executing');
     }
+
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
 
     const waitingPills = screen.getAllByText('waiting_on_dependencies');
     expect(waitingPills.length).toBeGreaterThan(0);
