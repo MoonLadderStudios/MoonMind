@@ -388,6 +388,13 @@ class RemediationEvidenceToolService:
             principal=principal,
         )
         link = await self._load_link(remediation_workflow_id)
+        self._validate_execution_context(
+            link=link,
+            remediation_workflow_id=remediation_workflow_id,
+            authority_result=authority_result,
+            guard_result=guard_result,
+            action_request=action_request,
+        )
         request_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
             artifact_type="remediation.action_request",
@@ -516,6 +523,79 @@ class RemediationEvidenceToolService:
             )
         self._context_payload_cache[cache_key] = decoded
         return decoded
+
+    def _validate_execution_context(
+        self,
+        *,
+        link: db_models.TemporalExecutionRemediationLink,
+        remediation_workflow_id: str,
+        authority_result: Mapping[str, Any],
+        guard_result: Mapping[str, Any],
+        action_request: Mapping[str, Any],
+    ) -> None:
+        expected_workflow_id = link.remediation_workflow_id
+        supplied_workflow_id = _required_string(
+            remediation_workflow_id,
+            "remediationWorkflowId",
+        )
+        if supplied_workflow_id != expected_workflow_id:
+            raise RemediationEvidenceToolError(
+                "remediationWorkflowId does not match the persisted remediation link."
+            )
+
+        for label, payload in (
+            ("authorityResult", authority_result),
+            ("guardResult", guard_result),
+        ):
+            if (
+                _required_string(
+                    payload.get("remediationWorkflowId"),
+                    f"{label}.remediationWorkflowId",
+                )
+                != expected_workflow_id
+            ):
+                raise RemediationEvidenceToolError(
+                    f"{label}.remediationWorkflowId does not match the action context."
+                )
+            if (
+                _required_string(
+                    payload.get("targetWorkflowId"),
+                    f"{label}.targetWorkflowId",
+                )
+                != link.target_workflow_id
+            ):
+                raise RemediationEvidenceToolError(
+                    f"{label}.targetWorkflowId does not match the action context."
+                )
+            if (
+                _required_string(
+                    payload.get("idempotencyKey"),
+                    f"{label}.idempotencyKey",
+                )
+                != action_request["actionId"]
+            ):
+                raise RemediationEvidenceToolError(
+                    f"{label}.idempotencyKey does not match the action request."
+                )
+
+        request_target = action_request.get("target")
+        request_target_mapping = (
+            request_target if isinstance(request_target, Mapping) else {}
+        )
+        if request_target_mapping.get("workflowId") != link.target_workflow_id:
+            raise RemediationEvidenceToolError(
+                "authorityResult.request.target.workflowId does not match the action context."
+            )
+        guard_lock = guard_result.get("lock")
+        guard_lock_mapping = guard_lock if isinstance(guard_lock, Mapping) else {}
+        if guard_lock_mapping.get("targetRunId") != link.target_run_id:
+            raise RemediationEvidenceToolError(
+                "guardResult.lock.targetRunId does not match the persisted target run."
+            )
+        if guard_lock_mapping.get("holderWorkflowId") != expected_workflow_id:
+            raise RemediationEvidenceToolError(
+                "guardResult.lock.holderWorkflowId does not match the action context."
+            )
 
 
 def _collect_context_artifact_ids(context: Mapping[str, Any]) -> set[str]:

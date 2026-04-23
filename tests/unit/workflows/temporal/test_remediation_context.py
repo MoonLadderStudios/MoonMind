@@ -1373,6 +1373,95 @@ async def test_remediation_execute_action_delegates_and_publishes_lifecycle_arti
 
 
 @pytest.mark.asyncio
+async def test_remediation_execute_action_rejects_mismatched_authority_or_guard_context(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        builder = RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        )
+        await builder.build_context(remediation_workflow_id=remediation.workflow_id)
+
+        action_kind = "workload.restart_helper_container"
+        authority = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind=action_kind,
+            parameters={"reason": "restart helper"},
+            dry_run=False,
+            idempotency_key="execute-action-context",
+            requesting_principal="workflow:remediator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(
+                allowed_action_kinds=(action_kind,),
+            ),
+        )
+        guard = await RemediationMutationGuardService(session=session).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind=action_kind,
+            idempotency_key="execute-action-context",
+            parameters={"reason": "restart helper"},
+            policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+            now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+        )
+        executor = RecordingActionExecutor()
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=executor,
+        )
+
+        stale_authority = authority.to_dict()
+        stale_authority["remediationWorkflowId"] = "mm:other-remediation"
+        with pytest.raises(RemediationEvidenceToolError, match="authorityResult"):
+            await tools.execute_action(
+                remediation_workflow_id=remediation.workflow_id,
+                authority_result=stale_authority,
+                guard_result=guard.to_dict(),
+                principal="service:test",
+            )
+
+        stale_guard = guard.to_dict()
+        stale_guard["targetWorkflowId"] = "mm:other-target"
+        with pytest.raises(RemediationEvidenceToolError, match="guardResult"):
+            await tools.execute_action(
+                remediation_workflow_id=remediation.workflow_id,
+                authority_result=authority.to_dict(),
+                guard_result=stale_guard,
+                principal="service:test",
+            )
+
+        stale_run_guard = guard.to_dict()
+        stale_run_guard["lock"] = {
+            **stale_run_guard["lock"],
+            "targetRunId": "other-run",
+        }
+        with pytest.raises(RemediationEvidenceToolError, match="target run"):
+            await tools.execute_action(
+                remediation_workflow_id=remediation.workflow_id,
+                authority_result=authority.to_dict(),
+                guard_result=stale_run_guard,
+                principal="service:test",
+            )
+
+        assert executor.calls == []
+
+
+@pytest.mark.asyncio
 async def test_remediation_context_builder_rejects_missing_target_record(
     tmp_path, mock_client_adapter
 ):
@@ -1906,7 +1995,7 @@ async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
             ),
             now=now + timedelta(seconds=122),
         )
-        service.release_lock(first.lock.lock_id)
+        await service.release_lock(first.lock.lock_id)
         lost = await service.evaluate(
             remediation_workflow_id=remediation.workflow_id,
             remediation_run_id=remediation.run_id,
@@ -2119,6 +2208,76 @@ async def test_remediation_mutation_guard_persists_locks_and_ledger_across_servi
         assert conflict.decision == "denied"
         assert conflict.reason == "mutation_lock_conflict"
         assert conflict.lock.lock_id == first.lock.lock_id
+
+
+@pytest.mark.asyncio
+async def test_remediation_mutation_guard_persists_released_lock_across_service_restart(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        now = datetime(2026, 4, 22, tzinfo=timezone.utc)
+        policy = RemediationMutationGuardPolicy(
+            lock_ttl_seconds=60,
+            cooldown_seconds=0,
+            max_attempts_per_action_kind=5,
+        )
+
+        first_service = RemediationMutationGuardService(session=session)
+        first = await first_service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="workload.restart_helper_container",
+            idempotency_key="release-durable-1",
+            parameters={},
+            policy=policy,
+            now=now,
+        )
+        await first_service.release_lock(first.lock.lock_id)
+        await session.commit()
+
+        link = await session.get(
+            TemporalExecutionRemediationLink,
+            remediation.workflow_id,
+        )
+        restarted_service = RemediationMutationGuardService(session=session)
+        lost = await restarted_service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="workload.restart_helper_container",
+            idempotency_key="release-durable-holder",
+            parameters={},
+            policy=policy,
+            now=now + timedelta(seconds=1),
+        )
+        other = await restarted_service.evaluate(
+            remediation_workflow_id="mm:other-remediator",
+            remediation_run_id="other-run",
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="workload.restart_helper_container",
+            idempotency_key="release-durable-other",
+            parameters={},
+            policy=policy,
+            now=now + timedelta(seconds=2),
+        )
+
+        assert link is not None
+        assert link.active_lock_scope is None
+        assert link.active_lock_holder is None
+        assert link.mutation_guard_lock_state["released"] is True
+        assert lost.decision == "denied"
+        assert lost.reason == "mutation_lock_lost"
+        assert other.decision == "allowed"
+        assert other.lock.status == "acquired"
 
 
 @pytest.mark.asyncio

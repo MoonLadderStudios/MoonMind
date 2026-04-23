@@ -905,7 +905,7 @@ class RemediationMutationGuardService:
         self._last_attempt_by_shape: dict[tuple[str, str, str], datetime] = {}
         self._last_target_activity: dict[str, datetime] = {}
 
-    def release_lock(self, lock_id: str) -> None:
+    async def release_lock(self, lock_id: str) -> None:
         """Mark a lock as lost/released so the holder cannot silently continue."""
 
         lock = self._locks_by_id.get(str(lock_id or "").strip())
@@ -920,6 +920,7 @@ class RemediationMutationGuardService:
                 lock.holder_workflow_id,
             )
         ] = lock.expires_at
+        await self._persist_lock_release(lock)
 
     async def evaluate(
         self,
@@ -1453,7 +1454,17 @@ class RemediationMutationGuardService:
             )
             if lock is None or lock.target_run_id != target_run_id:
                 continue
-            if lock.released or now >= lock.expires_at:
+            if lock.released:
+                self._lost_holders[
+                    (
+                        lock.scope,
+                        lock.target_workflow_id,
+                        lock.target_run_id,
+                        lock.holder_workflow_id,
+                    )
+                ] = lock.expires_at
+                continue
+            if now >= lock.expires_at:
                 continue
             lock_key = (lock.scope, lock.target_workflow_id, lock.target_run_id)
             existing = self._locks.get(lock_key)
@@ -1502,6 +1513,18 @@ class RemediationMutationGuardService:
             return
         link.active_lock_scope = lock.scope
         link.active_lock_holder = lock.holder_workflow_id
+        link.mutation_guard_lock_state = _active_lock_payload(lock)
+        await self._session.flush()
+
+    async def _persist_lock_release(self, lock: _ActiveMutationLock) -> None:
+        link = await self._session.get(
+            db_models.TemporalExecutionRemediationLink,
+            lock.holder_workflow_id,
+        )
+        if link is None:
+            return
+        link.active_lock_scope = None
+        link.active_lock_holder = None
         link.mutation_guard_lock_state = _active_lock_payload(lock)
         await self._session.flush()
 
