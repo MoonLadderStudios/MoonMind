@@ -702,13 +702,30 @@ class GitHubService:
         pr_number: int,
         headers: dict[str, str],
     ) -> dict[str, Any]:
+        reaction_url = (
+            f"https://api.github.com/repos/{repo}/issues/{pr_number}/reactions"
+            "?per_page=100"
+        )
         try:
-            response = await client.get(
-                f"https://api.github.com/repos/{repo}/issues/{pr_number}/reactions",
-                headers=headers,
-            )
-            response.raise_for_status()
-            reactions = response.json()
+            while reaction_url:
+                response = await client.get(reaction_url, headers=headers)
+                response.raise_for_status()
+                reactions = response.json()
+                for reaction in reactions:
+                    if not isinstance(reaction, dict):
+                        continue
+                    user = (
+                        reaction.get("user")
+                        if isinstance(reaction.get("user"), dict)
+                        else {}
+                    )
+                    reviewer = str(user.get("login") or "")
+                    if (
+                        str(reaction.get("content") or "") == "+1"
+                        and self._is_codex_connector_reviewer(reviewer)
+                    ):
+                        return {"complete": True, "blockers": []}
+                reaction_url = response.links.get("next", {}).get("url")
         except httpx.HTTPStatusError as exc:
             return {
                 "complete": None,
@@ -739,21 +756,6 @@ class GitHubService:
                     }
                 ],
             }
-
-        for reaction in reactions:
-            if not isinstance(reaction, dict):
-                continue
-            user = (
-                reaction.get("user")
-                if isinstance(reaction.get("user"), dict)
-                else {}
-            )
-            reviewer = str(user.get("login") or "")
-            if (
-                str(reaction.get("content") or "") == "+1"
-                and self._is_codex_connector_reviewer(reviewer)
-            ):
-                return {"complete": True, "blockers": []}
         return {"complete": False, "blockers": []}
 
     @staticmethod
