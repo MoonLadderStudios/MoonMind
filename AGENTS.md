@@ -202,6 +202,8 @@ Key diagnostics:
 - Python 3.12 + SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK service boundaries, existing Temporal artifact service, existing remediation context/action services (232-remediation-lifecycle-audit)
 - Existing Temporal execution records, `execution_remediation_links`, Temporal artifact metadata/content store, and existing execution memo/search/projection paths; no new persistent database table planned unless audit events cannot reuse an existing control-event mechanism (232-remediation-lifecycle-audit)
 - TypeScript/React for Mission Control UI; Python 3.12 remains present but is not expected in this story + React, Vitest, Testing Library, existing Mission Control stylesheet, existing entrypoint render tests (244-shimmer-sweep-status-pill)
+- Python 3.12 + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, pytest, existing OAuth session/terminal bridge/runtime-launch services (245-claude-oauth-guardrails)
+- Existing OAuth session rows, provider-profile rows, managed-session diagnostics, artifact metadata, and workflow history; no new persistent tables planned (245-claude-oauth-guardrails)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
