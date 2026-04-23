@@ -339,6 +339,6 @@ RUN build_id="${MOONMIND_BUILD_ID:-}" \
     && if [ -z "${build_id}" ]; then build_id="$(date -u +%Y%m%d.%H%M)"; fi \
     && printf '%s\n' "${build_id}" > /app/.moonmind-build-id
 
-EXPOSE 5000
+EXPOSE 8000
 
 CMD ["/app/api_service/entrypoint.sh"]

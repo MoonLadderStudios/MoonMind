@@ -106,7 +106,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
 ) -> None:
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
     monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
-    monkeypatch.setenv("MOONMIND_URL", "http://api:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
     workspace_root = tmp_path / "agent_jobs"
     session_store = ManagedSessionStore(tmp_path / "session-store")
     session_supervisor = AsyncMock()
@@ -285,7 +285,7 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
         artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
         codexHomePath="/home/app/.codex",
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
-        environment={"MOONMIND_URL": "http://api:5000"},
+        environment={"MOONMIND_URL": "http://api:8000"},
     )
     commands: list[tuple[str, ...]] = []
 
@@ -382,7 +382,7 @@ async def test_controller_replaces_blank_request_moonmind_url(
         workspace_volume_name="agent_workspaces",
         codex_volume_name="codex_auth_volume",
         workspace_root=str(workspace_root),
-        moonmind_url="http://api:5000",
+        moonmind_url="http://api:8000",
         command_runner=_fake_runner,
         ready_poll_interval_seconds=0,
     )
@@ -390,7 +390,7 @@ async def test_controller_replaces_blank_request_moonmind_url(
     await controller.launch_session(request)
 
     run_command = commands[1]
-    assert "MOONMIND_URL=http://api:5000" in run_command
+    assert "MOONMIND_URL=http://api:8000" in run_command
 
 
 @pytest.mark.asyncio

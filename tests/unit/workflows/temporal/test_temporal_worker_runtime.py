@@ -862,7 +862,7 @@ def test_build_agent_runtime_deps_reuses_global_session_network(
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
     monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "shared-moonmind-network")
-    monkeypatch.setenv("MOONMIND_URL", "http://moonmind-api:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://moonmind-api:8000")
 
     (
         _store,
@@ -874,7 +874,7 @@ def test_build_agent_runtime_deps_reuses_global_session_network(
     ) = _build_agent_runtime_deps()
 
     assert session_controller._network_name == "shared-moonmind-network"
-    assert session_controller._moonmind_url == "http://moonmind-api:5000"
+    assert session_controller._moonmind_url == "http://moonmind-api:8000"
 
 
 def _make_snapshot():
@@ -956,7 +956,7 @@ def test_runtime_planner_multi_step_preserves_custom_keys():
 
     nodes = plan["nodes"]
     assert len(nodes) == 2
-    
+
     s1_inputs = nodes[0]["inputs"]
     assert s1_inputs["instructions"] == "Step one instructions"
     assert s1_inputs["custom_field"] == "custom_value"

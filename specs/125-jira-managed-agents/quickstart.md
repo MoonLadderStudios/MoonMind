@@ -33,7 +33,7 @@ export ATLASSIAN_JIRA_REQUIRE_EXPLICIT_TRANSITION_LOOKUP=true
 ## 2. Discover tools
 
 ```bash
-curl -s http://localhost:5000/mcp/tools
+curl -s http://localhost:8000/mcp/tools
 ```
 
 Confirm the response contains Jira tool names such as `jira.create_issue`, `jira.get_issue`, and `jira.verify_connection`.

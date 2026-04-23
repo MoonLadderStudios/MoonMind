@@ -33,7 +33,7 @@ docker compose logs -f api temporal temporal-worker-workflow
 ## 2. Start a Temporal-managed execution
 
 ```bash
-curl -sS -X POST http://localhost:5000/api/executions \
+curl -sS -X POST http://localhost:8000/api/executions \
   -H 'Content-Type: application/json' \
   -d '{
     "workflowType": "MoonMind.Run",
@@ -56,7 +56,7 @@ Expected after implementation:
 Use the returned `workflowId`:
 
 ```bash
-curl -sS -X POST http://localhost:5000/api/executions/<workflowId>/update \
+curl -sS -X POST http://localhost:8000/api/executions/<workflowId>/update \
   -H 'Content-Type: application/json' \
   -d '{
     "updateName": "SetTitle",
@@ -64,13 +64,13 @@ curl -sS -X POST http://localhost:5000/api/executions/<workflowId>/update \
     "idempotencyKey": "source-truth-update-1"
   }'
 
-curl -sS -X POST http://localhost:5000/api/executions/<workflowId>/signal \
+curl -sS -X POST http://localhost:8000/api/executions/<workflowId>/signal \
   -H 'Content-Type: application/json' \
   -d '{
     "signalName": "Pause"
   }'
 
-curl -sS -X POST http://localhost:5000/api/executions/<workflowId>/cancel \
+curl -sS -X POST http://localhost:8000/api/executions/<workflowId>/cancel \
   -H 'Content-Type: application/json' \
   -d '{
     "reason": "source-truth validation complete"
@@ -86,8 +86,8 @@ Expected after implementation:
 ## 4. Validate list/detail source semantics
 
 ```bash
-curl -sS "http://localhost:5000/api/executions?workflowType=MoonMind.Run&pageSize=10"
-curl -sS "http://localhost:5000/api/executions/<workflowId>"
+curl -sS "http://localhost:8000/api/executions?workflowType=MoonMind.Run&pageSize=10"
+curl -sS "http://localhost:8000/api/executions/<workflowId>"
 ```
 
 Expected after implementation:

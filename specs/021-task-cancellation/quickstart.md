@@ -24,7 +24,7 @@ Validate these focused suites if you need faster iteration:
 ### Queue job cancellation request
 
 ```bash
-curl -X POST "http://localhost:5000/api/queue/jobs/<job_id>/cancel" \
+curl -X POST "http://localhost:8000/api/queue/jobs/<job_id>/cancel" \
   -H "Content-Type: application/json" \
   -d '{"reason":"operator requested cancel"}'
 ```
@@ -32,7 +32,7 @@ curl -X POST "http://localhost:5000/api/queue/jobs/<job_id>/cancel" \
 ### Worker cancellation acknowledgement
 
 ```bash
-curl -X POST "http://localhost:5000/api/queue/jobs/<job_id>/cancel/ack" \
+curl -X POST "http://localhost:8000/api/queue/jobs/<job_id>/cancel/ack" \
   -H "Content-Type: application/json" \
   -H "X-MoonMind-Worker-Token: <worker-token>" \
   -d '{"workerId":"worker-1","message":"stopping due to cancellation"}'

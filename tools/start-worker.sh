@@ -134,7 +134,7 @@ import time
 import urllib.error
 import urllib.request
 
-moonmind_url = os.environ.get("MOONMIND_URL", "http://api:5000").rstrip("/")
+moonmind_url = os.environ.get("MOONMIND_URL", "http://api:8000").rstrip("/")
 payload_raw = os.environ.get("MOONMIND_WORKER_RUNTIME_CAPABILITIES", "{}").strip()
 worker_token = os.environ.get("MOONMIND_WORKER_TOKEN", "").strip()
 if not payload_raw:
@@ -283,7 +283,7 @@ import time
 import urllib.error
 import urllib.request
 
-moonmind_url = os.environ.get("MOONMIND_URL", "http://api:5000").rstrip("/")
+moonmind_url = os.environ.get("MOONMIND_URL", "http://api:8000").rstrip("/")
 worker_id = os.environ.get("MOONMIND_WORKER_ID", "codex-worker-1").strip()
 description = os.environ.get(
     "MOONMIND_WORKER_TOKEN_DESCRIPTION",

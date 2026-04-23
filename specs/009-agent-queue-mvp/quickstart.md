@@ -1,6 +1,6 @@
 # Quickstart: Agent Queue MVP (Milestone 1)
 
-**Feature**: Agent Queue MVP  
+**Feature**: Agent Queue MVP
 **Branch**: `009-agent-queue-mvp`
 
 ## Prerequisites
@@ -26,7 +26,7 @@ Run the API service using the local project workflow you already use for MoonMin
 Create a job:
 
 ```bash
-curl -X POST http://localhost:5000/api/queue/jobs \
+curl -X POST http://localhost:8000/api/queue/jobs \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
   -d '{"type":"codex_exec","priority":10,"payload":{"instruction":"test"}}'
@@ -35,7 +35,7 @@ curl -X POST http://localhost:5000/api/queue/jobs \
 Claim a job:
 
 ```bash
-curl -X POST http://localhost:5000/api/queue/jobs/claim \
+curl -X POST http://localhost:8000/api/queue/jobs/claim \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
   -d '{"workerId":"executor-01","leaseSeconds":120}'
@@ -45,7 +45,7 @@ List jobs:
 
 ```bash
 curl -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
-  "http://localhost:5000/api/queue/jobs?status=queued&limit=20"
+  "http://localhost:8000/api/queue/jobs?status=queued&limit=20"
 ```
 
 ## 4. Run Unit Tests

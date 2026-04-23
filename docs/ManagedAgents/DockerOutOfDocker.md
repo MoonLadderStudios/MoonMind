@@ -3,53 +3,87 @@
 **Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`](../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md)
 **Status:** Desired state
 **Owners:** MoonMind Platform
-**Last updated:** 2026-04-09
+**Last updated:** 2026-04-23
 
 **Related:**
-- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
-- [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
-- [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](../Temporal/ActivityCatalogAndWorkerTopology.md)
-- [`docs/Tasks/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md)
-- [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
-- [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
+
+* [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
+* [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+* [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](../Temporal/ActivityCatalogAndWorkerTopology.md)
+* [`docs/Tasks/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md)
+* [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
+* [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)
 
 ---
 
 ## 1. Purpose
 
-This document defines MoonMind's **Docker-out-of-Docker (DooD)** architecture for launching **specialized workload containers** through the MoonMind / Temporal control plane.
+This document defines MoonMind’s **Docker-out-of-Docker (DooD)** architecture for launching **specialized workload containers** through the MoonMind / Temporal control plane.
 
-The main use case is **heavyweight, toolchain-specific work** that should not be baked into the generic MoonMind worker image or the Codex session container, for example:
+The DooD system supports three explicit deployment modes:
 
-- Unreal Engine build, cook, package, or test workloads
-- Unity batchmode test or build workloads
-- SDK- or distro-specific build/test images
-- GPU- or driver-constrained validation jobs
-- bounded helper containers needed to support a step's execution
+* `disabled`
+* `profiles`
+* `unrestricted`
 
-The goal is to let MoonMind run these workloads **against the task workspace** while keeping:
+These modes govern whether workflows may use Docker-backed workload tools, and if so, whether they may use only approved runner profiles or may also launch arbitrary runtime containers and Docker CLI workloads.
 
-- the **Codex managed session plane** focused on managed agent continuity
-- the **Temporal control plane** as the owner of launch, policy, cancellation, and observability
-- worker images generic and maintainable
+The DooD architecture exists to support heavyweight, toolchain-specific, or environment-specific work that must not be baked into the generic MoonMind worker image or the Codex managed session container, including:
 
-This document replaces the older framing that treated DooD mainly as a sandbox-worker trick for arbitrary heavy commands. The updated model distinguishes **managed agent session containers** from **non-agent workload containers**. Phase 0 locks that contract here; remaining rollout work belongs in [`docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`](../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md).
+* Unreal Engine build, cook, package, or test workloads
+* Unity batchmode test or build workloads
+* .NET, SDK, distro, or toolchain specific build/test workloads
+* load test containers and benchmark runners
+* bounded helper containers needed to support a step’s execution
+* deployment-gated arbitrary runtime containers in trusted environments
+
+The goals are:
+
+* keep the **Codex managed session plane** focused on managed agent continuity
+* keep the **Temporal control plane** as the owner of launch, policy, cancellation, audit, and observability
+* keep worker images generic and maintainable
+* support both curated and unrestricted Docker-backed workloads without giving the normal session container raw Docker authority
+
+This document replaces older framing that treated DooD primarily as a profile-only specialized workload system. The desired state includes both:
+
+* a stable **profile-backed** path for normal execution
+* a deployment-gated **unrestricted** path for trusted environments that need arbitrary runtime containers or Docker CLI operations
 
 ---
 
-## 2. Core decision
+## 2. Core decisions
 
-MoonMind should support specialized Docker workloads such as Unreal Engine runners, but they must remain **control-plane-launched workloads**, not ad hoc containers started directly by the Codex runtime.
+MoonMind adopts the following governing rules for Docker-backed workloads:
 
-The governing rules are:
+1. **Specialized Docker workloads are control-plane-launched workloads.**
+   They are not ad hoc containers started directly by the Codex runtime.
 
-1. **A Codex session container is not given unrestricted Docker authority by default.**
-2. **Specialized Docker workloads are launched through MoonMind / Temporal as executable tools or curated workload activities.**
-3. **A workload container is not a managed session and not a `MoonMind.AgentRun` unless it is itself a true agent runtime.**
-4. **Session identity and workload identity remain separate.**
-5. **Artifacts and bounded metadata remain authoritative; container state is never durable truth.**
+2. **Docker workflow access is governed by an explicit deployment mode.**
+   The canonical modes are `disabled`, `profiles`, and `unrestricted`.
 
-In practice, this means a Codex-managed step may decide that it needs an Unreal toolchain, but the launch is still mediated by MoonMind. The session requests a tool-capability; a Docker-capable worker launches the workload container via the secure Docker proxy; MoonMind captures results as normal step outputs.
+3. **A Codex session container is not given unrestricted Docker authority by default.**
+   This remains true even when the deployment mode is `unrestricted`.
+
+4. **The profile-backed path remains the normal execution path.**
+   `container.run_workload`, `container.start_helper`, and `container.stop_helper` remain profile-validated and deployment-curated.
+
+5. **Arbitrary runtime containers are first-class only in `unrestricted` mode.**
+   They are exposed through a structured MoonMind tool contract rather than by widening the profile-backed contract.
+
+6. **Raw Docker CLI is an unrestricted escape hatch, not the normal arbitrary-container contract.**
+   The public unrestricted container interface is `container.run_container`. The public unrestricted Docker CLI interface is `container.run_docker`.
+
+7. **Session identity and workload identity remain separate.**
+   A workload container is not a managed session and not a `MoonMind.AgentRun` unless it is itself a true agent runtime.
+
+8. **Artifacts and bounded metadata remain authoritative.**
+   Container-local state, daemon state, and terminal scrollback are not durable truth.
+
+9. **Invalid mode values fail fast.**
+   Unsupported Docker mode values are configuration errors and must prevent startup.
+
+10. **The DooD core remains domain-agnostic.**
+    Unreal, dotnet, load test, and similar workloads are modeled as profiles, curated wrappers, or unrestricted requests. The DooD core does not contain workload-specific branching.
 
 ---
 
@@ -59,25 +93,26 @@ In practice, this means a Codex-managed step may decide that it needs an Unreal 
 
 This document defines:
 
-- when MoonMind should launch a separate Docker workload container
-- how those launches fit with the Codex managed session plane
-- workspace, volume, artifact, timeout, and cleanup rules
-- the policy boundary for runner images and privileged capabilities
-- how specialized containers such as Unreal runners should be modeled
+* the Docker workflow permission model
+* the architectural separation between managed sessions and workload containers
+* the tool surface for profile-backed and unrestricted Docker execution
+* workspace, mount, artifact, timeout, and cleanup rules
+* the policy boundary for runner profiles and unrestricted execution
+* the audit and observability contract for Docker-backed workloads
 
 ### 3.2 Out of scope
 
 This document does **not** define:
 
-- Kubernetes orchestration
-- generic container marketplace semantics
-- cross-task session reuse
-- turning every workload container into a managed agent session
-- raw Docker access from inside the Codex session container
-- provider-native managed session protocols
-- a permanent, cross-step workload-service framework beyond the bounded direction noted below
+* Kubernetes orchestration
+* a generic container marketplace
+* cross-task session reuse
+* raw Docker access from inside the Codex session container
+* provider-native managed session protocols
+* a general-purpose arbitrary shell execution surface
+* a permanent unrestricted detached service framework spanning multiple steps without explicit MoonMind lifecycle ownership
 
-If MoonMind later needs reusable non-agent services with their own lifecycle across multiple steps, that should become a **sibling workload lifecycle**. It should not be forced into `CodexManagedSessionPlane` and should not be mislabeled as `MoonMind.AgentRun`.
+If MoonMind later needs reusable non-agent services with their own lifecycle across multiple steps, that becomes a sibling workload lifecycle. It does not collapse the distinction between the managed session plane and the Docker workload plane.
 
 ---
 
@@ -87,313 +122,627 @@ If MoonMind later needs reusable non-agent services with their own lifecycle acr
 
 The **session container** is the task-scoped Codex container defined by `CodexManagedSessionPlane`.
 
-It owns:
+It owns session continuity state such as:
 
-- `session_id`
-- `session_epoch`
-- `container_id`
-- `thread_id`
-- `active_turn_id`
+* `session_id`
+* `session_epoch`
+* `container_id`
+* `thread_id`
+* `active_turn_id`
 
-It is the continuity/performance cache for the Codex task-scoped managed session.
+It is the continuity and performance cache for the task-scoped managed session.
 
 ### 4.2 Workload container
 
 A **workload container** is a separate Docker container launched to execute a specialized non-agent workload against the task workspace.
 
-Examples:
+Examples include:
 
-- Unreal build/test image
-- Unity editor CI image
-- distro-specific compiler image
-- bounded service container used only to support a step
+* an Unreal test runner
+* a Unity build image
+* a distro-specific build/test container
+* a load test container
+* a bounded helper service container
+* an unrestricted runtime-selected container
 
 A workload container is **not** the session container.
 
 ### 4.3 Runner profile
 
-A **runner profile** is the curated MoonMind definition of an allowed workload-container shape.
+A **runner profile** is MoonMind’s curated definition of an approved workload-container shape.
 
 A runner profile typically specifies:
 
-- image reference
-- entrypoint/command wrapper
-- workspace mount contract
-- optional cache volumes
-- allowed environment variables
-- resource profile
-- network policy
-- optional device policy (for example GPU access)
+* image reference
+* entrypoint or command wrapper
+* workspace mount contract
+* optional cache volumes
+* allowed environment variables
+* resource profile
+* network policy
+* optional device policy
+* timeout defaults
+* cleanup policy
 
-### 4.4 Session-assisted workload launch
+### 4.4 Profile-backed workload
 
-A **session-assisted workload launch** happens when a managed session step decides it needs a specialized toolchain, but MoonMind launches the workload through the control plane instead of giving the session direct Docker daemon access.
+A **profile-backed workload** is a DooD execution that resolves through an approved runner profile and validates through the runner profile registry.
+
+### 4.5 Unrestricted container request
+
+An **unrestricted container request** is a trusted, deployment-gated DooD execution that supplies the image and runtime container shape at execution time through the `container.run_container` tool.
+
+### 4.6 Unrestricted Docker CLI request
+
+An **unrestricted Docker CLI request** is a trusted, deployment-gated DooD execution that runs a Docker CLI command through the configured Docker host or proxy via the `container.run_docker` tool.
+
+### 4.7 Session-assisted workload launch
+
+A **session-assisted workload launch** occurs when a managed session step determines that a specialized toolchain is required, but MoonMind launches the workload through the control plane instead of granting the session direct Docker daemon access.
 
 ---
 
 ## 5. Architectural layering
 
-MoonMind should treat Docker-backed workloads as a third layer adjacent to, but distinct from, the managed session plane.
+MoonMind treats Docker-backed workloads as a dedicated workload plane adjacent to, but distinct from, the managed session plane.
 
 ### 5.1 Orchestration layer
 
 MoonMind / Temporal owns:
 
-- workflow orchestration
-- tool routing
-- policy enforcement
-- timeout and cancellation semantics
-- artifact publication
-- observability
-- cleanup and orphan handling
+* workflow orchestration
+* tool routing
+* policy enforcement
+* timeout and cancellation semantics
+* artifact publication
+* observability
+* cleanup and orphan handling
 
 ### 5.2 Managed session plane
 
 `CodexManagedSessionPlane` owns:
 
-- the task-scoped Codex session container
-- thread/turn lifecycle
-- `clear_session`, `interrupt_turn`, and related session actions
-- session continuity artifacts and bounded session metadata
+* the task-scoped Codex session container
+* thread and turn lifecycle
+* `clear_session`, `interrupt_turn`, and related session actions
+* session continuity artifacts and bounded session metadata
 
-The managed session plane does **not** become the generic owner of all other containers.
+The managed session plane does not become the generic owner of all other containers.
 
 ### 5.3 Docker workload plane
 
-`DockerOutOfDocker` owns the MoonMind-side rules for launching **specialized workload containers** against the workspace.
+`DockerOutOfDocker` owns MoonMind-side rules for launching specialized workload containers against the workspace.
 
 It is responsible for:
 
-- Docker proxy usage
-- container launch arguments
-- workspace/cache mounts
-- workload labeling and identity
-- stdout/stderr capture
-- diagnostics capture
-- cleanup
+* Docker proxy usage
+* mode-aware permission enforcement
+* container launch arguments
+* workspace and cache mounts
+* workload labeling and identity
+* stdout and stderr capture
+* diagnostics capture
+* cleanup
+* audit metadata
 
-It does **not** own Codex thread lifecycle or session continuity semantics.
+It does not own Codex thread lifecycle or session continuity semantics.
+
+### 5.4 Logical execution capability
+
+All DooD-backed tools are routed through the logical MoonMind capability:
+
+* `docker_workload`
+
+The current deployment may satisfy `docker_workload` on the `agent_runtime` fleet. A dedicated Docker workload fleet may be introduced later if hardware, isolation, egress, or scaling requirements justify the split.
+
+The logical capability is stable. The physical fleet assignment is an implementation detail.
 
 ---
 
-## 6. Supported container roles
+## 6. Docker workflow permission modes
 
-### 6.1 Role A: task-scoped managed session container
+### 6.1 Configuration surface
+
+The canonical configuration surface is:
+
+```text
+MOONMIND_WORKFLOW_DOCKER_MODE=disabled|profiles|unrestricted
+```
+
+Mode behavior is normalized at settings load time.
+
+Rules:
+
+* default mode is `profiles`
+* unsupported values are startup errors
+* task instructions cannot change the mode
+* the mode is deployment-owned, not planner-owned and not task-owned
+
+If a legacy boolean alias is temporarily supported during migration, it maps only as follows:
+
+* `MOONMIND_WORKFLOW_DOCKER_ENABLED=false` → `disabled`
+* `MOONMIND_WORKFLOW_DOCKER_ENABLED=true` → `profiles`
+
+No runtime behavior may depend on the legacy boolean after settings normalization.
+
+### 6.2 `disabled`
+
+`disabled` means:
+
+* no workflow or task may use Docker-backed workload tools
+* `container.run_workload` is denied
+* `container.start_helper` is denied
+* `container.stop_helper` is denied
+* `container.run_container` is denied
+* `container.run_docker` is denied
+
+This preserves the existing “Docker workflows disabled” posture.
+
+### 6.3 `profiles`
+
+`profiles` is the default safe mode.
+
+It means:
+
+* workflows may use Docker-backed workloads only through approved runner profiles
+* `container.run_workload` is allowed and remains profile-validated
+* `container.start_helper` and `container.stop_helper` are allowed and remain profile-validated
+* curated Docker-backed tools such as `unreal.run_tests` remain available
+* `container.run_container` is denied
+* `container.run_docker` is denied
+
+Raw images, raw Docker flags, and arbitrary Docker CLI are not part of this mode.
+
+### 6.4 `unrestricted`
+
+`unrestricted` is the deployment-gated mode for trusted environments.
+
+It means:
+
+* all `profiles` behavior remains available
+* `container.run_container` is available for arbitrary runtime containers
+* `container.run_docker` is available for Docker CLI execution through the configured Docker host or proxy
+* unrestricted usage is explicit in audit and result metadata
+* unrestricted capability exists only because the deployment enables it; task instructions alone cannot enable it
+
+Unrestricted mode does **not** change the session-plane security boundary. Normal agent and session containers still do not receive direct raw Docker socket access.
+
+### 6.5 Tool exposure and runtime enforcement
+
+Tool exposure and runtime enforcement follow the same mode model.
+
+Rules:
+
+* `disabled`: Docker-backed tools are omitted from the default registry snapshot and denied at runtime if invoked directly
+* `profiles`: profile-backed DooD tools are included; unrestricted tools are omitted and denied at runtime if invoked directly
+* `unrestricted`: profile-backed and unrestricted DooD tools are included
+
+Runtime enforcement remains authoritative even when tool registration and planner exposure are mode-aware.
+
+---
+
+## 7. Supported container roles
+
+### 7.1 Role A: task-scoped managed session container
 
 The Codex managed session plane remains:
 
-- Docker only
-- one task-scoped session container per task
-- one active Codex thread per session epoch
-- continuity reused only within the same task
+* Docker only
+* one task-scoped session container per task
+* continuity reused only within the same task
 
 This role is governed by `CodexCliManagedSessions.md`, not by this document.
 
-### 6.2 Role B: one-shot workload container
+### 7.2 Role B: one-shot profile-backed workload container
 
 This is the default DooD role.
 
 MoonMind launches a separate ephemeral container to perform one bounded specialized job, such as:
 
-- `unreal.run_tests`
-- `unreal.build_editor_target`
-- `unity.run_batchmode_tests`
-- `container.run_workload` using an approved runner profile
+* `unreal.run_tests`
+* `unreal.build_target`
+* `container.run_workload` using an approved runner profile
 
-The container exits when the command completes and MoonMind returns a normal `ToolResult`.
+The container exits when the command completes and MoonMind returns a normal tool result.
 
-### 6.3 Role C: bounded helper workload container
+### 7.3 Role C: bounded helper workload container
 
-Some steps may require a non-agent helper container that stays alive long enough to support a bounded portion of execution, for example:
-
-- an Unreal dedicated-server test target
-- a temporary backing service for integration tests
-- a driver- or simulator-specific helper runtime
-
-This is allowed only when the lifecycle is still **bounded, owned, and observable by MoonMind**.
-
-Rules:
-
-- it remains a workload container, not a managed session
-- it must have an owner execution reference and an explicit timeout / TTL
-- it must have best-effort termination on step cancel, timeout, or task cancel
-- it must not become a hidden long-lived background service
-
-The initial implementation emphasis should remain **one-shot workload containers**. Bounded helper containers remain a later phase. They are a valid direction, but they do not change the separation between session-plane identity and workload identity.
-
----
-
-## 7. Ownership and routing model
-
-### 7.1 Primary rule
-
-Specialized Docker workloads should enter MoonMind through the **tool execution path**, not by extending `agent_runtime.*` session verbs to mean “run an arbitrary container.”
-
-### 7.2 Tool-path default
-
-For normal specialized workloads, the preferred model is:
-
-1. a plan step or session-assisted step invokes an executable tool
-2. the tool resolves from the pinned tool registry snapshot
-3. MoonMind routes the tool to a worker fleet with Docker workload capability
-4. that worker launches the workload container via the Docker proxy
-5. MoonMind publishes artifacts and returns a normal `ToolResult`
-
-This keeps specialized workload containers in the **tool** world rather than pretending they are extra agent sessions.
-
-The initial DooD execution primitive is `tool.type = "skill"`. `tool.type = "agent_runtime"` remains reserved for true long-lived agent runtimes rather than ordinary workload containers.
-
-### 7.3 Curated activity exception
-
-Some Docker-backed tools may justify a curated activity type later if they require stronger isolation, secrets handling, or hardware constraints.
+Some steps require a non-agent helper container that remains alive long enough to support a bounded execution window.
 
 Examples:
 
-- GPU-bound Unreal packaging
-- privileged simulator access
-- dedicated credentialed registry access
-
-That is consistent with MoonMind's hybrid execution model: the architectural boundary remains a control-plane tool/workload invocation even if the underlying activity type becomes more specialized.
-
-### 7.4 Relationship to `agent_runtime`
-
-True managed agent runtime execution and session supervision remain under `agent_runtime.*` and `MoonMind.AgentRun`.
-
-A specialized Unreal build container is **not** automatically a true agent runtime merely because Docker is involved.
-
-### 7.5 Current placement direction
-
-The local repo currently makes the `agent_runtime` fleet the Docker-capable worker fleet. That is acceptable for the current shape because the platform already routes managed runtime execution there and the local compose wiring already gives that fleet Docker-proxy access and the shared workspace volume.
-
-If isolation, hardware, egress, or scaling needs diverge materially, MoonMind may later introduce a dedicated Docker workload fleet and capability class. Until that split is justified, keep the queue model minimal.
-
----
-
-## 8. Session-plane interaction model
-
-### 8.1 What a Codex session may do
-
-A Codex-managed session may:
-
-- inspect the repository
-- detect that a step requires a specialized toolchain
-- request a MoonMind tool such as `unreal.run_tests`
-- consume the returned artifacts/results
-- continue the task-scoped managed session afterward
-
-### 8.2 What a Codex session may not do by default
-
-A Codex-managed session should **not** by default:
-
-- mount the host Docker socket
-- receive unrestricted `DOCKER_HOST` access
-- create arbitrary containers directly on the daemon
-- bypass Temporal for launches that affect workspace state or task progress
-
-If MoonMind wants the session to request workload execution interactively, expose a **narrow MoonMind-owned capability surface**. Examples include:
-
-- a tool invocation routed through normal plan execution
-- an adapter-mediated control-plane request
-- a brokered API surface owned by MoonMind
-
-The exact transport is an implementation detail. The security boundary is not.
-
-### 8.3 Session and workload lifecycle relation
+* an Unreal dedicated-server test target
+* a temporary integration-test backing service
+* a simulator or driver-specific helper runtime
 
 Rules:
 
-- `clear_session` affects the Codex thread/epoch model only
-- `clear_session` does not redefine workload identity
-- session artifacts remain session-plane artifacts
-- workload completion artifacts remain workload outputs
-- task cancellation should best-effort cancel both the session turn and any in-flight owned workload containers
+* helper containers remain workload containers, not managed sessions
+* helper lifecycle is explicit and bounded
+* helper ownership is attached to a step or step-group
+* helper containers remain profile-backed in the desired state
+* unrestricted mode does not introduce a general detached arbitrary-helper contract
 
-### 8.4 Identity boundary
+### 7.4 Role D: one-shot unrestricted runtime container
 
-If a workload is launched from a session-assisted step, MoonMind may attach session metadata such as:
+This role is available only in `unrestricted` mode.
 
-- `session_id`
-- `session_epoch`
-- `source_turn_id`
+MoonMind launches a separate ephemeral container from a runtime-selected image through the `container.run_container` tool.
 
-But those fields are **association metadata only**. They do not make the workload container part of session identity.
+This contract is intended for trusted environments that need arbitrary runtime container selection without changing worker images or pre-registering every image as a runner profile.
+
+### 7.5 Role E: unrestricted Docker CLI execution
+
+This role is available only in `unrestricted` mode.
+
+MoonMind runs a Docker CLI command through the `container.run_docker` tool on the trusted Docker-capable worker plane.
+
+This contract exists for advanced use cases such as:
+
+* `docker compose`
+* `docker build`
+* `docker pull`
+* `docker inspect`
+* other daemon-mediated Docker operations not represented by the structured container contract
+
+This contract is explicitly Docker CLI only. It is not a generic arbitrary shell execution surface.
 
 ---
 
-## 9. Workspace and volume contract
+## 8. Ownership and routing model
 
-### 9.1 Shared workspace root
+### 8.1 Primary rule
+
+Specialized Docker workloads enter MoonMind through the **tool execution path**.
+
+MoonMind does not extend `agent_runtime.*` session verbs to mean “run an arbitrary container.”
+
+### 8.2 Tool-path default
+
+The default execution model is:
+
+1. a plan step or session-assisted step invokes an executable tool
+2. the tool resolves from the pinned tool registry snapshot
+3. MoonMind routes the tool to a worker fleet with `docker_workload` capability
+4. the worker launches the workload through the configured Docker host or proxy
+5. MoonMind publishes artifacts and returns a normal tool result
+
+### 8.3 Executor contract
+
+All DooD-backed tools are modeled as executable tools with:
+
+* `tool.type = "skill"`
+* `executor.activity_type = "mm.tool.execute"`
+* selector mode by capability
+* required capability `docker_workload`
+
+This applies to:
+
+* curated domain tools
+* `container.run_workload`
+* `container.start_helper`
+* `container.stop_helper`
+* `container.run_container`
+* `container.run_docker`
+
+### 8.4 Relationship to `agent_runtime`
+
+True managed agent runtime execution and session supervision remain under `agent_runtime.*` and `MoonMind.AgentRun`.
+
+A Docker-backed workload is not a managed session merely because Docker is involved.
+
+The current deployment may satisfy `docker_workload` on the `agent_runtime` worker fleet. That does not change the identity boundary.
+
+### 8.5 Domain-agnostic core
+
+The DooD core is generic.
+
+It does not contain hardcoded branches for load test, Unreal, dotnet, or similar workload families. Domain-specific behavior is represented through:
+
+* curated tools
+* runner profiles
+* unrestricted container requests
+* unrestricted Docker CLI requests
+
+---
+
+## 9. Session-plane interaction model
+
+### 9.1 What a Codex session may do
+
+A Codex-managed session may:
+
+* inspect the repository
+* determine that a specialized toolchain is required
+* request a MoonMind tool such as `unreal.run_tests`, `container.run_workload`, or `container.run_container`
+* consume the returned artifacts and metadata
+* continue the task-scoped managed session afterward
+
+### 9.2 What a Codex session may not do by default
+
+A Codex-managed session must not, by default:
+
+* mount the raw host Docker socket
+* receive unrestricted `DOCKER_HOST` access
+* create arbitrary containers directly on the daemon
+* bypass Temporal for launches that affect workspace state or task progress
+
+This remains true in `unrestricted` mode. Unrestricted mode expands what the control plane may launch, not what the session container may launch directly.
+
+### 9.3 Session and workload lifecycle relation
+
+Rules:
+
+* `clear_session` affects the Codex session lifecycle only
+* `clear_session` does not redefine workload identity
+* session artifacts remain session-plane artifacts
+* workload artifacts remain workload outputs
+* task cancellation best-effort cancels both the session turn and any in-flight owned workload containers
+
+### 9.4 Association metadata
+
+If a workload is launched from a session-assisted step, MoonMind may attach association metadata such as:
+
+* `session_id`
+* `session_epoch`
+* `source_turn_id`
+
+These are association fields only. They do not make the workload container part of session identity.
+
+---
+
+## 10. Workspace and volume contract
+
+### 10.1 Shared workspace root
 
 The canonical shared task workspace remains a named volume such as:
 
-- `agent_workspaces` mounted at `/work/agent_jobs`
+* `agent_workspaces` mounted at `/work/agent_jobs`
 
-Recommended task layout:
+Recommended layout:
 
-- `run_root = /work/agent_jobs/<task_run_id>`
-- `repo_dir = /work/agent_jobs/<task_run_id>/repo`
-- `artifacts_dir = /work/agent_jobs/<task_run_id>/artifacts/<step_id>`
-- `scratch_dir = /work/agent_jobs/<task_run_id>/scratch/<step_id>`
+* `run_root = /work/agent_jobs/<task_run_id>`
+* `repo_dir = /work/agent_jobs/<task_run_id>/repo`
+* `artifacts_dir = /work/agent_jobs/<task_run_id>/artifacts/<step_id>`
+* `scratch_dir = /work/agent_jobs/<task_run_id>/scratch/<step_id>`
 
-### 9.2 Mount rules
+### 10.2 Path ownership
 
-A workload container should receive only the mounts it needs.
+All DooD tools operate on MoonMind-owned task paths.
+
+Rules:
+
+* `repoDir` must resolve under the workspace root
+* `artifactsDir` must resolve under the workspace root
+* `scratchDir`, when present, must resolve under the workspace root
+* declared outputs must resolve under `artifactsDir`
+
+Invalid paths are rejected before launch.
+
+### 10.3 Mount rules
+
+A workload container receives only the mounts it needs.
 
 Minimum common case:
 
-- `agent_workspaces` mounted at `/work/agent_jobs`
-- working directory set to the task repo directory
+* `agent_workspaces` mounted at `/work/agent_jobs`
+* working directory set to the task repository or explicit workload workdir under the workspace
 
-Optional additional mounts may include named caches such as:
+Additional mounts may include:
 
-- `unreal_ccache_volume`
-- `unreal_ubt_volume`
+* deployment-approved named cache volumes
+* deployment-approved helper-specific volumes declared by a runner profile
 
-### 9.3 Auth volume rule
+The structured unrestricted container contract does not expose arbitrary host-path mounts in the desired state.
 
-Workload containers must **not** automatically inherit Codex / Claude / Gemini auth volumes just because they were requested by a managed session step.
+### 10.4 Auth volume rule
+
+Workload containers must not automatically inherit Codex, Claude, Gemini, or other auth volumes merely because they were requested by a managed session step.
 
 Any auth or credential mount must be:
 
-- explicitly declared by the runner profile
-- justified by the workload
-- scoped to the minimum required secret surface
+* explicitly declared by a runner profile, or
+* explicitly provisioned by MoonMind policy for the unrestricted execution plane
 
-### 9.4 Output discipline
+### 10.5 Output discipline
 
 Workload containers must write only to approved task paths and mounted caches.
 
 They must not rely on:
 
-- container-local home directories as durable output
-- unnamed scratch layers as the only output location
-- hidden background state outside MoonMind-owned mounts
+* container-local home directories as durable output
+* unnamed scratch layers as the only output location
+* hidden background state outside MoonMind-owned mounts
 
 ---
 
-## 10. Runner profile model
+## 11. User-facing tool surface
 
-MoonMind should prefer **curated runner profiles** over free-form arbitrary image strings.
+### 11.1 Tool inventory
 
-The old rule “any pullable image may be used per repository” is too permissive for the current control-plane design.
+The desired-state DooD tool surface is:
 
-### 10.1 Minimum runner profile fields
+* curated domain tools such as `unreal.run_tests`
+* `container.run_workload`
+* `container.start_helper`
+* `container.stop_helper`
+* `container.run_container`
+* `container.run_docker`
 
-A runner profile should define at least:
+### 11.2 `container.run_workload`
 
-- `id`
-- `image`
-- `default_workdir`
-- `entrypoint` or command wrapper
-- required mounts
-- allowed extra env vars
-- resource profile
-- network policy
-- timeout defaults
-- cleanup policy
-- optional device policy
+`container.run_workload` is the generic profile-backed one-shot workload tool.
 
-### 10.2 Example runner profile: Unreal Linux CI
+It is available in:
+
+* `profiles`
+* `unrestricted`
+
+It is denied in:
+
+* `disabled`
+
+It requires an approved `profileId` and validates through the runner profile registry.
+
+It remains generic and does not gain unrestricted fields such as:
+
+* raw image strings
+* arbitrary host-path mounts
+* arbitrary Docker daemon flags
+* unrestricted privilege flags
+
+Minimum request shape:
+
+* `profileId`
+* `taskRunId`
+* `stepId`
+* `attempt`
+* `repoDir`
+* `artifactsDir`
+* `command`
+* `envOverrides`
+* `timeoutSeconds`
+* `declaredOutputs`
+* optional report publication fields
+
+### 11.3 `container.start_helper` and `container.stop_helper`
+
+`container.start_helper` and `container.stop_helper` are the profile-backed helper lifecycle tools.
+
+They are available in:
+
+* `profiles`
+* `unrestricted`
+
+They are denied in:
+
+* `disabled`
+
+They remain profile-validated and bounded. Unrestricted mode does not transform them into a generic arbitrary detached-container framework.
+
+### 11.4 `container.run_container`
+
+`container.run_container` is the first-class unrestricted arbitrary-container tool.
+
+It is available only in:
+
+* `unrestricted`
+
+It is denied in:
+
+* `disabled`
+* `profiles`
+
+This tool allows a trusted workflow to select the runtime image at execution time. The image:
+
+* need not be known at MoonMind worker build time
+* need not be pre-registered as a runner profile
+* remains subject to MoonMind workspace, artifact, timeout, and audit boundaries
+
+Minimum request shape:
+
+* `image` (required)
+* `taskRunId`
+* `stepId`
+* `attempt`
+* `repoDir`
+* `artifactsDir`
+* `scratchDir`
+* `entrypoint`
+* `command`
+* `workdir`
+* `envOverrides`
+* `cacheMounts`
+* `networkMode`
+* `resources`
+* `timeoutSeconds`
+* `declaredOutputs`
+* `report` / report publication fields
+
+Desired-state boundaries for `container.run_container`:
+
+* arbitrary runtime image selection is allowed
+* arbitrary command and entrypoint are allowed
+* workspace and deployment-approved named caches are allowed
+* arbitrary host-path mounts are not exposed by this contract
+* `--privileged` is not exposed by this contract
+* host networking is not exposed by this contract
+* implicit device access is not exposed by this contract
+* automatic auth-volume inheritance is not allowed
+
+The structured unrestricted contract is intentionally broad enough for arbitrary runtime containers while remaining narrower than raw Docker CLI.
+
+### 11.5 `container.run_docker`
+
+`container.run_docker` is the advanced unrestricted Docker CLI tool.
+
+It is available only in:
+
+* `unrestricted`
+
+It is denied in:
+
+* `disabled`
+* `profiles`
+
+Minimum request shape:
+
+* `command` (required)
+* `taskRunId`
+* `stepId`
+* `attempt`
+* `repoDir`
+* `artifactsDir`
+* `timeoutSeconds`
+* `envOverrides`
+* `declaredOutputs`
+* `report` / report publication fields
+
+Validation rules:
+
+* `command[0]` must be `"docker"`
+* `["docker", "compose", ...]` is allowed
+* arbitrary shell is not implied and is not allowed through this tool
+
+This tool exists for advanced Docker operations that are not represented by `container.run_container`.
+
+### 11.6 Planner and registry behavior
+
+The runtime planner and tool registry preserve all DooD-backed tools as `tool.type = "skill"` nodes.
+
+Mode-aware registry exposure rules apply:
+
+* `disabled`: no DooD tools in the default registry
+* `profiles`: curated and profile-backed DooD tools only
+* `unrestricted`: curated, profile-backed, and unrestricted DooD tools
+
+Runtime mode enforcement remains authoritative even when the registry is mode-aware.
+
+---
+
+## 12. Runner profile model
+
+MoonMind prefers curated runner profiles for normal execution.
+
+### 12.1 Minimum runner profile fields
+
+A runner profile defines at least:
+
+* `id`
+* `image`
+* `kind`
+* `default_workdir`
+* `entrypoint` or command wrapper
+* required mounts
+* optional cache volumes
+* allowed extra environment variables
+* resource profile
+* network policy
+* timeout defaults
+* cleanup policy
+* optional device policy
+
+### 12.2 Example runner profile: Unreal Linux CI
 
 ```yaml
 id: unreal-5_3-linux
@@ -430,419 +779,540 @@ cleanup:
   kill_grace_seconds: 30
 ```
 
-### 10.3 Example runner profile: GPU-bound variant
-
-A GPU-dependent variant must be explicit. GPU access must never be inferred merely because the image name suggests it.
+### 12.3 Example runner profile: .NET SDK
 
 ```yaml
-id: unreal-5_3-linux-gpu
+id: dotnet-sdk-8
 kind: one_shot
-image: ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3-gpu
+image: mcr.microsoft.com/dotnet/sdk:8.0
 workdir_template: /work/agent_jobs/${task_run_id}/repo
-device_policy:
-  gpu: required
+entrypoint: ["/bin/bash", "-lc"]
+required_mounts:
+  - type: volume
+    source: agent_workspaces
+    target: /work/agent_jobs
+env_allowlist:
+  - CI
+  - DOTNET_CLI_HOME
 resource_profile:
-  cpu: "16"
-  memory: "32g"
-network_policy: none
+  cpu: "4"
+  memory: "8g"
+network_policy: default
+timeout_seconds: 3600
+cleanup:
+  remove_container_on_exit: true
+  kill_grace_seconds: 15
 ```
 
-### 10.4 Profile selection rule
+### 12.4 Profile selection rule
 
-Plans, tools, or session-assisted requests should refer to a **profile id** or other approved workload class, not to an unrestricted image string, except in tightly controlled operator/debug flows.
+Normal execution refers to a **profile id**, not an unrestricted image string.
+
+This rule applies in both:
+
+* `profiles`
+* `unrestricted`
+
+Unrestricted mode expands the available tool surface. It does not weaken the meaning of `container.run_workload`.
 
 ---
 
-## 11. Execution contract
+## 13. Execution model and launch semantics
 
-### 11.1 One-shot workload request shape
+### 13.1 Shared execution plane
 
-A one-shot workload invocation should carry a small structured request such as:
+All DooD-backed tools execute on the trusted MoonMind worker plane with `docker_workload` capability.
 
-- `profile_id`
-- `task_run_id`
-- `step_id`
-- `attempt`
-- `workspace_root`
-- `repo_dir`
-- `artifacts_dir`
-- `command` or command arguments
-- `env_overrides` (only from allowlisted keys)
-- `timeout_seconds`
-- `resource_override` (within policy bounds)
-- optional association metadata like `session_id` / `session_epoch`
+The worker plane:
 
-### 11.2 Deterministic ownership labels
+* uses the configured Docker host or proxy
+* captures stdout, stderr, and diagnostics
+* writes runtime evidence under the task artifacts directory
+* collects declared outputs
+* applies timeout and cancellation policies
+* emits audit metadata
 
-Every launched workload container should be labeled so MoonMind can trace and clean it up.
+### 13.2 Launch classes
+
+MoonMind resolves DooD requests into one of three launch classes:
+
+* profile-backed workload launch
+* unrestricted container launch
+* unrestricted Docker CLI launch
+
+These classes share the same artifact, timeout, audit, and observability pipeline.
+
+### 13.3 Profile-backed workload launch
+
+A profile-backed launch resolves:
+
+* runner profile
+* mount contract
+* environment allowlist
+* network policy
+* resource bounds
+* timeout policy
+* cleanup policy
+
+MoonMind then launches the container through the configured Docker host or proxy.
+
+### 13.4 Unrestricted container launch
+
+An unrestricted container launch resolves:
+
+* runtime-selected image
+* entrypoint and command
+* workspace paths
+* deployment-approved cache mounts
+* network mode
+* resource overrides
+* timeout
+* declared outputs
+* report publication settings
+
+MoonMind then launches the container through the configured Docker host or proxy and captures the result using the same durable evidence pipeline as profile-backed workloads.
+
+### 13.5 Unrestricted Docker CLI launch
+
+An unrestricted Docker CLI launch runs the provided Docker command on the trusted worker plane with the configured Docker host or proxy in the environment.
+
+Rules:
+
+* the command is executed as a Docker CLI invocation, not as a general shell contract
+* stdout, stderr, and diagnostics are captured
+* artifacts are written under the task artifacts directory
+* declared outputs and report publication use the same semantics as other DooD tools
+
+### 13.6 Deterministic ownership labels
+
+Every MoonMind-launched workload container must be labeled so the platform can trace and clean it up.
 
 Recommended labels include:
 
-- `moonmind.kind=workload`
-- `moonmind.task_run_id=<task_run_id>`
-- `moonmind.step_id=<step_id>`
-- `moonmind.attempt=<attempt>`
-- `moonmind.tool_name=<tool_name>`
-- `moonmind.workload_profile=<profile_id>`
-- optional `moonmind.session_id=<session_id>`
-- optional `moonmind.session_epoch=<session_epoch>`
+* `moonmind.kind=workload`
+* `moonmind.task_run_id=<task_run_id>`
+* `moonmind.step_id=<step_id>`
+* `moonmind.attempt=<attempt>`
+* `moonmind.tool_name=<tool_name>`
+* `moonmind.docker_mode=<profiles|unrestricted>`
+* `moonmind.workload_access=<profile|unrestricted_container|unrestricted_docker_cli>`
+* `moonmind.workload_profile=<profile_id>` when profile-backed
+* `moonmind.session_id=<session_id>` when associated
+* `moonmind.session_epoch=<session_epoch>` when associated
 
 Recommended container name shape:
 
-- `mm-workload-<task_run_id>-<step_id>-<attempt>`
+* `mm-workload-<task_run_id>-<step_id>-<attempt>`
 
-### 11.3 Illustrative `docker run` shape
-
-The launcher may construct a command similar to:
-
-```bash
-docker run --rm \
-  --name "mm-workload-${TASK_RUN_ID}-${STEP_ID}-${ATTEMPT}" \
-  --label "moonmind.kind=workload" \
-  --label "moonmind.task_run_id=${TASK_RUN_ID}" \
-  --label "moonmind.step_id=${STEP_ID}" \
-  --label "moonmind.tool_name=unreal.run_tests" \
-  --label "moonmind.workload_profile=unreal-5_3-linux" \
-  --mount type=volume,src=agent_workspaces,dst=/work/agent_jobs \
-  --mount type=volume,src=unreal_ccache_volume,dst=/work/.ccache \
-  --mount type=volume,src=unreal_ubt_volume,dst=/work/ubt-cache \
-  --workdir "/work/agent_jobs/${TASK_RUN_ID}/repo" \
-  -e UE_PROJECT_PATH="MyGame.uproject" \
-  ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3 \
-  /bin/bash -lc "./Build/Scripts/run-ci-tests.sh"
-```
-
-This example is illustrative. The public contract is the MoonMind workload request, not the raw CLI string.
-
-### 11.4 Exit contract
+### 13.7 Exit contract
 
 For one-shot workloads:
 
-- exit code `0` means success
-- non-zero exit means failure unless the tool contract explicitly treats certain codes specially
-- stdout, stderr, diagnostics, and declared outputs must still be captured durably even on failure
+* exit code `0` means success
+* non-zero exit means failure unless the specific tool contract defines special handling
+* stdout, stderr, diagnostics, and declared outputs are still captured durably on failure where available
 
-### 11.5 Bounded helper contract
+### 13.8 Report publication
 
-If MoonMind supports a bounded helper workload container, the control plane must still own:
+Declared report outputs use the same artifact collection and report publication semantics across:
 
-- launch
-- health check / readiness
-- termination
-- TTL
-- artifact capture
-- link-back to the owner step or step-group
+* `container.run_workload`
+* `container.run_container`
+* `container.run_docker`
 
-This should be introduced as an explicit workload sub-contract, not as an informal “container happens to still be running” behavior.
+A declared primary report may publish as `report.primary` when configured.
 
----
+### 13.9 Helper lifecycle
 
-## 12. Tool-contract integration
+Profile-backed helper containers remain explicitly owned by MoonMind.
 
-### 12.1 Preferred user-facing shape
+The control plane owns:
 
-Specialized Docker workloads should normally be exposed as executable tools such as:
+* launch
+* readiness
+* termination
+* TTL
+* artifact capture
+* ownership metadata
 
-- `unreal.run_tests`
-- `unreal.build_target`
-- `unity.run_batchmode_tests`
-- `container.run_workload`
-
-These remain ordinary executable tools from the point of view of plan execution.
-
-### 12.2 Recommended modeling
-
-Preferred order:
-
-1. **Curated domain tool** when MoonMind understands the job well enough to expose a stable contract
-2. **Generic workload tool** for controlled operator or advanced use cases
-3. **Curated activity type** only when stronger isolation or hardware routing is required
-
-### 12.3 Example `ToolDefinition`
-
-```yaml
-name: "unreal.run_tests"
-version: "1.0.0"
-type: "skill"
-description: "Run Unreal Engine automated tests inside an approved workload container."
-inputs:
-  schema:
-    type: object
-    required: [repo_ref, project_path, test_command]
-    properties:
-      repo_ref: { type: string }
-      project_path: { type: string }
-      test_command: { type: string }
-      profile_id: { type: string, default: "unreal-5_3-linux" }
-outputs:
-  schema:
-    type: object
-    required: [status]
-    properties:
-      status: { type: string }
-      log_artifact_ref: { type: string }
-      test_results_artifact_ref: { type: string }
-executor:
-  activity_type: "mm.skill.execute"
-  selector:
-    mode: "by_capability"
-    requirements:
-      capabilities:
-        - "agent_runtime"
-policies:
-  timeouts:
-    start_to_close_seconds: 7200
-    schedule_to_close_seconds: 10800
-  retries:
-    max_attempts: 1
-```
-
-The exact capability name may change if MoonMind later introduces a dedicated Docker workload fleet, but the key architectural point remains: **this is a tool-backed workload invocation, not an extra managed session.**
+This is an explicit lifecycle contract, not an emergent side effect of a container remaining alive.
 
 ---
 
-## 13. Artifact and observability contract
+## 14. Artifact, audit, and observability contract
 
-### 13.1 Durable truth rule
+### 14.1 Durable truth rule
 
-Artifacts and bounded workflow metadata remain authoritative.
+Artifacts and bounded metadata remain authoritative.
 
-MoonMind must not depend on:
+MoonMind does not depend on:
 
-- container-local history
-- container-local caches as audit truth
-- daemon state as the only run record
-- terminal scrollback as the only source of logs
+* container-local history
+* daemon state as the only run record
+* terminal scrollback as the only log source
+* background container state as the only evidence of task progress
 
-### 13.2 Minimum outputs
+### 14.2 Minimum durable outputs
 
-Every workload invocation must produce durable evidence, including:
+Every DooD invocation produces durable evidence, including:
 
-- command summary / invocation metadata
-- stdout and stderr capture, or an equivalent durable log artifact set
-- diagnostics / exit metadata
-- declared output artifacts such as test reports, packages, or binaries
+* invocation summary
+* stdout capture or equivalent durable log artifact
+* stderr capture or equivalent durable log artifact
+* diagnostics and exit metadata
+* declared outputs
+* report bundles when configured
 
-Execution detail surfaces should present workload evidence on the producing step. Runtime stdout, stderr, diagnostics, declared primary/summary outputs, and test/report artifacts are step outputs. Bounded workload metadata such as runner profile, image reference, status, exit code, duration, and timeout/cancel reason may be displayed alongside those artifact refs.
+### 14.3 Audit metadata
 
-If the workload was launched from a managed-session-assisted step, `session_id`, `session_epoch`, and source-turn metadata may appear only as association context. The UI and API must not present the workload container itself as the managed session, and workload artifacts must not be grouped as session continuity artifacts by default.
+DooD results include bounded audit metadata such as:
 
-### 13.3 Artifact classes
+* `dockerMode`
+* `workloadAccess`
+* `unrestrictedContainer`
+* `unrestrictedDocker`
+* `profileId`
+* `image`
+* `commandSummary`
+* `taskRunId`
+* `stepId`
+* `attempt`
+* `dockerHost`
+* `startedAt`
+* `completedAt`
+* `durationSeconds`
+* `status`
+* `exitCode`
+* `artifactPublication`
+* `reportPublication`
 
-Artifact classes should align with the artifact contract:
+Rules:
 
-- generic tool execution logs may use `output.logs`
-- human-readable result summaries may use `output.summary`
-- primary outputs may use `output.primary`
-- runtime-supervised output may also publish `runtime.stdout`, `runtime.stderr`, or `runtime.diagnostics` when MoonMind's observability pipeline treats the workload as runtime-like operational output
+* unrestricted execution must be obvious from metadata
+* `dockerHost` is recorded in normalized or redacted form
+* raw secret values are never recorded in metadata
 
-The controlling rule is: **durable, retrievable outputs first; container-local output never first.**
+### 14.4 Artifact classes
 
-### 13.4 Session association
+Artifact classes align with the artifact contract:
 
-If a workload was launched from a session-assisted step, related artifacts may carry `session_context` or equivalent association metadata so operators can understand the relationship.
+* `output.logs`
+* `output.summary`
+* `output.primary`
+* `runtime.stdout`
+* `runtime.stderr`
+* `runtime.diagnostics`
+
+The controlling rule is durable, retrievable outputs first.
+
+### 14.5 Session association
+
+If a workload is launched from a session-assisted step, related artifacts may carry session association metadata.
 
 However:
 
-- workload artifacts are not session continuity artifacts by default
-- `session.summary`, `session.step_checkpoint`, `session.control_event`, and `session.reset_boundary` remain the responsibility of the session plane
-
-### 13.5 Observability guidance
-
-When workload execution is long enough or important enough to merit richer observability, MoonMind may project it into the standard observability surfaces. That does not change the identity rule: a workload container still is not a managed session.
+* workload artifacts are not session continuity artifacts by default
+* the workload container is not presented as the managed session
+* session-plane artifacts remain the responsibility of the session plane
 
 ---
 
-## 14. Security and policy controls
+## 15. Security and policy controls
 
-### 14.1 Docker access boundary
+### 15.1 Deployment gating
 
-Use a controlled Docker proxy such as `docker-proxy`.
+Docker workflow mode is a deployment setting.
 
-Do **not** mount the raw Docker socket into the session container as the default mechanism for specialized workload execution.
+Rules:
 
-### 14.2 Image policy
+* tasks cannot enable `unrestricted`
+* planners cannot elevate the deployment mode
+* unrestricted capability exists only because the deployment explicitly allows it
 
-Allowed images should come from:
+### 15.2 Docker access boundary
 
-- runner profiles
-- registry allowlists
-- controlled override paths for operators/debugging only
+MoonMind uses a controlled Docker host or proxy.
 
-MoonMind should reject arbitrary unapproved images in normal task execution.
+Rules:
 
-### 14.3 Mount policy
+* the normal session container does not receive the raw Docker socket
+* the normal session container does not receive unrestricted `DOCKER_HOST`
+* Docker-backed workloads run on the trusted MoonMind worker plane
 
-Allowed mounts must be explicit.
+### 15.3 Image policy
 
-Defaults:
+Image policy depends on mode.
 
-- shared task workspace volume
-- declared cache volumes
-- no host-path mounts except tightly controlled operator environments
-- no automatic inheritance of unrelated auth volumes
+In `profiles`:
 
-### 14.4 Privilege policy
+* images come from runner profiles only
+
+In `unrestricted`:
+
+* arbitrary images may be selected at runtime through `container.run_container`
+* arbitrary Docker CLI operations may reference arbitrary images through `container.run_docker`
+* registry access, egress, and daemon policy remain deployment-owned concerns
+
+### 15.4 Mount policy
+
+Mount policy depends on contract.
+
+For `container.run_workload` and helper tools:
+
+* mounts are profile-defined
+
+For `container.run_container`:
+
+* workspace mounts are MoonMind-defined
+* additional mounts are limited to deployment-approved named caches
+
+For `container.run_docker`:
+
+* Docker CLI may request broader daemon features
+* such usage is explicitly unrestricted and must be audited as such
+* MoonMind does not synthesize hidden mount grants on behalf of the request
+
+### 15.5 Privilege, device, and network policy
 
 Default posture:
 
-- no `--privileged`
-- no host networking
-- no device access unless explicitly required by profile
-- no implicit GPU access
-- no unrestricted env pass-through
-- resource limits applied where supported
+* no implicit `--privileged`
+* no implicit host networking
+* no implicit device access
+* no implicit GPU access
+* no unrestricted environment pass-through
+* resource limits applied where supported
 
-### 14.5 Secret handling
+Profiles may explicitly grant device or GPU access.
 
-Secrets must be injected through explicit MoonMind policy, never by copying broad worker or session environment wholesale into the workload container.
+The structured unrestricted container contract does not expose privileged or host-networking flags in the desired state.
 
-### 14.6 Network policy
+### 15.6 Secret handling and redaction
 
-Runner profiles should declare whether networking is:
+Secrets are injected only through explicit MoonMind policy.
 
-- disabled
-- restricted internal-only
-- restricted egress
-- explicitly allowed to reach named internal or external services
+Rules:
 
-Network allowance should be part of the runner profile, not an ad hoc per-command surprise.
+* broad worker or session environment is never copied wholesale into a workload container
+* stdout, stderr, and diagnostics pass through existing redaction helpers
+* secret-looking environment values are never logged raw
+* secret-looking metadata values are redacted before publication
+
+### 15.7 Deterministic failure codes
+
+Mode and contract failures are deterministic.
+
+Examples:
+
+* `invalid_docker_workflow_mode`
+* `docker_workflows_disabled`
+* `unrestricted_container_disabled`
+* `unrestricted_docker_disabled`
+* `invalid_docker_command`
+
+Profile validation failures remain explicit and deterministic.
 
 ---
 
-## 15. Timeout, cancellation, and cleanup
+## 16. Timeout, cancellation, and cleanup
 
-### 15.1 Timeout ownership
+### 16.1 Timeout ownership
 
 Temporal-side policies own the wall-clock timeout. The workload launcher enforces those policies at the container boundary.
 
-### 15.2 Cancel behavior
+### 16.2 Cancel behavior
 
-On task cancel, step cancel, or activity timeout, MoonMind should best-effort:
+On task cancel, step cancel, or activity timeout, MoonMind best-effort:
 
-1. stop the container gracefully
-2. escalate to kill if needed after a grace period
-3. collect whatever logs/diagnostics remain available
-4. record bounded failure / cancellation metadata
-5. remove the container if policy says it is ephemeral
+1. stops the container gracefully
+2. escalates to kill after a grace period when needed
+3. collects remaining logs and diagnostics where available
+4. records bounded failure or cancellation metadata
+5. removes ephemeral containers when policy requires it
 
-### 15.3 Orphan handling
+### 16.3 Cleanup of profile-backed and unrestricted structured containers
 
-MoonMind should be able to locate abandoned workload containers using deterministic names and labels.
+MoonMind directly owns cleanup for containers launched through:
 
-A sweeper may safely remove orphaned containers when:
+* `container.run_workload`
+* `container.start_helper`
+* `container.run_container`
 
-- the owning execution is terminal
-- the TTL has expired
-- no active ownership claim remains
+Rules:
 
-### 15.4 Cleanup of caches vs outputs
+* one-shot containers are removed on exit when configured as ephemeral
+* bounded helpers are terminated on completion, cancellation, timeout, or TTL expiry
+* orphan sweepers may remove labeled owned containers after terminal execution and TTL expiry
 
-Cleanup must preserve durable outputs while allowing cache reuse where policy permits.
+### 16.4 Cleanup of unrestricted Docker CLI resources
+
+MoonMind does not attempt to infer or remove arbitrary resources created by `container.run_docker`.
+
+Rules:
+
+* cleanup responsibility belongs to the Docker command unless the tool contract or wrapper injects explicit ownership labels
+* best-effort sweeper cleanup may target resources that carry deterministic MoonMind ownership labels
+* MoonMind does not claim automatic lifecycle ownership of arbitrary CLI-created resources that it cannot reliably identify
+
+### 16.5 Caches versus outputs
+
+Cleanup must preserve durable outputs while allowing configured cache reuse.
 
 This means:
 
-- remove transient workload containers
-- keep named caches such as Unreal ccache / UBT volumes when configured
-- preserve artifacts and task workspace outputs under MoonMind-owned paths
+* transient containers are removed
+* approved named caches may persist
+* artifacts and task workspace outputs remain under MoonMind-owned paths
 
 ---
 
-## 16. Compose and runtime shape
+## 17. Compose and runtime shape
 
-### 16.1 Keep
+### 17.1 Keep
 
-The local development / deployment shape should keep:
+The runtime shape keeps:
 
-- `docker-proxy` as the controlled Docker daemon access path
-- `agent_workspaces` as the shared workspace volume
-- specialized cache volumes such as Unreal cache volumes where needed
+* a controlled Docker host or proxy such as `docker-proxy`
+* `agent_workspaces` as the shared workspace volume
+* specialized named cache volumes where needed
 
-### 16.2 Current local direction
+### 17.2 Current logical placement
 
-The current local repo shape already places Docker proxy access on the `temporal-worker-agent-runtime` service. That should be treated as the current Docker-capable fleet for DooD-backed workloads.
+The logical `docker_workload` capability may currently be satisfied by the `agent_runtime` worker fleet.
 
-### 16.3 Important correction to older design
+This is the current Docker-capable execution boundary for DooD-backed workloads.
 
-Do **not** describe the desired state as “add `DOCKER_HOST` to `temporal-worker-sandbox` so sandbox workers can launch heavy-build containers” unless the platform intentionally moves Docker workload capability there.
+### 17.3 Important boundary
 
-The current direction is:
+The desired state is not “give the session container raw Docker access.”
 
-- managed sessions and managed runtime supervision stay aligned with the `agent_runtime` execution boundary
-- specialized workload launches use the Docker-capable worker fleet through MoonMind routing
-- the Codex session container itself does not become the raw Docker launcher
+The desired state is:
 
-### 16.4 Future fleet split
+* session containers remain managed-session containers
+* workload launches remain control-plane-launched
+* unrestricted execution expands the control-plane tool surface, not the session-side Docker authority surface
 
-If specialized workloads require materially different:
+### 17.4 Future fleet split
 
-- hardware
-- resource envelopes
-- secrets
-- registry access
-- concurrency limits
-- network policies
+If Docker-backed workloads require materially different:
 
-then introduce a dedicated Docker workload fleet and capability class. Do not over-split queues before that is operationally justified.
+* hardware
+* resource envelopes
+* secrets
+* registry access
+* concurrency limits
+* network policies
+
+then MoonMind may introduce a dedicated Docker workload fleet and capability class.
+
+Queue and fleet splitting follow operational need, not naming nostalgia.
 
 ---
 
-## 17. Example flows
+## 18. Example flows
 
-### 17.1 Unreal test run initiated from a Codex-managed task
+### 18.1 Unreal test run in `profiles` mode
 
-1. Task is running in a task-scoped Codex managed session.
+1. A task runs in a task-scoped Codex managed session.
 2. The session determines that the repository is an Unreal project.
 3. It requests `unreal.run_tests`.
-4. `MoonMind.Run` interprets that as an executable tool invocation.
-5. A Docker-capable worker resolves the `unreal-5_3-linux` runner profile.
-6. The worker launches the Unreal runner container through `docker-proxy`, mounting the shared workspace and allowed caches.
-7. The container writes reports and build outputs under the task workspace.
-8. MoonMind captures logs, diagnostics, and artifacts and returns a `ToolResult`.
-9. The Codex managed session continues with the new evidence.
+4. MoonMind resolves the tool to the `unreal-5_3-linux` runner profile.
+5. A `docker_workload` worker launches the workload through the configured Docker host or proxy.
+6. The container writes reports and build outputs under the task workspace.
+7. MoonMind captures logs, diagnostics, and artifacts and returns a normal tool result.
+8. The Codex managed session continues with the new evidence.
 
-### 17.2 Generic profile-backed workload for advanced use
+### 18.2 Dynamic dotnet container in `unrestricted` mode
 
-1. A plan node invokes `container.run_workload` with an approved `profile_id`.
-2. MoonMind validates the profile and argument policy.
-3. The worker launches the container through the Docker proxy.
-4. Outputs are captured as durable artifacts.
-5. The workflow treats the result as a normal tool result.
+A trusted workflow selects the runtime image at execution time without changing worker images and without pre-registering the image as a runner profile.
 
-### 17.3 Bounded helper service
+```json
+{
+  "name": "container.run_container",
+  "type": "skill",
+  "inputs": {
+    "image": "mcr.microsoft.com/dotnet/sdk:8.0",
+    "repoDir": "/work/agent_jobs/task-123/repo",
+    "artifactsDir": "/work/agent_jobs/task-123/artifacts/test-step",
+    "command": ["bash", "-lc", "dotnet test MySolution.sln --logger trx"],
+    "declaredOutputs": {
+      "trx": "TestResults/results.trx"
+    }
+  }
+}
+```
 
-1. A step requires a temporary helper container.
-2. MoonMind launches a bounded helper workload with explicit TTL and ownership metadata.
-3. The step uses that helper during the bounded execution window.
-4. MoonMind terminates the helper at step completion, cancellation, or timeout.
+### 18.3 Dynamic load test container in `unrestricted` mode
 
-This still does not create a new managed session.
+A trusted workflow selects a runtime load test image at execution time and writes outputs under the task workspace.
+
+```json
+{
+  "name": "container.run_container",
+  "type": "skill",
+  "inputs": {
+    "image": "ghcr.io/example/loadtest-runner:latest",
+    "repoDir": "/work/agent_jobs/task-456/repo",
+    "artifactsDir": "/work/agent_jobs/task-456/artifacts/loadtest",
+    "command": ["bash", "-lc", "./run-loadtest.sh --out /work/agent_jobs/task-456/artifacts/loadtest"],
+    "declaredOutputs": {
+      "summary": "summary.json",
+      "logs": "logs/output.log"
+    }
+  }
+}
+```
+
+### 18.4 Docker Compose stack in `unrestricted` mode
+
+A trusted workflow uses the Docker CLI escape hatch for compose-driven behavior.
+
+```json
+{
+  "name": "container.run_docker",
+  "type": "skill",
+  "inputs": {
+    "command": ["docker", "compose", "-f", "infra/docker-compose.yml", "up", "--abort-on-container-exit"],
+    "repoDir": "/work/agent_jobs/task-789/repo",
+    "artifactsDir": "/work/agent_jobs/task-789/artifacts/compose-step",
+    "declaredOutputs": {
+      "composeLog": "compose.log"
+    }
+  }
+}
+```
 
 ---
 
-## 18. Design rules to keep stable
+## 19. Stable design rules
 
-These rules should remain stable even as implementation details evolve:
+The following rules remain stable as implementation details evolve:
 
-1. **Codex managed session containers and specialized workload containers are different architectural roles.**
-2. **The control plane launches specialized workload containers.**
-3. **Session containers do not get unrestricted raw Docker access by default.**
-4. **Use approved runner profiles, not arbitrary image strings, in normal execution.**
-5. **Artifacts and bounded metadata remain authoritative.**
-6. **Queue/fleet splitting should follow real isolation needs, not naming nostalgia.**
-7. **A non-agent workload container is not a managed session merely because it is Docker-backed.**
+1. **Codex managed session containers and Docker workload containers are different architectural roles.**
+2. **The control plane launches Docker-backed workloads.**
+3. **Session containers do not receive unrestricted raw Docker authority by default.**
+4. **`disabled`, `profiles`, and `unrestricted` are the only supported Docker workflow modes.**
+5. **`container.run_workload` remains profile-backed.**
+6. **Arbitrary runtime containers are exposed through `container.run_container`, not by widening `container.run_workload`.**
+7. **Raw Docker CLI is exposed through `container.run_docker`, not through an implicit shell contract.**
+8. **Artifacts and bounded metadata remain authoritative.**
+9. **Normal execution uses curated runner profiles; unrestricted execution is explicit and auditable.**
+10. **Unrestricted mode expands the control-plane tool surface, not the session-side Docker authority boundary.**
+11. **The DooD core remains domain-agnostic and does not hardcode load test, Unreal, dotnet, or similar workload families.**
+12. **Queue and fleet splitting follow real isolation and operational requirements.**
 
 ---
 
-## 19. Future refinements
+## 20. Future refinements
 
 Likely future work includes:
 
-- dedicated Docker workload capability / worker fleet
-- richer bounded helper-container contracts
-- GPU and simulator scheduling policies
-- stronger registry attestation / image provenance checks
-- profile-aware cache lifecycle management
-- better observability projections for long-running workload containers
+* a dedicated Docker workload fleet and capability class
+* richer bounded helper-container contracts
+* labeled resource conventions for better `container.run_docker` cleanup
+* stronger registry attestation and image provenance checks
+* profile-aware cache lifecycle management
+* GPU and simulator scheduling policies
+* richer observability projections for long-running workload containers
 
-Those refinements should preserve the core separation defined above.
+These refinements preserve the architectural separation defined above.

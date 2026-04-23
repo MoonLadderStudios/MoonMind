@@ -526,7 +526,7 @@ async def test_launch_session_preserves_request_scoped_github_token_for_controll
 async def test_launch_session_injects_moonmind_url_from_activity_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("MOONMIND_URL", "http://api:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
     controller = AsyncMock()
     controller.launch_session = AsyncMock(
         return_value=CodexManagedSessionHandle(
@@ -558,7 +558,7 @@ async def test_launch_session_injects_moonmind_url_from_activity_environment(
 
     launched_request = controller.launch_session.await_args.args[0]
     assert launched_request.environment["PATH"] == "/usr/bin"
-    assert launched_request.environment["MOONMIND_URL"] == "http://api:5000"
+    assert launched_request.environment["MOONMIND_URL"] == "http://api:8000"
 
 
 async def test_launch_session_uses_github_descriptor_for_managed_secret_store(

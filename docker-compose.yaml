@@ -1,24 +1,19 @@
 services:
 
-
   keycloak:
-    profiles: ["keycloak"]
+    profiles: [ "keycloak" ]
     image: quay.io/keycloak/keycloak:24.0
     command: >
-      start-dev
-      --proxy-headers=xforwarded
-      --hostname-url=http://keycloak:8080
-      --import-realm
-      --db=postgres
-      --db-url=jdbc:postgresql://postgres:5432/keycloak
-      --db-username=keycloak
+      start-dev --proxy-headers=xforwarded --hostname-url=http://keycloak:8080
+      --import-realm --db=postgres
+      --db-url=jdbc:postgresql://postgres:5432/keycloak --db-username=keycloak
       --db-password=${KC_DB_PW:-keycloak}
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PW:-admin}
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
-    ports: [ "8085:8080" ]        # host→container
+    ports: [ "8085:8080" ] # host→container
     depends_on:
       postgres:
         condition: service_healthy
@@ -28,7 +23,7 @@ services:
   api:
     image: ghcr.io/moonladderstudios/moonmind:latest
     ports:
-      - "5000:5000"
+      - "8000:8000"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -39,7 +34,7 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - MODEL_CONTEXT_PROTOCOL_ENABLED=true
-      - MODEL_CONTEXT_PROTOCOL_PORT=5000
+      - MODEL_CONTEXT_PROTOCOL_PORT=8000
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
@@ -78,7 +73,14 @@ services:
       - local-network
       - docker-proxy-network
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/healthz')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;
+            urllib.request.urlopen('http://localhost:8000/healthz')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -199,7 +201,7 @@ services:
 
   temporal-visibility-rehearsal:
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
-    profiles: ["temporal-tools"]
+    profiles: [ "temporal-tools" ]
     environment:
       - TEMPORAL_POSTGRES_HOST=postgres
       - TEMPORAL_POSTGRES_PORT=5432
@@ -225,7 +227,7 @@ services:
 
   temporal-admin-tools:
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
-    profiles: ["temporal-tools"]
+    profiles: [ "temporal-tools" ]
     environment:
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
     command: sh -lc "sleep infinity"
@@ -240,7 +242,7 @@ services:
 
   temporal-ui:
     image: temporalio/ui:${TEMPORAL_UI_VERSION:-2.34.0}
-    profiles: ["temporal-ui"]
+    profiles: [ "temporal-ui" ]
     environment:
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
     ports:
@@ -265,8 +267,9 @@ services:
       - TEMPORAL_WORKER_FLEET=workflow
       - TEMPORAL_WORKFLOW_TASK_QUEUE=${TEMPORAL_WORKFLOW_TASK_QUEUE:-mm.workflow}
       - TEMPORAL_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_WORKFLOW_WORKER_CONCURRENCY:-8}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
-      - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
+        moonmind.workflows.temporal.worker_runtime}
+      - MOONMIND_URL=${MOONMIND_URL:-http://api:8000}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
       - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
       - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://localhost:9000}
@@ -286,7 +289,14 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;
+            urllib.request.urlopen('http://localhost:8080/healthz')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -317,7 +327,8 @@ services:
       - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
+        moonmind.workflows.temporal.worker_runtime}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - .env
@@ -330,7 +341,14 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;
+            urllib.request.urlopen('http://localhost:8080/healthz')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -361,7 +379,8 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
+        moonmind.workflows.temporal.worker_runtime}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
       - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
       - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://localhost:9000}
@@ -380,7 +399,14 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;
+            urllib.request.urlopen('http://localhost:8080/healthz')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -424,7 +450,8 @@ services:
       - MOONMIND_CLAUDE_EFFORT=${MOONMIND_CLAUDE_EFFORT:-}
       - GEMINI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
       - GEMINI_CLI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
+        moonmind.workflows.temporal.worker_runtime}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
       - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
       - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://localhost:9000}
@@ -447,7 +474,14 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;
+            urllib.request.urlopen('http://localhost:8080/healthz')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -480,7 +514,7 @@ services:
       - TEMPORAL_WORKER_FLEET=agent_runtime
       - TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE:-mm.activity.agent_runtime}
       - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-4}
-      - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
+      - MOONMIND_URL=${MOONMIND_URL:-http://api:8000}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
@@ -501,7 +535,8 @@ services:
       - MOONMIND_CLAUDE_EFFORT=${MOONMIND_CLAUDE_EFFORT:-}
       - GEMINI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
       - GEMINI_CLI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
+        moonmind.workflows.temporal.worker_runtime}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
       - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
       - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://localhost:9000}
@@ -526,7 +561,14 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;
+            urllib.request.urlopen('http://localhost:8080/healthz')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -565,7 +607,8 @@ services:
       - JULES_ENABLED=${JULES_ENABLED:-true}
       - JULES_API_URL=${JULES_API_URL:-}
       - JULES_API_KEY=${JULES_API_KEY:-}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
+        moonmind.workflows.temporal.worker_runtime}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
       - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
       - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://localhost:9000}
@@ -584,7 +627,14 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;
+            urllib.request.urlopen('http://localhost:8080/healthz')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -640,7 +690,10 @@ services:
   agent-workspaces-init:
     image: alpine:3.20
     command: >-
-      sh -lc "set -e; for dir in /work/agent_jobs /work/agent_jobs/artifacts /work/agent_jobs/managed_runs /work/agent_jobs/managed_sessions /work/agent_jobs/workspaces; do mkdir -p \"$$dir\" && chown 1000:1000 \"$$dir\" && chmod 0775 \"$$dir\"; done"
+      sh -lc "set -e; for dir in /work/agent_jobs /work/agent_jobs/artifacts
+      /work/agent_jobs/managed_runs /work/agent_jobs/managed_sessions
+      /work/agent_jobs/workspaces; do mkdir -p \"$$dir\" && chown 1000:1000
+      \"$$dir\" && chmod 0775 \"$$dir\"; done"
     volumes:
       - agent_workspaces:/work/agent_jobs
     restart: "no"
@@ -648,7 +701,8 @@ services:
   gemini-auth-init:
     image: alpine:3.20
     command: >-
-      sh -lc "mkdir -p /var/lib/gemini-auth && chown -R 1000:1000 /var/lib/gemini-auth && chmod 0775 /var/lib/gemini-auth"
+      sh -lc "mkdir -p /var/lib/gemini-auth && chown -R 1000:1000
+      /var/lib/gemini-auth && chmod 0775 /var/lib/gemini-auth"
     volumes:
       - gemini_auth_volume:/var/lib/gemini-auth
     restart: "no"
@@ -658,7 +712,9 @@ services:
     environment:
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
     command: >-
-      sh -lc "CODEX_HOME=$${CODEX_HOME:-/home/app/.codex}; mkdir -p \"$${CODEX_HOME}\" && chown -R 1000:1000 \"$${CODEX_HOME}\" && chmod 0775 \"$${CODEX_HOME}\""
+      sh -lc "CODEX_HOME=$${CODEX_HOME:-/home/app/.codex}; mkdir -p
+      \"$${CODEX_HOME}\" && chown -R 1000:1000 \"$${CODEX_HOME}\" && chmod 0775
+      \"$${CODEX_HOME}\""
     volumes:
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
     restart: "no"
@@ -666,7 +722,9 @@ services:
   claude-auth-init:
     image: alpine:3.20
     command: >-
-      sh -lc "mkdir -p ${CLAUDE_VOLUME_PATH:-/home/app/.claude} && chown -R 1000:1000 ${CLAUDE_VOLUME_PATH:-/home/app/.claude} && chmod 0775 ${CLAUDE_VOLUME_PATH:-/home/app/.claude}"
+      sh -lc "mkdir -p ${CLAUDE_VOLUME_PATH:-/home/app/.claude} && chown -R
+      1000:1000 ${CLAUDE_VOLUME_PATH:-/home/app/.claude} && chmod 0775
+      ${CLAUDE_VOLUME_PATH:-/home/app/.claude}"
     volumes:
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
     restart: "no"
@@ -689,7 +747,7 @@ services:
     restart: unless-stopped
 
   ollama:
-    profiles: ["ollama"]
+    profiles: [ "ollama" ]
     image: ollama/ollama:latest
     ports:
       - 11434:11434
@@ -699,11 +757,11 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     volumes:
       - ./model_data:/root/.ollama/models
       - ./tools/entrypoint-ollama.sh:/entrypoint-ollama.sh:ro
-    entrypoint: ["/bin/sh", "/entrypoint-ollama.sh"]
+    entrypoint: [ "/bin/sh", "/entrypoint-ollama.sh" ]
     networks:
       - local-network
     env_file:
@@ -714,7 +772,7 @@ services:
       - OLLAMA_KV_CACHE_TYPE=q4_0
 
   openhands:
-    profiles: ["openhands"]
+    profiles: [ "openhands" ]
     image: docker.all-hands.dev/all-hands-ai/openhands:0.39
     container_name: openhands-app
     pull_policy: always
@@ -736,34 +794,6 @@ services:
       - local-network
     env_file:
       - .env
-
-  vllm:
-    profiles: ["vllm"]
-    image: vllm/vllm-openai:latest
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    volumes:
-      - ./model_data:/root/.cache/huggingface/hub
-      - ./tools/entrypoint-vllm.sh:/entrypoint-vllm.sh:ro
-    ports:
-      - "8000:8000"
-    environment:
-      - MODEL_NAME=${VLLM_MODEL_NAME:-ByteDance-Seed/UI-TARS-1.5-7B}
-      - DTYPE=${VLLM_DTYPE:-float16}
-      - GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.95}
-      - HF_HOME=/root/.cache/huggingface
-      - MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-32768}
-      - NVIDIA_DRIVER_CAPABILITIES=all
-    entrypoint: ["/bin/sh", "/entrypoint-vllm.sh"]
-    networks:
-      - local-network
-    tty: true
-    init: true
 
 volumes:
   qdrant-storage:
