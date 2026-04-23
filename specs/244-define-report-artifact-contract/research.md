@@ -42,11 +42,11 @@ Test implications: unit + frontend unit.
 
 ## FR-010 Terminology and Contract-Facing Documentation
 
-Decision: implemented_unverified in runtime code; feature-local design artifacts should preserve the terminology explicitly.
-Evidence: `docs/Artifacts/ReportArtifacts.md` defines report artifact, report bundle, evidence artifact, final report, and intermediate report; `moonmind/workflows/temporal/report_artifacts.py` encodes the related runtime contract but not as a feature-local contract artifact.
-Rationale: The runtime semantics exist, but this feature still benefits from an explicit feature-local data model and contract artifact to make final verification traceable.
-Alternatives considered: Treat the canonical docs alone as sufficient and omit local planning artifacts. Rejected because the plan gate explicitly requires design artifacts when the story involves data and contract surfaces.
-Test implications: none beyond final verify unless a later implementation change is required.
+Decision: implemented_verified; preserve the terminology through final verification rather than planning new production changes.
+Evidence: `docs/Artifacts/ReportArtifacts.md`, `moonmind/workflows/temporal/report_artifacts.py`, `specs/244-define-report-artifact-contract/data-model.md`, and `specs/244-define-report-artifact-contract/contracts/report-artifact-contract.md` all preserve the report artifact, report bundle, evidence artifact, final report, and intermediate report terminology.
+Rationale: The runtime semantics and feature-local design artifacts now align, so no additional implementation is justified unless later verification finds a mismatch.
+Alternatives considered: Treat terminology as still unverified until application code changes are made. Rejected because the existing canonical docs, runtime helper contract, and feature-local design artifacts already provide the required contract-facing terminology.
+Test implications: none beyond final verify.
 
 ## FR-011 and SC-006 Traceability
 

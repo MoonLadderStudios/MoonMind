@@ -20,7 +20,7 @@ Plan MM-492 as a verification-first report contract story. The current repositor
 | FR-007 | implemented_verified | `REPORT_METADATA_KEYS`; `_validate_report_metadata`; unsafe metadata tests in `tests/unit/workflows/temporal/test_artifacts.py` | no new implementation | unit |
 | FR-008 | implemented_verified | `classify_report_rollout_artifacts`; latest `report.primary` API/query usage in backend and `frontend/src/entrypoints/task-detail.tsx` | no new implementation | unit + contract |
 | FR-009 | implemented_verified | report workflow mappings separate report and observability link types; task detail keeps related report content distinct | no new implementation | unit + frontend unit |
-| FR-010 | implemented_unverified | canonical terminology exists in `docs/Artifacts/ReportArtifacts.md` and report helper docstrings, but no dedicated contract artifact exists yet in this feature directory | add planning contract/data-model artifacts and verify traceability; implementation only if later verify finds missing runtime-facing terminology | none beyond final verify |
+| FR-010 | implemented_verified | canonical terminology exists in `docs/Artifacts/ReportArtifacts.md`, `moonmind/workflows/temporal/report_artifacts.py`, `specs/244-define-report-artifact-contract/data-model.md`, and `specs/244-define-report-artifact-contract/contracts/report-artifact-contract.md` | no new implementation | final verify |
 | FR-011 | partial | MM-492 is preserved in `spec.md` and Jira orchestration input | preserve MM-492 through plan, tasks, verification, and any later implementation artifacts | traceability check |
 | SC-001 | implemented_verified | report link classification and generic fallback tests exist in unit suites | no new implementation | unit |
 | SC-002 | implemented_verified | bundle validation tests reject inline payloads and unsafe keys | no new implementation | unit |
@@ -34,7 +34,7 @@ Plan MM-492 as a verification-first report contract story. The current repositor
 | DESIGN-REQ-004 | implemented_verified | compact `report_bundle_v = 1` result helpers exist | no new implementation | unit |
 | DESIGN-REQ-007 | implemented_verified | standardized report metadata key set exists | no new implementation | unit |
 | DESIGN-REQ-008 | implemented_verified | metadata sanitization rejects unsafe values | no new implementation | unit |
-| DESIGN-REQ-009 | implemented_unverified | terminology is present in docs and code comments but not yet preserved in feature-local contract artifacts | preserve in `data-model.md` and `contracts/` | final verify |
+| DESIGN-REQ-009 | implemented_verified | terminology is preserved in canonical docs, runtime helpers, `data-model.md`, and `contracts/report-artifact-contract.md` | no new implementation | final verify |
 | DESIGN-REQ-010 | implemented_verified | canonical report resolution is server/link-driven, with tests for latest `report.primary` lookup and UI consumption | no new implementation | contract + frontend unit |
 | DESIGN-REQ-011 | implemented_verified | rollout mapping and task-detail behavior preserve report/evidence/observability separation | no new implementation | unit + frontend unit |
 
@@ -80,6 +80,7 @@ specs/244-define-report-artifact-contract/
 ├── research.md
 ├── data-model.md
 ├── quickstart.md
+├── tasks.md
 ├── contracts/
 │   └── report-artifact-contract.md
 └── checklists/
