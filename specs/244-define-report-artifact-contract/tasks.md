@@ -26,8 +26,8 @@
 
 **Purpose**: Confirm the planning artifacts and current verification targets for the single MM-492 story.
 
-- [ ] T001 Confirm `specs/244-define-report-artifact-contract/` contains `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/report-artifact-contract.md`, and `quickstart.md`
-- [ ] T002 Confirm focused verification targets exist in `tests/unit/workflows/temporal/test_artifacts.py`, `tests/unit/workflows/temporal/test_artifacts_activities.py`, `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/contract/test_temporal_artifact_api.py`, and `frontend/src/entrypoints/task-detail.test.tsx`
+- [X] T001 Confirm `specs/244-define-report-artifact-contract/` contains `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/report-artifact-contract.md`, and `quickstart.md`
+- [X] T002 Confirm focused verification targets exist in `tests/unit/workflows/temporal/test_artifacts.py`, `tests/unit/workflows/temporal/test_artifacts_activities.py`, `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/contract/test_temporal_artifact_api.py`, and `frontend/src/entrypoints/task-detail.test.tsx`
 
 ---
 
@@ -37,8 +37,8 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T003 Confirm no database migration or new persistent storage is required because MM-492 uses the existing artifact tables and store through `moonmind/workflows/temporal/artifacts.py`
-- [ ] T004 Confirm no new package or service dependency is required because MM-492 relies on existing report artifact helpers, API contract coverage, and Mission Control consumer paths in `moonmind/workflows/temporal/report_artifacts.py`, `tests/contract/test_temporal_artifact_api.py`, and `frontend/src/entrypoints/task-detail.tsx`
+- [X] T003 Confirm no database migration or new persistent storage is required because MM-492 uses the existing artifact tables and store through `moonmind/workflows/temporal/artifacts.py`
+- [X] T004 Confirm no new package or service dependency is required because MM-492 relies on existing report artifact helpers, API contract coverage, and Mission Control consumer paths in `moonmind/workflows/temporal/report_artifacts.py`, `tests/contract/test_temporal_artifact_api.py`, and `frontend/src/entrypoints/task-detail.tsx`
 
 **Checkpoint**: Foundation ready - story verification and any fallback implementation work can now begin.
 
@@ -65,33 +65,33 @@
 
 ### Unit Verification Tests (write first)
 
-- [ ] T005 [P] Add or tighten focused unit assertions for FR-001 through FR-007, SC-001 through SC-003, and DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-007, DESIGN-REQ-008 in `tests/unit/workflows/temporal/test_artifacts.py`
-- [ ] T006 [P] Add or tighten focused unit assertions for FR-008, FR-009, SC-004, SC-005, DESIGN-REQ-010, and DESIGN-REQ-011 in `tests/unit/workflows/temporal/test_report_workflow_rollout.py`
-- [ ] T007 [P] Add or tighten unit coverage for report bundle publication boundary expectations in `tests/unit/workflows/temporal/test_artifacts_activities.py` for FR-005, FR-006, and SC-002
+- [X] T005 [P] Review existing unit assertions in `tests/unit/workflows/temporal/test_artifacts.py` for FR-001 through FR-007, SC-001 through SC-003, and DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-007, DESIGN-REQ-008; no tightening was required because current coverage already matches MM-492
+- [X] T006 [P] Review existing unit assertions in `tests/unit/workflows/temporal/test_report_workflow_rollout.py` for FR-008, FR-009, SC-004, SC-005, DESIGN-REQ-010, and DESIGN-REQ-011; no tightening was required because current coverage already matches MM-492
+- [X] T007 [P] Review existing report bundle publication boundary coverage in `tests/unit/workflows/temporal/test_artifacts_activities.py` for FR-005, FR-006, and SC-002; no tightening was required because current coverage already matches MM-492
 
 ### Integration-Style Boundary Tests (write first)
 
-- [ ] T008 [P] Add or tighten contract assertions for canonical latest `report.primary` resolution and explicit link-type behavior in `tests/contract/test_temporal_artifact_api.py` covering FR-008, SC-004, and DESIGN-REQ-010
-- [ ] T009 [P] Add or tighten Mission Control report-consumption assertions in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-008, FR-009, SC-004, SC-005, DESIGN-REQ-010, and DESIGN-REQ-011
+- [X] T008 [P] Review existing contract assertions in `tests/contract/test_temporal_artifact_api.py` for canonical latest `report.primary` resolution and explicit link-type behavior covering FR-008, SC-004, and DESIGN-REQ-010; no tightening was required because current coverage already matches MM-492
+- [X] T009 [P] Review existing Mission Control report-consumption assertions in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-008, FR-009, SC-004, SC-005, DESIGN-REQ-010, and DESIGN-REQ-011; no tightening was required because current coverage already matches MM-492
 
 ### Red-First Confirmation
 
-- [ ] T010 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_artifacts.py tests/unit/workflows/temporal/test_artifacts_activities.py tests/unit/workflows/temporal/test_report_workflow_rollout.py` and confirm any newly added verification-first tests fail for the intended MM-492 reason before production changes
-- [ ] T011 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py --ui-args frontend/src/entrypoints/task-detail.test.tsx` and confirm any newly added boundary checks fail for the intended MM-492 reason before production changes
+- [X] T010 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_artifacts.py tests/unit/workflows/temporal/test_artifacts_activities.py tests/unit/workflows/temporal/test_report_workflow_rollout.py`; the focused MM-492 unit verification passed without exposing drift, so no new red-first failure was required before production changes
+- [X] T011 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py --ui-args frontend/src/entrypoints/task-detail.test.tsx`; the focused MM-492 boundary verification passed without exposing drift, so no new red-first failure was required before production changes
 
 ### Fallback Implementation Tasks (only if T010 or T011 exposes drift)
 
-- [ ] T012 If unit verification fails, update `moonmind/workflows/temporal/report_artifacts.py` to align report link semantics, metadata validation, bundle validation, or canonical resolution helpers with FR-001 through FR-010 and DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-011
-- [ ] T013 If report bundle publication boundary checks fail, update `moonmind/workflows/temporal/artifacts.py` and `tests/unit/workflows/temporal/test_artifacts_activities.py` to preserve compact bundle publication behavior for FR-005 and FR-006
-- [ ] T014 If API or Mission Control boundary checks fail, update `tests/contract/test_temporal_artifact_api.py`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` so canonical report selection remains server/link-driven and report/evidence/observability separation is preserved for FR-008 and FR-009
-- [ ] T015 If terminology or traceability verification fails, update `specs/244-define-report-artifact-contract/data-model.md`, `specs/244-define-report-artifact-contract/contracts/report-artifact-contract.md`, and any affected runtime docstrings to preserve FR-010, FR-011, SC-006, and DESIGN-REQ-009 without changing behavior unnecessarily
+- [X] T012 No unit-side implementation changes were required in `moonmind/workflows/temporal/report_artifacts.py` because T010 exposed no MM-492 drift
+- [X] T013 No report bundle publication changes were required in `moonmind/workflows/temporal/artifacts.py` or `tests/unit/workflows/temporal/test_artifacts_activities.py` because T010 exposed no MM-492 drift
+- [X] T014 No API or Mission Control changes were required in `tests/contract/test_temporal_artifact_api.py`, `frontend/src/entrypoints/task-detail.tsx`, or `frontend/src/entrypoints/task-detail.test.tsx` because T011 exposed no MM-492 drift
+- [X] T015 No terminology or traceability remediation was required in `specs/244-define-report-artifact-contract/data-model.md`, `specs/244-define-report-artifact-contract/contracts/report-artifact-contract.md`, or runtime docstrings because the review found no MM-492 drift
 
 ### Story Validation
 
-- [ ] T016 Rerun the focused unit command from T010 until MM-492 verification passes
-- [ ] T017 Rerun the boundary verification command from T011 until MM-492 verification passes
-- [ ] T018 If T012-T014 changed artifact persistence, activity publication, or API serialization/linkage, run `./tools/test_integration.sh`; otherwise record why hermetic integration escalation was not required for MM-492
-- [ ] T019 Review `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/report-artifact-contract.md`, `quickstart.md`, code, and tests for MM-492 traceability covering FR-011 and SC-006
+- [X] T016 Rerun the focused unit command from T010 until MM-492 verification passes
+- [X] T017 Rerun the boundary verification command from T011 until MM-492 verification passes
+- [X] T018 Hermetic integration escalation was not required for MM-492 because no artifact persistence, activity publication, or API serialization/linkage changes were needed
+- [X] T019 Review `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/report-artifact-contract.md`, `quickstart.md`, code, and tests for MM-492 traceability covering FR-011 and SC-006
 
 **Checkpoint**: The MM-492 story is verified against the current repo, any discovered drift is resolved, and the contract remains independently testable.
 
@@ -101,8 +101,8 @@
 
 **Purpose**: Complete final validation and preserve story-level evidence without adding hidden scope.
 
-- [ ] T020 [P] Update `specs/244-define-report-artifact-contract/quickstart.md` and any affected feature artifacts if the executed verification commands differ from the plan while preserving MM-492 scope
-- [ ] T021 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit-suite verification if any code or test files changed during MM-492 work
+- [X] T020 [P] No `quickstart.md` or feature-artifact updates were required because the executed verification commands matched the MM-492 plan
+- [X] T021 Final full-unit rerun was not required because no code or test files changed during MM-492 implementation review
 - [ ] T022 Run `/moonspec-verify` equivalent for `specs/244-define-report-artifact-contract/` and produce the final verification artifact covering MM-492, FR-001 through FR-011, SC-001 through SC-006, and DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-011
 
 ---
