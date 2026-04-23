@@ -1,27 +1,27 @@
 [
   {
-    "id": 3133634364,
+    "id": 4166333325,
     "disposition": "addressed",
-    "rationale": "Added an explicit TemporalExecutionRecord | TemporalExecutionCanonicalRecord type hint to the snapshot helper record parameter."
+    "rationale": "Removed the deprecated executionStatusPillClasses compatibility alias and updated remaining call sites plus tests to use executionStatusPillProps directly."
   },
   {
-    "id": 3133634368,
+    "id": 3134136568,
     "disposition": "addressed",
-    "rationale": "Moved session.refresh(record) inside the snapshot_ref block so it only runs after a persisted snapshot commit."
+    "rationale": "Dropped the unused executionStatusPillClasses import from task-detail.tsx and kept only executionStatusPillProps."
   },
   {
-    "id": 4165735428,
-    "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable child comments were handled individually."
-  },
-  {
-    "id": 3133637367,
+    "id": 3134136587,
     "disposition": "addressed",
-    "rationale": "Changed direct-run snapshot creation to use parameters from the returned persisted record instead of the incoming request payload, preserving idempotency replay semantics."
+    "rationale": "Deleted the executionStatusPillClasses export and migrated all remaining frontend callers off the alias."
   },
   {
-    "id": 4165738806,
-    "disposition": "not-applicable",
-    "rationale": "Informational Codex review wrapper with no distinct actionable feedback beyond the child comment."
+    "id": 3134136591,
+    "disposition": "addressed",
+    "rationale": "Removed executionStatusPillClasses from the test imports so the spec exercises the canonical helper only."
+  },
+  {
+    "id": 3134136597,
+    "disposition": "addressed",
+    "rationale": "Updated the class-name expectations to assert executionStatusPillProps(...).className directly."
   }
 ]

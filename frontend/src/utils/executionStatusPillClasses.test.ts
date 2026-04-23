@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   EXECUTING_STATUS_PILL_TRACEABILITY,
-  executionStatusPillClasses,
   executionStatusPillProps,
 } from './executionStatusPillClasses';
 
@@ -23,9 +22,9 @@ describe('executionStatusPillProps', () => {
   });
 
   it('keeps the existing class helper output for non-executing states', () => {
-    expect(executionStatusPillClasses('completed')).toBe('status status-completed');
-    expect(executionStatusPillClasses('failed')).toBe('status status-failed');
-    expect(executionStatusPillClasses('executing')).toBe('status status-running is-executing');
+    expect(executionStatusPillProps('completed').className).toBe('status status-completed');
+    expect(executionStatusPillProps('failed').className).toBe('status status-failed');
+    expect(executionStatusPillProps('executing').className).toBe('status status-running is-executing');
   });
 
   it('preserves MM-488 traceability for downstream verification', () => {

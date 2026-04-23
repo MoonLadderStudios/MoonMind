@@ -4,7 +4,7 @@ import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
-import { executionStatusPillClasses, executionStatusPillProps } from '../utils/executionStatusPillClasses';
+import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { formatRuntimeLabel } from '../utils/formatters';
 import {
@@ -1990,8 +1990,9 @@ function stepCheckStatusClass(status: string | null | undefined): string {
 
 function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
   const checkStatusClass = stepCheckStatusClass(check.status);
+  const statusPillClassName = executionStatusPillProps(check.status).className;
   return (
-    <span className={`step-check-badge ${checkStatusClass} ${executionStatusPillClasses(check.status)}`}>
+    <span className={`step-check-badge ${checkStatusClass} ${statusPillClassName}`}>
       {check.kind.replaceAll('_', ' ')}: {check.status.replaceAll('_', ' ')}
     </span>
   );
@@ -2235,7 +2236,7 @@ function StepLedgerRowCard({
             <span className="step-tl-title">{row.title}</span>
             <span className="step-tl-right">
               <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
-              <span className={executionStatusPillClasses(row.status)}>{row.status.replaceAll('_', ' ')}</span>
+              <span {...executionStatusPillProps(row.status)}>{row.status.replaceAll('_', ' ')}</span>
               {row.attempt > 1 ? <span className="step-attempt-pill">Attempt {row.attempt}</span> : null}
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
             </span>

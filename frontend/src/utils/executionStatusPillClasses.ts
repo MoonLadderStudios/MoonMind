@@ -57,7 +57,3 @@ export function executionStatusPillProps(status: string | null | undefined): Exe
 
   return { className };
 }
-
-export function executionStatusPillClasses(status: string | null | undefined): string {
-  return executionStatusPillProps(status).className;
-}
