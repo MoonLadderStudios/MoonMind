@@ -92,8 +92,11 @@ def _build_credential_check_command(
         credentials_path = shlex.quote(f"{mount_path}/credentials.json")
         settings_path = shlex.quote(f"{mount_path}/settings.json")
         settings_evidence_pattern = (
-            r'"(hasCompletedOnboarding|userID|userEmail|account|oauth|'
-            r'primaryApiKeyHelper|customApiKeyResponses)"[[:space:]]*:'
+            r'"hasCompletedOnboarding"[[:space:]]*:[[:space:]]*true|'
+            r'"(userID|userEmail)"[[:space:]]*:[[:space:]]*"[^"]+"|'
+            r'"(account|oauth|primaryApiKeyHelper|customApiKeyResponses)"'
+            r'[[:space:]]*:[[:space:]]*(true|"[^"]+"|\{[^{}]*[^[:space:]{}][^{}]*\}|'
+            r'\[[^][]*[^[:space:]\[\]][^][]*\])'
         )
         return " && ".join(
             (
@@ -104,7 +107,8 @@ def _build_credential_check_command(
                 ),
                 (
                     f"( test -s {settings_path} "
-                    f"&& grep -Eiq {shlex.quote(settings_evidence_pattern)} {settings_path} "
+                    f"&& tr '\\n' ' ' < {settings_path} "
+                    f"| grep -Eiq {shlex.quote(settings_evidence_pattern)} "
                     '&& echo "QUALIFIED:settings.json" ) '
                     f"|| ( test -s {settings_path} "
                     '&& echo "UNQUALIFIED:settings.json" ) '

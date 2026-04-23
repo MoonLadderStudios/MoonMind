@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -69,6 +70,86 @@ class TestCredentialCheckCommand:
             "\"/.config/gemini/credentials.json'"
             in command
         )
+
+    def test_claude_settings_false_does_not_qualify(
+        self, tmp_path
+    ) -> None:
+        (tmp_path / "settings.json").write_text(
+            '{"hasCompletedOnboarding": false}', encoding="utf-8"
+        )
+
+        command = _build_credential_check_command(
+            runtime_id="claude_code",
+            mount_path=str(tmp_path),
+            credential_paths=PROVIDER_CREDENTIAL_PATHS["claude_code"],
+        )
+
+        output = subprocess.check_output(["sh", "-c", command], text=True)
+
+        lines = output.splitlines()
+
+        assert "MISSING:credentials.json" in lines
+        assert "UNQUALIFIED:settings.json" in lines
+        assert "QUALIFIED:settings.json" not in lines
+
+    def test_claude_settings_true_qualifies(self, tmp_path) -> None:
+        (tmp_path / "settings.json").write_text(
+            '{"hasCompletedOnboarding": true}', encoding="utf-8"
+        )
+
+        command = _build_credential_check_command(
+            runtime_id="claude_code",
+            mount_path=str(tmp_path),
+            credential_paths=PROVIDER_CREDENTIAL_PATHS["claude_code"],
+        )
+
+        output = subprocess.check_output(["sh", "-c", command], text=True)
+
+        lines = output.splitlines()
+
+        assert "MISSING:credentials.json" in lines
+        assert "QUALIFIED:settings.json" in lines
+        assert "UNQUALIFIED:settings.json" not in lines
+
+    def test_claude_empty_identity_setting_does_not_qualify(
+        self, tmp_path
+    ) -> None:
+        (tmp_path / "settings.json").write_text(
+            '{"userEmail": ""}', encoding="utf-8"
+        )
+
+        command = _build_credential_check_command(
+            runtime_id="claude_code",
+            mount_path=str(tmp_path),
+            credential_paths=PROVIDER_CREDENTIAL_PATHS["claude_code"],
+        )
+
+        output = subprocess.check_output(["sh", "-c", command], text=True)
+
+        lines = output.splitlines()
+
+        assert "UNQUALIFIED:settings.json" in lines
+        assert "QUALIFIED:settings.json" not in lines
+
+    def test_claude_non_empty_identity_setting_qualifies(
+        self, tmp_path
+    ) -> None:
+        (tmp_path / "settings.json").write_text(
+            '{"userEmail": "operator@example.test"}', encoding="utf-8"
+        )
+
+        command = _build_credential_check_command(
+            runtime_id="claude_code",
+            mount_path=str(tmp_path),
+            credential_paths=PROVIDER_CREDENTIAL_PATHS["claude_code"],
+        )
+
+        output = subprocess.check_output(["sh", "-c", command], text=True)
+
+        lines = output.splitlines()
+
+        assert "QUALIFIED:settings.json" in lines
+        assert "UNQUALIFIED:settings.json" not in lines
 
 
 class TestVerifyVolumeCredentials:

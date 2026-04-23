@@ -1,22 +1,17 @@
 [
   {
-    "id": 4300922049,
+    "id": 4302196849,
     "disposition": "not-applicable",
-    "rationale": "Quota warning from gemini-code-assist; no code feedback to address."
+    "rationale": "Gemini quota notice is informational and contains no actionable PR feedback."
   },
   {
-    "id": 3127713027,
+    "id": 3128784683,
     "disposition": "addressed",
-    "rationale": "Persisted released mutation lock state, cleared active lock fields, and added restart regression coverage."
+    "rationale": "Claude settings qualification now requires affirmative values and tests cover false and empty values."
   },
   {
-    "id": 3127713030,
-    "disposition": "addressed",
-    "rationale": "Validated authority and guard remediation workflow, target, target run, and idempotency context before action execution; added regression coverage."
-  },
-  {
-    "id": 4158858359,
+    "id": 4160181365,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary container; actionable child review comments are tracked separately."
+    "rationale": "Top-level automated review wrapper; actionable inline finding is tracked separately."
   }
 ]
