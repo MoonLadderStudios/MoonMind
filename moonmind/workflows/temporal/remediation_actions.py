@@ -52,24 +52,152 @@ _RAW_ACCESS_ACTION_KINDS = frozenset(
         "raw_storage",
     }
 )
+_COMMON_REASON_INPUT = {
+    "reason": {"type": "string", "required": False},
+}
+_COMMON_AUDIT_PAYLOAD_SHAPE = {
+    "actor": "string",
+    "executionPrincipal": "string",
+    "remediationWorkflowId": "string",
+    "targetWorkflowId": "string",
+    "actionKind": "string",
+    "riskTier": "string",
+    "decision": "string",
+    "timestamp": "string",
+}
 _ACTION_CATALOG: dict[str, dict[str, Any]] = {
-    "restart_worker": {
+    "execution.pause": {
         "risk": "medium",
         "enabled": True,
-        "target_type": "workload_container",
-        "input_metadata": {
-            "reason": {"type": "string", "required": False},
-        },
-        "verification_hint": "verify helper container health and target state",
+        "target_type": "execution",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "target_active"),
+        "idempotency": "same target/action/reason key returns the prior decision",
+        "verification_hint": "verify target execution enters a paused or non-progressing state",
     },
-    "terminate_session": {
+    "execution.resume": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "execution",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "target_paused"),
+        "idempotency": "same target/action/reason key returns the prior decision",
+        "verification_hint": "verify target execution leaves paused state or reports no-op",
+    },
+    "execution.request_rerun_same_workflow": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "execution",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "rerun_supported"),
+        "idempotency": "same target/action/reason key returns the prior decision",
+        "verification_hint": "verify target run identity changes or no-op reason is recorded",
+    },
+    "execution.start_fresh_rerun": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "execution",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "fresh_rerun_allowed"),
+        "idempotency": "same target/action/reason key returns the prior decision",
+        "verification_hint": "verify a fresh execution is created and linked to the target",
+    },
+    "execution.cancel": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "execution",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "target_cancelable"),
+        "idempotency": "same target/action/reason key returns the prior decision",
+        "verification_hint": (
+            "verify target execution records cancellation or a no-op terminal state"
+        ),
+    },
+    "execution.force_terminate": {
+        "risk": "high",
+        "enabled": True,
+        "target_type": "execution",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "force_termination_approved"),
+        "idempotency": "same target/action/reason key returns the prior decision",
+        "verification_hint": "verify target execution termination and high-risk audit evidence",
+    },
+    "session.interrupt_turn": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "managed_session",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "active_managed_turn"),
+        "idempotency": "same target/action/reason key returns the prior decision",
+        "verification_hint": (
+            "verify active managed turn is interrupted and control artifact is produced"
+        ),
+    },
+    "session.clear": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "managed_session",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "session_clear_supported"),
+        "idempotency": "same target/action/reason key returns the prior decision",
+        "verification_hint": "verify session clear boundary and continuity artifact are produced",
+    },
+    "session.cancel": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "managed_session",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "session_cancelable"),
+        "idempotency": "same target/action/reason key returns the prior decision",
+        "verification_hint": "verify session cancellation state and target run status",
+    },
+    "session.terminate": {
         "risk": "high",
         "enabled": True,
         "target_type": "managed_session",
-        "input_metadata": {
-            "reason": {"type": "string", "required": False},
-        },
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "session_termination_approved"),
+        "idempotency": "same target/action/reason key returns the prior decision",
         "verification_hint": "verify session termination state and target run status",
+    },
+    "session.restart_container": {
+        "risk": "high",
+        "enabled": True,
+        "target_type": "managed_session",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "restart_approved", "owning_session_plane"),
+        "idempotency": "same target/action/reason key returns the prior decision",
+        "verification_hint": "verify new session identity and continuity boundary artifact",
+    },
+    "provider_profile.evict_stale_lease": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "provider_profile_lease",
+        "input_metadata": {
+            **_COMMON_REASON_INPUT,
+            "profileRef": {"type": "string", "required": False},
+        },
+        "preconditions": ("target_visible", "lease_stale_or_orphaned"),
+        "idempotency": "same target/action/profile key returns the prior decision",
+        "verification_hint": "verify lease age, owner liveness, and slot state afterward",
+    },
+    "workload.restart_helper_container": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "workload_container",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "helper_container_owned_by_moonmind"),
+        "idempotency": "same target/action/container key returns the prior decision",
+        "verification_hint": "verify helper container health and target state",
+    },
+    "workload.reap_orphan_container": {
+        "risk": "medium",
+        "enabled": True,
+        "target_type": "workload_container",
+        "input_metadata": _COMMON_REASON_INPUT,
+        "preconditions": ("target_visible", "container_orphaned_by_policy"),
+        "idempotency": "same target/action/container key returns the prior decision",
+        "verification_hint": "verify orphan container is gone or no-op reason is recorded",
     },
 }
 _DEFAULT_AUTO_ALLOWED_RISK = "medium"
@@ -383,8 +511,11 @@ class RemediationActionAuthorityService:
                     "riskTier": action_info["risk"],
                     "targetType": action_info["target_type"],
                     "inputMetadata": deepcopy(action_info.get("input_metadata") or {}),
+                    "preconditions": tuple(action_info.get("preconditions") or ()),
+                    "idempotency": action_info.get("idempotency"),
                     "verificationRequired": True,
                     "verificationHint": action_info["verification_hint"],
+                    "auditPayloadShape": deepcopy(_COMMON_AUDIT_PAYLOAD_SHAPE),
                 }
             )
         return tuple(actions)

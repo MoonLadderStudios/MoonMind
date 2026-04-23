@@ -124,11 +124,72 @@ def _admin_profile(**overrides):
     data = {
         "profile_ref": "admin_healer",
         "execution_principal": "service:admin-healer",
-        "allowed_action_kinds": ("restart_worker", "terminate_session"),
+        "allowed_action_kinds": ("workload.restart_helper_container", "session.terminate"),
         "enabled": True,
     }
     data.update(overrides)
     return RemediationSecurityProfile(**data)
+
+
+CANONICAL_REMEDIATION_ACTIONS = {
+    "execution.pause",
+    "execution.resume",
+    "execution.request_rerun_same_workflow",
+    "execution.start_fresh_rerun",
+    "execution.cancel",
+    "execution.force_terminate",
+    "session.interrupt_turn",
+    "session.clear",
+    "session.cancel",
+    "session.terminate",
+    "session.restart_container",
+    "provider_profile.evict_stale_lease",
+    "workload.restart_helper_container",
+    "workload.reap_orphan_container",
+}
+
+
+def test_remediation_action_authority_lists_canonical_mm483_action_registry():
+    service = RemediationActionAuthorityService(session=object())
+
+    allowed = service.list_allowed_actions(
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(
+            allowed_action_kinds=tuple(sorted(CANONICAL_REMEDIATION_ACTIONS))
+        ),
+    )
+
+    assert {item["actionKind"] for item in allowed} == CANONICAL_REMEDIATION_ACTIONS
+    for item in allowed:
+        assert item["riskTier"] in {"low", "medium", "high"}
+        assert item["targetType"]
+        assert isinstance(item["inputMetadata"], dict)
+        assert item["preconditions"]
+        assert item["idempotency"]
+        assert item["verificationRequired"] is True
+        assert item["verificationHint"]
+        assert item["auditPayloadShape"]
+
+
+def test_remediation_action_authority_rejects_legacy_action_aliases():
+    service = RemediationActionAuthorityService(session=object())
+
+    allowed = service.list_allowed_actions(
+        permissions=_admin_permissions(),
+        security_profile=_admin_profile(
+            allowed_action_kinds=(
+                "restart_worker",
+                "terminate_session",
+                "workload.restart_helper_container",
+                "session.terminate",
+            )
+        ),
+    )
+
+    assert {item["actionKind"] for item in allowed} == {
+        "workload.restart_helper_container",
+        "session.terminate",
+    }
 
 
 def test_remediation_action_authority_lists_policy_compatible_actions():
@@ -142,10 +203,12 @@ def test_remediation_action_authority_lists_policy_compatible_actions():
 
     allowed = service.list_allowed_actions(
         permissions=_admin_permissions(),
-        security_profile=_admin_profile(allowed_action_kinds=("restart_worker",)),
+        security_profile=_admin_profile(
+            allowed_action_kinds=("workload.restart_helper_container",)
+        ),
     )
 
-    assert [item["actionKind"] for item in allowed] == ["restart_worker"]
+    assert [item["actionKind"] for item in allowed] == ["workload.restart_helper_container"]
     assert allowed[0]["riskTier"] == "medium"
     assert allowed[0]["targetType"] == "workload_container"
     assert allowed[0]["inputMetadata"]["reason"]["required"] is False
@@ -153,7 +216,9 @@ def test_remediation_action_authority_lists_policy_compatible_actions():
     allowed[0]["inputMetadata"]["reason"]["required"] = True
     listed_again = service.list_allowed_actions(
         permissions=_admin_permissions(),
-        security_profile=_admin_profile(allowed_action_kinds=("restart_worker",)),
+        security_profile=_admin_profile(
+            allowed_action_kinds=("workload.restart_helper_container",)
+        ),
     )
     assert listed_again[0]["inputMetadata"]["reason"]["required"] is False
 
@@ -165,8 +230,8 @@ def test_remediation_action_authority_does_not_advertise_raw_admin_actions():
         permissions=_admin_permissions(),
         security_profile=_admin_profile(
             allowed_action_kinds=(
-                "restart_worker",
-                "terminate_session",
+                "workload.restart_helper_container",
+                "session.terminate",
                 "raw_host_shell",
                 "raw_docker",
                 "raw_sql",
@@ -178,7 +243,7 @@ def test_remediation_action_authority_does_not_advertise_raw_admin_actions():
     )
 
     action_kinds = {item["actionKind"] for item in allowed}
-    assert action_kinds == {"restart_worker", "terminate_session"}
+    assert action_kinds == {"workload.restart_helper_container", "session.terminate"}
     assert not action_kinds.intersection(
         {
             "raw_host_shell",
@@ -559,7 +624,7 @@ def test_remediation_audit_normalizes_string_timestamps():
         remediation_run_id="remediation-run",
         target_workflow_id="target-workflow",
         target_run_id="target-run",
-        action_kind="restart_worker",
+        action_kind="workload.restart_helper_container",
         risk_tier="medium",
         approval_decision="approved",
         timestamp="2026-04-22T01:02:03+02:00",
@@ -579,7 +644,7 @@ def test_remediation_audit_rejects_malformed_string_timestamps():
             remediation_run_id="remediation-run",
             target_workflow_id="target-workflow",
             target_run_id="target-run",
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             risk_tier="medium",
             approval_decision="approved",
             timestamp="not-a-timestamp",
@@ -592,7 +657,7 @@ def test_target_remediation_linkage_summary_is_compact():
         active_remediation_count=2,
         latest_remediation_title="Publish remediation lifecycle phases",
         latest_remediation_status="acting",
-        latest_action_kind="restart_worker",
+        latest_action_kind="workload.restart_helper_container",
         latest_outcome="resolved_after_action",
         active_lock_scope="target_execution",
         active_lock_holder="remediation-workflow",
@@ -605,7 +670,7 @@ def test_target_remediation_linkage_summary_is_compact():
         "activeRemediationCount": 2,
         "latestRemediationTitle": "Publish remediation lifecycle phases",
         "latestRemediationStatus": "acting",
-        "latestActionKind": "restart_worker",
+        "latestActionKind": "workload.restart_helper_container",
         "latestOutcome": "resolved_after_action",
         "activeLockScope": "target_execution",
         "activeLockHolder": "remediation-workflow",
@@ -639,7 +704,7 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
             phase="resolved",
             mode="snapshot_then_follow",
             authority_mode="admin_auto",
-            actions_attempted=({"kind": "restart_worker", "status": "applied"},),
+            actions_attempted=({"kind": "workload.restart_helper_container", "status": "applied"},),
             resolution="resolved_after_action",
         )
         artifacts = []
@@ -657,7 +722,7 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
             (
                 "remediation.action_request",
                 "reports/remediation_action_request-1.json",
-                {"actionKind": "restart_worker"},
+                {"actionKind": "workload.restart_helper_container"},
             ),
             (
                 "remediation.action_result",
@@ -1167,11 +1232,11 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
         )
         preparation = await tools.prepare_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="terminate_session",
+            action_kind="session.terminate",
         )
 
         assert preparation.remediation_workflow_id == remediation.workflow_id
-        assert preparation.action_kind == "terminate_session"
+        assert preparation.action_kind == "session.terminate"
         assert preparation.context_target["runId"] == "target-run"
         assert preparation.target.workflow_id == target.workflow_id
         assert preparation.target.pinned_run_id == "target-run"
@@ -1248,7 +1313,7 @@ async def test_remediation_action_authority_enforces_authority_modes(
 
         dry_run = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={"reason": "diagnose only"},
             dry_run=True,
             idempotency_key="observe-dry-run",
@@ -1266,7 +1331,7 @@ async def test_remediation_action_authority_enforces_authority_modes(
 
         denied = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={"reason": "side effect"},
             dry_run=False,
             idempotency_key="observe-execute",
@@ -1293,7 +1358,7 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
 
         pending = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=False,
             idempotency_key="gated-pending",
@@ -1307,7 +1372,7 @@ async def test_remediation_action_authority_requires_approval_for_gated_mode(
 
         approved = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=False,
             idempotency_key="gated-approved",
@@ -1336,7 +1401,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         view_only = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=False,
             idempotency_key="view-only",
@@ -1349,7 +1414,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         disabled_profile = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=False,
             idempotency_key="disabled-profile",
@@ -1362,7 +1427,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         allowed = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=False,
             idempotency_key="medium-allowed",
@@ -1375,7 +1440,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
         assert allowed.executable is True
         payload = allowed.to_dict()
         assert payload["schemaVersion"] == "v1"
-        assert payload["request"]["actionKind"] == "restart_worker"
+        assert payload["request"]["actionKind"] == "workload.restart_helper_container"
         assert payload["request"]["riskTier"] == "medium"
         assert payload["request"]["dryRun"] is False
         assert payload["result"]["status"] == "applied"
@@ -1386,7 +1451,7 @@ async def test_remediation_action_authority_enforces_profile_permissions_and_ris
 
         high_risk = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="terminate_session",
+            action_kind="session.terminate",
             parameters={},
             dry_run=False,
             idempotency_key="high-risk",
@@ -1420,7 +1485,7 @@ async def test_remediation_action_authority_rejects_unsupported_authority_mode(
         service = RemediationActionAuthorityService(session=session)
         result = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=False,
             idempotency_key="unsupported-authority",
@@ -1448,7 +1513,7 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
 
         allowed = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=False,
             idempotency_key="same-idempotency-key",
@@ -1458,7 +1523,7 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         )
         high_risk = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="terminate_session",
+            action_kind="session.terminate",
             parameters={},
             dry_run=False,
             idempotency_key="same-idempotency-key",
@@ -1468,7 +1533,7 @@ async def test_remediation_action_authority_cache_keys_include_request_shape(
         )
         dry_run = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=True,
             idempotency_key="same-idempotency-key",
@@ -1503,7 +1568,7 @@ async def test_remediation_action_authority_redacts_audits_and_deduplicates(
 
         result = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={
                 "token": "raw-secret-token",
                 "path": "/work/agent_jobs/mm:secret/repo/.env",
@@ -1517,7 +1582,7 @@ async def test_remediation_action_authority_redacts_audits_and_deduplicates(
         )
         duplicate = await service.evaluate_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={"token": "different-secret"},
             dry_run=False,
             idempotency_key="dedupe-redact",
@@ -1575,7 +1640,7 @@ async def test_remediation_action_authority_denies_raw_access_and_unknown_target
 
         missing = await service.evaluate_action_request(
             remediation_workflow_id="mm:missing-remediation",
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             parameters={},
             dry_run=False,
             idempotency_key="missing-target",
@@ -1613,7 +1678,7 @@ async def test_remediation_action_authority_uses_prepared_action_context(
         )
         preparation = await tools.prepare_action_request(
             remediation_workflow_id=remediation.workflow_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
         )
 
         service = RemediationActionAuthorityService(session=session)
@@ -1651,7 +1716,7 @@ async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="lock-1",
             parameters={},
             policy=RemediationMutationGuardPolicy(
@@ -1666,7 +1731,7 @@ async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="lock-1",
             parameters={},
             policy=RemediationMutationGuardPolicy(
@@ -1681,7 +1746,7 @@ async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="lock-expired-holder",
             parameters={},
             policy=RemediationMutationGuardPolicy(
@@ -1696,7 +1761,7 @@ async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
             remediation_run_id="other-run",
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="lock-2",
             parameters={},
             policy=RemediationMutationGuardPolicy(
@@ -1711,7 +1776,7 @@ async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
             remediation_run_id="other-run",
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="lock-3",
             parameters={},
             policy=RemediationMutationGuardPolicy(
@@ -1727,7 +1792,7 @@ async def test_remediation_mutation_guard_enforces_exclusive_locks_and_recovery(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="lock-4",
             parameters={},
             policy=RemediationMutationGuardPolicy(
@@ -1776,7 +1841,7 @@ async def test_remediation_mutation_guard_enforces_ledger_budgets_and_cooldowns(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="ledger-1",
             parameters={"reason": "first"},
             policy=policy,
@@ -1787,7 +1852,7 @@ async def test_remediation_mutation_guard_enforces_ledger_budgets_and_cooldowns(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="ledger-1",
             parameters={"reason": "first"},
             policy=policy,
@@ -1798,7 +1863,7 @@ async def test_remediation_mutation_guard_enforces_ledger_budgets_and_cooldowns(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="ledger-1",
             parameters={"reason": "changed"},
             policy=policy,
@@ -1809,7 +1874,7 @@ async def test_remediation_mutation_guard_enforces_ledger_budgets_and_cooldowns(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="ledger-2",
             parameters={"reason": "first"},
             policy=policy,
@@ -1820,7 +1885,7 @@ async def test_remediation_mutation_guard_enforces_ledger_budgets_and_cooldowns(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="terminate_session",
+            action_kind="session.terminate",
             idempotency_key="ledger-3",
             parameters={"reason": "second"},
             policy=policy,
@@ -1831,7 +1896,7 @@ async def test_remediation_mutation_guard_enforces_ledger_budgets_and_cooldowns(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="terminate_session",
+            action_kind="session.terminate",
             idempotency_key="ledger-4",
             parameters={"reason": "third"},
             policy=policy,
@@ -1867,7 +1932,7 @@ async def test_remediation_mutation_guard_rejects_nested_and_changed_targets(
             remediation_run_id=remediation.run_id,
             target_workflow_id=remediation.workflow_id,
             target_run_id=remediation.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="nested-1",
             parameters={},
             policy=RemediationMutationGuardPolicy(),
@@ -1879,7 +1944,7 @@ async def test_remediation_mutation_guard_rejects_nested_and_changed_targets(
             remediation_run_id=remediation.run_id,
             target_workflow_id="mm:other-remediation",
             target_run_id="other-run",
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="nested-2",
             parameters={},
             policy=RemediationMutationGuardPolicy(),
@@ -1891,7 +1956,7 @@ async def test_remediation_mutation_guard_rejects_nested_and_changed_targets(
             remediation_run_id=remediation.run_id,
             target_workflow_id="mm:other-remediation",
             target_run_id="other-run",
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="nested-3",
             parameters={},
             policy=RemediationMutationGuardPolicy(allow_nested_remediation=True),
@@ -1903,7 +1968,7 @@ async def test_remediation_mutation_guard_rejects_nested_and_changed_targets(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="fresh-1",
             parameters={},
             policy=RemediationMutationGuardPolicy(target_change_policy="rediagnose"),
@@ -1922,7 +1987,7 @@ async def test_remediation_mutation_guard_rejects_nested_and_changed_targets(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="fresh-state-drift",
             parameters={},
             policy=RemediationMutationGuardPolicy(target_change_policy="escalate"),
@@ -1944,7 +2009,7 @@ async def test_remediation_mutation_guard_rejects_nested_and_changed_targets(
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="fresh-2",
             parameters={},
             policy=RemediationMutationGuardPolicy(),
@@ -1982,7 +2047,7 @@ async def test_remediation_mutation_guard_serialization_redacts_sensitive_values
             remediation_run_id=remediation.run_id,
             target_workflow_id=target.workflow_id,
             target_run_id=target.run_id,
-            action_kind="restart_worker",
+            action_kind="workload.restart_helper_container",
             idempotency_key="redact-guard",
             parameters={
                 "token": "secret-token-value",
