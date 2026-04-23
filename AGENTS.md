@@ -204,6 +204,8 @@ Key diagnostics:
 - TypeScript/React for Mission Control UI; Python 3.12 remains present but is not expected in this story + React, Vitest, Testing Library, existing Mission Control stylesheet, existing entrypoint render tests (244-shimmer-sweep-status-pill)
 - Python 3.12 + FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, pytest, existing OAuth session/terminal bridge/runtime-launch services (245-claude-oauth-guardrails)
 - Existing OAuth session rows, provider-profile rows, managed-session diagnostics, artifact metadata, and workflow history; no new persistent tables planned (245-claude-oauth-guardrails)
+- Python 3.12 and TypeScript/React for existing Mission Control verification surfaces + Pydantic v2, Temporal Python SDK, SQLAlchemy async ORM, existing temporal artifact service/helpers, React, Vitest (245-publish-report-bundles)
+- Existing temporal artifact metadata tables and configured artifact store; no new persistent storage (245-publish-report-bundles)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

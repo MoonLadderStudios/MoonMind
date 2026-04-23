@@ -1,7 +1,7 @@
-# Specification Quality Checklist: Surface Canonical Reports in Mission Control
+# Specification Quality Checklist: Publish Report Bundles
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: 2026-04-22
+**Created**: 2026-04-23
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -36,4 +36,8 @@
 
 ## Notes
 
-- Specification preserves MM-494 traceability while reusing the existing single-story report-presentation artifacts for the same runtime behavior.
+- Runtime intent selected from the MM-493 task instructions.
+- Input classified as a single-story runtime feature request.
+- Existing report-bundle specs under `specs/227-*` and `specs/244-*` cover different Jira stories, so MM-493 had no active feature directory and `Specify` was the first incomplete stage.
+- The canonical Jira preset brief is preserved verbatim in `spec.md`, including the MM-493 traceability requirement.
+- In-scope source design requirements from `docs/Artifacts/ReportArtifacts.md` sections 7, 11, 16, and 17 map to FR-001 through FR-008.
