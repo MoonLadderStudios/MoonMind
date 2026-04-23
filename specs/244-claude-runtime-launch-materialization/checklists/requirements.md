@@ -37,6 +37,8 @@
 ## Notes
 
 - Input classified as a single-story runtime feature request.
+- `moonspec-breakdown` was not run because MM-481 does not describe a broad technical or declarative design with multiple independently testable stories.
+- No multi-spec dependency ordering was required for MM-481 because only one isolated spec is in scope.
 - No existing MM-481 feature directory was present, so the first incomplete stage was `specify`.
 - Source design requirements from `docs/ManagedAgents/ClaudeAnthropicOAuth.md` sections 2, 7, and 9 map to FR-001 through FR-007.
 - The preserved original preset brief in `docs/tmp/jira-orchestration-inputs/MM-481-moonspec-orchestration-input.md` is the canonical orchestration input for this spec.
