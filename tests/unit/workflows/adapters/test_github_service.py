@@ -432,6 +432,114 @@ async def test_evaluate_pull_request_readiness_treats_commented_automated_review
 
 
 @pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_treats_codex_thumbs_up_reaction_as_complete(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
+            _mock_get_response(200, {"state": "success"}),
+            _mock_get_response(
+                200,
+                {
+                    "check_runs": [
+                        {"status": "completed", "conclusion": "success"},
+                    ]
+                },
+            ),
+            _mock_get_response(200, []),
+            _mock_get_response(
+                200,
+                [
+                    {
+                        "content": "+1",
+                        "created_at": "2026-04-23T00:33:48Z",
+                        "user": {
+                            "login": "chatgpt-codex-connector[bot]",
+                            "type": "User",
+                        },
+                    },
+                ],
+            ),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "required"},
+        )
+
+    assert result.ready is True
+    assert result.automated_review_complete is True
+    assert result.blockers == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_pull_request_readiness_ignores_non_codex_thumbs_up_reaction(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
+            _mock_get_response(200, {"state": "success"}),
+            _mock_get_response(
+                200,
+                {
+                    "check_runs": [
+                        {"status": "completed", "conclusion": "success"},
+                    ]
+                },
+            ),
+            _mock_get_response(200, []),
+            _mock_get_response(
+                200,
+                [
+                    {
+                        "content": "+1",
+                        "created_at": "2026-04-23T00:33:48Z",
+                        "user": {
+                            "login": "gemini-code-assist[bot]",
+                            "type": "Bot",
+                        },
+                    },
+                ],
+            ),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "required"},
+        )
+
+    assert result.ready is False
+    assert result.automated_review_complete is False
+    assert result.blockers[0]["kind"] == "automated_review_pending"
+
+
+@pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_waits_for_human_commented_review(
     monkeypatch,
 ):
@@ -460,6 +568,7 @@ async def test_evaluate_pull_request_readiness_waits_for_human_commented_review(
                     },
                 ],
             ),
+            _mock_get_response(200, []),
         ]
     )
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)

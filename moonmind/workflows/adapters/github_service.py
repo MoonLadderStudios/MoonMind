@@ -672,6 +672,16 @@ class GitHubService:
                     }
                 ],
             }
+        reaction_evidence = await self._evaluate_codex_review_reaction(
+            client=client,
+            repo=repo,
+            pr_number=pr_number,
+            headers=headers,
+        )
+        if reaction_evidence["complete"]:
+            return reaction_evidence
+        if reaction_evidence["blockers"]:
+            return reaction_evidence
         return {
             "complete": False,
             "blockers": [
@@ -683,6 +693,75 @@ class GitHubService:
                 }
             ],
         }
+
+    async def _evaluate_codex_review_reaction(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        repo: str,
+        pr_number: int,
+        headers: dict[str, str],
+    ) -> dict[str, Any]:
+        try:
+            response = await client.get(
+                f"https://api.github.com/repos/{repo}/issues/{pr_number}/reactions",
+                headers=headers,
+            )
+            response.raise_for_status()
+            reactions = response.json()
+        except httpx.HTTPStatusError as exc:
+            return {
+                "complete": None,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub review reaction state could not be fetched "
+                            f"(HTTP {exc.response.status_code})."
+                        ),
+                        "retryable": exc.response.status_code >= 500,
+                        "source": "github",
+                    }
+                ],
+            }
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return {
+                "complete": None,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub review reaction state request failed: "
+                            f"{exc.__class__.__name__}."
+                        ),
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            }
+
+        for reaction in reactions:
+            if not isinstance(reaction, dict):
+                continue
+            user = (
+                reaction.get("user")
+                if isinstance(reaction.get("user"), dict)
+                else {}
+            )
+            reviewer = str(user.get("login") or "")
+            if (
+                str(reaction.get("content") or "") == "+1"
+                and self._is_codex_connector_reviewer(reviewer)
+            ):
+                return {"complete": True, "blockers": []}
+        return {"complete": False, "blockers": []}
+
+    @staticmethod
+    def _is_codex_connector_reviewer(reviewer: str) -> bool:
+        login = reviewer.strip().lower()
+        if login.endswith("[bot]"):
+            login = login[: -len("[bot]")]
+        return login == "chatgpt-codex-connector"
 
     @staticmethod
     def _is_trusted_automation_reviewer(
