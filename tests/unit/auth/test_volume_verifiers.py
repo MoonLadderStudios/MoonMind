@@ -30,9 +30,10 @@ class TestProviderCredentialPaths:
 
     def test_claude_paths_defined(self) -> None:
         assert "claude_code" in PROVIDER_CREDENTIAL_PATHS
-        paths = PROVIDER_CREDENTIAL_PATHS["claude_code"]
-        assert len(paths) >= 1
-        assert any("claude" in p for p in paths)
+        assert PROVIDER_CREDENTIAL_PATHS["claude_code"] == (
+            "credentials.json",
+            "settings.json",
+        )
 
 
 class TestCredentialCheckCommand:
@@ -220,6 +221,106 @@ class TestVerifyVolumeCredentials:
         assert result["verified"] is False
         assert result["reason"] == "codex_auth_invalid"
         assert "sensitive-placeholder" not in repr(result)
+
+    @pytest.mark.asyncio
+    async def test_claude_verification_checks_credentials_at_mounted_home(
+        self,
+    ) -> None:
+        mock_process = AsyncMock()
+        mock_process.communicate = MagicMock(return_value="dummy")
+        mock_process.returncode = 0
+
+        with patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ) as exec_mock, patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
+            new_callable=AsyncMock,
+            return_value=(
+                b"FOUND:credentials.json\nMISSING:settings.json\n",
+                b"",
+            ),
+        ):
+            result = await verify_volume_credentials(
+                runtime_id="claude_code",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+            )
+
+        assert result["verified"] is True
+        assert result["status"] == "verified"
+        assert result["credentials_found_count"] == 1
+        assert result["credentials_missing_count"] == 1
+        assert "credentials.json" not in repr(result)
+        docker_args = exec_mock.call_args.args
+        assert "claude_auth_volume:/home/app/.claude:ro" in docker_args
+        command = docker_args[-1]
+        assert "/home/app/.claude/credentials.json" in command
+        assert "/home/app/.claude/.claude/credentials.json" not in command
+
+    @pytest.mark.asyncio
+    async def test_claude_verification_accepts_qualifying_settings_json(
+        self,
+    ) -> None:
+        mock_process = AsyncMock()
+        mock_process.communicate = MagicMock(return_value="dummy")
+        mock_process.returncode = 0
+
+        with patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
+            new_callable=AsyncMock,
+            return_value=(
+                b"MISSING:credentials.json\nQUALIFIED:settings.json\n",
+                b"",
+            ),
+        ):
+            result = await verify_volume_credentials(
+                runtime_id="claude_code",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+            )
+
+        assert result["verified"] is True
+        assert result["status"] == "verified"
+        assert result["reason"] == "ok"
+        assert result["credentials_found_count"] == 1
+        assert result["credentials_missing_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_claude_verification_rejects_non_qualifying_settings_json(
+        self,
+    ) -> None:
+        mock_process = AsyncMock()
+        mock_process.communicate = MagicMock(return_value="dummy")
+        mock_process.returncode = 0
+
+        with patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
+            new_callable=AsyncMock,
+            return_value=(
+                b"MISSING:credentials.json\nUNQUALIFIED:settings.json token-like-secret\n",
+                b"",
+            ),
+        ):
+            result = await verify_volume_credentials(
+                runtime_id="claude_code",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+            )
+
+        assert result["verified"] is False
+        assert result["status"] == "failed"
+        assert result["reason"] == "no_credentials_found"
+        assert result["credentials_found_count"] == 0
+        assert result["credentials_missing_count"] == 2
+        assert "token-like-secret" not in repr(result)
+        assert "settings.json" not in repr(result)
 
     @pytest.mark.asyncio
     async def test_no_credentials_found(self) -> None:
