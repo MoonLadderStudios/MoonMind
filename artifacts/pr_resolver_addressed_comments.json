@@ -1,17 +1,17 @@
 [
   {
-    "id": 4302196849,
+    "id": 4301917079,
     "disposition": "not-applicable",
-    "rationale": "Gemini quota notice is informational and contains no actionable PR feedback."
+    "rationale": "Gemini quota warning only; no actionable PR feedback."
   },
   {
-    "id": 3128784683,
+    "id": 3128519024,
     "disposition": "addressed",
-    "rationale": "Claude settings qualification now requires affirmative values and tests cover false and empty values."
+    "rationale": "Paginated GitHub issue reactions with per_page=100 and Link-next traversal, with regression coverage for Codex +1 on page 2."
   },
   {
-    "id": 4160181365,
+    "id": 4159873032,
     "disposition": "not-applicable",
-    "rationale": "Top-level automated review wrapper; actionable inline finding is tracked separately."
+    "rationale": "Codex review summary; actionable inline review comment handled separately."
   }
 ]
