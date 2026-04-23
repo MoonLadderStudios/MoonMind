@@ -41,6 +41,16 @@ function cssRuleBlockMatching(matches: (rule: Rule) => boolean): string {
   return block;
 }
 
+function cssAtRuleBlock(name: string, params: string): string {
+  let block = '';
+  cssRoot().walkAtRules(name, (rule) => {
+    if (!block && rule.params === params) {
+      block = rule.nodes?.map((node) => node.toString()).join('\n') ?? '';
+    }
+  });
+  return block;
+}
+
 describe('MaskedConicBorderBeam', () => {
   it('renders a standalone active border-beam wrapper with deterministic defaults', () => {
     render(
@@ -116,9 +126,9 @@ describe('MaskedConicBorderBeam', () => {
     expect(screen.getByText('Idle content')).toBeTruthy();
   });
 
-  it('keeps MM-465 and MM-466 traceability on the exported contract', () => {
+  it('keeps MM-465 through MM-468 traceability on the exported contract', () => {
     expect(MASKED_CONIC_BORDER_BEAM_TRACEABILITY).toEqual({
-      jiraIssueKeys: ['MM-465', 'MM-466', 'MM-467'],
+      jiraIssueKeys: ['MM-465', 'MM-466', 'MM-467', 'MM-468'],
       designRequirements: [
         'DESIGN-REQ-001',
         'DESIGN-REQ-002',
@@ -132,9 +142,47 @@ describe('MaskedConicBorderBeam', () => {
         'DESIGN-REQ-010',
         'DESIGN-REQ-011',
         'DESIGN-REQ-012',
+        'DESIGN-REQ-013',
+        'DESIGN-REQ-014',
+        'DESIGN-REQ-015',
         'DESIGN-REQ-016',
       ],
     });
+  });
+
+  it('provides a non-visual active execution label for MM-468 accessibility guardrails', () => {
+    const { rerender } = render(
+      <MaskedConicBorderBeam data-testid="beam">
+        <span>Decorated content</span>
+      </MaskedConicBorderBeam>,
+    );
+
+    const defaultStatus = screen.getByTestId('masked-conic-border-beam-status');
+    expect(defaultStatus.classList.contains('sr-only')).toBe(true);
+    expect(defaultStatus.textContent).toBe('Executing');
+    expect(screen.getByTestId('masked-conic-border-beam-layer').getAttribute('aria-hidden')).toBe('true');
+    expect(screen.getByTestId('masked-conic-border-beam-glow').getAttribute('aria-hidden')).toBe('true');
+
+    rerender(
+      <MaskedConicBorderBeam statusLabel="Running task" data-testid="beam">
+        <span>Decorated content</span>
+      </MaskedConicBorderBeam>,
+    );
+    expect(screen.getByTestId('masked-conic-border-beam-status').textContent).toBe('Running task');
+
+    rerender(
+      <MaskedConicBorderBeam statusLabel={null} data-testid="beam">
+        <span>Decorated content</span>
+      </MaskedConicBorderBeam>,
+    );
+    expect(screen.queryByTestId('masked-conic-border-beam-status')).toBeNull();
+
+    rerender(
+      <MaskedConicBorderBeam active={false} data-testid="beam">
+        <span>Decorated content</span>
+      </MaskedConicBorderBeam>,
+    );
+    expect(screen.queryByTestId('masked-conic-border-beam-status')).toBeNull();
   });
 
   it('maps named and explicit speed presets for MM-467 motion tuning', () => {
@@ -330,12 +378,35 @@ describe('MaskedConicBorderBeam', () => {
     expect(definedTrailBlock).not.toContain('--beam-speed');
   });
 
-  it('defines reduced-motion behavior and excludes shimmer, spinner, and completion effects', () => {
+  it('defines MM-468 reduced-motion behavior and degraded-mode glow guardrails', () => {
+    const rootMinimalBlock = cssRuleBlock('.masked-conic-border-beam[data-reduced-motion="minimal"]');
+    const activeMinimalBlock = cssRuleBlock('.masked-conic-border-beam[data-reduced-motion="minimal"][data-active="true"]');
     const minimalBlock = cssRuleBlock('.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__layer');
+    const minimalGlowBlock = cssRuleBlock('.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__glow');
+    const minimalCompanionBlock = cssRuleBlock('.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__companion');
     const reducedMotionBlock = cssRuleBlockMatching((rule) =>
       rule.selector.includes('.masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__layer') &&
       Boolean(rule.parent?.toString().includes('prefers-reduced-motion: reduce')),
     );
+    const reducedMotionGlowBlock = cssRuleBlockMatching((rule) =>
+      rule.selector.includes('.masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__glow') &&
+      Boolean(rule.parent?.toString().includes('prefers-reduced-motion: reduce')),
+    );
+    const reducedMotionCompanionBlock = cssRuleBlockMatching((rule) =>
+      rule.selector.includes('.masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__companion') &&
+      Boolean(rule.parent?.toString().includes('prefers-reduced-motion: reduce')),
+    );
+
+    expect(reducedMotionBlock).toContain('animation: none;');
+    expect(reducedMotionBlock).toContain('transform: rotate(42deg);');
+    expect(reducedMotionBlock).toContain('opacity: var(--beam-opacity);');
+    expect(reducedMotionGlowBlock).toContain('opacity: 0;');
+    expect(reducedMotionGlowBlock).toContain('visibility: hidden;');
+    expect(reducedMotionCompanionBlock).toContain('opacity: 0;');
+    expect(reducedMotionCompanionBlock).toContain('visibility: hidden;');
+    expect(rootMinimalBlock).not.toContain('--beam-border-base:');
+    expect(rootMinimalBlock).toContain('--beam-glow-opacity: 0;');
+    expect(activeMinimalBlock).toContain('--beam-border-base:');
     const allBeamCss = missionControlCss
       .split('\n')
       .filter((line) => line.includes('masked-conic-border-beam'))
@@ -343,10 +414,54 @@ describe('MaskedConicBorderBeam', () => {
       .toLowerCase();
 
     expect(minimalBlock).toContain('animation: none;');
-    expect(reducedMotionBlock).toContain('animation: none;');
+    expect(minimalBlock).toContain('opacity: 0;');
+    expect(minimalBlock).toContain('visibility: hidden;');
+    expect(minimalGlowBlock).toContain('opacity: 0;');
+    expect(minimalGlowBlock).toContain('visibility: hidden;');
+    expect(minimalCompanionBlock).toContain('opacity: 0;');
+    expect(minimalCompanionBlock).toContain('visibility: hidden;');
+    expect(allBeamCss).not.toContain('rapid-pulse');
+    expect(allBeamCss).not.toContain('warning-pulse');
     expect(allBeamCss).not.toContain('spinner');
     expect(allBeamCss).not.toContain('shimmer');
     expect(allBeamCss).not.toContain('success-burst');
     expect(allBeamCss).not.toContain('completion-pulse');
+  });
+
+  it('keeps MM-468 performance and non-goal guardrails in the CSS contract', () => {
+    const rootBlock = cssRuleBlock('.masked-conic-border-beam');
+    const layerBlock = cssRuleBlock('.masked-conic-border-beam__layer');
+    const glowBlock = cssRuleBlock('.masked-conic-border-beam__glow');
+    const orbitKeyframes = cssAtRuleBlock('keyframes', 'masked-conic-border-beam-orbit');
+    const allBeamCss = missionControlCss
+      .split('\n')
+      .filter((line) => line.includes('masked-conic-border-beam'))
+      .join('\n')
+      .toLowerCase();
+    const animatedDeclarations = [layerBlock, glowBlock]
+      .join('\n')
+      .split('\n')
+      .filter((line) => line.includes('animation:') || line.includes('transition:'))
+      .join('\n')
+      .toLowerCase();
+    const keyframeDeclarations = orbitKeyframes.toLowerCase();
+
+    expect(rootBlock).toContain('--beam-opacity: 0.9;');
+    expect(rootBlock).toContain('--beam-glow-opacity: 0.42;');
+    expect(glowBlock).toContain('filter: blur(5px);');
+    expect(layerBlock).toContain('animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;');
+    expect(orbitKeyframes).toContain('transform: rotate(1turn);');
+    expect(`${animatedDeclarations}\n${keyframeDeclarations}`).not.toMatch(
+      /(?:^|\n)\s*(width|height|margin|padding|top|right|bottom|left|inset|border-width|border-radius)\s*:/,
+    );
+    expect(allBeamCss).not.toContain('rapid-pulse');
+    expect(allBeamCss).not.toContain('warning-pulse');
+    expect(allBeamCss).not.toMatch(/\bred\b/);
+    expect(allBeamCss).not.toMatch(/\borange\b/);
+    expect(allBeamCss).not.toContain('spinner');
+    expect(allBeamCss).not.toContain('shimmer');
+    expect(allBeamCss).not.toContain('success-burst');
+    expect(allBeamCss).not.toContain('completion-pulse');
+    expect(allBeamCss).not.toContain('content-area-mask');
   });
 });

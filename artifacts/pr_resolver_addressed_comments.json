@@ -1,18 +1,23 @@
 [
   {
-    "id": 4301917079,
-    "disposition": "not-applicable",
-    "rationale": "Gemini quota warning only; no actionable PR feedback."
-  },
-  {
-    "id": 3128519024,
+    "id": 4157517883,
     "disposition": "addressed",
-    "rationale": "Paginated GitHub issue reactions with per_page=100 and Link-next traversal, with regression coverage for Codex +1 on page 2."
+    "rationale": "The minimal reduced-motion layer reset is satisfied by the current CSS selectors for __layer, __glow, and __companion, and the focused component contract test verifies all three are hidden."
   },
   {
-    "id": 4159873032,
+    "id": 3126534193,
+    "disposition": "addressed",
+    "rationale": "The current minimal reduced-motion CSS hides the beam layer, glow, and companion with animation disabled, opacity 0, and visibility hidden; verified by MaskedConicBorderBeam.test.tsx."
+  },
+  {
+    "id": 3126536200,
+    "disposition": "addressed",
+    "rationale": "Scoped the brighter minimal-mode border token to data-active=true and added a CSS contract assertion so inactive minimal beams retain the default border state."
+  },
+  {
+    "id": 4157520350,
     "disposition": "not-applicable",
-    "rationale": "Codex review summary; actionable inline review comment handled separately."
+    "rationale": "Automated review summary wrapper with no separate actionable feedback beyond discussion_r3126536200."
   },
   {
     "id": 3128925097,

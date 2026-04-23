@@ -1337,6 +1337,14 @@ tr[data-proposal-id].proposal-consuming td {
   --beam-tail-arc: 30deg;
 }
 
+.masked-conic-border-beam[data-reduced-motion="minimal"] {
+  --beam-glow-opacity: 0;
+}
+
+.masked-conic-border-beam[data-reduced-motion="minimal"][data-active="true"] {
+  --beam-border-base: rgb(var(--mm-border) / 0.9);
+}
+
 .masked-conic-border-beam__layer,
 .masked-conic-border-beam__glow,
 .masked-conic-border-beam__companion {
@@ -1430,6 +1438,8 @@ tr[data-proposal-id].proposal-consuming td {
 .masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__companion {
   animation: none;
   transform: rotate(42deg);
+  opacity: 0;
+  visibility: hidden;
 }
 
 .masked-conic-border-beam__content {
@@ -1446,11 +1456,18 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__layer,
+  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__layer {
+    animation: none;
+    transform: rotate(42deg);
+    opacity: var(--beam-opacity);
+  }
+
   .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__glow,
   .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__companion {
     animation: none;
     transform: rotate(42deg);
+    opacity: 0;
+    visibility: hidden;
   }
 }
 
