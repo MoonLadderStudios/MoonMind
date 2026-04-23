@@ -1,42 +1,27 @@
 [
   {
-    "id": 4157517883,
+    "id": 3133634364,
     "disposition": "addressed",
-    "rationale": "The minimal reduced-motion layer reset is satisfied by the current CSS selectors for __layer, __glow, and __companion, and the focused component contract test verifies all three are hidden."
+    "rationale": "Added an explicit TemporalExecutionRecord | TemporalExecutionCanonicalRecord type hint to the snapshot helper record parameter."
   },
   {
-    "id": 3126534193,
+    "id": 3133634368,
     "disposition": "addressed",
-    "rationale": "The current minimal reduced-motion CSS hides the beam layer, glow, and companion with animation disabled, opacity 0, and visibility hidden; verified by MaskedConicBorderBeam.test.tsx."
+    "rationale": "Moved session.refresh(record) inside the snapshot_ref block so it only runs after a persisted snapshot commit."
   },
   {
-    "id": 3126536200,
-    "disposition": "addressed",
-    "rationale": "Scoped the brighter minimal-mode border token to data-active=true and added a CSS contract assertion so inactive minimal beams retain the default border state."
-  },
-  {
-    "id": 4157520350,
+    "id": 4165735428,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary wrapper with no separate actionable feedback beyond discussion_r3126536200."
+    "rationale": "Review summary only; its actionable child comments were handled individually."
   },
   {
-    "id": 3128925097,
+    "id": 3133637367,
     "disposition": "addressed",
-    "rationale": "Inherited execution profiles now fall back to auto-selection when the parent runtime does not match the child runtime."
+    "rationale": "Changed direct-run snapshot creation to use parameters from the returned persisted record instead of the incoming request payload, preserving idempotency replay semantics."
   },
   {
-    "id": 4160334281,
+    "id": 4165738806,
     "disposition": "not-applicable",
-    "rationale": "Review summary comment only; the actionable runtime-compatibility feedback was handled in the code change."
-  },
-  {
-    "id": 3128933234,
-    "disposition": "addressed",
-    "rationale": "Inherited execution profiles are now validated against synced profile snapshots before being passed to child workflows."
-  },
-  {
-    "id": 4160343819,
-    "disposition": "not-applicable",
-    "rationale": "Review summary comment only; the actionable profile-validation feedback was handled in the code change."
+    "rationale": "Informational Codex review wrapper with no distinct actionable feedback beyond the child comment."
   }
 ]

@@ -2114,7 +2114,7 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
         "targetRuntime": "codex_cli",
         "task": {
             "title": "Direct run",
-            "instructions": "Implement the direct run.",
+            "instructions": "Implement the persisted direct run.",
         },
     }
     service.create_execution.return_value = record
@@ -2136,7 +2136,7 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
         }
         assert kwargs["task_payload"] == {
             "title": "Direct run",
-            "instructions": "Implement the direct run.",
+            "instructions": "Implement the persisted direct run.",
         }
         assert kwargs["source_kind"] == "create"
         target_record = kwargs["record"]
@@ -2160,7 +2160,14 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
             json={
                 "workflowType": "MoonMind.Run",
                 "title": "Direct run",
-                "initialParameters": record.parameters,
+                "initialParameters": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex_cli",
+                    "task": {
+                        "title": "Conflicting retry",
+                        "instructions": "Do not snapshot the replay payload.",
+                    },
+                },
             },
         )
 
@@ -2171,6 +2178,7 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
     assert body["actions"]["canUpdateInputs"] is True
     persist_mock.assert_awaited_once()
     session.commit.assert_awaited_once()
+    session.refresh.assert_awaited_once_with(record)
 
 
 def test_create_execution_enforces_idempotency(

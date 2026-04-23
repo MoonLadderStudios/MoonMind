@@ -2757,7 +2757,7 @@ async def _persist_original_task_input_snapshot(
 async def _persist_original_task_input_snapshot_from_parameters(
     *,
     session: AsyncSession,
-    record,
+    record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
     user: User,
     parameters: Mapping[str, Any],
     attachment_refs: list[dict[str, Any]] | None = None,
@@ -3719,12 +3719,11 @@ async def create_execution(
         session=session,
         record=record,
         user=user,
-        parameters=dict(request.initial_parameters),
+        parameters=dict(getattr(record, "parameters", None) or {}),
         source_kind="create",
     )
     if snapshot_ref:
         await session.commit()
-    if isinstance(record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)):
         await session.refresh(record)
 
     return _serialize_execution(record, user=user)
