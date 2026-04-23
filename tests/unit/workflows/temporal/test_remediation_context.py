@@ -895,6 +895,30 @@ class RecordingLiveFollower:
         )
 
 
+class RecordingActionExecutor:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def execute_action(self, *, action_request, guard_result, target_health):
+        self.calls.append(
+            {
+                "action_request": action_request,
+                "guard_result": guard_result,
+                "target_health": target_health,
+            }
+        )
+        return {
+            "status": "applied",
+            "beforeStateRef": "artifact://before-state",
+            "afterStateRef": "artifact://after-state",
+            "sideEffects": [{"kind": "subsystem_call", "status": "accepted"}],
+            "verification": {
+                "status": "verified",
+                "targetWorkflowId": target_health.workflow_id,
+            },
+        }
+
+
 @pytest.mark.asyncio
 async def test_remediation_evidence_tools_read_only_context_declared_evidence(
     tmp_path, mock_client_adapter
@@ -1250,6 +1274,102 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
                 remediation_workflow_id=remediation.workflow_id,
                 action_kind=" ",
             )
+
+
+@pytest.mark.asyncio
+async def test_remediation_execute_action_delegates_and_publishes_lifecycle_artifacts(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        builder = RemediationContextBuilder(
+            session=session,
+            artifact_service=artifact_service,
+        )
+        await builder.build_context(remediation_workflow_id=remediation.workflow_id)
+
+        action_kind = "workload.restart_helper_container"
+        authority = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind=action_kind,
+            parameters={"reason": "restart helper"},
+            dry_run=False,
+            idempotency_key="execute-action-1",
+            requesting_principal="workflow:remediator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(
+                allowed_action_kinds=(action_kind,),
+            ),
+        )
+        guard = await RemediationMutationGuardService(session=session).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind=action_kind,
+            idempotency_key="execute-action-1",
+            parameters={"reason": "restart helper"},
+            policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+            now=datetime(2026, 4, 23, tzinfo=timezone.utc),
+        )
+
+        executor = RecordingActionExecutor()
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifact_service,
+            action_executor=executor,
+        )
+
+        result = await tools.execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+        )
+
+        artifact_links = (
+            await session.execute(
+                select(TemporalArtifactLink).where(
+                    TemporalArtifactLink.workflow_id == remediation.workflow_id,
+                    TemporalArtifactLink.link_type.in_(
+                        [
+                            "remediation.action_request",
+                            "remediation.action_result",
+                            "remediation.verification",
+                        ]
+                    ),
+                )
+            )
+        ).scalars().all()
+        link = await session.get(
+            TemporalExecutionRemediationLink,
+            remediation.workflow_id,
+        )
+
+        assert executor.calls[0]["action_request"]["actionKind"] == action_kind
+        assert executor.calls[0]["target_health"].workflow_id == target.workflow_id
+        assert result["status"] == "applied"
+        assert result["artifactRefs"]["actionRequest"]
+        assert result["artifactRefs"]["actionResult"]
+        assert result["artifactRefs"]["verification"]
+        assert {artifact.link_type for artifact in artifact_links} == {
+            "remediation.action_request",
+            "remediation.action_result",
+            "remediation.verification",
+        }
+        assert link is not None
+        assert link.latest_action_summary == action_kind
+        assert link.outcome == "applied"
 
 
 @pytest.mark.asyncio
@@ -1912,6 +2032,93 @@ async def test_remediation_mutation_guard_enforces_ledger_budgets_and_cooldowns(
         assert second.decision == "allowed"
         assert exhausted.decision == "escalate"
         assert exhausted.reason == "action_budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_remediation_mutation_guard_persists_locks_and_ledger_across_service_restart(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session,
+            mock_client_adapter,
+            authority_mode="admin_auto",
+        )
+        mock_client_adapter.start_workflow.side_effect = [
+            SimpleNamespace(run_id="other-run")
+        ]
+        other = await TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        ).create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=target.owner_id,
+            title="Second remediator",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "remediation": {
+                        "target": {"workflowId": target.workflow_id},
+                        "authorityMode": "admin_auto",
+                    }
+                }
+            },
+            idempotency_key=None,
+        )
+        now = datetime(2026, 4, 22, tzinfo=timezone.utc)
+        policy = RemediationMutationGuardPolicy(
+            lock_ttl_seconds=60,
+            cooldown_seconds=0,
+            max_attempts_per_action_kind=5,
+        )
+
+        first_service = RemediationMutationGuardService(session=session)
+        first = await first_service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="workload.restart_helper_container",
+            idempotency_key="durable-ledger-1",
+            parameters={"reason": "restart durable"},
+            policy=policy,
+            now=now,
+        )
+
+        restarted_service = RemediationMutationGuardService(session=session)
+        replay = await restarted_service.evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="workload.restart_helper_container",
+            idempotency_key="durable-ledger-1",
+            parameters={"reason": "restart durable"},
+            policy=policy,
+            now=now + timedelta(seconds=1),
+        )
+        conflict = await restarted_service.evaluate(
+            remediation_workflow_id=other.workflow_id,
+            remediation_run_id=other.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind="workload.restart_helper_container",
+            idempotency_key="durable-lock-conflict",
+            parameters={},
+            policy=policy,
+            now=now + timedelta(seconds=2),
+        )
+
+        assert first.decision == "allowed"
+        assert first.lock.status == "acquired"
+        assert replay.decision == "allowed"
+        assert replay.ledger.duplicate is True
+        assert replay.lock.lock_id == first.lock.lock_id
+        assert conflict.decision == "denied"
+        assert conflict.reason == "mutation_lock_conflict"
+        assert conflict.lock.lock_id == first.lock.lock_id
 
 
 @pytest.mark.asyncio

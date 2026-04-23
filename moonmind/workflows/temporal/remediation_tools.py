@@ -18,6 +18,7 @@ from api_service.db import models as db_models
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 from moonmind.workflows.temporal.remediation_context import (
     REMEDIATION_CONTEXT_LINK_TYPE,
+    RemediationLifecyclePublisher,
 )
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
@@ -106,6 +107,19 @@ class RemediationLiveFollower(Protocol):
         raise NotImplementedError
 
 
+class RemediationActionExecutor(Protocol):
+    """Execute one authorized remediation action through an owning subsystem."""
+
+    async def execute_action(
+        self,
+        *,
+        action_request: Mapping[str, Any],
+        guard_result: Mapping[str, Any],
+        target_health: RemediationTargetHealthSnapshot,
+    ) -> Mapping[str, Any]:
+        raise NotImplementedError
+
+
 class _UnavailableLogReader:
     async def read_logs(
         self,
@@ -132,6 +146,19 @@ class _UnavailableLiveFollower:
         )
 
 
+class _UnavailableActionExecutor:
+    async def execute_action(
+        self,
+        *,
+        action_request: Mapping[str, Any],
+        guard_result: Mapping[str, Any],
+        target_health: RemediationTargetHealthSnapshot,
+    ) -> Mapping[str, Any]:
+        raise RemediationEvidenceToolError(
+            "remediation.execute_action is not configured in this runtime."
+        )
+
+
 class RemediationEvidenceToolService:
     """Typed evidence access surface for one remediation execution."""
 
@@ -142,6 +169,7 @@ class RemediationEvidenceToolService:
         artifact_service: TemporalArtifactService,
         log_reader: RemediationLogReader | None = None,
         live_follower: RemediationLiveFollower | None = None,
+        action_executor: RemediationActionExecutor | None = None,
         cursor_recorder: Callable[[str, dict[str, Any] | None], Awaitable[None]]
         | None = None,
     ) -> None:
@@ -149,6 +177,11 @@ class RemediationEvidenceToolService:
         self._artifact_service = artifact_service
         self._log_reader = log_reader or _UnavailableLogReader()
         self._live_follower = live_follower or _UnavailableLiveFollower()
+        self._action_executor = action_executor or _UnavailableActionExecutor()
+        self._lifecycle_publisher = RemediationLifecyclePublisher(
+            session=session,
+            artifact_service=artifact_service,
+        )
         self._cursor_recorder = cursor_recorder
         self._context_payload_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -316,6 +349,117 @@ class RemediationEvidenceToolService:
             ),
             context_target=context_target_mapping,
         )
+
+    async def execute_action(
+        self,
+        *,
+        remediation_workflow_id: str,
+        authority_result: Mapping[str, Any],
+        guard_result: Mapping[str, Any],
+        principal: str = "service:remediation-tools",
+    ) -> dict[str, Any]:
+        """Execute an authorized action and publish bounded lifecycle artifacts."""
+
+        if not isinstance(authority_result, Mapping):
+            raise RemediationEvidenceToolError("authorityResult must be an object.")
+        if not isinstance(guard_result, Mapping):
+            raise RemediationEvidenceToolError("guardResult must be an object.")
+        if authority_result.get("executable") is not True:
+            raise RemediationEvidenceToolError(
+                "authorityResult must be executable before action execution."
+            )
+        if guard_result.get("executable") is not True:
+            raise RemediationEvidenceToolError(
+                "guardResult must be executable before action execution."
+            )
+
+        action_request = authority_result.get("request")
+        if not isinstance(action_request, Mapping):
+            raise RemediationEvidenceToolError("authorityResult.request is required.")
+        action_kind = _required_string(action_request.get("actionKind"), "actionKind")
+        if action_kind != _required_string(guard_result.get("actionKind"), "actionKind"):
+            raise RemediationEvidenceToolError(
+                "authorityResult and guardResult action kinds do not match."
+            )
+
+        preparation = await self.prepare_action_request(
+            remediation_workflow_id=remediation_workflow_id,
+            action_kind=action_kind,
+            principal=principal,
+        )
+        link = await self._load_link(remediation_workflow_id)
+        request_artifact = await self._lifecycle_publisher.publish_json_artifact(
+            remediation_workflow_id=link.remediation_workflow_id,
+            artifact_type="remediation.action_request",
+            name=f"reports/remediation_action_request-{action_request['actionId']}.json",
+            payload={
+                "authority": dict(authority_result),
+                "guard": dict(guard_result),
+                "request": dict(action_request),
+            },
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal=principal,
+        )
+
+        raw_result = await self._action_executor.execute_action(
+            action_request=action_request,
+            guard_result=guard_result,
+            target_health=preparation.target,
+        )
+        if not isinstance(raw_result, Mapping):
+            raise RemediationEvidenceToolError("action executor returned invalid result.")
+        status = _required_string(raw_result.get("status"), "status")
+        result_payload = {
+            "schemaVersion": "v1",
+            "actionKind": action_kind,
+            "actionId": action_request["actionId"],
+            "status": status,
+            "beforeStateRef": _string_or_none(raw_result.get("beforeStateRef")),
+            "afterStateRef": _string_or_none(raw_result.get("afterStateRef")),
+            "sideEffects": _safe_sequence(raw_result.get("sideEffects")),
+        }
+        result_artifact = await self._lifecycle_publisher.publish_json_artifact(
+            remediation_workflow_id=link.remediation_workflow_id,
+            artifact_type="remediation.action_result",
+            name=f"reports/remediation_action_result-{action_request['actionId']}.json",
+            payload=result_payload,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal=principal,
+        )
+
+        verification = raw_result.get("verification")
+        verification_payload = (
+            dict(verification)
+            if isinstance(verification, Mapping)
+            else {"status": "not_verified"}
+        )
+        verification_payload.setdefault("actionKind", action_kind)
+        verification_payload.setdefault("actionId", action_request["actionId"])
+        verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
+            remediation_workflow_id=link.remediation_workflow_id,
+            artifact_type="remediation.verification",
+            name=f"reports/remediation_verification-{action_request['actionId']}.json",
+            payload=verification_payload,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            principal=principal,
+        )
+
+        link.latest_action_summary = action_kind
+        link.outcome = status
+        await self._session.commit()
+        return {
+            "schemaVersion": "v1",
+            "actionKind": action_kind,
+            "status": status,
+            "artifactRefs": {
+                "actionRequest": request_artifact.artifact_id,
+                "actionResult": result_artifact.artifact_id,
+                "verification": verification_artifact.artifact_id,
+            },
+        }
 
     async def _load_link(
         self, remediation_workflow_id: str
@@ -497,6 +641,12 @@ def _string_or_none(value: Any) -> str | None:
     return normalized or None
 
 
+def _safe_sequence(value: Any) -> list[Any]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return list(value)
+    return []
+
+
 def _enum_value(value: Any) -> str | None:
     if value is None:
         return None
@@ -505,6 +655,7 @@ def _enum_value(value: Any) -> str | None:
 
 
 __all__ = [
+    "RemediationActionExecutor",
     "RemediationActionRequestPreparation",
     "RemediationEvidenceToolError",
     "RemediationEvidenceToolService",

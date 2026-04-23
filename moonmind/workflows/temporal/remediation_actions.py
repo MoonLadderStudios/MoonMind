@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
@@ -473,6 +474,7 @@ class _LedgerEntry:
     request_shape_hash: str
     recorded_at: datetime
     result: RemediationMutationGuardResult
+    durable: bool = False
 
 
 class RemediationActionAuthorityService:
@@ -938,12 +940,18 @@ class RemediationMutationGuardService:
     ) -> RemediationMutationGuardResult:
         active_policy = _normalize_guard_policy(policy)
         current_time = _normalize_datetime(now)
-        self._cleanup_state(now=current_time)
         workflow_id = str(remediation_workflow_id or "").strip()
         target_id = str(target_workflow_id or "").strip()
         pinned_run_id = str(target_run_id or "").strip()
         normalized_action = str(action_kind or "").strip()
         idem = str(idempotency_key or "").strip()
+        await self._hydrate_durable_state(
+            remediation_workflow_id=workflow_id,
+            target_workflow_id=target_id,
+            target_run_id=pinned_run_id,
+            now=current_time,
+        )
+        self._cleanup_state(now=current_time)
         redacted_parameters = _redact_payload(parameters or {})
         shape_hash = _request_shape_hash(
             action_kind=normalized_action,
@@ -1010,6 +1018,8 @@ class RemediationMutationGuardService:
         existing_ledger = self._ledger.get(ledger_key)
         if existing_ledger is not None:
             if existing_ledger.request_shape_hash == shape_hash:
+                if existing_ledger.durable:
+                    return _duplicate_guard_result(existing_ledger.result)
                 return existing_ledger.result
             return self._guard_result(
                 remediation_workflow_id=workflow_id,
@@ -1080,7 +1090,7 @@ class RemediationMutationGuardService:
                 redacted_parameters=redacted_parameters,
             )
 
-        lock_decision, lock_allows = self._acquire_lock(
+        lock_decision, lock_allows = await self._acquire_lock(
             workflow_id=workflow_id,
             remediation_run_id=remediation_run_id,
             target_workflow_id=target_id,
@@ -1109,7 +1119,7 @@ class RemediationMutationGuardService:
             )
 
         if freshness_decision.status == "unavailable":
-            return self._record_guard_result(
+            return await self._record_guard_result(
                 ledger_key=ledger_key,
                 shape_hash=shape_hash,
                 result=self._guard_result(
@@ -1135,7 +1145,7 @@ class RemediationMutationGuardService:
             decision: RemediationMutationGuardDecision = (
                 active_policy.target_change_policy
             )
-            return self._record_guard_result(
+            return await self._record_guard_result(
                 ledger_key=ledger_key,
                 shape_hash=shape_hash,
                 result=self._guard_result(
@@ -1207,7 +1217,7 @@ class RemediationMutationGuardService:
             max_attempts_per_action_kind=active_policy.max_attempts_per_action_kind,
             cooldown_seconds=active_policy.cooldown_seconds,
         )
-        return self._record_guard_result(
+        return await self._record_guard_result(
             ledger_key=ledger_key,
             shape_hash=shape_hash,
             result=self._guard_result(
@@ -1230,7 +1240,7 @@ class RemediationMutationGuardService:
             ),
         )
 
-    def _acquire_lock(
+    async def _acquire_lock(
         self,
         *,
         workflow_id: str,
@@ -1290,6 +1300,7 @@ class RemediationMutationGuardService:
         )
         self._locks[lock_key] = lock
         self._locks_by_id[lock.lock_id] = lock
+        await self._persist_lock(lock)
         return (_lock_decision(lock, status), True)
 
     def _evaluate_budget(
@@ -1389,7 +1400,7 @@ class RemediationMutationGuardService:
             redacted_parameters=redacted_parameters,
         )
 
-    def _record_guard_result(
+    async def _record_guard_result(
         self,
         *,
         ledger_key: tuple[str, str],
@@ -1402,8 +1413,126 @@ class RemediationMutationGuardService:
             or datetime.fromtimestamp(0, timezone.utc),
             result=result,
         )
+        await self._persist_ledger_entry(
+            remediation_workflow_id=result.remediation_workflow_id,
+            idempotency_key=result.idempotency_key,
+            shape_hash=shape_hash,
+            result=result,
+        )
         self._trim_state()
         return result
+
+    async def _hydrate_durable_state(
+        self,
+        *,
+        remediation_workflow_id: str,
+        target_workflow_id: str,
+        target_run_id: str,
+        now: datetime,
+    ) -> None:
+        if remediation_workflow_id:
+            link = await self._session.get(
+                db_models.TemporalExecutionRemediationLink,
+                remediation_workflow_id,
+            )
+            if link is not None:
+                self._hydrate_ledger_from_link(link)
+
+        if not target_workflow_id or not target_run_id:
+            return
+
+        result = await self._session.execute(
+            select(db_models.TemporalExecutionRemediationLink).where(
+                db_models.TemporalExecutionRemediationLink.target_workflow_id
+                == target_workflow_id
+            )
+        )
+        for link in result.scalars():
+            lock = _active_lock_from_payload(
+                getattr(link, "mutation_guard_lock_state", None),
+            )
+            if lock is None or lock.target_run_id != target_run_id:
+                continue
+            if lock.released or now >= lock.expires_at:
+                continue
+            lock_key = (lock.scope, lock.target_workflow_id, lock.target_run_id)
+            existing = self._locks.get(lock_key)
+            if existing is None or existing.expires_at < lock.expires_at:
+                self._locks[lock_key] = lock
+                self._locks_by_id[lock.lock_id] = lock
+
+    def _hydrate_ledger_from_link(
+        self, link: db_models.TemporalExecutionRemediationLink
+    ) -> None:
+        payload = getattr(link, "mutation_guard_ledger_state", None)
+        if not isinstance(payload, Mapping):
+            return
+        entries = payload.get("entries")
+        if not isinstance(entries, Mapping):
+            return
+        workflow_id = str(getattr(link, "remediation_workflow_id", "") or "")
+        for idempotency_key, entry in entries.items():
+            if not isinstance(entry, Mapping):
+                continue
+            idem = str(idempotency_key or "").strip()
+            shape_hash = str(entry.get("requestShapeHash") or "").strip()
+            result_payload = entry.get("result")
+            if not idem or not shape_hash or not isinstance(result_payload, Mapping):
+                continue
+            ledger_key = (workflow_id, idem)
+            if ledger_key in self._ledger:
+                continue
+            result = _guard_result_from_payload(result_payload)
+            if result is None:
+                continue
+            self._ledger[ledger_key] = _LedgerEntry(
+                request_shape_hash=shape_hash,
+                recorded_at=_datetime_from_json(entry.get("recordedAt"))
+                or datetime.fromtimestamp(0, timezone.utc),
+                result=result,
+                durable=True,
+            )
+
+    async def _persist_lock(self, lock: _ActiveMutationLock) -> None:
+        link = await self._session.get(
+            db_models.TemporalExecutionRemediationLink,
+            lock.holder_workflow_id,
+        )
+        if link is None:
+            return
+        link.active_lock_scope = lock.scope
+        link.active_lock_holder = lock.holder_workflow_id
+        link.mutation_guard_lock_state = _active_lock_payload(lock)
+        await self._session.flush()
+
+    async def _persist_ledger_entry(
+        self,
+        *,
+        remediation_workflow_id: str,
+        idempotency_key: str,
+        shape_hash: str,
+        result: RemediationMutationGuardResult,
+    ) -> None:
+        link = await self._session.get(
+            db_models.TemporalExecutionRemediationLink,
+            remediation_workflow_id,
+        )
+        if link is None:
+            return
+        state = dict(getattr(link, "mutation_guard_ledger_state", None) or {})
+        entries = dict(state.get("entries") or {})
+        entries[idempotency_key] = {
+            "requestShapeHash": shape_hash,
+            "recordedAt": _datetime_to_json(
+                result.lock.created_at or datetime.now(timezone.utc)
+            ),
+            "result": result.to_dict(),
+        }
+        state["entries"] = entries
+        link.mutation_guard_ledger_state = state
+        link.latest_action_summary = result.action_kind
+        link.outcome = result.decision
+        await self._session.flush()
 
     def _cleanup_state(self, *, now: datetime) -> None:
         cutoff = now - timedelta(seconds=_GUARD_STATE_RETENTION_SECONDS)
@@ -1496,6 +1625,19 @@ def _datetime_to_json(value: datetime | None) -> str | None:
     return _normalize_datetime(value).isoformat().replace("+00:00", "Z")
 
 
+def _datetime_from_json(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return _normalize_datetime(parsed)
+
+
 def _request_shape_hash(
     *,
     action_kind: str,
@@ -1534,6 +1676,171 @@ def _lock_decision(
         created_at=lock.created_at,
         expires_at=lock.expires_at,
     )
+
+
+def _active_lock_payload(lock: _ActiveMutationLock) -> dict[str, Any]:
+    return {
+        "lockId": lock.lock_id,
+        "scope": lock.scope,
+        "mode": lock.mode,
+        "holderWorkflowId": lock.holder_workflow_id,
+        "holderRunId": lock.holder_run_id,
+        "targetWorkflowId": lock.target_workflow_id,
+        "targetRunId": lock.target_run_id,
+        "createdAt": _datetime_to_json(lock.created_at),
+        "expiresAt": _datetime_to_json(lock.expires_at),
+        "released": bool(lock.released),
+    }
+
+
+def _active_lock_from_payload(payload: Any) -> _ActiveMutationLock | None:
+    if not isinstance(payload, Mapping):
+        return None
+    lock_id = str(payload.get("lockId") or "").strip()
+    scope = str(payload.get("scope") or "").strip()
+    mode = str(payload.get("mode") or "").strip()
+    holder = str(payload.get("holderWorkflowId") or "").strip()
+    target = str(payload.get("targetWorkflowId") or "").strip()
+    target_run = str(payload.get("targetRunId") or "").strip()
+    created_at = _datetime_from_json(payload.get("createdAt"))
+    expires_at = _datetime_from_json(payload.get("expiresAt"))
+    required = (lock_id, scope, mode, holder, target, target_run, created_at, expires_at)
+    if not all(required):
+        return None
+    return _ActiveMutationLock(
+        lock_id=lock_id,
+        scope=scope,
+        mode=mode,
+        holder_workflow_id=holder,
+        holder_run_id=_string_or_none(payload.get("holderRunId")),
+        target_workflow_id=target,
+        target_run_id=target_run,
+        created_at=created_at,
+        expires_at=expires_at,
+        released=bool(payload.get("released")),
+    )
+
+
+def _duplicate_guard_result(
+    result: RemediationMutationGuardResult,
+) -> RemediationMutationGuardResult:
+    return RemediationMutationGuardResult(
+        remediation_workflow_id=result.remediation_workflow_id,
+        target_workflow_id=result.target_workflow_id,
+        action_kind=result.action_kind,
+        idempotency_key=result.idempotency_key,
+        decision=result.decision,
+        reason=result.reason,
+        executable=result.executable,
+        lock=result.lock,
+        ledger=RemediationActionLedgerDecision(
+            status=result.ledger.status,
+            duplicate=True,
+            unsafe_reuse=result.ledger.unsafe_reuse,
+            request_shape_hash=result.ledger.request_shape_hash,
+        ),
+        budget=result.budget,
+        nested_remediation=result.nested_remediation,
+        target_freshness=result.target_freshness,
+        redacted_parameters=result.redacted_parameters,
+    )
+
+
+def _guard_result_from_payload(
+    payload: Mapping[str, Any],
+) -> RemediationMutationGuardResult | None:
+    lock_payload = payload.get("lock")
+    ledger_payload = payload.get("ledger")
+    budget_payload = payload.get("budget")
+    nested_payload = payload.get("nestedRemediation")
+    freshness_payload = payload.get("targetFreshness")
+    if not all(
+        isinstance(item, Mapping)
+        for item in (
+            lock_payload,
+            ledger_payload,
+            budget_payload,
+            nested_payload,
+            freshness_payload,
+        )
+    ):
+        return None
+
+    lock = RemediationMutationLockDecision(
+        status=str(lock_payload.get("status") or ""),
+        lock_id=_string_or_none(lock_payload.get("lockId")),
+        scope=str(lock_payload.get("scope") or ""),
+        mode=str(lock_payload.get("mode") or ""),
+        holder_workflow_id=str(lock_payload.get("holderWorkflowId") or ""),
+        holder_run_id=_string_or_none(lock_payload.get("holderRunId")),
+        target_workflow_id=str(lock_payload.get("targetWorkflowId") or ""),
+        target_run_id=str(lock_payload.get("targetRunId") or ""),
+        created_at=_datetime_from_json(lock_payload.get("createdAt")),
+        expires_at=_datetime_from_json(lock_payload.get("expiresAt")),
+    )
+    ledger = RemediationActionLedgerDecision(
+        status=str(ledger_payload.get("status") or ""),
+        duplicate=bool(ledger_payload.get("duplicate")),
+        unsafe_reuse=bool(ledger_payload.get("unsafeReuse")),
+        request_shape_hash=_string_or_none(ledger_payload.get("requestShapeHash")),
+    )
+    budget = RemediationActionBudgetDecision(
+        status=str(budget_payload.get("status") or ""),
+        actions_used=_int_or_zero(budget_payload.get("actionsUsed")),
+        max_actions_per_target=_int_or_zero(budget_payload.get("maxActionsPerTarget")),
+        attempts_for_action_kind=_int_or_zero(
+            budget_payload.get("attemptsForActionKind")
+        ),
+        max_attempts_per_action_kind=_int_or_zero(
+            budget_payload.get("maxAttemptsPerActionKind")
+        ),
+        cooldown_seconds=_int_or_zero(budget_payload.get("cooldownSeconds")),
+    )
+    nested = RemediationNestedDecision(
+        status=str(nested_payload.get("status") or ""),
+        allow_nested_remediation=bool(nested_payload.get("allowNestedRemediation")),
+        allow_self_target=bool(nested_payload.get("allowSelfTarget")),
+        max_self_healing_depth=_int_or_zero(
+            nested_payload.get("maxSelfHealingDepth")
+        ),
+    )
+    freshness = RemediationTargetFreshnessDecision(
+        status=str(freshness_payload.get("status") or ""),
+        pinned_run_id=_string_or_none(freshness_payload.get("pinnedRunId")),
+        current_run_id=_string_or_none(freshness_payload.get("currentRunId")),
+        state=_string_or_none(freshness_payload.get("state")),
+        summary=_string_or_none(freshness_payload.get("summary")),
+        session_identity=_string_or_none(freshness_payload.get("sessionIdentity")),
+        target_run_changed=bool(freshness_payload.get("targetRunChanged")),
+    )
+    redacted = payload.get("redactedParameters")
+    return RemediationMutationGuardResult(
+        remediation_workflow_id=str(payload.get("remediationWorkflowId") or ""),
+        target_workflow_id=str(payload.get("targetWorkflowId") or ""),
+        action_kind=str(payload.get("actionKind") or ""),
+        idempotency_key=str(payload.get("idempotencyKey") or ""),
+        decision=str(payload.get("decision") or "denied"),
+        reason=str(payload.get("reason") or ""),
+        executable=bool(payload.get("executable")),
+        lock=lock,
+        ledger=ledger,
+        budget=budget,
+        nested_remediation=nested,
+        target_freshness=freshness,
+        redacted_parameters=redacted if isinstance(redacted, Mapping) else {},
+    )
+
+
+def _string_or_none(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _nested_decision(

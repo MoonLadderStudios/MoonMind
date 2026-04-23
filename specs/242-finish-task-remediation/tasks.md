@@ -16,7 +16,7 @@
 - MM-483 is preserved in the Jira orchestration input, spec, plan, tasks, and final verification path.
 - Input classification: single-story runtime feature request.
 - Completed first implementation focus from `plan.md`: canonical action registry coverage, metadata shape, and `taskRunIds` ownership validation.
-- Remaining status from `plan.md`: durable lock/ledger persistence, owning-adapter action execution, aggregate artifact/read-model verification, Mission Control lifecycle completion, and full final verification remain open.
+- Remaining status from `plan.md`: concrete owning-adapter action implementations, aggregate read-model verification, Mission Control lifecycle completion, and full final verification remain open.
 
 ## Phase 1: Setup
 
@@ -41,14 +41,14 @@
 - [X] T005 Add failing unit coverage for the complete canonical action registry in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-001, FR-003, SC-001, DESIGN-REQ-004)
 - [X] T006 Add failing unit coverage proving legacy action aliases are not accepted as compatibility shims in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-038, DESIGN-REQ-004)
 - [X] T007 Add failing unit coverage for `taskRunIds` ownership validation in `moonmind/workflows/temporal/service.py` through `tests/unit/workflows/temporal/test_temporal_service.py` (FR-008, FR-009)
-- [ ] T008 Add failing restart-durability coverage for mutation locks and action ledgers in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-012 through FR-015)
-- [ ] T009 Add verification coverage for automatic runtime publication of remediation action and verification artifacts in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-005 through FR-007, FR-021 through FR-023)
+- [X] T008 Add failing restart-durability coverage for mutation locks and action ledgers in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-012 through FR-015)
+- [X] T009 Add verification coverage for automatic runtime publication of remediation action and verification artifacts in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-005 through FR-007, FR-021 through FR-023)
 - [ ] T010 Add verification coverage for bounded cancellation/failure/Continue-As-New outcomes in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-028 through FR-033)
 
 ### Integration Tests
 
-- [ ] T011 Add service-boundary or hermetic integration coverage for durable lock/ledger behavior across a restarted service instance in `tests/integration` or `tests/unit/workflows/temporal/test_remediation_context.py` using persistent fixtures (FR-012 through FR-015, SC-003, DESIGN-REQ-004)
-- [ ] T012 Add adapter-boundary coverage proving remediation actions dispatch through owning control-plane or subsystem adapters without raw host/Docker/SQL/storage access in `tests/unit/workflows/temporal/test_remediation_context.py` or workflow boundary tests (FR-004 through FR-007, SC-002, DESIGN-REQ-004)
+- [X] T011 Add service-boundary or hermetic integration coverage for durable lock/ledger behavior across a restarted service instance in `tests/integration` or `tests/unit/workflows/temporal/test_remediation_context.py` using persistent fixtures (FR-012 through FR-015, SC-003, DESIGN-REQ-004)
+- [X] T012 Add adapter-boundary coverage proving remediation actions dispatch through owning control-plane or subsystem adapters without raw host/Docker/SQL/storage access in `tests/unit/workflows/temporal/test_remediation_context.py` or workflow boundary tests (FR-004 through FR-007, SC-002, DESIGN-REQ-004)
 - [ ] T013 Add API/read-model coverage proving target-side remediation summaries expose active count, latest status/action, lock scope, outcome, and updated time in `tests/unit/api/routers/test_executions.py` or `tests/unit/api/routers/test_task_runs.py` (FR-024, FR-027, SC-006, DESIGN-REQ-003)
 - [ ] T014 Add Mission Control rendering coverage for action, approval, verification, artifact, and target-linkage lifecycle state in `frontend/src/entrypoints/task-detail.test.tsx` (FR-025, FR-035, SC-010, DESIGN-REQ-006)
 
@@ -61,7 +61,7 @@
 - [X] T016 Replace legacy remediation action catalog entries with canonical dotted action kinds and full metadata in `moonmind/workflows/temporal/remediation_actions.py` (FR-001 through FR-003)
 - [X] T017 Update authority/listing behavior to expose canonical metadata without raw execution or legacy compatibility aliases in `moonmind/workflows/temporal/remediation_actions.py` (FR-002, FR-004, FR-038)
 - [X] T018 Implement `taskRunIds` ownership validation against target step/task-run evidence in `moonmind/workflows/temporal/service.py` (FR-008, FR-009)
-- [ ] T019 Move mutation lock/ledger state to durable records or an explicitly persisted existing boundary in `moonmind/workflows/temporal/remediation_actions.py` and `api_service/db/models.py` (FR-012 through FR-015)
+- [X] T019 Move mutation lock/ledger state to durable records or an explicitly persisted existing boundary in `moonmind/workflows/temporal/remediation_actions.py` and `api_service/db/models.py` (FR-012 through FR-015)
 - [ ] T020 Wire action execution through owning control-plane or subsystem adapters in `moonmind/workflows/temporal/remediation_tools.py` or adjacent runtime service boundaries (FR-004 through FR-007)
 - [ ] T021 Complete aggregate verification for lifecycle artifacts, target-side summaries, self-healing policy, Mission Control rendering, and bounded degraded outcomes (FR-010 through FR-036)
 

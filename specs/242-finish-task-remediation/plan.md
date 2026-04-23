@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement MM-483 in runtime mode by completing the remaining Task Remediation desired-state contract around safe action execution boundaries, durable mutation coordination, lifecycle/read-model evidence, policy-bounded self-healing, and Mission Control presentation. Repo gap analysis shows substantial existing foundations: remediation links and pinned targets, context artifacts, evidence tools, lifecycle artifact helpers from MM-456, target-side relationship rendering, authority decisions, mutation guard tests, canonical action registry coverage, and `taskRunIds` ownership validation. The next missing runtime surfaces are durable lock/ledger persistence, owning-adapter action execution, aggregate artifact/read-model verification, and Mission Control lifecycle completion.
+Implement MM-483 in runtime mode by completing the remaining Task Remediation desired-state contract around safe action execution boundaries, durable mutation coordination, lifecycle/read-model evidence, policy-bounded self-healing, and Mission Control presentation. Repo gap analysis shows substantial existing foundations: remediation links and pinned targets, context artifacts, evidence tools, lifecycle artifact helpers from MM-456, target-side relationship rendering, authority decisions, mutation guard tests, canonical action registry coverage, `taskRunIds` ownership validation, durable mutation lock/ledger state on remediation links, and an evidence-tool execution boundary that publishes action request/result/verification artifacts. The next missing runtime surfaces are concrete owning-adapter action implementations, aggregate read-model verification, and Mission Control lifecycle completion.
 
 ## Requirement Status
 
@@ -15,10 +15,10 @@ Implement MM-483 in runtime mode by completing the remaining Task Remediation de
 | FR-002 | implemented_verified | raw access denial exists in `RemediationActionAuthorityService` and mutation guard; canonical registry tests exclude raw actions | no further registry work | final verify |
 | FR-003 | implemented_verified | action metadata now includes target type, inputs, risk, preconditions, idempotency, verification, and audit shape | no further registry work | final verify |
 | FR-004 | partial | authority service validates but does not execute actions; safe execution adapters not yet wired | keep execution out of authority and plan adapter boundary work | unit + integration |
-| FR-005-FR-007 | partial | action request/result payloads exist; MM-456 artifact helpers exist | integrate authority output with artifact publication in later tasks | unit + integration |
+| FR-005-FR-007 | implemented_verified | `RemediationEvidenceToolService.execute_action` publishes action request, action result, and verification artifacts from authority/guard output; focused tests passed | final aggregate verification | final verify |
 | FR-008-FR-009 | implemented_verified | service validates `taskRunIds` shape and rejects foreign IDs when target task-run evidence is available; focused tests passed | no further create-time validation work in this slice | final verify |
 | FR-010-FR-011 | partial | mutation guard has bounded nesting; no automatic self-healing creation policy path found | add policy gate before any automatic creation path | unit |
-| FR-012-FR-015 | partial | mutation guard has in-memory lock/ledger and tests; durable DB-backed guard not complete | move lock/ledger state to durable boundary or document cutover | unit + integration |
+| FR-012-FR-015 | implemented_verified | mutation guard lock and ledger state persist on `execution_remediation_links`; focused restart-durability test passed | no further durable lock/ledger work in this slice | final verify |
 | FR-016-FR-020 | partial | target control artifacts and compatibility constraints exist in adjacent runtime paths | add adapter-boundary tests before wiring actions | unit + integration |
 | FR-021-FR-027 | implemented_unverified | MM-456 lifecycle helpers and read-model fields exist | verify runtime publication and target-side summary coverage | unit + integration |
 | FR-028-FR-035 | partial | cancellation/degraded outcomes exist in pieces across context/action services and UI | consolidate bounded outcomes and UI exposure | unit + UI |

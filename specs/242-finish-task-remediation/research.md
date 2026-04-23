@@ -18,19 +18,19 @@ Test implications: Unit tests must assert the full canonical action set, metadat
 
 ## Action Execution Boundary
 
-Decision: Partial; plan adapter-boundary work after registry coverage.
-Evidence: `RemediationActionAuthorityService` explicitly does not execute host/container/SQL/provider/storage operations; owning runtime activities exist for managed sessions and provider profiles.
-Rationale: Authority decisions should stay side-effect-free while execution moves through owning subsystem adapters.
+Decision: Implemented at the evidence-tool service boundary; concrete subsystem action implementations remain open.
+Evidence: `RemediationActionAuthorityService` remains side-effect-free, while `RemediationEvidenceToolService.execute_action` validates executable authority and guard results, delegates mutation to an injected action executor, and publishes `remediation.action_request`, `remediation.action_result`, and `remediation.verification` artifacts.
+Rationale: Authority decisions stay pure and side-effecting work is forced through an owning executor boundary instead of raw shell, Docker, SQL, storage, or secret access.
 Alternatives considered: Execute directly from the authority service. Rejected because it would weaken the safety boundary.
-Test implications: Adapter-boundary tests must cover real invocation shapes before production execution wiring.
+Test implications: Focused adapter-boundary tests prove delegation and artifact publication. Concrete managed-session, provider-profile, workload, and execution action implementations still need runtime-specific tests.
 
 ## Durable Lock And Ledger
 
-Decision: Partial; existing guard behavior is in-memory and tested, but MM-483 requires durability across process restarts and retries.
-Evidence: `RemediationMutationGuardService` stores `_locks`, `_ledger`, and budgets in instance dictionaries.
-Rationale: The current implementation is useful for policy semantics but not sufficient for restart durability.
-Alternatives considered: Add another ad hoc compatibility layer. Rejected; either reuse existing durable records or introduce an explicit cutover-backed persistent representation.
-Test implications: Unit/service tests must simulate new service instances and prove duplicate/idempotency state survives.
+Decision: Implemented for mutation locks and action ledger state.
+Evidence: `RemediationMutationGuardService` persists active lock state and ledger entries on `execution_remediation_links` through `mutation_guard_lock_state` and `mutation_guard_ledger_state`; restart-durability coverage constructs a new service instance and verifies duplicate idempotency replay plus cross-remediator lock conflict detection.
+Rationale: Reusing the durable remediation link keeps guard state attached to the remediation-to-target relationship without adding a separate persistence concept for this slice.
+Alternatives considered: Keep process-local dictionaries. Rejected because MM-483 requires restart durability. Add another ad hoc compatibility layer. Rejected because the existing remediation link is the natural durable boundary.
+Test implications: Focused service-boundary tests prove restart durability for lock and ledger state; final verification still needs aggregate action execution, artifact, read-model, and UI coverage.
 
 ## Lifecycle Artifacts And Read Models
 
