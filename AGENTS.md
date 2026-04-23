@@ -201,6 +201,8 @@ Key diagnostics:
 - Existing SQLAlchemy/Alembic database with `execution_remediation_links` already present (226-canonical-remediation-submissions)
 - Python 3.12 + SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK service boundaries, existing Temporal artifact service, existing remediation context/action services (232-remediation-lifecycle-audit)
 - Existing Temporal execution records, `execution_remediation_links`, Temporal artifact metadata/content store, and existing execution memo/search/projection paths; no new persistent database table planned unless audit events cannot reuse an existing control-event mechanism (232-remediation-lifecycle-audit)
+- Python 3.12 and TypeScript/React for existing Mission Control verification surfaces + Pydantic v2, Temporal Python SDK, SQLAlchemy async ORM, existing temporal artifact service/helpers, React, Vitest (245-publish-report-bundles)
+- Existing temporal artifact metadata tables and configured artifact store; no new persistent storage (245-publish-report-bundles)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
