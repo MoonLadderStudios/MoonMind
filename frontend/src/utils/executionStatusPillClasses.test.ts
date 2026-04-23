@@ -28,17 +28,19 @@ describe('executionStatusPillProps', () => {
   });
 
   it('preserves MM-488 traceability for downstream verification', () => {
-    expect(EXECUTING_STATUS_PILL_TRACEABILITY).toEqual({
-      jiraIssue: 'MM-488',
-      designRequirements: [
-        'DESIGN-REQ-001',
-        'DESIGN-REQ-002',
-        'DESIGN-REQ-003',
-        'DESIGN-REQ-004',
-        'DESIGN-REQ-011',
-        'DESIGN-REQ-013',
-        'DESIGN-REQ-016',
-      ],
-    });
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.jiraIssue).toBe('MM-488');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.designRequirements).toEqual([
+      'DESIGN-REQ-001',
+      'DESIGN-REQ-002',
+      'DESIGN-REQ-003',
+      'DESIGN-REQ-004',
+      'DESIGN-REQ-011',
+      'DESIGN-REQ-013',
+      'DESIGN-REQ-016',
+    ]);
+  });
+
+  it('adds MM-489 traceability for the layered shimmer refinement story', () => {
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
   });
 });

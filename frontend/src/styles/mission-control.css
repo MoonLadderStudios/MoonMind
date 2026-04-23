@@ -43,6 +43,12 @@
   --mm-executing-sweep-duration: 1450ms;
   --mm-executing-sweep-delay: 220ms;
   --mm-executing-sweep-angle: -18deg;
+  --mm-executing-sweep-band-width: 24%;
+  --mm-executing-sweep-halo-width-multiplier: 10;
+  --mm-executing-sweep-core-width-multiplier: 9.1667;
+  --mm-executing-sweep-start-x: -135%;
+  --mm-executing-sweep-end-x: 135%;
+  --mm-executing-sweep-layer-offset: 15%;
   --mm-executing-sweep-core-opacity: 0.34;
   --mm-executing-sweep-halo-opacity: 0.14;
   --mm-font-headline: var(--mm-font-sans);
@@ -1299,15 +1305,21 @@ tr[data-proposal-id].proposal-consuming td {
       transparent 56%
     );
   background-repeat: no-repeat;
-  background-size: 240% 100%, 220% 100%;
-  background-position: -135% 0, -120% 0;
+  background-size:
+    calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) 100%,
+    calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) 100%;
+  background-position:
+    var(--mm-executing-sweep-start-x) 0,
+    calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset)) 0;
   animation: mm-status-pill-shimmer var(--mm-executing-sweep-duration) cubic-bezier(0.22, 1, 0.36, 1) infinite;
   animation-delay: var(--mm-executing-sweep-delay);
 }
 
 @keyframes mm-status-pill-shimmer {
   0% {
-    background-position: -135% 0, -120% 0;
+    background-position:
+      var(--mm-executing-sweep-start-x) 0,
+      calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset)) 0;
   }
 
   65% {
@@ -1315,7 +1327,9 @@ tr[data-proposal-id].proposal-consuming td {
   }
 
   100% {
-    background-position: 135% 0, 150% 0;
+    background-position:
+      var(--mm-executing-sweep-end-x) 0,
+      calc(var(--mm-executing-sweep-end-x) + var(--mm-executing-sweep-layer-offset)) 0;
   }
 }
 
