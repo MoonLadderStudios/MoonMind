@@ -103,7 +103,7 @@
 
 - [X] T020 [P] No `quickstart.md` or feature-artifact updates were required because the executed verification commands matched the MM-492 plan
 - [X] T021 Final full-unit rerun was not required because no code or test files changed during MM-492 implementation review
-- [ ] T022 Run `/moonspec-verify` equivalent for `specs/244-define-report-artifact-contract/` and produce the final verification artifact covering MM-492, FR-001 through FR-011, SC-001 through SC-006, and DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-011
+- [X] T022 Run `/moonspec-verify` equivalent for `specs/244-define-report-artifact-contract/` and produce the final verification artifact covering MM-492, FR-001 through FR-011, SC-001 through SC-006, and DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-011
 
 ---
 
