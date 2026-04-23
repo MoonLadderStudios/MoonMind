@@ -47,6 +47,7 @@ Fields:
 
 Validation rules:
 - Only standardized keys are allowed.
+- Internal system keys such as `preview_artifact_id` may be present only when the validation context explicitly permits internal metadata.
 - Values must remain bounded in size, depth, and collection length.
 - Secret-like keys and values are rejected.
 - Large inline bodies, credentials, cookies, session tokens, raw grants, and similar unsafe values are forbidden.
@@ -85,6 +86,25 @@ Validation rules:
 - `evidence_refs` must be a list of compact refs.
 - Bundle payloads must remain workflow-safe and bounded.
 
+### Report Projection Summary
+
+Convenience projection of report state for control-plane display.
+
+Fields:
+- `has_report`: boolean
+- `latest_report_ref`: compact ref to the latest primary report
+- `latest_report_summary_ref`: optional compact ref to the latest summary
+- `report_type`: stable report family identifier
+- `report_status`: projection field carrying `report_scope` from the bundle
+- `finding_counts`: bounded counts map
+- `severity_counts`: bounded counts map
+
+Validation rules:
+- The projection is derived from compact bundle refs and bounded metadata only.
+- `report_status` mirrors `report_scope` from the bundle rather than introducing a separate workflow-facing status source.
+- Only `finding_counts` and `severity_counts` are projected from metadata; the generic `counts` bundle map is intentionally excluded.
+- Projection payloads remain compact, bounded, and safe for control-plane display.
+
 ### Report Workflow Mapping
 
 Deterministic runtime mapping for a report-producing workflow family.
@@ -120,6 +140,7 @@ Rules:
 
 - A `Report Bundle Result` references one canonical `Report Artifact Link Type` through `primary_report_ref` and may reference related summary, structured, and evidence artifacts.
 - `Report Artifact Metadata` is attached to each report artifact and remains bounded for control-plane display.
+- A `Report Projection Summary` is derived from a `Report Bundle Result` plus bounded metadata and is used for high-level execution listing and dashboard summaries.
 - A `Report Workflow Mapping` constrains which report and observability link types are valid for one workflow family.
 - `Canonical Report Resolution` consumes artifact link types to determine whether a scope has a canonical report, generic fallback, invalid report output, or no report content.
 

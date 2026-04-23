@@ -13,7 +13,7 @@ Plan MM-492 as a verification-first report contract story. The current repositor
 | --- | --- | --- | --- | --- |
 | FR-001 | implemented_verified | `REPORT_ARTIFACT_LINK_TYPES`; `validate_report_artifact_contract`; report link tests in `tests/unit/workflows/temporal/test_artifacts.py` | no new implementation | unit only if later verification finds drift |
 | FR-002 | implemented_verified | report validation runs in existing artifact create/write paths in `moonmind/workflows/temporal/artifacts.py` | no new implementation | unit + final verify |
-| FR-003 | implemented_verified | `REPORT_ARTIFACT_LINK_TYPES` includes primary/summary/structured/evidence/appendix/findings_index/export | no new implementation | unit + final verify |
+| FR-003 | implemented_verified | `REPORT_ARTIFACT_LINK_TYPES`; `_derive_retention` long-retention defaults for primary/summary/appendix/findings_index/export; retention tests in `tests/unit/workflows/temporal/test_artifacts.py` | no new implementation | unit + final verify |
 | FR-004 | implemented_verified | `GENERIC_OUTPUT_LINK_TYPES`; fallback validation in `classify_report_rollout_artifacts` and `validate_report_workflow_artifact_classes` | no new implementation | unit + final verify |
 | FR-005 | implemented_verified | `build_report_bundle_result`; `validate_report_bundle_result`; bundle tests in `tests/unit/workflows/temporal/test_artifacts.py` | no new implementation | unit |
 | FR-006 | implemented_verified | unsafe bundle key/value validation in `validate_report_bundle_result`; rejection tests cover inline body and raw URL | no new implementation | unit |

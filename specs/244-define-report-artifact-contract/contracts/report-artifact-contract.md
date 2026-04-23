@@ -43,7 +43,7 @@ Allowed report metadata keys:
 
 Validation rules:
 - Metadata must remain bounded and display-safe.
-- Unknown keys are rejected.
+- Unknown keys are rejected, except for internal system keys such as `preview_artifact_id` when the validation context explicitly permits internal metadata.
 - Secret-like keys or values are rejected.
 - Oversized inline values are rejected.
 
