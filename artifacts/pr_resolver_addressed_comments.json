@@ -1,32 +1,22 @@
 [
   {
-    "id": 3134202207,
+    "id": 3134586258,
     "disposition": "addressed",
-    "rationale": "Converted _apply_oauth_home_runtime_env to a static method because it does not use instance state."
+    "rationale": "Removed the superseded --mm-executing-sweep-duration and --mm-executing-sweep-delay variables so the stylesheet keeps only the active cycle-duration contract."
   },
   {
-    "id": 4166409108,
+    "id": 3134586265,
+    "disposition": "addressed",
+    "rationale": "Dropped the obsolete CSS test expectations for the removed duration and delay tokens so the suite reflects the active shimmer contract only."
+  },
+  {
+    "id": 3134586268,
+    "disposition": "addressed",
+    "rationale": "Simplified the single-quoted selector string literal to remove unnecessary escaped double quotes."
+  },
+  {
+    "id": 4166856735,
     "disposition": "not-applicable",
-    "rationale": "Summary review only; the only actionable feedback in the review was the inline static-method refactor, which is addressed separately."
-  },
-  {
-    "id": 4166611138,
-    "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; the actionable feedback is tracked and resolved via the three inline review comments below."
-  },
-  {
-    "id": 3134370154,
-    "disposition": "addressed",
-    "rationale": "Extracted the shimmer width multipliers and layer offset into named CSS tokens and updated the shimmer block to consume them."
-  },
-  {
-    "id": 3134370157,
-    "disposition": "addressed",
-    "rationale": "Replaced brittle exact-string CSS assertions with regex assertions that tolerate formatting changes while still enforcing the tokenized shimmer contract."
-  },
-  {
-    "id": 3134370170,
-    "disposition": "addressed",
-    "rationale": "Extended the task-detail render test to assert the executing pill still renders the visible status label text unchanged."
+    "rationale": "Top-level review summary only; its actionable items were handled through the inline review comments above."
   }
 ]

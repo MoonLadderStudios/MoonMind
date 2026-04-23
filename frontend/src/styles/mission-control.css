@@ -40,8 +40,6 @@
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.12);
   --mm-control-border: rgb(var(--mm-border) / 0.78);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
-  --mm-executing-sweep-duration: 1450ms;
-  --mm-executing-sweep-delay: 220ms;
   --mm-executing-sweep-cycle-duration: 1670ms;
   --mm-executing-sweep-angle: -18deg;
   --mm-executing-sweep-band-width: 24%;

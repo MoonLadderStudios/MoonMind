@@ -397,8 +397,6 @@ describe('Mission Control shared entry', () => {
 
 
   it('defines the shared MM-488 executing shimmer modifier contract', async () => {
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-duration:\s*1450ms/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-delay:\s*220ms/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*1670ms/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
@@ -409,7 +407,7 @@ describe('Mission Control shared entry', () => {
 
     const shimmerBlock = cssRuleBlocks(
       missionControlCss,
-      '.status-running[data-state=\"executing\"][data-effect=\"shimmer-sweep\"], .status-running.is-executing',
+      '.status-running[data-state="executing"][data-effect="shimmer-sweep"], .status-running.is-executing',
     ).join('\n');
     expect(shimmerBlock).toContain('animation: mm-status-pill-shimmer');
     expect(shimmerBlock).toContain('background-image:');
