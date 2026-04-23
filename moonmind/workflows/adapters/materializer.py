@@ -147,8 +147,8 @@ class ProviderProfileMaterializer:
         self.generated_dirs.append(str(temp_dir))
         return str(temp_dir)
 
+    @staticmethod
     def _apply_oauth_home_runtime_env(
-        self,
         profile: ManagedRuntimeProfile,
         env: dict[str, str],
     ) -> None:

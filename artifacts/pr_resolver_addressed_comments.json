@@ -1,27 +1,12 @@
 [
   {
-    "id": 3133634364,
+    "id": 3134202207,
     "disposition": "addressed",
-    "rationale": "Added an explicit TemporalExecutionRecord | TemporalExecutionCanonicalRecord type hint to the snapshot helper record parameter."
+    "rationale": "Converted _apply_oauth_home_runtime_env to a static method because it does not use instance state."
   },
   {
-    "id": 3133634368,
-    "disposition": "addressed",
-    "rationale": "Moved session.refresh(record) inside the snapshot_ref block so it only runs after a persisted snapshot commit."
-  },
-  {
-    "id": 4165735428,
+    "id": 4166409108,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable child comments were handled individually."
-  },
-  {
-    "id": 3133637367,
-    "disposition": "addressed",
-    "rationale": "Changed direct-run snapshot creation to use parameters from the returned persisted record instead of the incoming request payload, preserving idempotency replay semantics."
-  },
-  {
-    "id": 4165738806,
-    "disposition": "not-applicable",
-    "rationale": "Informational Codex review wrapper with no distinct actionable feedback beyond the child comment."
+    "rationale": "Summary review only; the only actionable feedback in the review was the inline static-method refactor, which is addressed separately."
   }
 ]
