@@ -2754,6 +2754,38 @@ async def _persist_original_task_input_snapshot(
     return completed.artifact_id
 
 
+async def _persist_original_task_input_snapshot_from_parameters(
+    *,
+    session: AsyncSession,
+    record,
+    user: User,
+    parameters: Mapping[str, Any],
+    attachment_refs: list[dict[str, Any]] | None = None,
+    source_kind: str,
+    source_workflow_id: str | None = None,
+    source_run_id: str | None = None,
+) -> str:
+    workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
+    if workflow_type_value != "MoonMind.Run":
+        return ""
+    snapshot_payload, snapshot_task = _snapshot_source_payload_from_parameters(
+        parameters
+    )
+    if not snapshot_task:
+        return ""
+    return await _persist_original_task_input_snapshot(
+        session=session,
+        record=record,
+        user=user,
+        payload=snapshot_payload,
+        task_payload=snapshot_task,
+        attachment_refs=attachment_refs,
+        source_kind=source_kind,
+        source_workflow_id=source_workflow_id,
+        source_run_id=source_run_id,
+    )
+
+
 async def _attach_input_attachment_artifacts_to_execution(
     *,
     session: AsyncSession | None,
@@ -3683,6 +3715,18 @@ async def create_execution(
             },
         ) from exc
 
+    snapshot_ref = await _persist_original_task_input_snapshot_from_parameters(
+        session=session,
+        record=record,
+        user=user,
+        parameters=dict(request.initial_parameters),
+        source_kind="create",
+    )
+    if snapshot_ref:
+        await session.commit()
+    if isinstance(record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)):
+        await session.refresh(record)
+
     return _serialize_execution(record, user=user)
 
 
@@ -4136,22 +4180,17 @@ async def update_execution(
     refreshed_record = await service.describe_execution(response_workflow_id)
     snapshot_ref = ""
     if is_task_editing_update:
-        snapshot_payload, snapshot_task = _snapshot_source_payload_from_parameters(
-            dict(getattr(refreshed_record, "parameters", None) or {})
+        snapshot_ref = await _persist_original_task_input_snapshot_from_parameters(
+            session=session,
+            record=refreshed_record,
+            user=user,
+            parameters=dict(getattr(refreshed_record, "parameters", None) or {}),
+            source_kind=(
+                "rerun" if payload.update_name == "RequestRerun" else "edit"
+            ),
+            source_workflow_id=record.workflow_id,
+            source_run_id=getattr(record, "run_id", None),
         )
-        if snapshot_task:
-            snapshot_ref = await _persist_original_task_input_snapshot(
-                session=session,
-                record=refreshed_record,
-                user=user,
-                payload=snapshot_payload,
-                task_payload=snapshot_task,
-                source_kind=(
-                    "rerun" if payload.update_name == "RequestRerun" else "edit"
-                ),
-                source_workflow_id=record.workflow_id,
-                source_run_id=getattr(record, "run_id", None),
-            )
     if is_task_editing_update:
         accepted = bool(update_result.get("accepted", True))
         applied = str(update_result.get("applied") or "").strip() or None
@@ -4531,21 +4570,15 @@ async def rerun_execution(
             },
         ) from exc
 
-    snapshot_payload, snapshot_task = _snapshot_source_payload_from_parameters(
-        dict(initial_params)
+    snapshot_ref = await _persist_original_task_input_snapshot_from_parameters(
+        session=session,
+        record=record,
+        user=user,
+        parameters=dict(initial_params),
+        source_kind="rerun",
+        source_workflow_id=canonical.workflow_id,
+        source_run_id=canonical.run_id,
     )
-    snapshot_ref = ""
-    if snapshot_task:
-        snapshot_ref = await _persist_original_task_input_snapshot(
-            session=session,
-            record=record,
-            user=user,
-            payload=snapshot_payload,
-            task_payload=snapshot_task,
-            source_kind="rerun",
-            source_workflow_id=canonical.workflow_id,
-            source_run_id=canonical.run_id,
-        )
 
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
