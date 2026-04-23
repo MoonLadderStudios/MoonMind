@@ -13,7 +13,7 @@
 
 - Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/auth/test_volume_verifiers.py tests/unit/api_service/api/routers/test_oauth_sessions.py`
 - Integration tests: route-boundary async pytest coverage through `tests/unit/api_service/api/routers/test_oauth_sessions.py`; run `./tools/test_integration.sh` only if API/artifact lifecycle behavior changes
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec-verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -90,7 +90,7 @@
 - [X] T017 [P] Review `specs/243-claude-oauth-verification/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/claude-oauth-verification.md`, `quickstart.md`, and `tasks.md` for MM-480 traceability covering FR-011
 - [X] T018 Run final unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - [X] T019 Run `./tools/test_integration.sh` only if route/API/artifact lifecycle behavior changed; otherwise document why it was not required. Not run because MM-480 changed verifier logic and unit-tested route behavior only, with no compose/API artifact lifecycle change.
-- [X] T020 Run `/speckit.verify` equivalent by checking implementation, tests, and artifacts against the original MM-480 request and produce the final verification report
+- [X] T020 Run `/moonspec-verify` equivalent by checking implementation, tests, and artifacts against the original MM-480 request and produce the final verification report
 
 ---
 
