@@ -23,5 +23,30 @@
     "id": 3134136597,
     "disposition": "addressed",
     "rationale": "Updated the class-name expectations to assert executionStatusPillProps(...).className directly."
+  },
+  {
+    "id": 4166160843,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Gemini summary review duplicated the actionable inline width feedback that is addressed below."
+  },
+  {
+    "id": 3133984746,
+    "disposition": "addressed",
+    "rationale": "Reduced desktop floating-bar grid minimums from 18/15/12rem to 12/10/8rem so the widened bar stays fluid on mid-width viewports."
+  },
+  {
+    "id": 3133984751,
+    "disposition": "addressed",
+    "rationale": "Updated the Create page CSS expectation test to match the relaxed 12/10/8rem floating-bar grid minimums."
+  },
+  {
+    "id": 3133987413,
+    "disposition": "addressed",
+    "rationale": "Restored shrinkable mid-width behavior by reducing the desktop column minimums rather than keeping overflow-prone fixed widths."
+  },
+  {
+    "id": 4166164127,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Codex review wrapper contained no additional actionable feedback beyond the inline comment already addressed."
   }
 ]
