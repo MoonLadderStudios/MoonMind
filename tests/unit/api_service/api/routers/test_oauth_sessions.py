@@ -627,6 +627,51 @@ async def test_oauth_terminal_attach_returns_one_time_websocket_token(
 
 
 @pytest.mark.asyncio
+async def test_claude_oauth_terminal_attach_allows_awaiting_user_with_hash_only_token(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_claudepaste01"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_terminal_ceremony",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_claudepaste01",
+                terminal_bridge_id="br_oas_claudepaste01",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_id
+    assert payload["terminal_session_id"] == "term_oas_claudepaste01"
+    assert payload["terminal_bridge_id"] == "br_oas_claudepaste01"
+    assert payload["attach_token"]
+    assert payload["attach_token"] in payload["websocket_url"]
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.metadata_json is not None
+        assert row.metadata_json["terminal_attach_token_sha256"] != payload["attach_token"]
+        assert row.metadata_json["terminal_attach_token_used"] is False
+        assert payload["attach_token"] not in str(row.metadata_json)
+
+
+@pytest.mark.asyncio
 async def test_oauth_terminal_attach_rejects_expired_session(
     client_app: AsyncClient, _module_db
 ) -> None:
