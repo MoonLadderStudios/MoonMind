@@ -1,0 +1,630 @@
+{
+  "source": {
+    "title": "Report Artifacts",
+    "path": "docs/Artifacts/ReportArtifacts.md",
+    "referencePath": "docs/Artifacts/ReportArtifacts.md",
+    "originalDesignText": "# Report Artifacts\n\nStatus: Draft  \nOwners: MoonMind Platform + Mission Control  \nLast updated: 2026-04-21\n\n## 1. Purpose\n\nThis document defines how MoonMind should support workflows that produce a **report** as the final artifact or primary end-user deliverable.\n\nExamples include:\n\n- unit test reports\n- coverage reports\n- benchmark reports\n- compliance reports\n- security and penetration-testing reports\n- investigation and incident-analysis reports\n- agent-authored technical writeups assembled from execution evidence\n\nThis document is intentionally layered on top of the broader artifact system.\nIt does not redefine artifact storage internals, execution identity, workflow payload rules, or live observability APIs.\n\nInstead, it defines:\n\n- what a **report** means in MoonMind\n- how reports should be modeled as artifact-backed outputs\n- how reports should be linked to executions and steps\n- how Mission Control and other consumers should present reports\n- how report workflows should separate curated report content from raw evidence, logs, and diagnostics\n\n---\n\n## 1.1 Related docs and ownership boundaries\n\n- `docs/Temporal/WorkflowArtifactSystemDesign.md`\n  - Owns artifact identity, storage, linkage, retention, authorization, and lifecycle.\n- `docs/Temporal/ArtifactPresentationContract.md`\n  - Owns generic artifact presentation, preview behavior, metadata hints, and rendering rules.\n- `docs/ManagedAgents/LiveLogs.md`\n  - Owns observability, live tails, stdout/stderr, diagnostics, and session-aware run timelines.\n- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`\n  - Owns canonical runtime result contracts such as `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult`.\n\nThis document owns the **report-specific artifact contract and presentation model**.\n\n---\n\n## 2. Scope / Non-goals\n\n## 2.1 In scope\n\n- report-specific artifact classes and `link_type` conventions\n- recommended report bundle shape for workflow outputs\n- report metadata needed for UI presentation and filtering\n- rules for separating reports from evidence, diagnostics, and raw logs\n- report retention and access expectations\n- examples for unit-test and pentest-style workflows\n\n## 2.2 Out of scope\n\n- PDF rendering engines or document-conversion implementation details\n- provider-specific report-generation prompts\n- full-text search/indexing strategy for report bodies\n- legal/compliance review procedures for report content\n- replacing generic artifact APIs with an entirely separate report storage system\n\n---\n\n## 3. Core decision\n\nMoonMind should **not** introduce a separate storage system for reports.\n\nInstead:\n\n1. **Reports are first-class artifact families.**\n   - A report is stored in the existing artifact system.\n   - Report workflows produce report-specific artifact link types and bounded metadata.\n\n2. **A report is usually a bundle, not just one file.**\n   - The human-facing report, machine-readable results, and supporting evidence should be stored as distinct linked artifacts.\n\n3. **Curated report content is separate from observability.**\n   - `stdout`, `stderr`, merged logs, diagnostics, session continuity artifacts, and provider snapshots remain observability/evidence surfaces, not the report itself.\n\n4. **Large report payloads remain artifact-backed.**\n   - Workflows and activities pass refs and compact summaries rather than embedding report bodies or evidence blobs in workflow history.\n\n5. **Mission Control should treat reports as a first-class end state.**\n   - If an execution has a canonical report artifact, the UI should surface it directly rather than forcing users to hunt through a generic artifact list.\n\n---\n\n## 4. Goals\n\n1. **First-class final deliverables**  \n   MoonMind should be able to represent \u201cthis workflow produced a report\u201d as a clear, queryable end state.\n\n2. **Bundle-friendly structure**  \n   Report workflows should be able to publish a human-readable report, structured findings, and evidence without collapsing everything into one opaque blob.\n\n3. **Artifact-first durability**  \n   Reports must survive refreshes, reruns, worker restarts, and ended runs without depending on in-memory process state or workflow payload bloat.\n\n4. **Safe presentation**  \n   Sensitive reports should support preview-only or restricted raw access using the existing artifact presentation model.\n\n5. **Workflow compatibility**  \n   Unit-test, benchmark, pentest, compliance, and similar workflows should all fit one report contract without forcing one report schema onto all producers.\n\n6. **Clear separation of concerns**  \n   Reports, evidence, and observability should remain related but distinct surfaces.\n\n---\n\n## 5. Non-goals\n\n- treating every `output.primary` artifact as a report\n- storing evidence, logs, and diagnostics inline inside one giant report blob by default\n- introducing mutable in-place report updates\n- requiring every report workflow to produce PDF output\n- making Mission Control parse provider-native raw payloads as if they were canonical reports\n\n---\n\n## 6. Definitions\n\n## 6.1 Report artifact\n\nA **Report artifact** is an immutable artifact whose primary purpose is to communicate the outcome of a workflow, step, or evaluation in a human-readable or machine-readable reporting form.\n\n## 6.2 Report bundle\n\nA **Report bundle** is the set of related artifacts that together form the report deliverable for a workflow or step.\n\nA report bundle commonly includes:\n\n- a primary human-facing report\n- a short summary\n- structured results or findings\n- evidence attachments\n\n## 6.3 Evidence artifact\n\nAn **Evidence artifact** is a durable supporting artifact linked to a report, such as:\n\n- screenshots\n- excerpts\n- command results\n- request/response captures\n- reproducer output\n- diff snippets\n- benchmark measurements\n\n## 6.4 Final report\n\nA **Final report** is the canonical report deliverable for the completed execution or task.\n\n## 6.5 Intermediate report\n\nAn **Intermediate report** is a report artifact created mid-workflow or at a step boundary for review, checkpointing, or iterative delivery.\n\n---\n\n## 7. Consumer and producer invariants\n\n1. **Reports remain artifact-backed.**\n   - The report body and large supporting evidence must live in artifacts, not workflow history.\n\n2. **A report is not the same thing as logs or diagnostics.**\n   - `runtime.stdout`, `runtime.stderr`, `runtime.merged_logs`, `runtime.diagnostics`, provider snapshots, and session continuity artifacts remain separate artifact classes.\n\n3. **The human-facing report is the primary read target, not necessarily the only output.**\n   - A workflow may publish multiple report-related artifacts, but one primary report should be treated as canonical for end-user presentation.\n\n4. **Reports are immutable.**\n   - Any revised report creates a new artifact ID.\n   - \u201cLatest report\u201d is query behavior, not mutable state.\n\n5. **UI clients must not guess which artifact is the report by local heuristics alone.**\n   - Use report-specific `link_type`, bounded metadata, and server-defined latest behavior.\n\n6. **Sensitive reports must degrade safely.**\n   - If raw access is restricted, the UI should use preview/default-read behavior rather than assuming full download is allowed.\n\n7. **Evidence should remain separately addressable.**\n   - Screenshots, transcripts, and structured findings should not be irreversibly buried inside one rendered report file when separate durable access would improve auditability or reuse.\n\n---\n\n## 8. Recommended report artifact classes\n\nMoonMind should add these stable `link_type` values for report-centric workflows.\n\n## 8.1 Core report classes\n\n- `report.primary`\n  - Canonical human-facing report for the current scope.\n- `report.summary`\n  - Short executive summary or abstract.\n- `report.structured`\n  - Machine-readable findings or results.\n- `report.evidence`\n  - Supporting evidence attachment.\n\n## 8.2 Optional report classes\n\n- `report.appendix`\n  - Extended detail that is intentionally separate from the main report.\n- `report.findings_index`\n  - Structured findings index optimized for UI grouping or filtering.\n- `report.export`\n  - Alternative rendered export such as HTML or PDF.\n\n## 8.3 Relationship to existing output classes\n\nUse these rules:\n\n- Prefer `report.*` link types when the artifact is explicitly part of a report deliverable.\n- Continue using `output.primary`, `output.summary`, and `output.agent_result` for generic non-report outputs.\n- Keep observability and diagnostics in their existing runtime/debug classes.\n\nThis keeps report semantics explicit without breaking generic output flows.\n\n---\n\n## 9. Report bundle model\n\nMoonMind should standardize on a compact workflow-facing result shape for report-producing flows.\n\nExample:\n\n```json\n{\n  \"report_bundle_v\": 1,\n  \"primary_report_ref\": {\n    \"artifact_ref_v\": 1,\n    \"artifact_id\": \"art_...\"\n  },\n  \"summary_ref\": {\n    \"artifact_ref_v\": 1,\n    \"artifact_id\": \"art_...\"\n  },\n  \"structured_ref\": {\n    \"artifact_ref_v\": 1,\n    \"artifact_id\": \"art_...\"\n  },\n  \"evidence_refs\": [\n    {\n      \"artifact_ref_v\": 1,\n      \"artifact_id\": \"art_...\"\n    }\n  ],\n  \"report_type\": \"security_pentest_report\",\n  \"report_scope\": \"final\",\n  \"sensitivity\": \"restricted\",\n  \"finding_counts\": {\n    \"total\": 8,\n    \"critical\": 1,\n    \"high\": 2,\n    \"medium\": 3,\n    \"low\": 2\n  }\n}\n```\n\nRules:\n\n- This contract is compact and workflow-safe.\n- The bundle contains refs and bounded metadata only.\n- Large report bodies, finding details, screenshots, logs, and transcripts remain artifact-backed.\n\n---\n\n## 10. Metadata model for report artifacts\n\nReport artifacts should continue using generic artifact metadata plus a small set of standardized report keys.\n\nRecommended keys under `ArtifactMetadata.metadata`:\n\n- `artifact_type`\n  - Example: `unit_test_report`, `coverage_report`, `security_pentest_report`, `benchmark_report`\n- `report_type`\n  - Stable report family identifier\n- `report_scope`\n  - `final | intermediate | step | executive | technical`\n- `title`\n  - Human-facing display title\n- `description`\n  - Short display description\n- `producer`\n  - Workflow/tool/adapter identity such as `pytest`, `pentestgpt`, `benchmark-runner`\n- `subject`\n  - Bounded target description such as repo, test suite, hostname, challenge, or environment\n- `render_hint`\n  - `text | json | diff | image | binary`\n- `name`\n  - Suggested display filename/basename\n- `is_final_report`\n  - Boolean convenience flag when applicable\n- `finding_counts`\n  - Bounded counts only\n- `severity_counts`\n  - Bounded counts only\n- `step_id`\n  - Optional step-aware presentation hint\n- `attempt`\n  - Optional step attempt hint\n\nRules:\n\n- Metadata must remain bounded and safe for control-plane display.\n- Metadata must not contain secrets, raw access grants, cookies, session tokens, or large inline payloads.\n- Detailed findings belong in `report.structured` or other linked artifacts, not in bloated metadata.\n\n---\n\n## 11. Storage and linkage rules\n\n## 11.1 Storage\n\nReport artifacts use the existing artifact store and index.\n\nThat means:\n\n- immutable artifact IDs\n- ordinary artifact lifecycle management\n- execution linkage through the existing artifact link model\n- ordinary preview and raw-download behavior\n\nNo separate report blob store is required.\n\n## 11.2 Execution linkage\n\nA report artifact should normally be linked to the producing execution using the standard execution reference:\n\n- `namespace`\n- `workflow_id`\n- `run_id`\n- `link_type`\n- optional `label`\n\nExamples:\n\n- `link_type=report.primary`, `label=\"Final report\"`\n- `link_type=report.summary`, `label=\"Executive summary\"`\n- `link_type=report.structured`, `label=\"Findings JSON\"`\n- `link_type=report.evidence`, `label=\"Screenshot evidence\"`\n\n## 11.3 Step-aware linkage\n\nWhen reports are step-scoped or iterative, producers should also include bounded step metadata such as:\n\n- `step_id`\n- `attempt`\n- optional `scope=step`\n\nThis allows the UI to show both per-step reports and the final report without local guesswork.\n\n## 11.4 \u201cLatest report\u201d semantics\n\nLatest-report selection is a server query behavior, not mutable state.\n\nRules:\n\n- For one execution, latest report should be resolved by `(namespace, workflow_id, run_id, link_type)`.\n- For one task or multi-step flow, the UI should prefer an explicit final-report projection when available.\n- Clients must not sort arbitrary artifacts in the browser and infer a canonical report.\n\n---\n\n## 12. Presentation rules\n\n## 12.1 Primary UI surfaces\n\nReport-producing executions should expose:\n\n- a **Report** panel or top-level report card for the canonical final report\n- a **Related Evidence** section for supporting artifacts\n- continued access to **Artifacts**, **Stdout**, **Stderr**, **Diagnostics**, and other observability surfaces\n\nThe report surface should complement, not replace, the generic artifact surface.\n\n## 12.2 Default read behavior\n\nFor a primary report:\n\n- use the artifact system's `default_read_ref` for the default render target\n- use `render_hint`, `content_type`, and `metadata.name/title` to choose the appropriate viewer\n- expose raw download only when allowed\n\n## 12.3 Recommended renderer behavior\n\nTypical report renderers:\n\n- `text/markdown` \u2192 text/markdown viewer\n- `application/json` \u2192 JSON viewer for structured findings/results\n- `text/plain` \u2192 text viewer\n- `text/x-diff` \u2192 diff viewer for patch-like reports\n- `image/*` \u2192 image viewer for screenshot evidence\n- `application/pdf` or unknown binary \u2192 metadata + download-only unless a later PDF viewer is added deliberately\n\n## 12.4 Report-first UX rule\n\nIf an execution has a canonical `report.primary` artifact, Mission Control should present that artifact before making the user inspect the generic artifact list.\n\nRecommended behavior:\n\n1. Query latest `report.primary` for the current execution.\n2. If present, show a report card/panel with summary metadata and open action.\n3. Show linked `report.summary`, `report.structured`, and `report.evidence` artifacts as related report content.\n4. Fall back to the normal artifact list when no report artifact exists.\n\n## 12.5 Evidence presentation\n\nEvidence artifacts should remain individually addressable and viewable.\n\nExamples:\n\n- screenshots shown inline where safe\n- JSON findings shown in the JSON viewer\n- large logs or dumps kept as download/open surfaces rather than eagerly inlined into the report panel\n\n---\n\n## 13. Relationship to observability and diagnostics\n\nThis separation is mandatory.\n\n## 13.1 Report vs observability\n\nA report is the curated outcome surface.\nObservability remains the operational truth surface.\n\nObservability artifacts still include:\n\n- `runtime.stdout`\n- `runtime.stderr`\n- `runtime.merged_logs`\n- `runtime.diagnostics`\n- provider snapshots\n- session continuity artifacts\n- debug traces\n\nThese artifacts may support or explain the report, but they are not themselves the report.\n\n## 13.2 UI rule\n\nMission Control should not collapse raw logs and diagnostics into the report view by default.\n\nInstead:\n\n- the report panel shows curated deliverables\n- the observability panels show how the run behaved\n- the evidence surfaces show supporting proof\n\nThis is especially important for security and investigation workflows, where the final report, the raw transcript, and the execution diagnostics all matter but serve different purposes.\n\n---\n\n## 14. Security and access model\n\nReport artifacts should use the existing artifact authorization model.\n\n## 14.1 Sensitivity expectations\n\nReports may contain:\n\n- sensitive internal code or architecture details\n- security findings\n- credentials accidentally captured in evidence\n- PII or customer data\n- provider operational payloads\n\n## 14.2 Recommended redaction posture\n\nUse these patterns:\n\n- `report.primary` may be raw-readable for authorized users only\n- `report.summary` may be less sensitive and broadly presentable\n- `report.structured` may be preview-only or restricted depending on content\n- `report.evidence` should often be treated as sensitive by default for security workflows\n\n## 14.3 Preview support\n\nWhen a report or evidence artifact is sensitive:\n\n1. store the raw artifact\n2. optionally generate a preview artifact\n3. use `default_read_ref` to point clients at the preview when raw access is not allowed\n\nThis lets MoonMind show a useful report surface without widening raw-access permissions.\n\n---\n\n## 15. Retention guidance\n\nReports are usually more valuable than transient logs.\n\n## 15.1 Recommended default mappings\n\n- `report.primary` \u2192 `long`\n- `report.summary` \u2192 `long`\n- `report.structured` \u2192 `long` or `standard` depending on product policy\n- `report.evidence` \u2192 `standard` or `long` depending on audit/review needs\n- related raw logs and diagnostics keep their normal observability retention rules\n\n## 15.2 Pinning\n\nFinal reports should be easy to pin from the UI.\n\nRecommended behavior:\n\n- allow explicit pin/unpin through the existing artifact API\n- consider product-level auto-pinning for workflows where the final report is the primary deliverable\n\n## 15.3 Deletion\n\nSoft-delete/hard-delete behavior should remain artifact-system-native.\n\nReport deletion must not implicitly delete unrelated observability artifacts unless a later product policy explicitly defines cascading behavior.\n\n---\n\n## 16. Workflow integration guidance\n\n## 16.1 Workflow rule\n\nWorkflows should publish reports through activities that create and finalize artifacts, then return compact refs and bounded metadata.\n\nWorkflows must not:\n\n- embed large report bodies in history\n- embed screenshots or evidence blobs directly in workflow state\n- embed raw download URLs in workflow payloads\n\n## 16.2 Activity rule\n\nActivities should be responsible for:\n\n- assembling the report content\n- writing `report.primary`, `report.summary`, `report.structured`, and `report.evidence` artifacts as needed\n- linking them to the producing execution and optional step metadata\n- returning a compact report bundle to workflow code\n\n## 16.3 Finalization rule\n\nWhen a workflow completes and the report is the primary deliverable, the producing path should ensure that one artifact is clearly marked and linked as the canonical final report.\n\nPreferred mechanisms:\n\n- `link_type=report.primary`\n- `metadata.is_final_report=true`\n- `metadata.report_scope=final`\n\nThis lets UI clients and later API projections identify the report without brittle heuristics.\n\n---\n\n## 17. Example workflow mappings\n\n## 17.1 Unit test report\n\nA unit-test workflow might publish:\n\n- `report.primary`\n  - Markdown or HTML summary of pass/fail totals, key failures, duration, and environment\n- `report.summary`\n  - Short executive test outcome summary\n- `report.structured`\n  - JUnit XML converted to JSON or a machine-readable results artifact\n- `report.evidence`\n  - Coverage summary image or selected failure excerpts when useful\n- `runtime.stdout` / `runtime.stderr`\n  - Raw test runner output\n- `runtime.diagnostics`\n  - Execution metadata, exit code, worker/runtime classification\n\nRecommended metadata:\n\n- `artifact_type=unit_test_report`\n- `producer=pytest`\n- `subject=<repo or suite name>`\n- `finding_counts={ total, passed, failed, skipped }`\n\n## 17.2 Coverage report\n\nA coverage workflow might publish:\n\n- `report.primary`\n  - Human-readable coverage summary\n- `report.structured`\n  - Raw coverage JSON summary\n- `report.evidence`\n  - HTML coverage export or image snippets\n\nRecommended metadata:\n\n- `artifact_type=coverage_report`\n- `subject=<repo/module>`\n- `finding_counts={ files_below_threshold }`\n\n## 17.3 Pentest or security report\n\nA pentest-style workflow might publish:\n\n- `report.primary`\n  - Executive pentest report for the target\n- `report.summary`\n  - Short findings overview\n- `report.structured`\n  - Machine-readable findings JSON\n- `report.evidence`\n  - Screenshots, request/response excerpts, command outputs, proof-of-exploit captures\n- `runtime.stdout` / `runtime.stderr`\n  - Raw tool/runtime output\n- `runtime.diagnostics`\n  - Run diagnostics, tool failures, and environment details\n\nRecommended metadata:\n\n- `artifact_type=security_pentest_report`\n- `producer=pentestgpt` or equivalent adapter name\n- `subject=<target/engagement>`\n- `severity_counts={ critical, high, medium, low, info }`\n- `sensitivity=restricted`\n\n## 17.4 Benchmark or evaluation report\n\nA benchmark workflow might publish:\n\n- `report.primary`\n  - Human-readable benchmark summary\n- `report.structured`\n  - Per-case results JSON\n- `report.evidence`\n  - Charts, tables, or selected case output excerpts\n\nRecommended metadata:\n\n- `artifact_type=benchmark_report`\n- `subject=<benchmark suite>`\n- `finding_counts={ total_cases, passed_cases, failed_cases }`\n\n---\n\n## 18. Suggested API/UI extensions\n\nThe existing artifact APIs are sufficient for a first version, but MoonMind should consider adding report-aware convenience surfaces.\n\n## 18.1 Execution detail summary fields\n\nRecommended execution detail conveniences:\n\n- `has_report`\n- `latest_report_ref`\n- `latest_report_summary_ref`\n- `report_type`\n- `report_status`\n- bounded `finding_counts` / `severity_counts`\n\n## 18.2 Report projection endpoint (optional future)\n\nPossible future read model:\n\n`GET /api/executions/{namespace}/{workflow_id}/{run_id}/report`\n\nExample response:\n\n```json\n{\n  \"execution_ref\": {\n    \"namespace\": \"moonmind\",\n    \"workflow_id\": \"wf_123\",\n    \"run_id\": \"run_456\"\n  },\n  \"report_type\": \"security_pentest_report\",\n  \"primary_report_ref\": {\n    \"artifact_ref_v\": 1,\n    \"artifact_id\": \"art_primary\"\n  },\n  \"summary_ref\": {\n    \"artifact_ref_v\": 1,\n    \"artifact_id\": \"art_summary\"\n  },\n  \"structured_ref\": {\n    \"artifact_ref_v\": 1,\n    \"artifact_id\": \"art_structured\"\n  },\n  \"evidence_refs\": [\n    {\n      \"artifact_ref_v\": 1,\n      \"artifact_id\": \"art_evidence_1\"\n    }\n  ],\n  \"finding_counts\": {\n    \"total\": 8\n  }\n}\n```\n\nRules:\n\n- This is a convenience projection over normal artifacts, not a second storage model.\n- All underlying report artifacts still remain individually addressable through the standard artifact APIs.\n\n---\n\n## 19. Migration guidance\n\nMoonMind does not need a flag-day migration.\n\nRecommended rollout:\n\n1. **Phase 1**  \n   Recognize report intent through metadata conventions and existing artifact APIs.\n\n2. **Phase 2**  \n   Add explicit `report.*` link types and UI report surfacing.\n\n3. **Phase 3**  \n   Standardize a compact report bundle result contract for report-producing workflows.\n\n4. **Phase 4**  \n   Add report-aware projections, filters, retention defaults, and pinning affordances where useful.\n\nDuring migration:\n\n- existing generic outputs can continue using `output.primary`\n- new report workflows should prefer explicit `report.*` semantics\n- UI should degrade gracefully when only generic output artifacts exist\n\n---\n\n## 20. Open questions\n\n1. Should MoonMind standardize a bounded enum for `report_type`, or keep it producer-defined with conventions first?\n2. Should final reports be auto-pinned by default for some workflow families?\n3. Do we want a dedicated report projection endpoint immediately, or should the first version rely entirely on standard artifact list queries?\n4. Should `report.export` explicitly distinguish PDF/HTML exports from the editable or source-format report artifact?\n5. Should report evidence support stronger grouping semantics such as `finding_id` or `section_id` in bounded metadata?\n6. Should multi-step tasks expose both per-step reports and one task-level final report projection in Mission Control?\n\n---\n\n## 21. Bottom line\n\nMoonMind should support report-producing workflows by making **reports a first-class artifact family on top of the existing artifact system**, not by inventing a separate report storage model.\n\nThat means:\n\n- report outputs stay immutable and artifact-backed\n- reports, evidence, and observability remain clearly separated\n- workflows return compact report bundle refs rather than large payloads\n- Mission Control can present a canonical final report directly when one exists\n- sensitive reports can reuse the existing preview/restriction model\n\nThis gives MoonMind a clean way to support workflows such as unit-test reports, coverage reports, benchmark reports, and pentest reports while staying aligned with the current artifact-first Temporal architecture.\n"
+  },
+  "extractedAt": "2026-04-23T07:20:15Z",
+  "outputMode": "jira",
+  "designSummary": "ReportArtifacts.md defines report-producing workflows as first-class artifact-backed deliverables layered on the existing artifact system. It standardizes report link types, compact bundle refs, bounded metadata, execution and step linkage, report-first Mission Control presentation, access and retention expectations, and staged rollout guidance while keeping report content, evidence, logs, diagnostics, and raw provider payloads separate.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Report-specific ownership boundary",
+      "type": "constraint",
+      "source_section": "1 Purpose, 1.1 Related docs and ownership boundaries",
+      "explanation": "The document owns report-specific artifact contracts and presentation while existing docs own storage internals, generic presentation, live logs, and runtime result contracts."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "No separate report storage",
+      "type": "architecture",
+      "source_section": "3 Core decision, 11.1 Storage",
+      "explanation": "Reports are stored in the existing immutable artifact system and index, not a new report blob store."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Reports as first-class artifact family",
+      "type": "requirement",
+      "source_section": "3 Core decision, 4 Goals",
+      "explanation": "MoonMind must represent report-producing workflows as clear, queryable end states using report-specific artifact semantics."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Report bundle shape",
+      "type": "artifact",
+      "source_section": "3 Core decision, 6.2 Report bundle, 9 Report bundle model",
+      "explanation": "A report deliverable usually consists of distinct primary, summary, structured, and evidence artifacts connected through a compact bundle result."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Curated report separation",
+      "type": "constraint",
+      "source_section": "3 Core decision, 7 Consumer and producer invariants, 13 Relationship to observability and diagnostics",
+      "explanation": "Reports, supporting evidence, observability logs, diagnostics, provider snapshots, and session continuity artifacts must remain related but distinct surfaces."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Artifact-backed workflow safety",
+      "type": "constraint",
+      "source_section": "3 Core decision, 7 Consumer and producer invariants, 16 Workflow integration guidance",
+      "explanation": "Large report bodies, screenshots, findings, logs, evidence, raw URLs, and transcripts must stay artifact-backed while workflows pass refs and bounded summaries."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Report definitions and scopes",
+      "type": "state-model",
+      "source_section": "6 Definitions",
+      "explanation": "The model distinguishes report artifacts, report bundles, evidence artifacts, final reports, and intermediate reports."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Stable report link types",
+      "type": "contract",
+      "source_section": "8 Recommended report artifact classes",
+      "explanation": "Report-producing flows should use report.primary, report.summary, report.structured, report.evidence, and optional report appendix/index/export link types."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Generic output relationship",
+      "type": "contract",
+      "source_section": "8.3 Relationship to existing output classes, 5 Non-goals",
+      "explanation": "Explicit report deliverables use report.* link types while generic non-report outputs keep output.* classes and not every output.primary is a report."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Compact report bundle contract",
+      "type": "contract",
+      "source_section": "9 Report bundle model",
+      "explanation": "Report-producing workflows should return report_bundle_v, artifact refs, report type, scope, sensitivity, and bounded counts only."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Bounded safe report metadata",
+      "type": "security",
+      "source_section": "10 Metadata model for report artifacts",
+      "explanation": "Report metadata uses standardized bounded keys and must exclude secrets, raw grants, cookies, tokens, and large inline payloads."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Execution and step linkage",
+      "type": "integration",
+      "source_section": "11.2 Execution linkage, 11.3 Step-aware linkage",
+      "explanation": "Report artifacts link to executions through namespace, workflow_id, run_id, link_type, label, and optional bounded step metadata."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Server-owned latest report semantics",
+      "type": "state-model",
+      "source_section": "11.4 Latest report semantics",
+      "explanation": "Latest report selection is server query or projection behavior, not mutable state or browser-side artifact sorting."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Report-first Mission Control UX",
+      "type": "requirement",
+      "source_section": "12 Presentation rules",
+      "explanation": "Mission Control should surface canonical report.primary artifacts directly, show related report content, and fall back to generic artifact lists when no report exists."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Default read and renderer behavior",
+      "type": "contract",
+      "source_section": "12.2 Default read behavior, 12.3 Recommended renderer behavior",
+      "explanation": "UI readers use default_read_ref, content type, render_hint, and metadata to choose viewers while raw download is exposed only when allowed."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Evidence presentation",
+      "type": "requirement",
+      "source_section": "7 Consumer and producer invariants, 12.5 Evidence presentation",
+      "explanation": "Evidence remains separately addressable and viewable instead of being irreversibly buried inside one rendered report file."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Authorization and preview safety",
+      "type": "security",
+      "source_section": "14 Security and access model",
+      "explanation": "Sensitive reports use existing artifact authorization and default_read_ref previews so useful presentation does not widen raw-access permissions."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Retention, pinning, and deletion",
+      "type": "lifecycle",
+      "source_section": "15 Retention guidance",
+      "explanation": "Report artifacts receive longer retention guidance, final reports should be easy to pin, and deletion remains artifact-system-native without implicit unrelated cascades."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Activity-owned publishing",
+      "type": "architecture",
+      "source_section": "16 Workflow integration guidance",
+      "explanation": "Activities assemble, create, link, and finalize report artifacts while workflow code orchestrates and receives compact refs."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Canonical final report marking",
+      "type": "requirement",
+      "source_section": "16.3 Finalization rule",
+      "explanation": "When a report is the primary deliverable, one artifact is clearly marked with report.primary, is_final_report=true, and report_scope=final."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Multiple workflow family support",
+      "type": "requirement",
+      "source_section": "4 Goals, 17 Example workflow mappings",
+      "explanation": "Unit-test, coverage, pentest, benchmark, compliance, and investigation workflows should share one report contract without a single forced producer schema."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Report-aware convenience surfaces",
+      "type": "integration",
+      "source_section": "18 Suggested API/UI extensions",
+      "explanation": "Execution detail summaries and an optional report projection endpoint can expose has_report, latest refs, report type/status, and bounded counts over normal artifacts."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Incremental migration path",
+      "type": "migration",
+      "source_section": "19 Migration guidance",
+      "explanation": "MoonMind should roll out report support without a flag-day migration, allowing generic outputs to continue while new workflows prefer report.* semantics."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Documented product choices",
+      "type": "non-goal",
+      "source_section": "2 Scope / Non-goals, 5 Non-goals, 20 Open questions",
+      "explanation": "PDF engines, provider prompts, full-text indexing, legal review, separate storage, mutable in-place updates, and provider-native payload parsing are excluded or deferred choices."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Define the report artifact contract",
+      "shortName": "report-artifact-contract",
+      "jira": {
+        "issueType": "Story",
+        "labels": [
+          "report-artifacts",
+          "artifacts",
+          "contracts"
+        ]
+      },
+      "description": "As a workflow producer, I want a canonical report artifact contract so report deliverables use explicit artifact semantics without introducing a second storage system.",
+      "sourceReference": {
+        "path": "docs/Artifacts/ReportArtifacts.md",
+        "title": "Report Artifacts",
+        "sections": [
+          "1 Purpose",
+          "1.1 Related docs and ownership boundaries",
+          "3 Core decision",
+          "6 Definitions",
+          "8 Recommended report artifact classes",
+          "9 Report bundle model",
+          "10 Metadata model for report artifacts"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "independentTest": "Create report, generic output, and invalid large-metadata artifacts through the artifact contract layer; assert report.* link types, bundle refs, bounded metadata, and existing artifact storage/index behavior are used without a separate report store.",
+      "acceptanceCriteria": [
+        "Report-specific link types are defined for report.primary, report.summary, report.structured, report.evidence, report.appendix, report.findings_index, and report.export where applicable.",
+        "Report artifacts persist through the existing artifact store and index with immutable artifact IDs.",
+        "Generic outputs continue to use output.primary, output.summary, and output.agent_result when they are not explicit report deliverables.",
+        "The compact report bundle shape carries artifact refs, report type, scope, sensitivity, and bounded counts only.",
+        "Metadata validation accepts standardized report keys and rejects or strips secrets, raw grants, cookies, session tokens, and large inline payloads.",
+        "Definitions for report artifact, report bundle, evidence artifact, final report, and intermediate report are reflected in code contracts or schema documentation."
+      ],
+      "requirements": [
+        "Model reports as first-class artifact families on existing artifact infrastructure.",
+        "Define stable report.* link-type semantics without treating every output.primary as a report.",
+        "Represent report bundles with refs and bounded metadata only.",
+        "Constrain report metadata to safe display fields."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Keeps report-specific ownership aligned with related artifact, presentation, observability, and runtime docs.",
+        "DESIGN-REQ-002": "Ensures no separate report storage system is introduced.",
+        "DESIGN-REQ-003": "Establishes report-producing workflows as queryable report end states.",
+        "DESIGN-REQ-004": "Defines primary, summary, structured, and evidence artifacts as one bundle.",
+        "DESIGN-REQ-007": "Carries report, bundle, evidence, final, and intermediate definitions.",
+        "DESIGN-REQ-008": "Owns stable report.* classes.",
+        "DESIGN-REQ-009": "Preserves generic output behavior for non-report outputs.",
+        "DESIGN-REQ-010": "Owns the compact workflow-facing bundle contract.",
+        "DESIGN-REQ-011": "Owns bounded, safe metadata."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "Existing artifact metadata validation can be extended without a new database table."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Publish report bundles from workflows",
+      "shortName": "report-bundle-publishing",
+      "jira": {
+        "issueType": "Story",
+        "labels": [
+          "report-artifacts",
+          "temporal",
+          "workflow-boundary"
+        ]
+      },
+      "description": "As an operator, I want report-producing workflows to publish immutable report bundles through activities so completed executions expose durable final and step-level reports without workflow-history bloat.",
+      "sourceReference": {
+        "path": "docs/Artifacts/ReportArtifacts.md",
+        "title": "Report Artifacts",
+        "sections": [
+          "7 Consumer and producer invariants",
+          "11 Storage and linkage rules",
+          "16 Workflow integration guidance",
+          "17 Example workflow mappings"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021"
+        ]
+      },
+      "independentTest": "Run a representative report-producing workflow and a step-scoped report workflow; assert activities create and link report artifacts, workflow history contains only refs/bounded summaries, final report marking exists, and latest-report resolution is server-side.",
+      "acceptanceCriteria": [
+        "Report assembly and artifact creation happen in activities, not workflow code.",
+        "Workflow return values and state include compact artifact refs and bounded metadata only.",
+        "Report artifacts link to namespace, workflow_id, run_id, link_type, label, and bounded step_id/attempt metadata when step-scoped.",
+        "A completed execution with a primary report has one canonical report.primary artifact with metadata.is_final_report=true and metadata.report_scope=final.",
+        "Intermediate reports can coexist with the final report without mutating prior report artifacts.",
+        "Latest report resolution is provided by server query/projection behavior and does not rely on browser-side sorting of arbitrary artifacts.",
+        "Unit-test, coverage, pentest/security, and benchmark-style flows can each publish valid bundles without adopting one universal findings schema."
+      ],
+      "requirements": [
+        "Create report artifacts through activity/service boundaries.",
+        "Link final and step-level reports to execution identity.",
+        "Keep report bodies, screenshots, findings, logs, and transcripts out of workflow history.",
+        "Support multiple workflow families under one report-bundle contract."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Keeps curated reports distinct from observability and evidence.",
+        "DESIGN-REQ-006": "Prevents large payloads and raw URLs in workflow state.",
+        "DESIGN-REQ-012": "Owns execution and step linkage.",
+        "DESIGN-REQ-013": "Owns server-side latest report behavior.",
+        "DESIGN-REQ-019": "Owns activity-side publishing.",
+        "DESIGN-REQ-020": "Owns canonical final report marking.",
+        "DESIGN-REQ-021": "Validates the contract across representative workflow families."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "At least one existing workflow can be adapted as the first report-producing example."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Surface canonical reports in Mission Control",
+      "shortName": "mission-control-report-surface",
+      "jira": {
+        "issueType": "Story",
+        "labels": [
+          "report-artifacts",
+          "mission-control",
+          "ui"
+        ]
+      },
+      "description": "As a Mission Control user, I want executions with canonical reports to show a report-first surface with related evidence so I can inspect the deliverable without hunting through raw artifacts or logs.",
+      "sourceReference": {
+        "path": "docs/Artifacts/ReportArtifacts.md",
+        "title": "Report Artifacts",
+        "sections": [
+          "12 Presentation rules",
+          "13 Relationship to observability and diagnostics"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016"
+        ]
+      },
+      "independentTest": "Load execution details for runs with and without report.primary artifacts; assert report panel ordering, related report content, evidence rendering, viewer selection, raw-download permissions, and fallback to the generic artifact list.",
+      "acceptanceCriteria": [
+        "Executions with a canonical report.primary show a Report panel or top-level report card before the generic artifact list.",
+        "The report surface shows summary metadata and an open action for the default read target.",
+        "Linked report.summary, report.structured, and report.evidence artifacts appear as related report content.",
+        "Artifacts, stdout, stderr, diagnostics, and other observability surfaces remain accessible outside the report panel.",
+        "Viewer choice uses default_read_ref, render_hint, content_type, and metadata.name/title.",
+        "Markdown, JSON, plain text, diff, image, PDF, and unknown binary report artifacts follow the documented renderer behavior.",
+        "Evidence artifacts remain individually addressable and viewable rather than being collapsed into the primary report by default.",
+        "When no report.primary exists, Mission Control falls back to the existing artifact list behavior."
+      ],
+      "requirements": [
+        "Add report-first execution detail presentation.",
+        "Use existing artifact presentation contracts for default reads and viewer selection.",
+        "Present related evidence separately from operational logs and diagnostics."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Preserves report/evidence/observability separation in UI.",
+        "DESIGN-REQ-014": "Owns report-first Mission Control behavior and fallback.",
+        "DESIGN-REQ-015": "Owns default read and renderer behavior.",
+        "DESIGN-REQ-016": "Owns individually addressable evidence presentation."
+      },
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Mission Control already has artifact list and preview viewer components to reuse."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Apply report access and lifecycle policy",
+      "shortName": "report-access-lifecycle",
+      "jira": {
+        "issueType": "Story",
+        "labels": [
+          "report-artifacts",
+          "security",
+          "retention"
+        ]
+      },
+      "description": "As an operator, I want sensitive reports to reuse artifact authorization, preview, retention, pinning, and deletion behavior so report delivery is useful without widening access or lifecycle risk.",
+      "sourceReference": {
+        "path": "docs/Artifacts/ReportArtifacts.md",
+        "title": "Report Artifacts",
+        "sections": [
+          "10 Metadata model for report artifacts",
+          "14 Security and access model",
+          "15 Retention guidance"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "Create restricted primary, summary, structured, and evidence report artifacts with preview refs and retention classes; assert raw access restrictions, default_read_ref preview behavior, metadata redaction, pin/unpin, and deletion semantics.",
+      "acceptanceCriteria": [
+        "Report artifacts use the existing artifact authorization model for preview and raw reads.",
+        "Restricted report.primary, report.structured, and report.evidence artifacts can point default_read_ref to preview artifacts when raw access is disallowed.",
+        "Report metadata does not expose secrets, raw access grants, cookies, session tokens, or large inline payloads.",
+        "Default retention policy can map report.primary and report.summary to long retention, report.structured to long or standard, and report.evidence to standard or long by product policy.",
+        "Final reports can be explicitly pinned and unpinned through the existing artifact API.",
+        "Deleting a report artifact uses existing soft-delete/hard-delete behavior and does not implicitly delete unrelated observability artifacts."
+      ],
+      "requirements": [
+        "Reuse artifact authorization for sensitive reports.",
+        "Support preview-safe report presentation.",
+        "Apply report-specific retention recommendations through existing lifecycle controls.",
+        "Avoid unsafe cascading deletion semantics."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-011": "Reinforces metadata safety for sensitive report surfaces.",
+        "DESIGN-REQ-017": "Owns authorization and preview posture.",
+        "DESIGN-REQ-018": "Owns retention, pinning, and artifact-native deletion."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Existing artifact APIs already support pinning or can expose it without report-specific storage."
+      ],
+      "needsClarification": [
+        "Whether any workflow family should auto-pin final reports by default is product policy and remains unresolved."
+      ]
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Expose report-aware execution projections",
+      "shortName": "report-execution-projections",
+      "jira": {
+        "issueType": "Story",
+        "labels": [
+          "report-artifacts",
+          "api",
+          "projection"
+        ]
+      },
+      "description": "As an API consumer, I want execution detail responses and an optional report projection to expose the latest report refs and bounded counts so clients can build report-first views without duplicating artifact-selection heuristics.",
+      "sourceReference": {
+        "path": "docs/Artifacts/ReportArtifacts.md",
+        "title": "Report Artifacts",
+        "sections": [
+          "11.4 Latest report semantics",
+          "18 Suggested API/UI extensions",
+          "20 Open questions"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "independentTest": "Request execution details and the report projection for executions with no report, one final report, multiple report versions, and restricted artifacts; assert latest refs, bounded counts, authorization behavior, and no client-side heuristic dependency.",
+      "acceptanceCriteria": [
+        "Execution detail data can expose has_report, latest_report_ref, latest_report_summary_ref, report_type, report_status, and bounded finding/severity counts.",
+        "A report projection endpoint, if implemented in this story, returns execution_ref, primary_report_ref, summary_ref, structured_ref, evidence_refs, report_type, and bounded counts over standard artifacts.",
+        "Projection output never becomes a second report storage model; underlying artifacts remain individually addressable.",
+        "Latest report selection is resolved server-side using execution identity and report link types.",
+        "Restricted artifacts still obey artifact authorization and preview/default-read behavior.",
+        "The story records whether the projection endpoint is implemented immediately or deferred in favor of execution-detail summary fields."
+      ],
+      "requirements": [
+        "Provide report-aware server selection for clients.",
+        "Keep projection data as a convenience read model over artifacts.",
+        "Make unresolved projection timing explicit."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-013": "Prevents client-side latest-report guessing.",
+        "DESIGN-REQ-022": "Owns execution summary fields and optional projection endpoint.",
+        "DESIGN-REQ-024": "Captures the open choice around immediate projection endpoint delivery."
+      },
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "The first implementation may choose execution-detail fields before a standalone endpoint if that is the smaller viable slice."
+      ],
+      "needsClarification": [
+        "Should the dedicated report projection endpoint ship in the first version, or should first version rely on execution-detail report fields plus standard artifact APIs?"
+      ]
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Roll out report semantics without flag-day migration",
+      "shortName": "report-rollout-compatibility",
+      "jira": {
+        "issueType": "Story",
+        "labels": [
+          "report-artifacts",
+          "migration",
+          "documentation"
+        ]
+      },
+      "description": "As a MoonMind maintainer, I want report artifact semantics to roll out incrementally with documented non-goals and producer examples so existing generic outputs continue working while new report workflows adopt report.* conventions.",
+      "sourceReference": {
+        "path": "docs/Artifacts/ReportArtifacts.md",
+        "title": "Report Artifacts",
+        "sections": [
+          "2 Scope / Non-goals",
+          "5 Non-goals",
+          "17 Example workflow mappings",
+          "19 Migration guidance",
+          "20 Open questions",
+          "21 Bottom line"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "independentTest": "Exercise old generic-output executions and new report.* executions side by side; assert old outputs still render through generic artifacts, new reports use report-first behavior, and documentation/tracker notes identify deferred choices without introducing specs or runtime aliases.",
+      "acceptanceCriteria": [
+        "Existing generic output.primary workflows continue to function without being reclassified as reports.",
+        "New report workflows prefer report.* link types and report metadata conventions.",
+        "Migration can proceed through metadata conventions, explicit link types/UI surfacing, compact bundle results, and later projections/filters/retention/pinning.",
+        "PDF rendering engines, provider-specific prompts, full-text indexing, legal review, separate report storage, mutable report updates, and provider-native payload parsing remain out of scope unless separately specified.",
+        "Examples document unit-test, coverage, pentest/security, and benchmark report mappings.",
+        "Unresolved product choices around report_type enums, auto-pinning, projection endpoint timing, export semantics, evidence grouping, and multi-step task projections are tracked as clarification points for later stories."
+      ],
+      "requirements": [
+        "Support incremental report rollout with generic-output compatibility.",
+        "Document representative workflow mappings and explicit non-goals.",
+        "Keep migration notes under docs/tmp when implementation tracking is needed."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-021": "Owns representative workflow-family examples.",
+        "DESIGN-REQ-023": "Owns no-flag-day rollout behavior.",
+        "DESIGN-REQ-024": "Owns non-goals and documented open product choices."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "No compatibility alias is needed for internal contract renames because this is a new report semantic layer on existing artifacts."
+      ],
+      "needsClarification": [
+        "Should report_type become a bounded enum or remain producer-defined by convention first?",
+        "Should report.export distinguish PDF/HTML exports from source-format reports?",
+        "Should evidence metadata include finding_id or section_id grouping semantics?"
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-002",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-005",
+      "STORY-006"
+    ]
+  }
+}
