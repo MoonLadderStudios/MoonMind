@@ -1,5 +1,30 @@
 [
   {
+    "id": 4166333325,
+    "disposition": "addressed",
+    "rationale": "Removed the deprecated executionStatusPillClasses compatibility alias and updated remaining call sites plus tests to use executionStatusPillProps directly."
+  },
+  {
+    "id": 3134136568,
+    "disposition": "addressed",
+    "rationale": "Dropped the unused executionStatusPillClasses import from task-detail.tsx and kept only executionStatusPillProps."
+  },
+  {
+    "id": 3134136587,
+    "disposition": "addressed",
+    "rationale": "Deleted the executionStatusPillClasses export and migrated all remaining frontend callers off the alias."
+  },
+  {
+    "id": 3134136591,
+    "disposition": "addressed",
+    "rationale": "Removed executionStatusPillClasses from the test imports so the spec exercises the canonical helper only."
+  },
+  {
+    "id": 3134136597,
+    "disposition": "addressed",
+    "rationale": "Updated the class-name expectations to assert executionStatusPillProps(...).className directly."
+  },
+  {
     "id": 4166160843,
     "disposition": "not-applicable",
     "rationale": "Top-level Gemini summary review duplicated the actionable inline width feedback that is addressed below."

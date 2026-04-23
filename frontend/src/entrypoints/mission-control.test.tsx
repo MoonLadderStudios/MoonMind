@@ -395,6 +395,24 @@ describe('Mission Control shared entry', () => {
     }
   });
 
+
+  it('defines the shared MM-488 executing shimmer modifier contract', async () => {
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-duration:\s*1450ms/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-delay:\s*220ms/);
+
+    const shimmerBlock = cssRuleBlocks(
+      missionControlCss,
+      '.status-running[data-state="executing"][data-effect="shimmer-sweep"], .status-running.is-executing',
+    ).join('\n');
+    expect(shimmerBlock).toContain('animation: mm-status-pill-shimmer');
+    expect(shimmerBlock).toContain('background-image:');
+    expect(shimmerBlock).toContain('overflow: hidden');
+
+    expect(missionControlCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,
+    );
+  });
+
   it('enforces MM-430 additive shared styling modifiers', async () => {
     for (const selector of [
       '.panel--controls',
