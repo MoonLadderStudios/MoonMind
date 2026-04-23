@@ -380,6 +380,7 @@ describe('MaskedConicBorderBeam', () => {
 
   it('defines MM-468 reduced-motion behavior and degraded-mode glow guardrails', () => {
     const rootMinimalBlock = cssRuleBlock('.masked-conic-border-beam[data-reduced-motion="minimal"]');
+    const activeMinimalBlock = cssRuleBlock('.masked-conic-border-beam[data-reduced-motion="minimal"][data-active="true"]');
     const minimalBlock = cssRuleBlock('.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__layer');
     const minimalGlowBlock = cssRuleBlock('.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__glow');
     const minimalCompanionBlock = cssRuleBlock('.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__companion');
@@ -403,8 +404,9 @@ describe('MaskedConicBorderBeam', () => {
     expect(reducedMotionGlowBlock).toContain('visibility: hidden;');
     expect(reducedMotionCompanionBlock).toContain('opacity: 0;');
     expect(reducedMotionCompanionBlock).toContain('visibility: hidden;');
-    expect(rootMinimalBlock).toContain('--beam-border-base:');
+    expect(rootMinimalBlock).not.toContain('--beam-border-base:');
     expect(rootMinimalBlock).toContain('--beam-glow-opacity: 0;');
+    expect(activeMinimalBlock).toContain('--beam-border-base:');
     const allBeamCss = missionControlCss
       .split('\n')
       .filter((line) => line.includes('masked-conic-border-beam'))

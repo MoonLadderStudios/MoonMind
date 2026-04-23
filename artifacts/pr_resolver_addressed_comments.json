@@ -1,17 +1,22 @@
 [
   {
-    "id": 4157254325,
-    "disposition": "not-applicable",
-    "rationale": "Bot review summary explicitly reported no feedback to address."
-  },
-  {
-    "id": 3126297003,
+    "id": 4157517883,
     "disposition": "addressed",
-    "rationale": "Kept beam and glow layers mounted while inactive and moved fade-out visibility to CSS, with Vitest coverage for the inactive fade contract."
+    "rationale": "The minimal reduced-motion layer reset is satisfied by the current CSS selectors for __layer, __glow, and __companion, and the focused component contract test verifies all three are hidden."
   },
   {
-    "id": 4157264371,
+    "id": 3126534193,
+    "disposition": "addressed",
+    "rationale": "The current minimal reduced-motion CSS hides the beam layer, glow, and companion with animation disabled, opacity 0, and visibility hidden; verified by MaskedConicBorderBeam.test.tsx."
+  },
+  {
+    "id": 3126536200,
+    "disposition": "addressed",
+    "rationale": "Scoped the brighter minimal-mode border token to data-active=true and added a CSS contract assertion so inactive minimal beams retain the default border state."
+  },
+  {
+    "id": 4157520350,
     "disposition": "not-applicable",
-    "rationale": "Bot review wrapper without additional actionable feedback beyond the linked review comment."
+    "rationale": "Automated review summary wrapper with no separate actionable feedback beyond discussion_r3126536200."
   }
 ]

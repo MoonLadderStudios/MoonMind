@@ -1337,8 +1337,11 @@ tr[data-proposal-id].proposal-consuming td {
 }
 
 .masked-conic-border-beam[data-reduced-motion="minimal"] {
-  --beam-border-base: rgb(var(--mm-border) / 0.9);
   --beam-glow-opacity: 0;
+}
+
+.masked-conic-border-beam[data-reduced-motion="minimal"][data-active="true"] {
+  --beam-border-base: rgb(var(--mm-border) / 0.9);
 }
 
 .masked-conic-border-beam__layer,
