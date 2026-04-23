@@ -1,27 +1,22 @@
 [
   {
-    "id": 4166333325,
-    "disposition": "addressed",
-    "rationale": "Removed the deprecated executionStatusPillClasses compatibility alias and updated remaining call sites plus tests to use executionStatusPillProps directly."
+    "id": 4166611138,
+    "disposition": "not-applicable",
+    "rationale": "Top-level review summary only; the actionable feedback is tracked and resolved via the three inline review comments below."
   },
   {
-    "id": 3134136568,
+    "id": 3134370154,
     "disposition": "addressed",
-    "rationale": "Dropped the unused executionStatusPillClasses import from task-detail.tsx and kept only executionStatusPillProps."
+    "rationale": "Extracted the shimmer width multipliers and layer offset into named CSS tokens and updated the shimmer block to consume them."
   },
   {
-    "id": 3134136587,
+    "id": 3134370157,
     "disposition": "addressed",
-    "rationale": "Deleted the executionStatusPillClasses export and migrated all remaining frontend callers off the alias."
+    "rationale": "Replaced brittle exact-string CSS assertions with regex assertions that tolerate formatting changes while still enforcing the tokenized shimmer contract."
   },
   {
-    "id": 3134136591,
+    "id": 3134370170,
     "disposition": "addressed",
-    "rationale": "Removed executionStatusPillClasses from the test imports so the spec exercises the canonical helper only."
-  },
-  {
-    "id": 3134136597,
-    "disposition": "addressed",
-    "rationale": "Updated the class-name expectations to assert executionStatusPillProps(...).className directly."
+    "rationale": "Extended the task-detail render test to assert the executing pill still renders the visible status label text unchanged."
   }
 ]

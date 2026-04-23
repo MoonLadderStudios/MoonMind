@@ -400,8 +400,11 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toMatch(/--mm-executing-sweep-duration:\s*1450ms/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-delay:\s*220ms/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-core-width-multiplier:\s*9\.1667/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-start-x:\s*-135%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-end-x:\s*135%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset:\s*15%/);
 
     const shimmerBlock = cssRuleBlocks(
       missionControlCss,
@@ -410,8 +413,12 @@ describe('Mission Control shared entry', () => {
     expect(shimmerBlock).toContain('animation: mm-status-pill-shimmer');
     expect(shimmerBlock).toContain('background-image:');
     expect(shimmerBlock).toContain('overflow: hidden');
-    expect(shimmerBlock).toContain('background-size: calc(var(--mm-executing-sweep-band-width) * 10) 100%, calc(var(--mm-executing-sweep-band-width) * 9.1667) 100%');
-    expect(shimmerBlock).toContain('background-position: var(--mm-executing-sweep-start-x) 0, calc(var(--mm-executing-sweep-start-x) + 15%) 0');
+    expect(shimmerBlock).toMatch(
+      /background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*100%,\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*100%/,
+    );
+    expect(shimmerBlock).toMatch(
+      /background-position:\s*var\(--mm-executing-sweep-start-x\)\s*0,\s*calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset\)\)\s*0/,
+    );
 
     expect(missionControlCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,

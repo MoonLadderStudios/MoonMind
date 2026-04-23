@@ -404,6 +404,7 @@ describe('Task Detail Entrypoint', () => {
     expect(toolbarStatus?.className).toContain('is-executing');
     expect(toolbarStatus?.className).toContain('status-running');
     expect(toolbarStatus?.childElementCount).toBe(0);
+    expect(toolbarStatus?.textContent).toBe('executing');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
 
     const waitingPill = await screen.findByText('waiting_on_dependencies');
