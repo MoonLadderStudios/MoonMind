@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Mission Control Report Presentation
+# Specification Quality Checklist: Surface Canonical Reports in Mission Control
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-04-22
@@ -36,4 +36,4 @@
 
 ## Notes
 
-- Specification preserves MM-462 traceability and maps all in-scope DESIGN-REQ IDs from the Jira preset brief.
+- Specification preserves MM-494 traceability while reusing the existing single-story report-presentation artifacts for the same runtime behavior.

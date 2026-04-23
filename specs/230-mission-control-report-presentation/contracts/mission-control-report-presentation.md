@@ -1,4 +1,4 @@
-# Contract: Mission Control Report Presentation
+# Contract: Surface Canonical Reports in Mission Control
 
 ## Latest Primary Report Query
 
