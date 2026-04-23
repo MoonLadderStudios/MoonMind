@@ -1,27 +1,22 @@
 [
   {
-    "id": 3133634364,
+    "id": 3134120640,
     "disposition": "addressed",
-    "rationale": "Added an explicit TemporalExecutionRecord | TemporalExecutionCanonicalRecord type hint to the snapshot helper record parameter."
+    "rationale": "Extended report retention defaults and unit coverage so report.appendix, report.findings_index, and report.export now retain for the long window like primary and summary reports."
   },
   {
-    "id": 3133634368,
+    "id": 3134120652,
     "disposition": "addressed",
-    "rationale": "Moved session.refresh(record) inside the snapshot_ref block so it only runs after a persisted snapshot commit."
+    "rationale": "Added the Report Projection Summary entity to the MM-492 data model, including report_status mapping and the projection-only finding_counts/severity_counts constraints."
   },
   {
-    "id": 4165735428,
+    "id": 4166314916,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable child comments were handled individually."
+    "rationale": "This review body is a bot summary of the underlying inline comments, which were handled individually in this change."
   },
   {
-    "id": 3133637367,
+    "id": 3134120669,
     "disposition": "addressed",
-    "rationale": "Changed direct-run snapshot creation to use parameters from the returned persisted record instead of the incoming request payload, preserving idempotency replay semantics."
-  },
-  {
-    "id": 4165738806,
-    "disposition": "not-applicable",
-    "rationale": "Informational Codex review wrapper with no distinct actionable feedback beyond the child comment."
+    "rationale": "Documented the internal-metadata exception so validation rules now explicitly cover system keys such as preview_artifact_id when the validation context allows them."
   }
 ]
