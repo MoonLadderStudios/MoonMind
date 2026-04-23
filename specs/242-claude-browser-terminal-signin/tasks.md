@@ -3,7 +3,7 @@
 **Input**: Design documents from `/specs/242-claude-browser-terminal-signin/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
-**Tests**: Unit tests and integration-style UI tests are REQUIRED. Write verification tests first, confirm they pass for already-implemented behavior or expose a focused gap, then implement production code only if the tests fail for a real missing behavior.
+**Tests**: Unit tests and integration-style UI tests are REQUIRED. Write verification tests first, confirm they pass for already-implemented behavior or expose a focused gap, then implement production code only if the tests fail for a real missing behavior. Red-first confirmation applies to any implementation contingency: if a verification test exposes a real missing behavior, keep or adjust that failing test first, confirm the expected failure, and only then change production code.
 
 **Organization**: Tasks are grouped by phase around a single user story so the work stays focused, traceable, and independently testable.
 
@@ -72,11 +72,17 @@
 
 ---
 
-## Phase 4: Polish & Verification
+## Phase 4: Story Validation
 
-- [X] T012 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit verification.
-- [X] T013 Run `/moonspec-verify` equivalent and record results in `specs/242-claude-browser-terminal-signin/verification.md`.
-- [X] T014 Review diff for MM-479 traceability, secret hygiene, and absence of unrelated changes.
+- [X] T012 Validate the single MM-479 story against `specs/242-claude-browser-terminal-signin/spec.md`, `specs/242-claude-browser-terminal-signin/plan.md`, focused route/unit/UI tests, and `specs/242-claude-browser-terminal-signin/verification.md`.
+
+---
+
+## Phase 5: Polish & Verification
+
+- [X] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` for final unit verification.
+- [X] T014 Run `/moonspec-verify` equivalent and record results in `specs/242-claude-browser-terminal-signin/verification.md`.
+- [X] T015 Review diff for MM-479 traceability, secret hygiene, and absence of unrelated changes.
 
 ---
 
@@ -86,7 +92,7 @@
 - T004-T006 can be authored in parallel.
 - T007 before any implementation contingency tasks.
 - T008-T010 only if focused verification exposes real implementation gaps.
-- T011 before T012-T014.
+- T011 before T012-T015.
 
 ## Parallel Opportunities
 
