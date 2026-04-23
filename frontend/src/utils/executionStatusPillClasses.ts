@@ -1,5 +1,6 @@
 export const EXECUTING_STATUS_PILL_TRACEABILITY = Object.freeze({
   jiraIssue: 'MM-488',
+  relatedJiraIssues: ['MM-489'],
   designRequirements: [
     'DESIGN-REQ-001',
     'DESIGN-REQ-002',

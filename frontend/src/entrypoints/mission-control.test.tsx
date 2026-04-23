@@ -399,6 +399,9 @@ describe('Mission Control shared entry', () => {
   it('defines the shared MM-488 executing shimmer modifier contract', async () => {
     expect(missionControlCss).toMatch(/--mm-executing-sweep-duration:\s*1450ms/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-delay:\s*220ms/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-start-x:\s*-135%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-end-x:\s*135%/);
 
     const shimmerBlock = cssRuleBlocks(
       missionControlCss,
@@ -407,6 +410,8 @@ describe('Mission Control shared entry', () => {
     expect(shimmerBlock).toContain('animation: mm-status-pill-shimmer');
     expect(shimmerBlock).toContain('background-image:');
     expect(shimmerBlock).toContain('overflow: hidden');
+    expect(shimmerBlock).toContain('background-size: calc(var(--mm-executing-sweep-band-width) * 10) 100%, calc(var(--mm-executing-sweep-band-width) * 9.1667) 100%');
+    expect(shimmerBlock).toContain('background-position: var(--mm-executing-sweep-start-x) 0, calc(var(--mm-executing-sweep-start-x) + 15%) 0');
 
     expect(missionControlCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,

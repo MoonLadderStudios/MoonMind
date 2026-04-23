@@ -17,17 +17,17 @@
 - SCN-001 through SCN-005: additive base preservation, bright-band/wider-halo semantics, theme coherence, interaction safety, and bounded in-pill rendering.
 - SC-001 through SC-007: measurable proof for base visibility, dual-layer semantics, theme coherence, readability, bounded layout, token surface, and MM-489 traceability.
 - DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-012, DESIGN-REQ-015: legibility-first design, layered visual model, theme binding, isolation rules, attachable host treatment, and reusable token surface.
-- Requirement status summary from `plan.md`: 2 `missing`, 3 `partial`, 20 `implemented_unverified`, 0 `implemented_verified`.
+- Requirement status summary from `plan.md`: 0 `missing`, 0 `partial`, 0 `implemented_unverified`, 25 `implemented_verified`.
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify MM-489 planning inputs and target frontend files in `specs/245-render-shimmer-band-halo/spec.md`, `specs/245-render-shimmer-band-halo/plan.md`, `specs/245-render-shimmer-band-halo/research.md`, `frontend/src/styles/mission-control.css`, `frontend/src/utils/executionStatusPillClasses.ts`, `frontend/src/entrypoints/tasks-list.tsx`, and `frontend/src/entrypoints/task-detail.tsx`.
-- [ ] T002 Confirm the focused unit and integration test commands in `specs/245-render-shimmer-band-halo/quickstart.md` remain the active validation path for MM-489 and require no new package or service setup.
+- [X] T001 Verify MM-489 planning inputs and target frontend files in `specs/245-render-shimmer-band-halo/spec.md`, `specs/245-render-shimmer-band-halo/plan.md`, `specs/245-render-shimmer-band-halo/research.md`, `frontend/src/styles/mission-control.css`, `frontend/src/utils/executionStatusPillClasses.ts`, `frontend/src/entrypoints/tasks-list.tsx`, and `frontend/src/entrypoints/task-detail.tsx`.
+- [X] T002 Confirm the focused unit and integration test commands in `specs/245-render-shimmer-band-halo/quickstart.md` remain the active validation path for MM-489 and require no new package or service setup.
 
 ## Phase 2: Foundational
 
-- [ ] T003 Reconcile the MM-489 layered shimmer contract and data model in `specs/245-render-shimmer-band-halo/contracts/status-pill-shimmer-layers.md` and `specs/245-render-shimmer-band-halo/data-model.md` with the current shared status-pill seams before story verification begins.
-- [ ] T004 Confirm the story stays within the existing shared Mission Control pill surfaces and requires no new component, route, or infrastructure in `specs/245-render-shimmer-band-halo/plan.md` and `specs/245-render-shimmer-band-halo/research.md`.
+- [X] T003 Reconcile the MM-489 layered shimmer contract and data model in `specs/245-render-shimmer-band-halo/contracts/status-pill-shimmer-layers.md` and `specs/245-render-shimmer-band-halo/data-model.md` with the current shared status-pill seams before story verification begins.
+- [X] T004 Confirm the story stays within the existing shared Mission Control pill surfaces and requires no new component, route, or infrastructure in `specs/245-render-shimmer-band-halo/plan.md` and `specs/245-render-shimmer-band-halo/research.md`.
 
 ## Phase 3: Story - Premium Executing Shimmer Layers
 
@@ -48,35 +48,35 @@
 
 ### Tests First
 
-- [ ] T005 [P] Add failing CSS contract tests for preserved base appearance, bright-band/wider-halo semantics, theme-token binding, bounded additive behavior, and reusable effect tokens in `frontend/src/entrypoints/mission-control.test.tsx` covering FR-001, FR-002, FR-003, FR-005, FR-006, SCN-001, SCN-002, SCN-003, SCN-005, SC-001, SC-002, SC-003, SC-005, SC-006, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-012, DESIGN-REQ-015.
-- [ ] T006 [P] Add failing helper tests for MM-489 traceability alongside the existing executing shimmer selector contract in `frontend/src/utils/executionStatusPillClasses.test.ts` covering FR-007, SC-007, and MM-489 traceability preservation.
-- [ ] T007 [P] Add failing task-list integration tests for visible text preservation, bounded executing-pill rendering, and non-executing guardrails in `frontend/src/entrypoints/tasks-list.test.tsx` covering FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-009, DESIGN-REQ-012.
-- [ ] T008 [P] Add failing task-detail integration tests for visible text preservation, bounded executing-pill rendering, and shared selector reuse in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-004, FR-005, SCN-004, SCN-005, SC-004, SC-005, DESIGN-REQ-009, DESIGN-REQ-012.
-- [ ] T009 Run the focused unit and integration commands from `specs/245-render-shimmer-band-halo/quickstart.md` to confirm T005-T008 fail for the expected MM-489 gaps before implementation.
+- [X] T005 [P] Add failing CSS contract tests for preserved base appearance, bright-band/wider-halo semantics, theme-token binding, bounded additive behavior, and reusable effect tokens in `frontend/src/entrypoints/mission-control.test.tsx` covering FR-001, FR-002, FR-003, FR-005, FR-006, SCN-001, SCN-002, SCN-003, SCN-005, SC-001, SC-002, SC-003, SC-005, SC-006, DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-012, DESIGN-REQ-015.
+- [X] T006 [P] Add failing helper tests for MM-489 traceability alongside the existing executing shimmer selector contract in `frontend/src/utils/executionStatusPillClasses.test.ts` covering FR-007, SC-007, and MM-489 traceability preservation.
+- [X] T007 [P] Add failing task-list integration tests for visible text preservation, bounded executing-pill rendering, and non-executing guardrails in `frontend/src/entrypoints/tasks-list.test.tsx` covering FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-009, DESIGN-REQ-012.
+- [X] T008 [P] Add failing task-detail integration tests for visible text preservation, bounded executing-pill rendering, and shared selector reuse in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-004, FR-005, SCN-004, SCN-005, SC-004, SC-005, DESIGN-REQ-009, DESIGN-REQ-012.
+- [X] T009 Run the focused unit and integration commands from `specs/245-render-shimmer-band-halo/quickstart.md` to confirm T005-T008 fail for the expected MM-489 gaps before implementation.
 
 ### Conditional Fallback For Implemented-Unverified Rows
 
-- [ ] T010 If T005 or T009 shows the layered visual model is incomplete, update `frontend/src/styles/mission-control.css` to preserve the executing base appearance and explicitly express the bright-band/wider-halo behavior for FR-001, FR-002, FR-003, SCN-001, SCN-002, SCN-003, SC-001, SC-002, SC-003, DESIGN-REQ-005, DESIGN-REQ-006, and DESIGN-REQ-008.
-- [ ] T011 If T007-T009 shows text, bounds, or interaction regressions, update `frontend/src/styles/mission-control.css`, `frontend/src/entrypoints/tasks-list.tsx`, and `frontend/src/entrypoints/task-detail.tsx` to preserve FR-004, FR-005, SCN-004, SCN-005, SC-004, SC-005, DESIGN-REQ-009, and DESIGN-REQ-012 while keeping the shimmer additive.
+- [X] T010 If T005 or T009 shows the layered visual model is incomplete, update `frontend/src/styles/mission-control.css` to preserve the executing base appearance and explicitly express the bright-band/wider-halo behavior for FR-001, FR-002, FR-003, SCN-001, SCN-002, SCN-003, SC-001, SC-002, SC-003, DESIGN-REQ-005, DESIGN-REQ-006, and DESIGN-REQ-008.
+- [X] T011 If T007-T009 shows text, bounds, or interaction regressions, update `frontend/src/styles/mission-control.css`, `frontend/src/entrypoints/tasks-list.tsx`, and `frontend/src/entrypoints/task-detail.tsx` to preserve FR-004, FR-005, SCN-004, SCN-005, SC-004, SC-005, DESIGN-REQ-009, and DESIGN-REQ-012 while keeping the shimmer additive.
 
 ### Implementation
 
-- [ ] T012 Add the missing MM-489 traceability surface in `frontend/src/utils/executionStatusPillClasses.ts` and `frontend/src/utils/executionStatusPillClasses.test.ts` for FR-007 and SC-007.
-- [ ] T013 Add reusable effect tokens or equivalent variables for the MM-489 layered shimmer in `frontend/src/styles/mission-control.css` for FR-006, SC-006, and DESIGN-REQ-015.
-- [ ] T014 Re-run the focused unit command from `specs/245-render-shimmer-band-halo/quickstart.md`, fix any failing MM-489 CSS/helper assertions in `frontend/src/styles/mission-control.css` and `frontend/src/utils/executionStatusPillClasses.ts`, and confirm the verification-first tasks now pass.
-- [ ] T015 Re-run the focused integration command from `specs/245-render-shimmer-band-halo/quickstart.md`, fix any failing MM-489 render assertions in `frontend/src/entrypoints/tasks-list.tsx` and `frontend/src/entrypoints/task-detail.tsx`, and confirm the story passes end-to-end on the supported surfaces.
+- [X] T012 Add the missing MM-489 traceability surface in `frontend/src/utils/executionStatusPillClasses.ts` and `frontend/src/utils/executionStatusPillClasses.test.ts` for FR-007 and SC-007.
+- [X] T013 Add reusable effect tokens or equivalent variables for the MM-489 layered shimmer in `frontend/src/styles/mission-control.css` for FR-006, SC-006, and DESIGN-REQ-015.
+- [X] T014 Re-run the focused unit command from `specs/245-render-shimmer-band-halo/quickstart.md`, fix any failing MM-489 CSS/helper assertions in `frontend/src/styles/mission-control.css` and `frontend/src/utils/executionStatusPillClasses.ts`, and confirm the verification-first tasks now pass.
+- [X] T015 Re-run the focused integration command from `specs/245-render-shimmer-band-halo/quickstart.md`, fix any failing MM-489 render assertions in `frontend/src/entrypoints/tasks-list.tsx` and `frontend/src/entrypoints/task-detail.tsx`, and confirm the story passes end-to-end on the supported surfaces.
 
 ### Story Validation
 
-- [ ] T016 Update the MM-489 requirement-status evidence in `specs/245-render-shimmer-band-halo/plan.md` after T014-T015 so `missing`, `partial`, and `implemented_unverified` rows reflect the final proof.
-- [ ] T017 Verify the independent story criteria in `specs/245-render-shimmer-band-halo/quickstart.md` and record any remaining MM-489-specific gaps before polish work.
+- [X] T016 Update the MM-489 requirement-status evidence in `specs/245-render-shimmer-band-halo/plan.md` after T014-T015 so `missing`, `partial`, and `implemented_unverified` rows reflect the final proof.
+- [X] T017 Verify the independent story criteria in `specs/245-render-shimmer-band-halo/quickstart.md` and record any remaining MM-489-specific gaps before polish work.
 
 ## Final Phase: Polish and Verification
 
-- [ ] T018 Expand edge-case coverage for non-executing guardrails, token-surface completeness, and bounded layered treatment in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` as needed for SCN-003, SCN-005, SC-005, SC-006, and DESIGN-REQ-015.
-- [ ] T019 Run the quickstart validation steps from `specs/245-render-shimmer-band-halo/quickstart.md`.
-- [ ] T020 Run `./tools/test_unit.sh` for final unit-test verification.
-- [ ] T021 Run `/moonspec-verify` by creating `specs/245-render-shimmer-band-halo/verification.md` with MM-489 traceability, DESIGN-REQ coverage, test evidence, and final verdict.
+- [X] T018 Expand edge-case coverage for non-executing guardrails, token-surface completeness, and bounded layered treatment in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` as needed for SCN-003, SCN-005, SC-005, SC-006, and DESIGN-REQ-015.
+- [X] T019 Run the quickstart validation steps from `specs/245-render-shimmer-band-halo/quickstart.md`.
+- [X] T020 Run `./tools/test_unit.sh` for final unit-test verification.
+- [X] T021 Run `/moonspec-verify` by creating `specs/245-render-shimmer-band-halo/verification.md` with MM-489 traceability, DESIGN-REQ coverage, test evidence, and final verdict.
 
 ## Dependencies and Execution Order
 
