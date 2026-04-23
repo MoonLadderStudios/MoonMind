@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement MM-480 by completing the Claude OAuth finalization boundary. The existing OAuth finalize route already verifies the auth volume before profile mutation, skips mutation on failed verification, writes OAuth-home provider profile fields, syncs Provider Profile Manager, and scopes finalization to the owning user. Repo gap analysis found the Claude verifier itself is incomplete: `claude_code` currently checks paths that do not match the mounted Claude home contract and does not validate qualifying `settings.json` evidence. The implementation will add failing unit tests for Claude credential artifact detection and focused route tests for successful Claude finalization, then update the verifier and any required finalization metadata handling.
+Implement MM-480 by completing the Claude OAuth finalization boundary. The existing OAuth finalize route already verifies the auth volume before profile mutation, skips mutation on failed verification, writes OAuth-home provider profile fields, syncs Provider Profile Manager, and scopes finalization to the owning user. Initial repo gap analysis found the Claude verifier itself was incomplete: `claude_code` checked paths that did not match the mounted Claude home contract and did not validate qualifying `settings.json` evidence. The completed implementation added failing unit tests for Claude credential artifact detection and focused route tests for successful Claude finalization, then updated the verifier while leaving route behavior unchanged because the route-boundary tests passed.
 
 ## Requirement Status
 
