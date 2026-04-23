@@ -224,7 +224,11 @@ function summarizeSecretRefs(secretRefs: Record<string, string>): string {
   return entries.map(([key, value]) => `${key}: ${value}`).join(', ');
 }
 
-type ProviderAuthActionLabel = 'Connect Claude' | 'Replace token' | 'Validate' | 'Disconnect';
+type ProviderAuthActionLabel =
+  | 'Connect with Claude OAuth'
+  | 'Use Anthropic API key'
+  | 'Validate OAuth'
+  | 'Disconnect OAuth';
 
 interface ClaudeAuthAction {
   id: string;
@@ -252,7 +256,7 @@ interface ClaudeReadinessMetadata {
 type ProviderAuthModel =
   | { kind: 'codex_oauth' }
   | {
-      kind: 'claude_manual';
+      kind: 'claude_credentials';
       statusLabel: string | null;
       actions: ClaudeAuthAction[];
       readiness: ClaudeReadinessMetadata | null;
@@ -278,10 +282,10 @@ interface ClaudeManualAuthResult {
 }
 
 const CLAUDE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
-  connect: 'Connect Claude',
-  replace_token: 'Replace token',
-  validate: 'Validate',
-  disconnect: 'Disconnect',
+  connect_oauth: 'Connect with Claude OAuth',
+  use_api_key: 'Use Anthropic API key',
+  validate_oauth: 'Validate OAuth',
+  disconnect_oauth: 'Disconnect OAuth',
 };
 
 const CLAUDE_ENROLLMENT_STEPS: ClaudeEnrollmentStep[] = [
@@ -316,9 +320,9 @@ function commandBehaviorString(profile: ProviderProfile, key: string): string | 
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
-function commandBehaviorStringArray(profile: ProviderProfile, key: string): string[] {
+function commandBehaviorStringArray(profile: ProviderProfile, key: string): string[] | null {
   const value = commandBehaviorValue(profile, key);
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value)) return null;
   return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
 }
 
@@ -376,7 +380,7 @@ function redactClaudeSecretText(value: string | null | undefined, submittedToken
 
 function extractErrorMessage(payload: unknown): string {
   if (typeof payload === 'string') return payload;
-  if (!payload || typeof payload !== 'object') return 'Claude token validation failed.';
+  if (!payload || typeof payload !== 'object') return 'Anthropic API key validation failed.';
   const record = payload as Record<string, unknown>;
   if (typeof record.message === 'string') return record.message;
   if (typeof record.detail === 'string') return record.detail;
@@ -386,7 +390,7 @@ function extractErrorMessage(payload: unknown): string {
     if (typeof detail.error === 'string') return detail.error;
   }
   if (typeof record.error === 'string') return record.error;
-  return 'Claude token validation failed.';
+  return 'Anthropic API key validation failed.';
 }
 
 function isCodexOAuthProfile(profile: ProviderProfile): boolean {
@@ -398,12 +402,44 @@ function isCodexOAuthProfile(profile: ProviderProfile): boolean {
   );
 }
 
-function isClaudeManualAuthProfile(profile: ProviderProfile): boolean {
+function isCanonicalClaudeAnthropicProfile(profile: ProviderProfile): boolean {
   return (
     profile.runtime_id === 'claude_code' &&
-    profile.provider_id === 'anthropic' &&
-    commandBehaviorString(profile, 'auth_strategy') === 'claude_manual_token'
+    profile.provider_id === 'anthropic'
   );
+}
+
+function isClaudeCredentialMethodProfile(profile: ProviderProfile): boolean {
+  return (
+    profile.runtime_id === 'claude_code' &&
+    profile.provider_id === 'anthropic'
+  );
+}
+
+function defaultClaudeCredentialActions(profile: ProviderProfile): string[] {
+  if (!isCanonicalClaudeAnthropicProfile(profile)) {
+    return [];
+  }
+  const actions = ['use_api_key'];
+  if (
+    (profile.credential_source === 'oauth_volume' ||
+      profile.runtime_materialization_mode === 'oauth_home' ||
+      Boolean(profile.volume_ref || profile.volume_mount_path))
+  ) {
+    actions.unshift('connect_oauth');
+  }
+  return actions;
+}
+
+function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
+  const actionIds = commandBehaviorStringArray(profile, 'auth_actions');
+  const resolvedActionIds = actionIds ?? defaultClaudeCredentialActions(profile);
+  return resolvedActionIds
+    .map((actionId) => {
+      const label = CLAUDE_AUTH_ACTION_LABELS[actionId];
+      return label ? { id: actionId, label } : null;
+    })
+    .filter((action): action is ClaudeAuthAction => action !== null);
 }
 
 function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
@@ -411,21 +447,14 @@ function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
     return { kind: 'codex_oauth' };
   }
 
-  if (!isClaudeManualAuthProfile(profile)) {
+  if (!isClaudeCredentialMethodProfile(profile)) {
     return { kind: 'none' };
   }
 
-  const actions = commandBehaviorStringArray(profile, 'auth_actions')
-    .map((actionId) => {
-      const label = CLAUDE_AUTH_ACTION_LABELS[actionId];
-      return label ? { id: actionId, label } : null;
-    })
-    .filter((action): action is ClaudeAuthAction => action !== null);
-
   return {
-    kind: 'claude_manual',
+    kind: 'claude_credentials',
     statusLabel: commandBehaviorString(profile, 'auth_status_label'),
-    actions,
+    actions: claudeCredentialActions(profile),
     readiness: normalizeReadinessMetadata(commandBehaviorValue(profile, 'auth_readiness')),
   };
 }
@@ -538,8 +567,8 @@ export function ProviderProfilesManager({
       step: 'not_connected',
       token: '',
       failureReason: null,
-      statusLabel: authModel.kind === 'claude_manual' ? authModel.statusLabel : null,
-      readiness: authModel.kind === 'claude_manual' ? authModel.readiness : null,
+      statusLabel: authModel.kind === 'claude_credentials' ? authModel.statusLabel : null,
+      readiness: authModel.kind === 'claude_credentials' ? authModel.readiness : null,
     });
     onNotice(null);
   };
@@ -573,7 +602,7 @@ export function ProviderProfilesManager({
       const payload: unknown = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ?? 'Claude token validation failed.');
+        throw new Error(redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ?? 'Anthropic API key validation failed.');
       }
 
       return payload as ClaudeManualAuthResult;
@@ -613,7 +642,7 @@ export function ProviderProfilesManager({
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({
         level: 'ok',
-        text: `Claude token enrollment completed for "${profileId}".`,
+        text: `Anthropic API key enrollment completed for "${profileId}".`,
       });
     },
     onError: (error, { profileId, submittedToken }) => {
@@ -623,12 +652,12 @@ export function ProviderProfilesManager({
       const failureReason =
         error instanceof Error
           ? redactClaudeSecretText(error.message, submittedToken)
-          : 'Claude token validation failed.';
+          : 'Anthropic API key validation failed.';
       updateClaudeEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'failed',
         token: '',
-        failureReason: failureReason ?? 'Claude token validation failed.',
+        failureReason: failureReason ?? 'Anthropic API key validation failed.',
       }));
     },
   });
@@ -638,7 +667,7 @@ export function ProviderProfilesManager({
     const profileId = claudeEnrollment.profile.profile_id;
     const submittedToken = claudeEnrollment.token.trim();
     if (!submittedToken) {
-      onNotice({ level: 'error', text: 'Returned Claude token is required.' });
+      onNotice({ level: 'error', text: 'Anthropic API key is required.' });
       return;
     }
 
@@ -947,6 +976,40 @@ export function ProviderProfilesManager({
     },
   });
 
+  const claudeOAuthLifecycleMutation = useMutation({
+    mutationFn: async ({
+      profileId,
+      actionId,
+    }: {
+      profileId: string;
+      actionId: 'validate_oauth' | 'disconnect_oauth';
+    }) => {
+      const endpointAction = actionId === 'validate_oauth' ? 'validate' : 'disconnect';
+      const response = await fetch(
+        `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/oauth/${endpointAction}`,
+        { method: 'POST' },
+      );
+      const payload: unknown = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(redactClaudeSecretText(extractErrorMessage(payload)) ?? 'Claude OAuth action failed.');
+      }
+      return { profileId, actionId };
+    },
+    onSuccess: ({ profileId, actionId }) => {
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      onNotice({
+        level: 'ok',
+        text:
+          actionId === 'validate_oauth'
+            ? `Claude OAuth validated for "${profileId}".`
+            : `Claude OAuth disconnected for "${profileId}".`,
+      });
+    },
+    onError: (error: Error) => {
+      onNotice({ level: 'error', text: error.message });
+    },
+  });
+
   useEffect(() => {
     const activeSessions = Object.entries(oauthSessions).filter(([, session]) =>
       isActiveOAuthStatus(session.status),
@@ -1188,32 +1251,32 @@ export function ProviderProfilesManager({
                         {oauthSession.failureReason}
                       </div>
                     ) : null}
-                    {authModel.kind === 'claude_manual' && authModel.statusLabel ? (
+                    {authModel.kind === 'claude_credentials' && authModel.statusLabel ? (
                       <div className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-400">
                         {authModel.statusLabel}
                       </div>
                     ) : null}
-                    {authModel.kind === 'claude_manual' && authModel.readiness?.connected !== undefined ? (
+                    {authModel.kind === 'claude_credentials' && authModel.readiness?.connected !== undefined ? (
                       <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                         Claude connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
                       </div>
                     ) : null}
-                    {authModel.kind === 'claude_manual' && authModel.readiness?.lastValidatedAt ? (
+                    {authModel.kind === 'claude_credentials' && authModel.readiness?.lastValidatedAt ? (
                       <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                         Last validated: {authModel.readiness.lastValidatedAt}
                       </div>
                     ) : null}
-                    {authModel.kind === 'claude_manual' && authModel.readiness?.backingSecretExists !== undefined ? (
+                    {authModel.kind === 'claude_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
                       <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                         Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
                       </div>
                     ) : null}
-                    {authModel.kind === 'claude_manual' && authModel.readiness?.launchReady !== undefined ? (
+                    {authModel.kind === 'claude_credentials' && authModel.readiness?.launchReady !== undefined ? (
                       <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                         Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
                       </div>
                     ) : null}
-                    {authModel.kind === 'claude_manual' && authModel.readiness?.failureReason ? (
+                    {authModel.kind === 'claude_credentials' && authModel.readiness?.failureReason ? (
                       <div className="mt-1 text-xs text-rose-600 dark:text-rose-400">
                         Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
                       </div>
@@ -1237,13 +1300,29 @@ export function ProviderProfilesManager({
                           Auth
                         </button>
                       ) : null}
-                      {authModel.kind === 'claude_manual'
+                      {authModel.kind === 'claude_credentials'
                         ? authModel.actions.map((action) => (
                             <button
                               key={action.id}
                               type="button"
                               className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
-                              onClick={() => openClaudeEnrollment(profile)}
+                              onClick={() => {
+                                if (action.id === 'connect_oauth') {
+                                  startOAuthMutation.mutate(profile);
+                                  return;
+                                }
+                                if (action.id === 'use_api_key') {
+                                  openClaudeEnrollment(profile);
+                                  return;
+                                }
+                                if (action.id === 'validate_oauth' || action.id === 'disconnect_oauth') {
+                                  claudeOAuthLifecycleMutation.mutate({
+                                    profileId: profile.profile_id,
+                                    actionId: action.id,
+                                  });
+                                }
+                              }}
+                              disabled={claudeOAuthLifecycleMutation.isPending}
                               aria-label={`${action.label} ${profile.profile_id}`}
                             >
                               {action.label}
@@ -1369,10 +1448,10 @@ export function ProviderProfilesManager({
                 id="claude-enrollment-title"
                 className="text-base font-semibold text-slate-900 dark:text-white"
               >
-                Claude manual token enrollment for {claudeEnrollment.profile.profile_id}
+                Anthropic API key enrollment for {claudeEnrollment.profile.profile_id}
               </h4>
               <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-                Claude enrollment is completed externally. Open the Claude enrollment flow, paste the returned token here, then validate and save it as a managed provider credential.
+                Use an Anthropic API key for Claude Code launches. Paste the key here, then validate and save it as a managed provider credential.
               </p>
             </div>
             <button
@@ -1380,7 +1459,7 @@ export function ProviderProfilesManager({
               className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
               onClick={closeClaudeEnrollment}
             >
-              Cancel Claude enrollment
+              Cancel API key enrollment
             </button>
           </div>
 
@@ -1402,14 +1481,14 @@ export function ProviderProfilesManager({
           {claudeEnrollment.step === 'not_connected' ? (
             <div className="mt-5 space-y-4">
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-700 dark:text-slate-300">
-                Complete the external Claude Anthropic enrollment step first, then continue to paste the returned token.
+                Continue when you are ready to paste the Anthropic API key. This path stores the key in Managed Secrets and does not create an OAuth terminal session.
               </div>
               <button
                 type="button"
                 className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
                 onClick={continueClaudeEnrollment}
               >
-                Continue to token paste
+                Continue to API key paste
               </button>
             </div>
           ) : null}
@@ -1417,7 +1496,7 @@ export function ProviderProfilesManager({
           {claudeEnrollment.step === 'awaiting_token_paste' ? (
             <div className="mt-5 space-y-4">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Returned Claude token</span>
+                <span>Anthropic API key</span>
                 <input
                   type="password"
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -1431,34 +1510,34 @@ export function ProviderProfilesManager({
                 className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
                 onClick={() => void submitClaudeEnrollment()}
               >
-                Validate and save Claude token
+                Validate and save Anthropic API key
               </button>
             </div>
           ) : null}
 
           {['validating_token', 'saving_secret', 'updating_profile'].includes(claudeEnrollment.step) ? (
             <div className="mt-5 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/30 p-4 text-sm font-medium text-sky-800 dark:text-sky-300">
-              Processing Claude manual enrollment: {claudeEnrollment.step}
+              Processing Anthropic API key enrollment: {claudeEnrollment.step}
             </div>
           ) : null}
 
           {claudeEnrollment.step === 'ready' ? (
             <div className="mt-5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 p-4 text-sm font-medium text-emerald-800 dark:text-emerald-300">
-              {claudeEnrollment.statusLabel ?? 'Claude token ready'}
+              {claudeEnrollment.statusLabel ?? 'Anthropic API key ready'}
             </div>
           ) : null}
 
           {claudeEnrollment.step === 'failed' ? (
             <div className="mt-5 space-y-4">
               <div className="rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 p-4 text-sm font-medium text-rose-700 dark:text-rose-300">
-                {claudeEnrollment.failureReason ?? 'Claude token validation failed.'}
+                {claudeEnrollment.failureReason ?? 'Anthropic API key validation failed.'}
               </div>
               <button
                 type="button"
                 className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
                 onClick={continueClaudeEnrollment}
               >
-                Return to token paste
+                Return to API key paste
               </button>
             </div>
           ) : null}

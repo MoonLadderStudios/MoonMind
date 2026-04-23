@@ -1,5 +1,20 @@
 [
   {
+    "id": 4301917079,
+    "disposition": "not-applicable",
+    "rationale": "Gemini quota warning only; no actionable PR feedback."
+  },
+  {
+    "id": 3128519024,
+    "disposition": "addressed",
+    "rationale": "Paginated GitHub issue reactions with per_page=100 and Link-next traversal, with regression coverage for Codex +1 on page 2."
+  },
+  {
+    "id": 4159873032,
+    "disposition": "not-applicable",
+    "rationale": "Codex review summary; actionable inline review comment handled separately."
+  },
+  {
     "id": 3128925097,
     "disposition": "addressed",
     "rationale": "Inherited execution profiles now fall back to auto-selection when the parent runtime does not match the child runtime."

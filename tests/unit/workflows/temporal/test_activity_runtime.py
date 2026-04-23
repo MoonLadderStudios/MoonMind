@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -749,13 +749,13 @@ async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_f
 
 
 def _approved_pentest_scope() -> dict[str, object]:
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     return {
         "scope_id": "scope-123",
         "title": "Lab validation",
         "owner_user_id": "user-security",
-        "created_at": (now - timedelta(days=1)).isoformat().replace("+00:00", "Z"),
-        "expires_at": (now + timedelta(days=1)).isoformat().replace("+00:00", "Z"),
+        "created_at": (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+        "expires_at": (now + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
         "target_class": "lab",
         "targets": [{"kind": "url", "value": "https://lab.example.test"}],
         "allowed_actions": [

@@ -764,7 +764,7 @@ async def test_agent_run_managed_session_start_runtime_error_truncates_summary(
     assert result.summary.startswith("managed start failed: ")
 
 
-async def test_agent_run_clears_auto_profile_after_provider_cooldown_retry(
+async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run = MoonMindAgentRun()
@@ -777,7 +777,7 @@ async def test_agent_run_clears_auto_profile_after_provider_cooldown_retry(
             retryRecommendation="retry_after_cooldown",
             summary="provider capacity",
         ),
-        AgentRunResult(summary="Recovered on fallback profile."),
+        AgentRunResult(summary="Recovered on pinned profile."),
     ]
 
     _configure_workflow_runtime(monkeypatch)
@@ -820,11 +820,7 @@ async def test_agent_run_clears_auto_profile_after_provider_cooldown_retry(
         if request_slot:
             ensure_profile_refs.append(execution_profile_ref)
             run.slot_assigned_event.set()
-            run._assigned_profile_id = (
-                "codex_openrouter_qwen36_plus"
-                if len(ensure_profile_refs) == 1
-                else "codex-default"
-            )
+            run._assigned_profile_id = execution_profile_ref or "codex-default"
         return _FakeManagerHandle()
 
     async def fake_sync_manager_profiles(
@@ -836,9 +832,13 @@ async def test_agent_run_clears_auto_profile_after_provider_cooldown_retry(
         run._profile_snapshots = {
             "codex_openrouter_qwen36_plus": {
                 "cooldown_after_429_seconds": 0,
+                "enabled": True,
+                "is_default": False,
             },
             "codex-default": {
                 "cooldown_after_429_seconds": 0,
+                "enabled": True,
+                "is_default": True,
             },
         }
         return 2
@@ -873,13 +873,13 @@ async def test_agent_run_clears_auto_profile_after_provider_cooldown_retry(
 
     result = await run.run(request)
 
-    assert result.summary == "Recovered on fallback profile."
-    assert ensure_profile_refs == [None, None]
+    assert result.summary == "Recovered on pinned profile."
+    assert ensure_profile_refs == ["codex-default", "codex-default"]
     assert manager_signals[:2] == [
         (
             "report_cooldown",
             {
-                "profile_id": "codex_openrouter_qwen36_plus",
+                "profile_id": "codex-default",
                 "cooldown_seconds": 0,
             },
         ),
@@ -887,7 +887,7 @@ async def test_agent_run_clears_auto_profile_after_provider_cooldown_retry(
             "release_slot",
             {
                 "requester_workflow_id": "wf-agent-run-1",
-                "profile_id": "codex_openrouter_qwen36_plus",
+                "profile_id": "codex-default",
             },
         ),
     ]

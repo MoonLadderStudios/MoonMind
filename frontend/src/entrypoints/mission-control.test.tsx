@@ -584,6 +584,20 @@ describe('Mission Control shared entry', () => {
     );
   });
 
+  it('keeps the mobile navigation layer above route content panels', async () => {
+    const mastheadBlock = cssRuleBlock(missionControlCss, '.masthead');
+    expect(mastheadBlock).toContain('position: relative;');
+    expect(mastheadBlock).toContain('z-index: 50;');
+    expect(mastheadBlock).toContain('isolation: isolate;');
+
+    const navBlocks = cssRuleBlocks(missionControlCss, '.route-nav');
+    expect(
+      navBlocks.some(
+        (block) => block.includes('position: absolute;') && block.includes('z-index: 30;'),
+      ),
+    ).toBe(true);
+  });
+
   it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
     const { readFileSync } = await import('node:fs');
     const missionControlCss = readFileSync(
@@ -865,6 +879,117 @@ describe('Mission Control shared entry', () => {
       { timeout: 3500 },
     );
     expect(await screen.findByText('Ready after wait')).toBeTruthy();
+    expect(sentFrames.some((frame) => frame.includes('"heartbeat"'))).toBe(true);
+  });
+
+  it('attaches the OAuth terminal when a Claude session reaches awaiting user', async () => {
+    const sentFrames: string[] = [];
+    const attachCalls: string[] = [];
+    const websocketUrls: string[] = [];
+    const sessionStatuses = [
+      { status: 'starting' },
+      {
+        status: 'awaiting_user',
+        runtime_id: 'claude_code',
+        profile_id: 'claude_anthropic',
+        terminal_session_id: 'term_oas_claude_wait',
+        terminal_bridge_id: 'br_oas_claude_wait',
+      },
+    ];
+
+    class MockWebSocket extends EventTarget {
+      static readonly OPEN = 1;
+      readonly OPEN = 1;
+      readyState = 1;
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      constructor(readonly url: string) {
+        super();
+        websocketUrls.push(url);
+        setTimeout(() => {
+          this.onopen?.(new Event('open'));
+          this.onmessage?.(
+            new MessageEvent('message', {
+              data: 'Open https://claude.ai/login and paste the returned code',
+            }),
+          );
+        }, 0);
+      }
+      send(frame: string) {
+        sentFrames.push(frame);
+      }
+      close() {
+        this.onclose?.(new CloseEvent('close'));
+      }
+    }
+    window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/v1/oauth-sessions/oas_claude_wait') {
+        const nextStatus = sessionStatuses.shift() ?? {
+          status: 'awaiting_user',
+          runtime_id: 'claude_code',
+          profile_id: 'claude_anthropic',
+          terminal_session_id: 'term_oas_claude_wait',
+          terminal_bridge_id: 'br_oas_claude_wait',
+        };
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: 'oas_claude_wait',
+            ...nextStatus,
+          }),
+        } as Response);
+      }
+      if (url === '/api/v1/oauth-sessions/oas_claude_wait/terminal/attach') {
+        attachCalls.push(url);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            session_id: 'oas_claude_wait',
+            terminal_session_id: 'term_oas_claude_wait',
+            terminal_bridge_id: 'br_oas_claude_wait',
+            websocket_url: '/api/v1/oauth-sessions/oas_claude_wait/terminal/ws?token=once',
+            attach_token: 'once',
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        json: async () => ({ detail: 'Unhandled fetch' }),
+      } as Response);
+    });
+
+    renderWithClient(
+      <MissionControlApp
+        payload={{
+          page: 'oauth-terminal',
+          apiBase: '/api',
+          initialData: { sessionId: 'oas_claude_wait' },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('Provider Login Terminal', {}, { timeout: 3000 })).toBeTruthy();
+    expect(attachCalls).toEqual([]);
+
+    await waitFor(
+      () => {
+        expect(attachCalls).toEqual([
+          '/api/v1/oauth-sessions/oas_claude_wait/terminal/attach',
+        ]);
+      },
+      { timeout: 3500 },
+    );
+    expect(websocketUrls).toEqual([
+      'ws://localhost:3000/api/v1/oauth-sessions/oas_claude_wait/terminal/ws?token=once',
+    ]);
+    expect(await screen.findByText(/Open https:\/\/claude\.ai\/login/)).toBeTruthy();
     expect(sentFrames.some((frame) => frame.includes('"heartbeat"'))).toBe(true);
   });
 });
