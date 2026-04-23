@@ -1050,6 +1050,12 @@ class TemporalExecutionRemediationLink(Base):
         Text, nullable=True
     )
     outcome: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    mutation_guard_lock_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
+    mutation_guard_ledger_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

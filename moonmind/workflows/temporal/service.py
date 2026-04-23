@@ -446,6 +446,13 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "task.remediation.target.taskRunIds must be a list of strings."
                 )
+            allowed_task_run_ids = self._target_task_run_ids(target_record)
+            if allowed_task_run_ids:
+                requested_task_run_ids = {str(item).strip() for item in task_run_ids}
+                if not requested_task_run_ids.issubset(allowed_task_run_ids):
+                    raise TemporalExecutionValidationError(
+                        "task.remediation.target.taskRunIds must belong to the target execution."
+                    )
 
         trigger = remediation.get("trigger")
         trigger_type = None
@@ -484,6 +491,33 @@ class TemporalExecutionService:
             status="created",
             trigger_type=trigger_type,
         )
+
+    @classmethod
+    def _target_task_run_ids(
+        cls, record: TemporalExecutionCanonicalRecord
+    ) -> set[str]:
+        output: set[str] = set()
+        for payload in (
+            getattr(record, "parameters", None),
+            getattr(record, "memo", None),
+            getattr(record, "search_attributes", None),
+        ):
+            cls._collect_task_run_ids(payload, output)
+        return output
+
+    @classmethod
+    def _collect_task_run_ids(cls, value: Any, output: set[str]) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                if key in {"taskRunId", "task_run_id"}:
+                    task_run_id = str(item or "").strip()
+                    if task_run_id:
+                        output.add(task_run_id)
+                cls._collect_task_run_ids(item, output)
+            return
+        if isinstance(value, list | tuple):
+            for item in value:
+                cls._collect_task_run_ids(item, output)
 
     async def _write_dependency_edges(
         self,
