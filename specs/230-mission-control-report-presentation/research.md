@@ -56,10 +56,10 @@ Rationale: The source forbids local report identity heuristics.
 Alternatives considered: Guess from `metadata.report_type`, filenames, or content type. Rejected as explicitly forbidden.
 Test implications: Frontend fallback test with generic artifacts and empty latest report response.
 
-## FR-008 - MM-462 Traceability
+## FR-008 - MM-494 Traceability
 
-Decision: Preserve MM-462 in MoonSpec artifacts and verification evidence.
-Evidence: `spec.md` and this plan include MM-462.
-Rationale: Jira traceability is required by the orchestration input.
-Alternatives considered: None.
+Decision: Preserve MM-494 in the resumed MoonSpec artifacts and verification evidence while keeping the already-completed runtime story and implementation evidence under `specs/230-mission-control-report-presentation`.
+Evidence: `spec.md`, `plan.md`, `tasks.md`, `verification.md`, and `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` include MM-494.
+Rationale: The current Jira orchestration input requires MM-494 traceability, and the existing feature directory already covers the same independently testable runtime behavior.
+Alternatives considered: Open a duplicate feature directory for MM-494. Rejected because the story was already fully specified, implemented, and verified under the existing feature directory.
 Test implications: Traceability grep in quickstart/final verification.

@@ -9,7 +9,7 @@
 
 ## Source Traceability
 
-- Jira: MM-462
+- Jira: MM-494
 - Story: Present canonical reports in Mission Control task detail surfaces.
 - Story count: exactly one independently testable story from `spec.md`.
 - Independent test: load an execution detail surface with report artifacts, verify report-first presentation, related content openability, presentation-field viewer selection, and no fabricated report panel when `report.primary` is absent.
@@ -19,7 +19,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm active feature context points to `specs/230-mission-control-report-presentation` in `.specify/feature.json` (MM-462).
+- [X] T001 Confirm active feature context points to `specs/230-mission-control-report-presentation` in `.specify/feature.json` (MM-494).
 - [X] T002 Inspect existing artifact list parsing and rendering in `frontend/src/entrypoints/task-detail.tsx` before editing (FR-001 through FR-007).
 - [X] T003 Inspect existing task detail and artifact API tests in `frontend/src/entrypoints/task-detail.test.tsx` and `tests/contract/test_temporal_artifact_api.py` before adding failures (FR-001 through FR-007).
 
@@ -49,7 +49,7 @@ Integration/contract test plan: API contract coverage verifies the execution art
 
 - [X] T017 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx` and fix failures (FR-001 through FR-007).
 - [X] T018 Run `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py` and fix failures (FR-001, FR-006).
-- [X] T019 Run traceability check `rg -n "MM-462|DESIGN-REQ-011|DESIGN-REQ-012|DESIGN-REQ-013|DESIGN-REQ-014|DESIGN-REQ-020|DESIGN-REQ-022" specs/230-mission-control-report-presentation docs/tmp/jira-orchestration-inputs/MM-462-moonspec-orchestration-input.md` (FR-008, SC-006).
+- [X] T019 Run traceability check `rg -n "MM-494|DESIGN-REQ-011|DESIGN-REQ-012|DESIGN-REQ-013|DESIGN-REQ-014|DESIGN-REQ-020|DESIGN-REQ-022" specs/230-mission-control-report-presentation docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` (FR-008, SC-006).
 - [X] T020 Run final `./tools/test_unit.sh` unless blocked by environment constraints.
 
 ## Phase 5: Verify

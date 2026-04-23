@@ -2,11 +2,11 @@
 
 **Verdict**: FULLY_IMPLEMENTED  
 **Date**: 2026-04-22  
-**Jira**: MM-462
+**Jira**: MM-494
 
 ## Summary
 
-Mission Control task detail now uses server-selected report linkage to render a canonical Report section for executions with `report.primary`, displays related `report.summary`, `report.structured`, and `report.evidence` artifacts as report content, preserves the generic Artifacts and observability surfaces, and avoids fabricating report state when the latest primary report query returns no report artifact.
+Mission Control task detail already uses server-selected report linkage to render a canonical Report section for executions with `report.primary`, displays related `report.summary`, `report.structured`, and `report.evidence` artifacts as report content, preserves the generic Artifacts and observability surfaces, and avoids fabricating report state when the latest primary report query returns no report artifact. This alignment run preserves MM-494 as the canonical Jira source without reopening the completed implementation.
 
 ## Requirement Coverage
 
@@ -19,7 +19,7 @@ Mission Control task detail now uses server-selected report linkage to render a 
 | FR-005 | VERIFIED | `reportOpenHref` and `reportViewerLabel` use `default_read_ref`, `download_url`, `render_hint`, `content_type`, and metadata title/name. |
 | FR-006 | VERIFIED | Implementation consumes existing artifact endpoint/read model only; no new storage or mutation route added. |
 | FR-007 | VERIFIED | Report section renders only when latest report response contains an actual `report.primary` link. |
-| FR-008 | VERIFIED | MM-462 appears in spec, plan, tasks, quickstart, and verification. |
+| FR-008 | VERIFIED | MM-494 appears in spec, plan, tasks, quickstart, and verification. |
 
 ## Source Design Coverage
 

@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement MM-462 by extending Mission Control's task detail surface to query the server for the latest `report.primary` artifact, present that canonical report before the generic artifact list, show related report summary/structured/evidence artifacts as report content, and choose open/download targets from artifact presentation metadata. Backend artifact APIs already expose execution-scoped filtering with `link_type` and `latest_only`; the primary implementation work is frontend parsing, report presentation, and focused UI tests with an API contract regression.
+The existing Mission Control report-presentation implementation already satisfies the MM-494 runtime story. This resumed plan preserves MM-494 as the canonical Jira source brief, reuses the verified implementation in `frontend/src/entrypoints/task-detail.tsx` and its tests, and limits current work to source-traceability alignment rather than reopening implementation.
 
 ## Requirement Status
 
@@ -18,7 +18,7 @@ Implement MM-462 by extending Mission Control's task detail surface to query the
 | FR-005 | partial | `artifactDownloadHref` uses download URL or artifact ID only; no report viewer target helper reads `default_read_ref`, `render_hint`, or content metadata. | Add viewer target/label helper based on artifact presentation fields. | frontend unit |
 | FR-006 | implemented_unverified | Artifact list endpoint serializes metadata and links from normal artifact rows; no separate report store exists. | Keep report UI as read model over existing artifact responses. | contract + frontend unit |
 | FR-007 | missing | UI currently fetches all artifacts and would need local filtering for report identity. | Query `link_type=report.primary&latest_only=true`; do not infer canonical report from arbitrary artifacts. | frontend unit |
-| FR-008 | implemented_unverified | MM-462 preserved in `spec.md` and orchestration input. | Preserve through plan, tasks, verification, and code/test names where practical. | traceability check |
+| FR-008 | implemented_unverified | MM-494 preserved in `spec.md` and orchestration input. | Preserve through plan, tasks, verification, and code/test names where practical. | traceability check |
 | DESIGN-REQ-011 | implemented_unverified | Server latest-report query exists for execution/link type. | Consume latest query from UI and test query URL. | frontend unit |
 | DESIGN-REQ-012 | partial | Generic surfaces exist; report panel and related evidence section do not. | Add report panel and related content. | frontend unit |
 | DESIGN-REQ-013 | partial | API serializes `default_read_ref`; UI does not parse/use it. | Parse presentation fields and choose open target/label. | frontend unit |
@@ -52,7 +52,7 @@ Implement MM-462 by extending Mission Control's task detail surface to query the
 - VII. Runtime Configurability: PASS. Uses existing configured API endpoints.
 - VIII. Modular and Extensible Architecture: PASS. Changes stay in task detail UI and artifact API contract.
 - IX. Resilient by Default: PASS. Report identity comes from durable artifact links, not browser heuristics.
-- X. Facilitate Continuous Improvement: PASS. Verification will produce traceable MM-462 evidence.
+- X. Facilitate Continuous Improvement: PASS. Verification preserves traceable MM-494 evidence for the resumed feature artifacts.
 - XI. Spec-Driven Development: PASS. Spec, plan, tasks, and verification drive work.
 - XII. Canonical Documentation Separation: PASS. Orchestration input remains under `docs/tmp`.
 - XIII. Pre-release Compatibility Policy: PASS. No compatibility aliases or internal semantic transforms are introduced.

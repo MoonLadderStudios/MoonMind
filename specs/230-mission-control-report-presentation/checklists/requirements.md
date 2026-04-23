@@ -36,4 +36,4 @@
 
 ## Notes
 
-- Specification preserves MM-462 traceability and maps all in-scope DESIGN-REQ IDs from the Jira preset brief.
+- Specification preserves MM-494 traceability while reusing the existing single-story report-presentation artifacts for the same runtime behavior.
