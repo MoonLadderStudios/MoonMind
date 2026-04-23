@@ -20,12 +20,21 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
+from temporalio import exceptions as temporal_exceptions
 
 from moonmind.config.settings import settings
 from moonmind.integrations.pentest.models import (
+    PentestLaunchPolicyError,
+    PentestProviderMaterializationError,
     PentestScopeValidationError,
     PentestWorkloadRequest,
-    validate_authorized_scope_for_request,
+    build_pentest_execution_materialization,
+    build_pentest_publication_result,
+    build_pentest_provider_cooldown_diagnostic,
+    build_pentest_launch_plan,
+    materialize_pentest_provider_profile,
+    pentest_provider_lease_metadata,
+    resolve_pentest_provider_profile,
 )
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
@@ -304,6 +313,14 @@ def _managed_runtime_artifact_root() -> Path:
 
 class TemporalActivityRuntimeError(RuntimeError):
     """Raised when one of the Temporal activity helpers cannot complete."""
+
+
+def _docker_workflows_disabled_failure() -> temporal_exceptions.ApplicationError:
+    return temporal_exceptions.ApplicationError(
+        "policy_denied: docker_workflows_disabled",
+        type="docker_workflows_disabled",
+        non_retryable=True,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -792,6 +809,24 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                                 },
                             },
                         },
+                        "provider_runtime_state": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "object",
+                                "properties": {
+                                    "profile_id": {"type": "string"},
+                                    "current_leases": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "available_slots": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                    },
+                                    "cooldown_until": {"type": "string"},
+                                },
+                            },
+                        },
                         "time_budget_minutes": {
                             "type": "integer",
                             "minimum": 1,
@@ -829,26 +864,85 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                         "status",
                         "target",
                         "runner_profile_id",
-                        "stdout_artifact_ref",
-                        "stderr_artifact_ref",
-                        "diagnostics_artifact_ref",
-                        "summary_artifact_ref",
-                        "findings_artifact_ref",
+                        "launch_plan",
                     ],
                     "properties": {
-                        "status": {"type": "string"},
+                        "status": {
+                            "type": "string",
+                            "enum": ["launch_plan_ready", "provider_cooldown"],
+                        },
                         "target": {"type": "string"},
                         "runner_profile_id": {"type": "string"},
-                        "execution_profile_ref": {"type": "string"},
-                        "stdout_artifact_ref": {"type": "string"},
-                        "stderr_artifact_ref": {"type": "string"},
-                        "diagnostics_artifact_ref": {"type": "string"},
-                        "summary_artifact_ref": {"type": "string"},
-                        "findings_artifact_ref": {"type": "string"},
-                        "evidence_bundle_artifact_ref": {"type": "string"},
-                        "provider_snapshot_artifact_ref": {"type": "string"},
-                        "findings_count": {"type": "integer"},
-                        "confirmed_findings_count": {"type": "integer"},
+                        "provider_profile": {"type": "object"},
+                        "provider_lease": {"type": "object"},
+                        "provider_cooldown": {
+                            "type": "object",
+                            "properties": {
+                                "profile_id": {"type": "string"},
+                                "cooldown_seconds": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                },
+                                "failure_category": {"type": "string"},
+                                "retry_allowed": {"type": "boolean"},
+                            },
+                        },
+                        "instruction_bundle": {"type": "object"},
+                        "runtime_paths": {"type": "object"},
+                        "wrapper_invocation": {"type": "object"},
+                        "launch_plan": {
+                            "type": "object",
+                            "required": [
+                                "profile_id",
+                                "container_name",
+                                "image",
+                                "entrypoint",
+                                "workdir",
+                                "network_policy",
+                                "linux_capabilities",
+                                "devices",
+                                "labels",
+                                "cleanup_selector",
+                            ],
+                            "properties": {
+                                "profile_id": {"type": "string"},
+                                "container_name": {"type": "string"},
+                                "image": {"type": "string"},
+                                "entrypoint": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "workdir": {"type": "string"},
+                                "mounts": {
+                                    "type": "array",
+                                    "items": {"type": "object"},
+                                },
+                                "env_keys": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "network_policy": {"type": "string"},
+                                "linux_capabilities": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "devices": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "resources": {"type": "object"},
+                                "timeout_seconds": {"type": "integer"},
+                                "cleanup": {"type": "object"},
+                                "labels": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                },
+                                "cleanup_selector": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                },
+                            },
+                        },
                     },
                 }
             },
@@ -2755,6 +2849,7 @@ class TemporalAgentRuntimeActivities:
         session_controller: ManagedSessionController | None = None,
         workload_launcher: Any | None = None,
         workload_registry: Any | None = None,
+        workflow_docker_enabled: bool = True,
         client_adapter: Any = None,
     ) -> None:
         self._artifact_service = artifact_service
@@ -2764,6 +2859,7 @@ class TemporalAgentRuntimeActivities:
         self._session_controller = session_controller
         self._workload_launcher = workload_launcher
         self._workload_registry = workload_registry
+        self._workflow_docker_enabled = workflow_docker_enabled
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
@@ -3091,6 +3187,8 @@ class TemporalAgentRuntimeActivities:
     ) -> dict[str, Any]:
         """Run one validated Docker workload on the agent_runtime fleet."""
 
+        if not self._workflow_docker_enabled:
+            raise _docker_workflows_disabled_failure()
         if self._workload_registry is None or self._workload_launcher is None:
             raise TemporalActivityRuntimeError(
                 "workload registry and launcher are required for workload.run"
@@ -3127,15 +3225,97 @@ class TemporalAgentRuntimeActivities:
         silently falling back to the generic tool executor.
         """
 
-        request_payload = dict(payload.get("request", payload))
+        if not self._workflow_docker_enabled:
+            raise _docker_workflows_disabled_failure()
+        raw_payload = dict(payload)
+        nested_request = raw_payload.get("request")
+        if nested_request is not None:
+            request_payload = dict(nested_request)
+            publication_source = request_payload
+        else:
+            request_payload = raw_payload
+            publication_source = raw_payload
+        publication_keys = {
+            "findings",
+            "provider_snapshot_available",
+            "wrapper_log_available",
+            "summary_text",
+            "stdout_preview",
+            "stderr_preview",
+            "progress_annotations",
+            "publication_errors",
+        }
+        publication_payload = {
+            key: publication_source[key]
+            for key in publication_keys
+            if key in publication_source
+        }
+        request_payload = {
+            key: value
+            for key, value in request_payload.items()
+            if key not in publication_keys
+        }
         request = PentestWorkloadRequest.model_validate(request_payload)
         try:
-            validate_authorized_scope_for_request(request)
-        except PentestScopeValidationError as exc:
+            launch_plan = build_pentest_launch_plan(request)
+            provider_profile = resolve_pentest_provider_profile(
+                execution_profile_ref=request.execution_profile_ref,
+                provider_selector=request.provider_selector,
+                runtime_state=request.provider_runtime_state,
+            )
+            provider_materialization = materialize_pentest_provider_profile(
+                provider_profile
+            )
+            execution_materialization = build_pentest_execution_materialization(
+                request
+            )
+        except (
+            PentestScopeValidationError,
+            PentestLaunchPolicyError,
+            PentestProviderMaterializationError,
+        ) as exc:
             raise TemporalActivityRuntimeError(str(exc)) from exc
-        raise TemporalActivityRuntimeError(
-            "security.pentest.execute runner is not implemented"
-        )
+        output = launch_plan.to_activity_output(request)
+        output["provider_profile"] = provider_materialization.model_dump(mode="json")
+        output["provider_lease"] = pentest_provider_lease_metadata(provider_profile)
+        execution_metadata = execution_materialization.model_dump(mode="json")
+        execution_metadata["instruction_bundle"].pop("content", None)
+        execution_metadata["instruction_bundle"].pop("objective", None)
+        output.update(execution_metadata)
+        publication = build_pentest_publication_result(
+            request,
+            findings=list(publication_payload.get("findings") or ()),
+            provider_snapshot_available=_coerce_bool(
+                publication_payload.get("provider_snapshot_available"),
+                default=False,
+            ),
+            wrapper_log_available=_coerce_bool(
+                publication_payload.get("wrapper_log_available"),
+                default=False,
+            ),
+            summary_text=publication_payload.get("summary_text"),
+            stdout_preview=publication_payload.get("stdout_preview"),
+            stderr_preview=publication_payload.get("stderr_preview"),
+            progress_annotations=list(
+                publication_payload.get("progress_annotations") or ()
+            ),
+            errors=list(publication_payload.get("publication_errors") or ()),
+        ).model_dump(mode="json")
+        output.update(publication)
+        provider_failure = request.provider_failure or {}
+        failure_category = str(provider_failure.get("category") or "").strip()
+        if failure_category in {"provider_429", "provider_quota"}:
+            output["status"] = "provider_cooldown"
+            output["provider_cooldown"] = build_pentest_provider_cooldown_diagnostic(
+                profile_id=provider_profile.profile_id,
+                cooldown_seconds=provider_profile.cooldown_after_429_seconds,
+                reason=failure_category,
+            ).model_dump(mode="json")
+            output["provider_lease"] = pentest_provider_lease_metadata(
+                provider_profile,
+                release_required=True,
+            )
+        return output
 
     async def agent_runtime_publish_artifacts(
         self,

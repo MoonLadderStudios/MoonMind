@@ -109,6 +109,29 @@ async def test_terminal_bridge_forwards_input_and_resize_to_pty_adapter() -> Non
 
 
 @pytest.mark.asyncio
+async def test_terminal_bridge_forwards_claude_auth_code_without_safe_metadata_leak() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_claude_code_paste",
+        terminal_bridge_id="br_oas_claude_code_paste",
+        owner_user_id="user-1",
+    )
+    pty = InMemoryPtyAdapter()
+    pasted_code = "claude-returned-authorization-code-123456\n"
+
+    await pty.connect()
+    response = await bridge.handle_frame_for_pty(
+        {"type": "input", "data": pasted_code}, pty
+    )
+
+    assert response == {"type": "input_ack", "bytes": len(pasted_code.encode())}
+    assert pty.written == [pasted_code.encode()]
+    metadata = bridge.safe_metadata()
+    assert metadata["terminal_input_event_count"] == 1
+    assert pasted_code.strip() not in str(metadata)
+    assert "authorization-code" not in str(metadata)
+
+
+@pytest.mark.asyncio
 async def test_terminal_bridge_streams_output_without_persisting_raw_output() -> None:
     bridge = TerminalBridgeConnection(
         session_id="oas_terminal_output",
@@ -204,6 +227,46 @@ async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
     assert "sleep 1800" in observed[-1]
     assert observed[-1].count("codex") == 2
     assert observed[-1] != "codex login --device-auth"
+
+
+@pytest.mark.asyncio
+async def test_start_terminal_bridge_container_uses_claude_home_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[str] = []
+
+    async def fake_create_subprocess_exec(*args, **_kwargs):
+        observed.extend(args)
+        return _FakeProcess()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-anthropic")
+    monkeypatch.setenv("CLAUDE_API_KEY", "ambient-claude")
+    monkeypatch.setattr(
+        terminal_bridge.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    await start_terminal_bridge_container(
+        session_id="oas_terminal_runner_claude",
+        runtime_id="claude_code",
+        volume_ref="claude_auth_volume",
+        volume_mount_path="/home/app/.claude",
+        session_ttl=1800,
+        bootstrap_command=("claude", "login"),
+    )
+
+    assert "claude_auth_volume:/home/app/.claude" in observed
+    assert "HOME=/home/app" in observed
+    assert "CLAUDE_HOME=/home/app/.claude" in observed
+    assert "CLAUDE_VOLUME_PATH=/home/app/.claude" in observed
+    assert "ANTHROPIC_API_KEY=" in observed
+    assert "CLAUDE_API_KEY=" in observed
+    assert "ANTHROPIC_API_KEY=ambient-anthropic" not in observed
+    assert "CLAUDE_API_KEY=ambient-claude" not in observed
+    assert "CODEX_HOME=/home/app/.claude" not in observed
+    assert "command -v claude" in observed[-1]
+    assert observed[-1] != "claude login"
 
 
 @pytest.mark.asyncio

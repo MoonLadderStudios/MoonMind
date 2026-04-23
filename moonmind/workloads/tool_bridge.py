@@ -23,6 +23,8 @@ WorkloadToolHandler = Callable[
 CONTAINER_RUN_WORKLOAD_TOOL = "container.run_workload"
 CONTAINER_START_HELPER_TOOL = "container.start_helper"
 CONTAINER_STOP_HELPER_TOOL = "container.stop_helper"
+INTEGRATION_CI_TOOL = "moonmind.integration_ci"
+INTEGRATION_CI_PROFILE_ID = "moonmind-integration-ci"
 UNREAL_RUN_TESTS_TOOL = "unreal.run_tests"
 DEFAULT_UNREAL_PROFILE_ID = "unreal-5_3-linux"
 DOOD_TOOL_NAMES = frozenset(
@@ -30,6 +32,7 @@ DOOD_TOOL_NAMES = frozenset(
         CONTAINER_RUN_WORKLOAD_TOOL,
         CONTAINER_START_HELPER_TOOL,
         CONTAINER_STOP_HELPER_TOOL,
+        INTEGRATION_CI_TOOL,
         UNREAL_RUN_TESTS_TOOL,
     }
 )
@@ -196,6 +199,33 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
             "additionalProperties": False,
         }
         description = "Run Unreal Engine tests through a curated runner profile."
+    elif normalized == INTEGRATION_CI_TOOL:
+        input_schema = {
+            "type": "object",
+            "required": ["repoDir", "artifactsDir"],
+            "properties": {
+                "taskRunId": {"type": "string", "minLength": 1},
+                "stepId": {"type": "string", "minLength": 1},
+                "attempt": {"type": "integer", "minimum": 1},
+                "repoDir": {"type": "string", "minLength": 1},
+                "artifactsDir": {"type": "string", "minLength": 1},
+                "envOverrides": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+                "timeoutSeconds": {"type": "integer", "minimum": 1},
+                "resources": _resources_schema(),
+                "declaredOutputs": _declared_outputs_schema(),
+                "sessionId": {"type": "string", "minLength": 1},
+                "sessionEpoch": {"type": "integer", "minimum": 1},
+                "sourceTurnId": {"type": "string", "minLength": 1},
+            },
+            "additionalProperties": False,
+        }
+        description = (
+            "Run MoonMind hermetic integration tests through a curated "
+            "Docker-backed runner profile."
+        )
     else:
         raise ValueError(f"unknown Docker workload tool: {name}")
 
@@ -248,12 +278,14 @@ def register_workload_tool_handlers(
     *,
     registry: RunnerProfileRegistry,
     launcher: Any,
+    workflow_docker_enabled: bool = True,
 ) -> None:
     for tool_name in sorted(DOOD_TOOL_NAMES):
         handler = build_workload_tool_handler(
             tool_name=tool_name,
             registry=registry,
             launcher=launcher,
+            workflow_docker_enabled=workflow_docker_enabled,
         )
         for version in ("1.0", "1.0.0"):
             dispatcher.register_skill(
@@ -268,6 +300,7 @@ def build_workload_tool_handler(
     tool_name: str,
     registry: RunnerProfileRegistry,
     launcher: Any,
+    workflow_docker_enabled: bool = True,
 ) -> WorkloadToolHandler:
     normalized = str(tool_name or "").strip()
     if not is_dood_tool(normalized):
@@ -277,6 +310,17 @@ def build_workload_tool_handler(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None,
     ) -> SkillResult:
+        if not workflow_docker_enabled:
+            raise ToolFailure(
+                error_code="PERMISSION_DENIED",
+                message=(
+                    "Docker-backed workflow tools are disabled by "
+                    "MOONMIND_WORKFLOW_DOCKER_ENABLED=false "
+                    "(docker_workflows_disabled)"
+                ),
+                retryable=False,
+                details={"reason": "docker_workflows_disabled"},
+            )
         try:
             request = _build_workload_request(
                 tool_name=normalized,
@@ -369,6 +413,9 @@ def _build_workload_request(
             "reportPaths",
         ):
             request_payload.pop(curated_only_key, None)
+    elif tool_name == INTEGRATION_CI_TOOL:
+        request_payload["profileId"] = INTEGRATION_CI_PROFILE_ID
+        request_payload["command"] = ("./tools/test_integration.sh",)
 
     return WorkloadRequest.model_validate(request_payload)
 
@@ -537,6 +584,8 @@ __all__ = [
     "CONTAINER_STOP_HELPER_TOOL",
     "DEFAULT_UNREAL_PROFILE_ID",
     "DOOD_TOOL_NAMES",
+    "INTEGRATION_CI_PROFILE_ID",
+    "INTEGRATION_CI_TOOL",
     "UNREAL_RUN_TESTS_TOOL",
     "build_dood_tool_definition_payload",
     "build_workload_tool_handler",

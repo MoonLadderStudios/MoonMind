@@ -666,6 +666,57 @@ export interface paths {
         patch: operations["update_profile_api_v1_provider_profiles__profile_id__patch"];
         trace?: never;
     };
+    "/api/v1/provider-profiles/{profile_id}/manual-auth/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Commit Claude Manual Auth */
+        post: operations["commit_claude_manual_auth_api_v1_provider_profiles__profile_id__manual_auth_commit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-profiles/{profile_id}/oauth/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Claude Oauth Profile */
+        post: operations["validate_claude_oauth_profile_api_v1_provider_profiles__profile_id__oauth_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-profiles/{profile_id}/oauth/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disconnect Claude Oauth Profile */
+        post: operations["disconnect_claude_oauth_profile_api_v1_provider_profiles__profile_id__oauth_disconnect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/oauth-sessions": {
         parameters: {
             query?: never;
@@ -2879,6 +2930,38 @@ export interface components {
             role: string;
             /** Content */
             content: string;
+        };
+        /** ClaudeManualAuthCommitRequest */
+        ClaudeManualAuthCommitRequest: {
+            /** Token */
+            token: string;
+            /** Account Label */
+            account_label?: string | null;
+        };
+        /** ClaudeManualAuthCommitResponse */
+        ClaudeManualAuthCommitResponse: {
+            /** Status */
+            status: string;
+            /** Status Label */
+            status_label: string;
+            readiness: components["schemas"]["ClaudeManualAuthReadiness"];
+            /** Profile Id */
+            profile_id: string;
+            /** Secret Ref */
+            secret_ref: string;
+        };
+        /** ClaudeManualAuthReadiness */
+        ClaudeManualAuthReadiness: {
+            /** Connected */
+            connected: boolean;
+            /** Last Validated At */
+            last_validated_at: string;
+            /** Backing Secret Exists */
+            backing_secret_exists: boolean;
+            /** Launch Ready */
+            launch_ready: boolean;
+            /** Failure Reason */
+            failure_reason?: string | null;
         };
         /**
          * CodexAuthVolumeStatus
@@ -7896,6 +7979,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    commit_claude_manual_auth_api_v1_provider_profiles__profile_id__manual_auth_commit_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaudeManualAuthCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaudeManualAuthCommitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_claude_oauth_profile_api_v1_provider_profiles__profile_id__oauth_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disconnect_claude_oauth_profile_api_v1_provider_profiles__profile_id__oauth_disconnect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

@@ -138,6 +138,7 @@ samp {
 
 .masthead {
   position: relative;
+  z-index: 50;
   isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);

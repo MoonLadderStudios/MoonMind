@@ -129,6 +129,9 @@ SLOT_HANDOFF_PATCH_ID = "agent-run-slot-handoff-v1"
 SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
     "agent-run-sync-profiles-before-slot-request-v1"
 )
+PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID = (
+    "agent-run-pin-provider-profile-before-slot-request-v1"
+)
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.Run (run.py:50).
@@ -386,6 +389,51 @@ class MoonMindAgentRun:
             if seconds >= 0:
                 return seconds
         return _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS
+
+    @staticmethod
+    def _profile_selector_has_constraints(selector: Any) -> bool:
+        if selector is None:
+            return False
+        selector_payload = (
+            selector.model_dump(by_alias=True, exclude_none=True)
+            if hasattr(selector, "model_dump")
+            else selector
+        )
+        if not isinstance(selector_payload, Mapping):
+            return False
+        for value in selector_payload.values():
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, list) and not value:
+                continue
+            return True
+        return False
+
+    def _default_execution_profile_ref(self, request: AgentExecutionRequest) -> str | None:
+        if request.execution_profile_ref:
+            return str(request.execution_profile_ref).strip() or None
+        if self._profile_selector_has_constraints(request.profile_selector):
+            return None
+
+        default_profile_ids: list[str] = []
+        enabled_profile_ids: list[str] = []
+        for profile_id, profile in self._profile_snapshots.items():
+            normalized_profile_id = str(profile_id or "").strip()
+            if not normalized_profile_id:
+                continue
+            if profile.get("enabled") is False:
+                continue
+            enabled_profile_ids.append(normalized_profile_id)
+            if profile.get("is_default") is True:
+                default_profile_ids.append(normalized_profile_id)
+
+        if len(default_profile_ids) == 1:
+            return default_profile_ids[0]
+        if not default_profile_ids and len(enabled_profile_ids) == 1:
+            return enabled_profile_ids[0]
+        return None
 
     @staticmethod
     def _format_retry_timestamp(value: datetime) -> str:
@@ -1114,6 +1162,14 @@ class MoonMindAgentRun:
                             manager_handle=manager_handle,
                             runtime_id=runtime_id,
                         )
+                        if workflow.patched(
+                            PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID
+                        ):
+                            pinned_profile_id = self._default_execution_profile_ref(
+                                request
+                            )
+                            if pinned_profile_id:
+                                request.execution_profile_ref = pinned_profile_id
                         manager_handle = await self._ensure_manager_and_signal(
                             manager_id,
                             runtime_id,
@@ -1983,7 +2039,10 @@ class MoonMindAgentRun:
                         self.completion_event.clear()
                         self.final_result = None
                         self._assigned_profile_id = None
-                        request.execution_profile_ref = requested_execution_profile_ref
+                        if not workflow.patched(
+                            PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID
+                        ):
+                            request.execution_profile_ref = requested_execution_profile_ref
                         self.run_status = RunStatus.awaiting_slot
                         continue  # Retries loop
                     else:
@@ -2003,7 +2062,10 @@ class MoonMindAgentRun:
                         )
                         self.completion_event.clear()
                         self.final_result = None
-                        request.execution_profile_ref = requested_execution_profile_ref
+                        if not workflow.patched(
+                            PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID
+                        ):
+                            request.execution_profile_ref = requested_execution_profile_ref
                         continue  # Retries loop
 
                 # Not a 429 or external agent

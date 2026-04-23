@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import re
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio import exceptions as temporal_exceptions
 
 from api_service.db.models import Base
 from moonmind.config.settings import settings
@@ -647,6 +649,12 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
         "tags_any",
         "tags_all",
     }
+    assert (
+        input_schema["properties"]["provider_runtime_state"][
+            "additionalProperties"
+        ]["properties"]["available_slots"]["minimum"]
+        == 0
+    )
     assert input_schema["properties"]["time_budget_minutes"] == {
         "type": "integer",
         "minimum": 1,
@@ -665,18 +673,37 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
         "status",
         "target",
         "runner_profile_id",
-        "stdout_artifact_ref",
-        "stderr_artifact_ref",
-        "diagnostics_artifact_ref",
-        "summary_artifact_ref",
-        "findings_artifact_ref",
+        "launch_plan",
+    ]
+    assert output_schema["properties"]["status"] == {
+        "type": "string",
+        "enum": ["launch_plan_ready", "provider_cooldown"],
+    }
+    assert "provider_profile" in output_schema["properties"]
+    assert "provider_lease" in output_schema["properties"]
+    assert output_schema["properties"]["provider_cooldown"]["properties"][
+        "cooldown_seconds"
+    ] == {"type": "integer", "minimum": 0}
+    launch_plan_schema = output_schema["properties"]["launch_plan"]
+    assert launch_plan_schema["required"] == [
+        "profile_id",
+        "container_name",
+        "image",
+        "entrypoint",
+        "workdir",
+        "network_policy",
+        "linux_capabilities",
+        "devices",
+        "labels",
+        "cleanup_selector",
     ]
     assert {
-        "evidence_bundle_artifact_ref",
-        "provider_snapshot_artifact_ref",
-        "findings_count",
-        "confirmed_findings_count",
-    }.issubset(output_schema["properties"])
+        "mounts",
+        "env_keys",
+        "resources",
+        "timeout_seconds",
+        "cleanup",
+    }.issubset(launch_plan_schema["properties"])
 
     assert definition["policies"] == {
         "timeouts": {
@@ -722,12 +749,13 @@ async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_f
 
 
 def _approved_pentest_scope() -> dict[str, object]:
+    now = datetime.now(timezone.utc)
     return {
         "scope_id": "scope-123",
         "title": "Lab validation",
         "owner_user_id": "user-security",
-        "created_at": "2026-04-22T00:00:00Z",
-        "expires_at": "2026-04-23T00:00:00Z",
+        "created_at": (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+        "expires_at": (now + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
         "target_class": "lab",
         "targets": [{"kind": "url", "value": "https://lab.example.test"}],
         "allowed_actions": [
@@ -755,7 +783,7 @@ def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
         "objective": "Validate auth bypass hypothesis.",
         "scope_artifact_ref": "art:sha256:scope",
         "runner_profile_id": "pentestgpt-safe",
-        "execution_profile_ref": "profile:pipeline",
+        "execution_profile_ref": "pentestgpt_anthropic_api_team",
         "time_budget_minutes": 60,
         "evidence_level": "standard",
         "artifacts_dir": "/tmp/artifacts",
@@ -780,13 +808,306 @@ async def test_security_pentest_execute_fails_closed_before_runner_without_scope
     assert "runner is not implemented" not in message
 
 
-async def test_security_pentest_execute_reaches_runner_boundary_after_scope_validation():
+async def test_security_pentest_execute_denies_without_retry_when_workflow_docker_disabled():
+    activities = TemporalAgentRuntimeActivities(workflow_docker_enabled=False)
+
+    with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
+        await activities.security_pentest_execute(_pentest_activity_payload())
+
+    message = str(exc_info.value)
+    assert "docker_workflows_disabled" in message
+    assert "policy_denied" in message
+    assert exc_info.value.type == "docker_workflows_disabled"
+    assert exc_info.value.non_retryable is True
+
+
+async def test_security_pentest_execute_reaches_launch_plan_after_scope_validation():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(_pentest_activity_payload())
+
+    assert result["status"] == "launch_plan_ready"
+    assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+
+
+async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_validation():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(_pentest_activity_payload())
+
+    assert result["status"] == "launch_plan_ready"
+    assert result["target"] == "https://lab.example.test"
+    assert result["runner_profile_id"] == "pentestgpt-safe"
+    launch_plan = result["launch_plan"]
+    assert launch_plan["profile_id"] == "pentestgpt-safe"
+    assert launch_plan["container_name"] == "mm-pentest-run-123-step-pentest-1"
+    assert launch_plan["network_policy"] == "restricted_egress"
+    assert launch_plan["linux_capabilities"] == []
+    assert launch_plan["devices"] == []
+    assert launch_plan["labels"]["moonmind.tool_name"] == "security.pentest.run"
+    assert launch_plan["labels"]["moonmind.operation_mode"] == "validate_hypothesis"
+
+
+async def test_security_pentest_execute_includes_secret_safe_provider_preparation():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            execution_profile_ref="pentestgpt_anthropic_api_team",
+        )
+    )
+
+    provider_profile = result["provider_profile"]
+    assert provider_profile["profile_id"] == "pentestgpt_anthropic_api_team"
+    assert provider_profile["runtime_id"] == "pentestgpt"
+    assert provider_profile["provider_id"] == "anthropic"
+    assert provider_profile["env"] == {
+        "PENTESTGPT_AUTH_MODE": "anthropic",
+        "LANGFUSE_ENABLED": "false",
+    }
+    assert provider_profile["secret_env"] == {
+        "ANTHROPIC_API_KEY": "anthropic_api_key"
+    }
+    assert provider_profile["secret_refs"] == {
+        "anthropic_api_key": {
+            "secret_id": "sec_pentestgpt_anthropic_team",
+            "backend_type": "db_encrypted",
+        }
+    }
+    assert provider_profile["clear_env_keys"] == ["OPENROUTER_API_KEY"]
+    assert provider_profile["force_non_interactive"] is True
+    assert result["provider_lease"]["runtime_id"] == "pentestgpt"
+    assert result["provider_lease"]["profile_id"] == "pentestgpt_anthropic_api_team"
+    assert result["provider_lease"]["lease_required"] is True
+    assert "sk-" not in str(result)
+
+
+async def test_security_pentest_execute_filters_provider_runtime_state():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            execution_profile_ref=None,
+            provider_selector={"tags_any": ["api-key"]},
+            provider_runtime_state={
+                "pentestgpt_anthropic_api_team": {
+                    "profile_id": "pentestgpt_anthropic_api_team",
+                    "current_leases": ["wf-1", "wf-2"],
+                }
+            },
+        )
+    )
+
+    assert result["provider_profile"]["profile_id"] == "pentestgpt_openrouter_default"
+    assert result["provider_lease"]["profile_id"] == "pentestgpt_openrouter_default"
+
+
+async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            execution_profile_ref="pentestgpt_openrouter_default",
+            provider_failure={"category": "provider_429"},
+        )
+    )
+
+    assert result["status"] == "provider_cooldown"
+    assert result["provider_cooldown"] == {
+        "profile_id": "pentestgpt_openrouter_default",
+        "cooldown_seconds": 300,
+        "failure_category": "provider_429",
+        "retry_allowed": False,
+    }
+    assert result["provider_lease"]["release_required"] is True
+    assert "OPENROUTER_API_KEY" not in str(result["provider_cooldown"])
+    assert "token" not in str(result).lower()
+
+
+async def test_security_pentest_execute_includes_instruction_materialization_metadata():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(_pentest_activity_payload())
+
+    bundle = result["instruction_bundle"]
+    paths = result["runtime_paths"]
+    invocation = result["wrapper_invocation"]
+
+    assert bundle["target"] == "https://lab.example.test"
+    assert "objective" not in bundle
+    assert bundle["operation_mode"] == "validate_hypothesis"
+    assert "content" not in bundle
+    assert len(bundle["sha256"]) == 64
+    assert paths["instruction_file"] == "/tmp/artifacts/pentest/inputs/instruction.txt"
+    assert paths["stdout_file"] == "/tmp/artifacts/pentest/runtime/stdout.log"
+    assert paths["stderr_file"] == "/tmp/artifacts/pentest/runtime/stderr.log"
+    assert paths["diagnostics_file"] == "/tmp/artifacts/pentest/runtime/diagnostics.json"
+    assert paths["raw_evidence_file"] == (
+        "/tmp/artifacts/pentest/evidence/pentestgpt-session-export.json"
+    )
+    assert paths["normalizer_input_file"] == (
+        "/tmp/artifacts/pentest/findings/findings.normalizer-input.json"
+    )
+    assert invocation["command"][0] == "/usr/local/bin/moonmind-pentestgpt-run"
+    assert "--non-interactive" in invocation["command"]
+    assert "--instruction-file" in invocation["command"]
+    assert invocation["env"] == {
+        "MM_PENTEST_TARGET": "https://lab.example.test",
+        "MM_PENTEST_MODE": "validate_hypothesis",
+        "MM_PENTEST_INSTRUCTION_FILE": paths["instruction_file"],
+        "LANGFUSE_ENABLED": "false",
+    }
+    assert "Validate auth bypass hypothesis" not in str(result)
+    assert "Objective:" not in str(invocation["command"])
+    assert "Objective:" not in str(invocation["env"])
+    assert "Objective:" not in str(result["launch_plan"]["labels"])
+    assert "make connect" not in str(result).lower()
+    assert "docker attach" not in str(result).lower()
+
+
+async def test_security_pentest_execute_includes_publication_metadata_without_session_artifacts():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            summary_text="Pentest finished with password=hunter2",
+            findings=[
+                {
+                    "finding_id": "finding-1",
+                    "title": "Supported issue",
+                    "severity": "high",
+                    "confidence": "supported",
+                    "target": "https://lab.example.test",
+                    "summary": "Evidence supports issue",
+                }
+            ],
+            provider_snapshot_available=True,
+            wrapper_log_available=True,
+        )
+    )
+
+    publication = result["artifact_publication"]
+    finding_set = result["normalized_findings"]
+    live_logs = result["live_log_events"]
+    artifact_names = {item["name"] for item in publication["artifacts"]}
+
+    assert publication["status"] == "complete"
+    assert {
+        "input.manifest",
+        "input.instructions",
+        "runtime.stdout",
+        "runtime.stderr",
+        "runtime.diagnostics",
+        "output.summary",
+        "output.primary",
+        "output.provider_snapshot",
+        "output.logs",
+        "evidence.bundle",
+    }.issubset(artifact_names)
+    assert "session.summary" not in artifact_names
+    assert "session.step_checkpoint" not in artifact_names
+    assert "session.control_event" not in artifact_names
+    assert "session.reset_boundary" not in artifact_names
+    assert publication["restricted_evidence_refs"]
+    assert finding_set["summary"] == {
+        "findings_count": 1,
+        "confirmed_findings_count": 0,
+        "high_or_critical_count": 1,
+    }
+    assert finding_set["findings"][0]["confidence"] == "supported"
+    assert result["heartbeat_phases"] == [
+        "validating_scope",
+        "waiting_for_profile_slot",
+        "materializing_inputs",
+        "launching_container",
+        "running",
+        "publishing_artifacts",
+        "normalizing_findings",
+        "cleanup",
+    ]
+    assert any(event["event_type"] == "artifact" for event in live_logs)
+    assert any(event["event_type"] == "annotation" for event in live_logs)
+    assert "hunter2" not in str(result)
+    assert "terminal_control" not in str(live_logs)
+    assert "docker attach" not in str(result).lower()
+
+
+async def test_security_pentest_execute_coerces_string_publication_flags():
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.security_pentest_execute(
+        _pentest_activity_payload(
+            provider_snapshot_available="false",
+            wrapper_log_available="0",
+        )
+    )
+
+    publication = result["artifact_publication"]
+    artifact_names = {item["name"] for item in publication["artifacts"]}
+    assert "output.provider_snapshot" not in artifact_names
+    assert "output.logs" not in artifact_names
+    assert publication["omitted_optional_artifacts"] == [
+        "output.provider_snapshot",
+        "output.logs",
+    ]
+
+
+async def test_security_pentest_execute_sources_publication_payload_from_nested_request():
+    activities = TemporalAgentRuntimeActivities()
+    nested_request = _pentest_activity_payload(
+        findings=[
+            {
+                "finding_id": "nested-finding",
+                "title": "Nested finding",
+                "severity": "high",
+                "confidence": "supported",
+                "summary": "Nested request metadata",
+            }
+        ],
+        provider_snapshot_available=False,
+    )["request"]
+    payload = {
+        "request": nested_request,
+        "findings": [
+            {
+                "finding_id": "raw-finding",
+                "title": "Raw finding",
+                "severity": "critical",
+                "confidence": "confirmed",
+                "summary": "Raw payload metadata",
+            }
+        ],
+        "provider_snapshot_available": True,
+    }
+
+    result = await activities.security_pentest_execute(payload)
+
+    publication = result["artifact_publication"]
+    artifact_names = {item["name"] for item in publication["artifacts"]}
+    findings = result["normalized_findings"]["findings"]
+    assert [item["finding_id"] for item in findings] == ["nested-finding"]
+    assert "output.provider_snapshot" not in artifact_names
+
+
+async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval():
     activities = TemporalAgentRuntimeActivities()
 
     with pytest.raises(TemporalActivityRuntimeError) as exc_info:
-        await activities.security_pentest_execute(_pentest_activity_payload())
+        await activities.security_pentest_execute(
+            _pentest_activity_payload(
+                runner_profile_id="pentestgpt-vpn-lab",
+                approved_scope={
+                    **_approved_pentest_scope(),
+                    "allowed_runner_profiles": ["pentestgpt-vpn-lab"],
+                    "required_network_attachment_type": "vpn",
+                },
+            )
+        )
 
-    assert "security.pentest.execute runner is not implemented" in str(exc_info.value)
+    message = str(exc_info.value)
+    assert "PERMISSION_DENIED" in message
+    assert "network_attachment_required" in message
+    assert "launch_plan_ready" not in message
 
 
 async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(

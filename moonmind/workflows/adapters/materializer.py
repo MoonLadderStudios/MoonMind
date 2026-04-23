@@ -26,7 +26,7 @@ class ProviderProfileMaterializer:
 
     def __init__(
         self,
-        base_env: Dict[str, str],
+        base_env: dict[str, str],
         secret_resolver: SecretResolverBoundary,
     ):
         self._base_env = base_env.copy()
@@ -65,7 +65,28 @@ class ProviderProfileMaterializer:
 
         # Step 3: Resolve Plaintext Secrets Just In Time
         resolved_secrets = await self._secret_resolver.resolve_secrets(profile.secret_refs)
-        env.update({k: str(v) for k, v in resolved_secrets.items()})
+        template_secret_aliases = self._collect_from_secret_ref_aliases(
+            profile.env_template
+        )
+        template_secret_aliases.update(
+            self._collect_from_secret_ref_aliases(profile.home_path_overrides)
+        )
+        for file_template in profile.file_templates or []:
+            template_secret_aliases.update(
+                self._collect_from_secret_ref_aliases(file_template.path)
+            )
+            template_secret_aliases.update(
+                self._collect_from_secret_ref_aliases(file_template.content_template)
+            )
+        for alias in template_secret_aliases:
+            env.pop(alias, None)
+        env.update(
+            {
+                k: str(v)
+                for k, v in resolved_secrets.items()
+                if k not in template_secret_aliases
+            }
+        )
 
         resolved_workspace_path = (
             str(Path(workspace_path).expanduser().resolve()) if workspace_path else ""
@@ -150,6 +171,22 @@ class ProviderProfileMaterializer:
         if isinstance(value, list):
             return [self._render_value(item, context) for item in value]
         return value
+
+    def _collect_from_secret_ref_aliases(self, value: Any) -> set[str]:
+        aliases: set[str] = set()
+        if isinstance(value, str):
+            for match in _TEMPLATE_PATTERN.finditer(value):
+                aliases.add(match.group(1).strip())
+        elif isinstance(value, dict):
+            if set(value.keys()) == {"from_secret_ref"}:
+                aliases.add(str(value["from_secret_ref"]).strip())
+                return aliases
+            for child in value.values():
+                aliases.update(self._collect_from_secret_ref_aliases(child))
+        elif isinstance(value, list):
+            for child in value:
+                aliases.update(self._collect_from_secret_ref_aliases(child))
+        return aliases
 
     def _render_env_value(self, value: Any, context: dict[str, Any]) -> str:
         rendered = self._render_value(value, context)

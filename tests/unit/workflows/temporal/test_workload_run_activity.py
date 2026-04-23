@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from temporalio import exceptions as temporal_exceptions
 
 from moonmind.schemas.workload_models import RunnerProfile, WorkloadResult
 from moonmind.workflows.temporal.activity_runtime import (
@@ -140,6 +141,22 @@ class _FakeLauncher:
         )
 
 
+class _FailingRegistry:
+    def validate_request(self, _request: object) -> object:
+        raise AssertionError("registry validation should not run")
+
+
+class _FailingLauncher:
+    async def run(self, _validated: object) -> object:
+        raise AssertionError("launcher should not run")
+
+    async def start_helper(self, _validated: object) -> object:
+        raise AssertionError("launcher should not run")
+
+    async def stop_helper(self, _validated: object, *, reason: str) -> object:
+        raise AssertionError("launcher should not run")
+
+
 @pytest.mark.asyncio
 async def test_workload_run_activity_validates_request_and_calls_launcher() -> None:
     registry = RunnerProfileRegistry(
@@ -233,3 +250,21 @@ async def test_workload_run_activity_requires_runtime_dependencies() -> None:
 
     with pytest.raises(TemporalActivityRuntimeError, match="workload registry"):
         await activities.workload_run(_request_payload())
+
+
+@pytest.mark.asyncio
+async def test_workload_run_activity_denies_when_workflow_docker_disabled() -> None:
+    activities = TemporalAgentRuntimeActivities(
+        workload_registry=_FailingRegistry(),
+        workload_launcher=_FailingLauncher(),
+        workflow_docker_enabled=False,
+    )
+
+    with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
+        await activities.workload_run({"request": _request_payload()})
+
+    message = str(exc_info.value)
+    assert "docker_workflows_disabled" in message
+    assert "policy_denied" in message
+    assert exc_info.value.type == "docker_workflows_disabled"
+    assert exc_info.value.non_retryable is True

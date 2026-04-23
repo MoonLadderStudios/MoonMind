@@ -1192,6 +1192,116 @@ async def test_create_execution_rejects_malformed_remediation_task_run_ids(
 
 
 @pytest.mark.asyncio
+async def test_create_execution_rejects_foreign_remediation_task_run_ids(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "stepLedger": {
+                    "steps": [
+                        {
+                            "logicalStepId": "run-tests",
+                            "refs": {"taskRunId": "target-task-run"},
+                        }
+                    ]
+                }
+            },
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="task.remediation.target.taskRunIds must belong to the target execution",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title="Remediate target",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "task": {
+                        "remediation": {
+                            "target": {
+                                "workflowId": target.workflow_id,
+                                "taskRunIds": ["foreign-task-run"],
+                            }
+                        }
+                    }
+                },
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_accepts_owned_remediation_task_run_ids(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "stepLedger": {
+                    "steps": [
+                        {
+                            "logicalStepId": "run-tests",
+                            "refs": {"taskRunId": "target-task-run"},
+                        }
+                    ]
+                }
+            },
+            idempotency_key=None,
+        )
+
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Remediate target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "task": {
+                    "remediation": {
+                        "target": {
+                            "workflowId": target.workflow_id,
+                            "taskRunIds": ["target-task-run"],
+                        }
+                    }
+                }
+            },
+            idempotency_key=None,
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        assert link.target_workflow_id == target.workflow_id
+
+
+@pytest.mark.asyncio
 async def test_create_execution_normalizes_depends_on_before_limit_and_persistence(
     tmp_path, mock_client_adapter
 ):

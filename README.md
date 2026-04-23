@@ -23,8 +23,6 @@ MoonMind is an open-source platform that orchestrates leading AI agents out of t
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 
-*Note: The local Temporal deployment defaults to the built-in `default` namespace. You can override this by setting `TEMPORAL_NAMESPACE` in your `.env` file.*
-
 ### Authenticate a runtime with OAuth
 
 ```bash

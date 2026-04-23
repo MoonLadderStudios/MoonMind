@@ -10,6 +10,7 @@ import pytest
 
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     DB_AUTHORITATIVE_PROFILE_SYNC_PATCH,
+    DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH,
     HandoffReservation,
     PendingRequest,
     SLOT_HANDOFF_RESERVATION_PATCH,
@@ -482,7 +483,12 @@ class TestProviderProfileManagerHelpers:
             rate_limit_policy="backoff",
             enabled=True,
         )
-        best = wf._find_available_profile()
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            best = wf._find_available_profile()
+
         assert best is not None
         assert best.profile_id == "p2"
 
@@ -505,9 +511,112 @@ class TestProviderProfileManagerHelpers:
             is_default=True,
         )
 
-        best = wf._find_available_profile()
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            best = wf._find_available_profile()
+
         assert best is not None
         assert best.profile_id == "p2"
+
+    def test_find_available_profile_does_not_fallback_when_default_unavailable(self):
+        wf = self._make_workflow()
+        wf._profiles["fallback"] = ProfileSlotState(
+            profile_id="fallback",
+            max_parallel_runs=3,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=False,
+        )
+        wf._profiles["default"] = ProfileSlotState(
+            profile_id="default",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            current_leases=["wf1"],
+        )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH
+            )
+            assert wf._find_available_profile() is None
+
+    def test_find_available_profile_preserves_unpatched_default_fallback(self):
+        wf = self._make_workflow()
+        wf._profiles["fallback"] = ProfileSlotState(
+            profile_id="fallback",
+            max_parallel_runs=3,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=False,
+        )
+        wf._profiles["default"] = ProfileSlotState(
+            profile_id="default",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            current_leases=["wf1"],
+        )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = False
+            best = wf._find_available_profile()
+
+        assert best is not None
+        assert best.profile_id == "fallback"
+
+    def test_find_available_profile_sorts_multiple_available_defaults(self):
+        wf = self._make_workflow()
+        wf._profiles["default-low"] = ProfileSlotState(
+            profile_id="default-low",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            priority=100,
+        )
+        wf._profiles["default-high"] = ProfileSlotState(
+            profile_id="default-high",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            priority=300,
+        )
+        wf._profiles["fallback"] = ProfileSlotState(
+            profile_id="fallback",
+            max_parallel_runs=5,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=False,
+            priority=500,
+        )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH
+            )
+            best = wf._find_available_profile()
+
+        assert best is not None
+        assert best.profile_id == "default-high"
 
     def test_find_available_profile_treats_empty_selector_as_no_selector(self):
         wf = self._make_workflow()
@@ -530,7 +639,12 @@ class TestProviderProfileManagerHelpers:
             priority=100,
         )
 
-        best = wf._find_available_profile({"tagsAny": [], "tagsAll": []})
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            best = wf._find_available_profile({"tagsAny": [], "tagsAll": []})
+
         assert best is not None
         assert best.profile_id == "p2"
 
@@ -555,7 +669,12 @@ class TestProviderProfileManagerHelpers:
             priority=300,
         )
 
-        best = wf._find_available_profile()
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            best = wf._find_available_profile()
+
         assert best is not None
         assert best.profile_id == "p2"
 
@@ -678,6 +797,58 @@ class TestProviderProfileManagerHelpers:
         assert best.profile_id == "p1"
         
         assert wf._find_available_profile({"tagsAll": ["fast", "expensive"]}) is None
+
+    def test_find_available_profile_handles_pentest_selector_contract(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "pentestgpt"
+        wf._profiles["pentestgpt_anthropic_api_team"] = ProfileSlotState(
+            profile_id="pentestgpt_anthropic_api_team",
+            max_parallel_runs=2,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            provider_id="anthropic",
+            tags=["default", "api-key"],
+            priority=100,
+            runtime_materialization_mode="api_key_env",
+        )
+        wf._profiles["pentestgpt_openrouter_default"] = ProfileSlotState(
+            profile_id="pentestgpt_openrouter_default",
+            max_parallel_runs=2,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            provider_id="openrouter",
+            tags=["api-key", "router"],
+            priority=90,
+            runtime_materialization_mode="composite",
+        )
+        wf._profiles["pentestgpt_local_default"] = ProfileSlotState(
+            profile_id="pentestgpt_local_default",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=60,
+            rate_limit_policy="queue",
+            enabled=False,
+            provider_id="local_openai_compatible",
+            tags=["local"],
+            priority=80,
+            runtime_materialization_mode="composite",
+        )
+
+        best = wf._find_available_profile(
+            {
+                "providerId": "openrouter",
+                "tagsAll": ["api-key", "router"],
+                "runtimeMaterializationMode": "composite",
+            }
+        )
+
+        assert best is not None
+        assert best.profile_id == "pentestgpt_openrouter_default"
+        assert (
+            wf._find_available_profile({"providerId": "local_openai_compatible"})
+            is None
+        )
 
     def test_build_continue_as_new_input(self):
         wf = self._make_workflow()
@@ -1013,7 +1184,11 @@ class TestProviderProfileManagerHelpers:
             expires_at="2026-04-15T00:00:10+00:00",
         )
 
-        profile = wf._find_available_profile(lease_group_id="run-2")
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            profile = wf._find_available_profile(lease_group_id="run-2")
 
         assert profile is wf._profiles["p1"]
 

@@ -98,6 +98,36 @@ def _oauth_runner_user() -> str:
     return normalized or _DEFAULT_OAUTH_RUNNER_USER
 
 
+def _runner_environment_args(runtime_id: str, volume_mount_path: str) -> list[str]:
+    args = ["-e", "HOME=/home/app"]
+    if runtime_id == "claude_code":
+        args.extend(
+            [
+                "-e",
+                f"CLAUDE_HOME={volume_mount_path}",
+                "-e",
+                f"CLAUDE_VOLUME_PATH={volume_mount_path}",
+                "-e",
+                "ANTHROPIC_API_KEY=",
+                "-e",
+                "CLAUDE_API_KEY=",
+            ]
+        )
+        return args
+    if runtime_id == "codex_cli":
+        args.extend(
+            [
+                "-e",
+                f"CODEX_HOME={volume_mount_path}",
+                "-e",
+                f"CODEX_CONFIG_HOME={volume_mount_path}",
+                "-e",
+                f"CODEX_CONFIG_PATH={volume_mount_path.rstrip('/')}/config.toml",
+            ]
+        )
+    return args
+
+
 class DockerExecPtyAdapter:
     """Docker exec PTY adapter for the OAuth auth-runner container."""
 
@@ -290,10 +320,7 @@ async def start_terminal_bridge_container(
             "--label", f"moonmind.oauth_session_id={session_id}",
             "--label", f"moonmind.runtime_id={runtime_id}",
             "--user", _oauth_runner_user(),
-            "-e", "HOME=/home/app",
-            "-e", f"CODEX_HOME={volume_mount_path}",
-            "-e", f"CODEX_CONFIG_HOME={volume_mount_path}",
-            "-e", f"CODEX_CONFIG_PATH={volume_mount_path.rstrip('/')}/config.toml",
+            *_runner_environment_args(runtime_id, volume_mount_path),
             "-v", f"{volume_ref}:{volume_mount_path}",
             runner_image,
             "/bin/sh",
