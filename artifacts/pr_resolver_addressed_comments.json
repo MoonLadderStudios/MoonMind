@@ -1,12 +1,22 @@
 [
   {
-    "id": 3134202207,
+    "id": 3134534895,
     "disposition": "addressed",
-    "rationale": "Converted _apply_oauth_home_runtime_env to a static method because it does not use instance state."
+    "rationale": "Replaced the managed-agent absolute feature path in .specify/feature.json with the repo-relative specs/245-claude-oauth-guardrails path."
   },
   {
-    "id": 4166409108,
+    "id": 4166796428,
     "disposition": "not-applicable",
-    "rationale": "Summary review only; the only actionable feedback in the review was the inline static-method refactor, which is addressed separately."
+    "rationale": "Top-level Codex review wrapper comment; the actionable feedback was the linked review comment and has been addressed."
+  },
+  {
+    "id": 3134537750,
+    "disposition": "addressed",
+    "rationale": "Updated .specify/feature.json to use the suggested repo-relative feature_directory value for portability across environments."
+  },
+  {
+    "id": 4166799430,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Gemini summary review; the only actionable item duplicated the .specify/feature.json path issue and is now fixed."
   }
 ]
