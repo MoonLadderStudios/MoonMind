@@ -1873,6 +1873,7 @@ class MoonMindRunWorkflow:
                                 node_id=node_id,
                                 tool_name=tool_name,
                                 resolved_skillset_ref=resolved_skillset_ref,
+                                workflow_parameters=parameters,
                             )
                             if workflow.patched(RUN_SLOT_CONTINUITY_PATCH):
                                 self._mark_slot_continuity_for_next_step(
@@ -3407,10 +3408,7 @@ class MoonMindRunWorkflow:
             ),
             "requiredCapabilities": ["git", "gh"],
         }
-        profile_id = self._coerce_text(
-            parameters.get("profileId"),
-            max_chars=160,
-        )
+        profile_id = self._inherited_execution_profile_ref(parameters)
         if profile_id:
             resolver_template["executionProfileRef"] = profile_id
         runtime_model = self._coerce_text(
@@ -3745,6 +3743,7 @@ class MoonMindRunWorkflow:
         node_id: str,
         tool_name: str,
         resolved_skillset_ref: str | None = None,
+        workflow_parameters: Mapping[str, Any] | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
         runtime_block_raw = node_inputs.get("runtime")
@@ -3789,6 +3788,10 @@ class MoonMindRunWorkflow:
                     )
                     candidate = None
             execution_profile_ref = candidate
+        if execution_profile_ref is None and workflow_parameters is not None:
+            execution_profile_ref = self._inherited_execution_profile_ref(
+                workflow_parameters
+            )
         wf_info = workflow.info()
         correlation_id = wf_info.workflow_id
         idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
@@ -3910,6 +3913,33 @@ class MoonMindRunWorkflow:
             callback_policy=node_inputs.get("callbackPolicy") or {},
             profile_selector=profile_selector,
         )
+
+    def _inherited_execution_profile_ref(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> str | None:
+        """Resolve the parent-request provider profile for child workflow launches."""
+        task_payload = self._mapping_value(parameters, "task") or {}
+        task_runtime_payload = (
+            self._mapping_value(task_payload, "runtime")
+            if isinstance(task_payload, Mapping)
+            else {}
+        ) or {}
+        for source in (task_runtime_payload, parameters):
+            if not isinstance(source, Mapping):
+                continue
+            profile_id = self._coerce_text(
+                source.get("executionProfileRef")
+                or source.get("execution_profile_ref")
+                or source.get("profileId")
+                or source.get("profile_id")
+                or source.get("providerProfile")
+                or source.get("provider_profile"),
+                max_chars=160,
+            )
+            if profile_id:
+                return profile_id
+        return None
 
     @staticmethod
     def _managed_runtime_id(agent_id: str) -> str:
