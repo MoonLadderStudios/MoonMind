@@ -60,6 +60,61 @@ describe('Tasks List Entrypoint', () => {
     });
   });
 
+
+  it('renders executing task-list pills with the shared shimmer selector contract while keeping non-executing pills plain', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-executing',
+            source: 'temporal',
+            title: 'Executing task',
+            status: 'running',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-waiting',
+            source: 'temporal',
+            title: 'Waiting task',
+            status: 'waiting',
+            state: 'waiting_on_dependencies',
+            rawState: 'waiting_on_dependencies',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<TasksListPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(
+        document.querySelectorAll(
+          '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
+        ),
+      ).toHaveLength(2);
+    });
+
+    const executingPills = document.querySelectorAll<HTMLElement>(
+      '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
+    );
+    expect(executingPills).toHaveLength(2);
+    for (const pill of executingPills) {
+      expect(pill.dataset.state).toBe('executing');
+      expect(pill.className).toContain('is-executing');
+      expect(pill.textContent).toBe('executing');
+    }
+
+    const waitingPills = screen.getAllByText('waiting_on_dependencies');
+    expect(waitingPills.length).toBeGreaterThan(0);
+    for (const pill of waitingPills) {
+      expect(pill.closest('span')?.dataset.effect).toBeUndefined();
+    }
+  });
+
   it('keeps started time out of the task list presentation', async () => {
     renderWithClient(<TasksListPage payload={mockPayload} />);
 

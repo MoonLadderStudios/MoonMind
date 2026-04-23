@@ -40,6 +40,11 @@
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.12);
   --mm-control-border: rgb(var(--mm-border) / 0.78);
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --mm-executing-sweep-duration: 1450ms;
+  --mm-executing-sweep-delay: 220ms;
+  --mm-executing-sweep-angle: -18deg;
+  --mm-executing-sweep-core-opacity: 0.34;
+  --mm-executing-sweep-halo-opacity: 0.14;
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
@@ -1274,6 +1279,55 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-border) / 0.75);
 }
 
+.status-running[data-state="executing"][data-effect="shimmer-sweep"],
+.status-running.is-executing {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background-color: rgb(var(--mm-accent-2) / 0.14);
+  background-image:
+    linear-gradient(
+      var(--mm-executing-sweep-angle),
+      transparent 0 36%,
+      rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity)) 50%,
+      transparent 64%
+    ),
+    linear-gradient(
+      var(--mm-executing-sweep-angle),
+      transparent 0 44%,
+      rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity)) 50%,
+      transparent 56%
+    );
+  background-repeat: no-repeat;
+  background-size: 240% 100%, 220% 100%;
+  background-position: -135% 0, -120% 0;
+  animation: mm-status-pill-shimmer var(--mm-executing-sweep-duration) cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  animation-delay: var(--mm-executing-sweep-delay);
+}
+
+@keyframes mm-status-pill-shimmer {
+  0% {
+    background-position: -135% 0, -120% 0;
+  }
+
+  65% {
+    background-position: 50% 0, 62% 0;
+  }
+
+  100% {
+    background-position: 135% 0, 150% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-running[data-state="executing"][data-effect="shimmer-sweep"],
+  .status-running.is-executing {
+    animation: none;
+    background-position: 50% 0, 54% 0;
+    background-size: 160% 100%, 140% 100%;
+  }
+}
+
 .masked-conic-border-beam {
   --beam-border-radius: 16px;
   --beam-border-width: 1.5px;
@@ -2483,7 +2537,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   bottom: 1.1rem;
   transform: translateX(-50%);
   z-index: 40;
-  width: min(100% - 1.5rem, 72rem);
+  width: min(100% - 1.5rem, 84rem);
   padding: 0.55rem 0.7rem;
   border-radius: 1.5rem;
   background: var(--mm-glass-fill);
@@ -2514,9 +2568,9 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 .queue-floating-bar-row {
   display: grid;
   grid-template-columns:
-    minmax(0, 1.35fr)
-    minmax(0, 1.35fr)
-    minmax(9.5rem, 0.8fr)
+    minmax(12rem, 1.65fr)
+    minmax(10rem, 1.45fr)
+    minmax(8rem, 1fr)
     auto;
   gap: 0.5rem;
   align-items: center;
