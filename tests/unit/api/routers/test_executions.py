@@ -2201,6 +2201,85 @@ def test_create_execution_routes_directly_to_temporal(
     service.create_execution.assert_awaited_once()
 
 
+def test_create_execution_persists_task_input_snapshot_for_direct_run_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    service = AsyncMock()
+    record = _build_execution_record(has_task_input_snapshot=False)
+    record.parameters = {
+        "repository": "Moon/Mind",
+        "targetRuntime": "codex_cli",
+        "task": {
+            "title": "Direct run",
+            "instructions": "Implement the persisted direct run.",
+        },
+    }
+    service.create_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=False)
+    session = AsyncMock()
+    app.dependency_overrides[get_async_session] = lambda: session
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_task_editing_enabled", True
+    )
+
+    async def _persist_snapshot(**kwargs) -> str:
+        assert kwargs["payload"] == {
+            "repository": "Moon/Mind",
+            "targetRuntime": "codex_cli",
+            "requiredCapabilities": [],
+        }
+        assert kwargs["task_payload"] == {
+            "title": "Direct run",
+            "instructions": "Implement the persisted direct run.",
+        }
+        assert kwargs["source_kind"] == "create"
+        target_record = kwargs["record"]
+        target_record.memo = {
+            **dict(target_record.memo or {}),
+            "task_input_snapshot_ref": "art_snapshot_direct",
+            "task_input_snapshot_version": 1,
+            "task_input_snapshot_source_kind": "create",
+        }
+        return "art_snapshot_direct"
+
+    persist_mock = AsyncMock(side_effect=_persist_snapshot)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._persist_original_task_input_snapshot",
+        persist_mock,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "workflowType": "MoonMind.Run",
+                "title": "Direct run",
+                "initialParameters": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex_cli",
+                    "task": {
+                        "title": "Conflicting retry",
+                        "instructions": "Do not snapshot the replay payload.",
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["taskInputSnapshot"]["available"] is True
+    assert body["taskInputSnapshot"]["artifactRef"] == "art_snapshot_direct"
+    assert body["actions"]["canUpdateInputs"] is True
+    persist_mock.assert_awaited_once()
+    session.commit.assert_awaited_once()
+    session.refresh.assert_awaited_once_with(record)
+
+
 def test_create_execution_enforces_idempotency(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

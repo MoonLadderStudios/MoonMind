@@ -1,27 +1,27 @@
 [
   {
-    "id": 3133588441,
+    "id": 3133634364,
     "disposition": "addressed",
-    "rationale": "Updated publish mode resolution to prefer task-specific mode fields before top-level publish objects, support publish_mode aliases, preserve fields from the most specific publish object, and handle empty self-managed publish modes."
+    "rationale": "Added an explicit TemporalExecutionRecord | TemporalExecutionCanonicalRecord type hint to the snapshot helper record parameter."
   },
   {
-    "id": 4165682009,
+    "id": 3133634368,
+    "disposition": "addressed",
+    "rationale": "Moved session.refresh(record) inside the snapshot_ref block so it only runs after a persisted snapshot commit."
+  },
+  {
+    "id": 4165735428,
     "disposition": "not-applicable",
-    "rationale": "Summary review comment only; its actionable details are covered by review comment 3133588441."
+    "rationale": "Review summary only; its actionable child comments were handled individually."
   },
   {
-    "id": 3133588447,
+    "id": 3133637367,
     "disposition": "addressed",
-    "rationale": "Added publish_mode to the remediation convenience route passthrough and covered it in the override regression test."
+    "rationale": "Changed direct-run snapshot creation to use parameters from the returned persisted record instead of the incoming request payload, preserving idempotency replay semantics."
   },
   {
-    "id": 3133613452,
-    "disposition": "addressed",
-    "rationale": "Publish mode candidate selection now preserves falsy non-string values so malformed false/0 values are rejected instead of defaulting to PR mode."
-  },
-  {
-    "id": 4165712021,
+    "id": 4165738806,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary without a separate actionable request."
+    "rationale": "Informational Codex review wrapper with no distinct actionable feedback beyond the child comment."
   }
 ]

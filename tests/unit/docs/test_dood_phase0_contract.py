@@ -54,10 +54,11 @@ def test_dood_glossary_and_scope_terms_remain_present() -> None:
         "workload container",
         "runner profile",
         "session-assisted workload",
-        "one-shot workload containers",
-        "bounded helper containers remain a later phase",
+        "one-shot workload tool",
+        "profile-backed helper containers remain explicitly owned",
         '`tool.type = "skill"`',
-        '`tool.type = "agent_runtime"`',
+        "`agent_runtime.*`",
+        "`moonmind.agentrun`",
     ):
         assert term in lowered
 
