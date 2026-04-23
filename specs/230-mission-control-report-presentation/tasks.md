@@ -15,7 +15,7 @@
 - Independent test: load an execution detail surface with report artifacts, verify report-first presentation, related content openability, presentation-field viewer selection, and no fabricated report panel when `report.primary` is absent.
 - Requirements: FR-001 through FR-008; SC-001 through SC-006.
 - Source design coverage: DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-020, DESIGN-REQ-022.
-- Requirement statuses from plan: FR-002, FR-007, DESIGN-REQ-014 are missing; FR-003, FR-005, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-020 are partial; FR-001, FR-004, FR-006, FR-008, DESIGN-REQ-011, DESIGN-REQ-022 are implemented_unverified.
+- Requirement statuses from plan: FR-001 through FR-008 and DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-020, and DESIGN-REQ-022 are implemented_verified in the resumed MM-494 artifact set.
 
 ## Phase 1: Setup
 

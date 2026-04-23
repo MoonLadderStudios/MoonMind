@@ -11,20 +11,20 @@ The existing Mission Control report-presentation implementation already satisfie
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | implemented_unverified | `api_service/api/routers/temporal_artifacts.py` accepts `link_type` and `latest_only`; `TemporalArtifactService.list_for_execution` uses `latest_for_execution_link`. | Use this query from Mission Control and add contract/UI coverage. | unit + contract |
-| FR-002 | missing | `frontend/src/entrypoints/task-detail.tsx` shows Summary, Steps, Timeline, then Artifacts; no report-first panel exists. | Add report-first panel before Timeline/Artifacts. | frontend unit |
-| FR-003 | partial | Artifact list payload includes links/metadata, but frontend schema discards links/default read refs and does not group report content. | Parse links/default read refs and render related report content. | frontend unit |
-| FR-004 | implemented_unverified | Existing sections preserve Artifacts, Timeline, stdout/stderr/diagnostics, run summary, and session panels. | Ensure report panel is additive and tests assert generic artifacts remain visible. | frontend unit |
-| FR-005 | partial | `artifactDownloadHref` uses download URL or artifact ID only; no report viewer target helper reads `default_read_ref`, `render_hint`, or content metadata. | Add viewer target/label helper based on artifact presentation fields. | frontend unit |
-| FR-006 | implemented_unverified | Artifact list endpoint serializes metadata and links from normal artifact rows; no separate report store exists. | Keep report UI as read model over existing artifact responses. | contract + frontend unit |
-| FR-007 | missing | UI currently fetches all artifacts and would need local filtering for report identity. | Query `link_type=report.primary&latest_only=true`; do not infer canonical report from arbitrary artifacts. | frontend unit |
-| FR-008 | implemented_unverified | MM-494 preserved in `spec.md` and orchestration input. | Preserve through plan, tasks, verification, and code/test names where practical. | traceability check |
-| DESIGN-REQ-011 | implemented_unverified | Server latest-report query exists for execution/link type. | Consume latest query from UI and test query URL. | frontend unit |
-| DESIGN-REQ-012 | partial | Generic surfaces exist; report panel and related evidence section do not. | Add report panel and related content. | frontend unit |
-| DESIGN-REQ-013 | partial | API serializes `default_read_ref`; UI does not parse/use it. | Parse presentation fields and choose open target/label. | frontend unit |
-| DESIGN-REQ-014 | missing | No report-first UX in task detail. | Render report before generic artifacts. | frontend unit |
-| DESIGN-REQ-020 | partial | Generic observability surfaces exist; evidence is not report-related. | Keep evidence individually openable while preserving observability sections. | frontend unit |
-| DESIGN-REQ-022 | implemented_unverified | Existing endpoint is a read model over artifacts; optional projection not needed for this slice. | Use existing endpoint only. | contract |
+| FR-001 | implemented_verified | `frontend/src/entrypoints/task-detail.tsx` queries `link_type=report.primary&latest_only=true`; `tests/contract/test_temporal_artifact_api.py` verifies the existing artifact endpoint contract. | No additional plan work; preserve existing verified behavior. | unit + contract |
+| FR-002 | implemented_verified | `ReportPresentationSection` renders before Timeline and Artifacts; `frontend/src/entrypoints/task-detail.test.tsx` asserts Report appears before Artifacts. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| FR-003 | implemented_verified | Frontend artifact normalization preserves links and renders related report content with open actions. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| FR-004 | implemented_verified | Generic Artifacts and observability surfaces remain rendered; fallback tests verify generic artifacts still show without report fabrication. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| FR-005 | implemented_verified | `reportOpenHref` and `reportViewerLabel` honor `default_read_ref`, `download_url`, `render_hint`, `content_type`, and metadata title/name. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| FR-006 | implemented_verified | Implementation consumes the existing artifact endpoint/read model only; no new storage or mutation route was added. | No additional plan work; preserve existing verified behavior. | unit + contract |
+| FR-007 | implemented_verified | Report section renders only when latest report response contains an actual `report.primary` link. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| FR-008 | implemented_verified | MM-494 is preserved in `spec.md`, `plan.md`, `tasks.md`, `quickstart.md`, `verification.md`, and the orchestration input. | No additional plan work; preserve traceability across resumed artifacts. | traceability check |
+| DESIGN-REQ-011 | implemented_verified | Latest report query remains server-side through `link_type=report.primary&latest_only=true`. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-012 | implemented_verified | Report section includes canonical report and related report content while preserving generic artifacts and observability. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-013 | implemented_verified | Viewer/open helpers honor artifact presentation fields. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-014 | implemented_verified | Report-first UI appears before generic artifact inspection. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-020 | implemented_verified | Related evidence remains individually openable and generic observability remains separate. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-022 | implemented_verified | Existing artifact endpoint remains a read model over artifacts; no report-specific storage plane was introduced. | No additional plan work; preserve existing verified behavior. | contract |
 
 ## Technical Context
 
