@@ -5,7 +5,7 @@
 
 ## Validation Commands
 
-- Unit: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`
+- Unit: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py`
 - Router unit when API read models change: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py`
 - UI when Mission Control changes: `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx`
 - Final unit suite: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
@@ -40,7 +40,7 @@
 
 - [X] T005 Add failing unit coverage for the complete canonical action registry in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-001, FR-003, SC-001, DESIGN-REQ-004)
 - [X] T006 Add failing unit coverage proving legacy action aliases are not accepted as compatibility shims in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-038, DESIGN-REQ-004)
-- [X] T007 Add failing unit coverage for `taskRunIds` ownership validation in `moonmind/workflows/temporal/service.py` through `tests/unit/workflows/temporal/test_service.py` or adjacent tests (FR-008, FR-009)
+- [X] T007 Add failing unit coverage for `taskRunIds` ownership validation in `moonmind/workflows/temporal/service.py` through `tests/unit/workflows/temporal/test_temporal_service.py` (FR-008, FR-009)
 - [ ] T008 Add failing restart-durability coverage for mutation locks and action ledgers in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-012 through FR-015)
 - [ ] T009 Add verification coverage for automatic runtime publication of remediation action and verification artifacts in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-005 through FR-007, FR-021 through FR-023)
 - [ ] T010 Add verification coverage for bounded cancellation/failure/Continue-As-New outcomes in `tests/unit/workflows/temporal/test_remediation_context.py` (FR-028 through FR-033)
@@ -67,7 +67,7 @@
 
 ### Story Validation
 
-- [X] T022 Run focused remediation tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`
+- [X] T022 Run focused remediation tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py tests/unit/workflows/temporal/test_temporal_service.py`
 - [ ] T023 Run final unit suite after all implementation tasks complete: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - [ ] T024 Run `/moonspec-verify` and record the verdict in `specs/242-finish-task-remediation/verification.md`
 
