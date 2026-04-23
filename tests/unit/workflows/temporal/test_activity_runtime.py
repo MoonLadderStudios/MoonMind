@@ -753,7 +753,7 @@ def _approved_pentest_scope() -> dict[str, object]:
         "title": "Lab validation",
         "owner_user_id": "user-security",
         "created_at": "2026-04-22T00:00:00Z",
-        "expires_at": "2026-04-23T00:00:00Z",
+        "expires_at": "2099-04-23T00:00:00Z",
         "target_class": "lab",
         "targets": [{"kind": "url", "value": "https://lab.example.test"}],
         "allowed_actions": [
