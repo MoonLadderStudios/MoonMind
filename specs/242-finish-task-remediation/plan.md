@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement MM-483 in runtime mode by completing the remaining Task Remediation desired-state contract around canonical action coverage, safe execution boundaries, durable mutation coordination, lifecycle/read-model evidence, policy-bounded self-healing, and Mission Control presentation. Repo gap analysis shows substantial existing foundations: remediation links and pinned targets, context artifacts, evidence tools, lifecycle artifact helpers from MM-456, target-side relationship rendering, authority decisions, and mutation guard tests. The first missing runtime surface is canonical action registry coverage: `remediation_actions.py` still exposes legacy aliases instead of the documented action kinds. Tests will start there and preserve broader tasks for the remaining runtime gaps.
+Implement MM-483 in runtime mode by completing the remaining Task Remediation desired-state contract around safe action execution boundaries, durable mutation coordination, lifecycle/read-model evidence, policy-bounded self-healing, and Mission Control presentation. Repo gap analysis shows substantial existing foundations: remediation links and pinned targets, context artifacts, evidence tools, lifecycle artifact helpers from MM-456, target-side relationship rendering, authority decisions, mutation guard tests, canonical action registry coverage, and `taskRunIds` ownership validation. The next missing runtime surfaces are durable lock/ledger persistence, owning-adapter action execution, aggregate artifact/read-model verification, and Mission Control lifecycle completion.
 
 ## Requirement Status
 
