@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { formatTaskSkills } from '../utils/formatters';
 import { BootPayload } from '../boot/parseBootPayload';
-import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
+import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 
 const PROPOSAL_STATUSES = ['open', 'promoted', 'dismissed'] as const;
@@ -310,7 +310,7 @@ export function ProposalsPage({ payload }: { payload: BootPayload }) {
                         <td>{formatPresetProvenance(row.taskPreview)}</td>
                         <td>{row.repository || '—'}</td>
                         <td>
-                          <span className={executionStatusPillClasses(row.status)}>
+                          <span {...executionStatusPillProps(row.status)}>
                             {row.status || '—'}
                           </span>
                         </td>
@@ -363,7 +363,7 @@ export function ProposalsPage({ payload }: { payload: BootPayload }) {
                         </p>
                       </div>
                       <div className="queue-card-status">
-                        <span className={executionStatusPillClasses(row.status)}>
+                        <span {...executionStatusPillProps(row.status)}>
                           {row.status || '—'}
                         </span>
                       </div>

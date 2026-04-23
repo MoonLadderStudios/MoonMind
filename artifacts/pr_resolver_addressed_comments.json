@@ -1,22 +1,27 @@
 [
   {
-    "id": 3134120640,
+    "id": 4166333325,
     "disposition": "addressed",
-    "rationale": "Extended report retention defaults and unit coverage so report.appendix, report.findings_index, and report.export now retain for the long window like primary and summary reports."
+    "rationale": "Removed the deprecated executionStatusPillClasses compatibility alias and updated remaining call sites plus tests to use executionStatusPillProps directly."
   },
   {
-    "id": 3134120652,
+    "id": 3134136568,
     "disposition": "addressed",
-    "rationale": "Added the Report Projection Summary entity to the MM-492 data model, including report_status mapping and the projection-only finding_counts/severity_counts constraints."
+    "rationale": "Dropped the unused executionStatusPillClasses import from task-detail.tsx and kept only executionStatusPillProps."
   },
   {
-    "id": 4166314916,
-    "disposition": "not-applicable",
-    "rationale": "This review body is a bot summary of the underlying inline comments, which were handled individually in this change."
+    "id": 3134136587,
+    "disposition": "addressed",
+    "rationale": "Deleted the executionStatusPillClasses export and migrated all remaining frontend callers off the alias."
   },
   {
-    "id": 3134120669,
+    "id": 3134136591,
     "disposition": "addressed",
-    "rationale": "Documented the internal-metadata exception so validation rules now explicitly cover system keys such as preview_artifact_id when the validation context allows them."
+    "rationale": "Removed executionStatusPillClasses from the test imports so the spec exercises the canonical helper only."
+  },
+  {
+    "id": 3134136597,
+    "disposition": "addressed",
+    "rationale": "Updated the class-name expectations to assert executionStatusPillProps(...).className directly."
   }
 ]
