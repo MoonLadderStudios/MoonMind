@@ -627,6 +627,51 @@ async def test_oauth_terminal_attach_returns_one_time_websocket_token(
 
 
 @pytest.mark.asyncio
+async def test_claude_oauth_terminal_attach_allows_awaiting_user_with_hash_only_token(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_claudepaste01"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_terminal_ceremony",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_claudepaste01",
+                terminal_bridge_id="br_oas_claudepaste01",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_id
+    assert payload["terminal_session_id"] == "term_oas_claudepaste01"
+    assert payload["terminal_bridge_id"] == "br_oas_claudepaste01"
+    assert payload["attach_token"]
+    assert payload["attach_token"] in payload["websocket_url"]
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.metadata_json is not None
+        assert row.metadata_json["terminal_attach_token_sha256"] != payload["attach_token"]
+        assert row.metadata_json["terminal_attach_token_used"] is False
+        assert payload["attach_token"] not in str(row.metadata_json)
+
+
+@pytest.mark.asyncio
 async def test_oauth_terminal_attach_rejects_expired_session(
     client_app: AsyncClient, _module_db
 ) -> None:
@@ -971,3 +1016,150 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         "container_name": "moonmind_auth_oas_registercodex1",
     }
     assert completed_signal == {"session_id": session_id}
+
+
+@pytest.mark.asyncio
+async def test_finalize_oauth_session_registers_claude_oauth_profile(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_registerclaude1"
+    profile_id = "claude_anthropic"
+    verify_seen_existing_profile = None
+    synced_runtimes: list[str] = []
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id=profile_id,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                account_label="Claude Anthropic OAuth",
+                metadata_json={
+                    "provider_id": "anthropic",
+                    "provider_label": "Anthropic",
+                    "max_parallel_runs": 1,
+                    "cooldown_after_429_seconds": 900,
+                    "rate_limit_policy": "backoff",
+                },
+            )
+        )
+        await session.commit()
+
+    async def _successful_verify(**kwargs):
+        nonlocal verify_seen_existing_profile
+        assert kwargs["runtime_id"] == "claude_code"
+        assert kwargs["volume_ref"] == "claude_auth_volume"
+        assert kwargs["volume_mount_path"] == "/home/app/.claude"
+        async with db_base.async_session_maker() as session:
+            verify_seen_existing_profile = await session.get(
+                ManagedAgentProviderProfile, profile_id
+            )
+        return {
+            "verified": True,
+            "status": "verified",
+            "reason": "ok",
+            "credentials_found_count": 1,
+            "credentials_missing_count": 1,
+        }
+
+    async def _capture_sync(*, session: AsyncSession, runtime_id: str):
+        synced_runtimes.append(runtime_id)
+
+    async def _noop_stop(_session_obj):
+        return None
+
+    async def _noop_complete(_session_id):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _successful_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions.sync_provider_profile_manager",
+        _capture_sync,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _noop_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._complete_oauth_session_workflow",
+        _noop_complete,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "succeeded"}
+    assert verify_seen_existing_profile is None
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert row is not None
+        assert row.status == OAuthSessionStatus.SUCCEEDED
+        assert profile is not None
+        assert profile.runtime_id == "claude_code"
+        assert profile.provider_id == "anthropic"
+        assert profile.provider_label == "Anthropic"
+        assert profile.credential_source == ProviderCredentialSource.OAUTH_VOLUME
+        assert (
+            profile.runtime_materialization_mode
+            == RuntimeMaterializationMode.OAUTH_HOME
+        )
+        assert profile.volume_ref == "claude_auth_volume"
+        assert profile.volume_mount_path == "/home/app/.claude"
+        assert "credentials" not in repr(profile.__dict__)
+        assert "token" not in repr(profile.__dict__).lower()
+    assert synced_runtimes == ["claude_code"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_oauth_session_rejects_other_users_claude_session_before_verify(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_claudeotheruser1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_other_user",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="different-user",
+                account_label="Claude Anthropic OAuth",
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_verify(**_kwargs):
+        raise AssertionError("unauthorized finalize must not verify volume")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _unexpected_verify,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Session not found"
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.status == OAuthSessionStatus.AWAITING_USER
+        profile = await session.get(
+            ManagedAgentProviderProfile, "claude_anthropic_other_user"
+        )
+        assert profile is None

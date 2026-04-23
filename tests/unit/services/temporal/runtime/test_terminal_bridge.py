@@ -109,6 +109,29 @@ async def test_terminal_bridge_forwards_input_and_resize_to_pty_adapter() -> Non
 
 
 @pytest.mark.asyncio
+async def test_terminal_bridge_forwards_claude_auth_code_without_safe_metadata_leak() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_claude_code_paste",
+        terminal_bridge_id="br_oas_claude_code_paste",
+        owner_user_id="user-1",
+    )
+    pty = InMemoryPtyAdapter()
+    pasted_code = "claude-returned-authorization-code-123456\n"
+
+    await pty.connect()
+    response = await bridge.handle_frame_for_pty(
+        {"type": "input", "data": pasted_code}, pty
+    )
+
+    assert response == {"type": "input_ack", "bytes": len(pasted_code.encode())}
+    assert pty.written == [pasted_code.encode()]
+    metadata = bridge.safe_metadata()
+    assert metadata["terminal_input_event_count"] == 1
+    assert pasted_code.strip() not in str(metadata)
+    assert "authorization-code" not in str(metadata)
+
+
+@pytest.mark.asyncio
 async def test_terminal_bridge_streams_output_without_persisting_raw_output() -> None:
     bridge = TerminalBridgeConnection(
         session_id="oas_terminal_output",

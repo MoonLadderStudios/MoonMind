@@ -34,8 +34,8 @@ _CODEX_CREDENTIAL_PATHS = (
 )
 
 _CLAUDE_CREDENTIAL_PATHS = (
-    ".claude/credentials.json",
-    ".claude.json",
+    "credentials.json",
+    "settings.json",
 )
 
 PROVIDER_CREDENTIAL_PATHS: dict[str, tuple[str, ...]] = {
@@ -84,6 +84,35 @@ def _build_credential_check_command(
                 (
                     f"( test -s {config_path} && echo \"FOUND:config.toml\" ) "
                     '|| echo "MISSING:config.toml"'
+                ),
+            )
+        )
+
+    if runtime_id == "claude_code":
+        credentials_path = shlex.quote(f"{mount_path}/credentials.json")
+        settings_path = shlex.quote(f"{mount_path}/settings.json")
+        settings_evidence_pattern = (
+            r'"hasCompletedOnboarding"[[:space:]]*:[[:space:]]*true|'
+            r'"(userID|userEmail)"[[:space:]]*:[[:space:]]*"[^"]+"|'
+            r'"(account|oauth|primaryApiKeyHelper|customApiKeyResponses)"'
+            r'[[:space:]]*:[[:space:]]*(true|"[^"]+"|\{[^{}]*[^[:space:]{}][^{}]*\}|'
+            r'\[[^][]*[^[:space:]\[\]][^][]*\])'
+        )
+        return " && ".join(
+            (
+                (
+                    f"( test -s {credentials_path} "
+                    '&& echo "FOUND:credentials.json" ) '
+                    '|| echo "MISSING:credentials.json"'
+                ),
+                (
+                    f"( test -s {settings_path} "
+                    f"&& tr '\\n' ' ' < {settings_path} "
+                    f"| grep -Eiq {shlex.quote(settings_evidence_pattern)} "
+                    '&& echo "QUALIFIED:settings.json" ) '
+                    f"|| ( test -s {settings_path} "
+                    '&& echo "UNQUALIFIED:settings.json" ) '
+                    '|| echo "MISSING:settings.json"'
                 ),
             )
         )
@@ -223,8 +252,12 @@ async def verify_volume_credentials(
         if line.startswith("VALID:"):
             valid.append(line[6:])
             found.append(line[6:])
+        elif line.startswith("QUALIFIED:"):
+            found.append(line[10:])
         elif line.startswith("INVALID:"):
             invalid.append(line[8:])
+        elif line.startswith("UNQUALIFIED:"):
+            missing.append(line[12:])
         elif line.startswith("FOUND:"):
             found.append(line[6:])
         elif line.startswith("MISSING:"):
