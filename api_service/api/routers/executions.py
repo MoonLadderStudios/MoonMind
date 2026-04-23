@@ -2330,23 +2330,37 @@ def _task_publish_skill_id(
     return skill_payload.get("id") or skill_payload.get("name")
 
 
+def _first_present_publish_mode(
+    *candidates: tuple[Mapping[str, Any], str],
+) -> object | None:
+    for source, key in candidates:
+        if key in source and source[key] is not None:
+            return source[key]
+    return None
+
+
 def _resolve_task_publish_payload(
     *,
     payload: Mapping[str, Any],
     task_payload: Mapping[str, Any],
     normalized_tool: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    publish_payload = _normalize_publish_payload(task_payload.get("publish"))
-    if not publish_payload:
-        publish_payload = _normalize_publish_payload(payload.get("publish"))
+    task_publish = _normalize_publish_payload(task_payload.get("publish"))
+    top_publish = _normalize_publish_payload(payload.get("publish"))
 
-    requested_mode = (
-        publish_payload.get("mode")
-        or task_payload.get("publishMode")
-        or payload.get("publishMode")
+    requested_mode = _first_present_publish_mode(
+        (task_publish, "mode"),
+        (task_payload, "publishMode"),
+        (task_payload, "publish_mode"),
+        (top_publish, "mode"),
+        (payload, "publishMode"),
+        (payload, "publish_mode"),
     )
     skill_id = _task_publish_skill_id(task_payload, normalized_tool)
-    if requested_mode is None and is_self_managed_publish_skill(skill_id):
+    if (
+        requested_mode is None
+        or (isinstance(requested_mode, str) and not requested_mode.strip())
+    ) and is_self_managed_publish_skill(skill_id):
         requested_mode = "none"
     try:
         publish_mode = resolve_publish_mode_for_skill(
@@ -2356,7 +2370,7 @@ def _resolve_task_publish_payload(
     except TaskContractError as exc:
         raise _invalid_task_request(str(exc)) from exc
 
-    resolved = dict(publish_payload)
+    resolved = dict(task_publish or top_publish)
     resolved["mode"] = publish_mode
     return resolved
 
@@ -3523,6 +3537,7 @@ async def create_remediation_execution(
         "targetRuntime",
         "publish",
         "publishMode",
+        "publish_mode",
         "profileId",
         "providerProfile",
         "idempotencyKey",
