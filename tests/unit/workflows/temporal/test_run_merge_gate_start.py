@@ -106,6 +106,38 @@ def test_build_merge_gate_start_payload_preserves_parent_runtime_profile() -> No
     assert "providerProfile" not in resolver_template
 
 
+def test_build_merge_gate_start_payload_inherits_task_runtime_profile() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters={
+            "publishMode": "pr",
+            "task": {
+                "runtime": {
+                    "mode": "codex",
+                    "executionProfileRef": "codex_default",
+                },
+                "publish": {
+                    "mergeAutomation": {
+                        "enabled": True,
+                        "mergeMethod": "squash",
+                    }
+                },
+            },
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/341",
+        head_sha="abc123",
+        parent_workflow_id="mm:parent",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    resolver_template = payload["resolverTemplate"]
+    assert resolver_template["targetRuntime"] == "codex"
+    assert resolver_template["executionProfileRef"] == "codex_default"
+
+
 def test_build_merge_gate_start_payload_normalizes_timeout_values() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._repo = "MoonLadderStudios/MoonMind"
