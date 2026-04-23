@@ -11,33 +11,33 @@ Implement MM-488 by extending the existing shared `status-running` pill presenta
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | partial | `frontend/src/utils/executionStatusPillClasses.ts`, `frontend/src/styles/mission-control.css` expose a shared `status-running` pill but no shimmer treatment | add shared executing shimmer modifier to shared status-pill styling and adopt it on executing pills | unit + integration |
-| FR-002 | missing | no `data-state="executing"`, `data-effect="shimmer-sweep"`, or `.is-executing` contract found in frontend status-pill markup or CSS | add preferred/fallback selector contract and apply it to supported executing pills | unit + integration |
-| FR-003 | partial | non-executing pills use distinct semantic classes today, but no shimmer isolation contract exists yet | scope shimmer selectors strictly to executing state and add regression tests for non-executing states | unit + integration |
-| FR-004 | implemented_unverified | list/detail status pills currently render raw status text inside shared spans without mutating text content | verify text and icon content remain unchanged after shimmer adoption; adjust markup only if needed to preserve semantics | integration |
-| FR-005 | implemented_unverified | current pills are lightweight inline spans with shared styling and no extra wrappers | verify shimmer modifier does not add layout shift or alter polling/live-update behavior; implement conservative pseudo-element approach if needed | unit + integration |
-| FR-006 | missing | no status-pill reduced-motion shimmer replacement exists in `mission-control.css` | add non-animated reduced-motion active treatment and verify it remains executing-only | unit + integration |
-| FR-007 | partial | current executing pill color is cyan via `.status-running`, but no shimmer-specific guardrail or tests exist | tune shimmer visuals to read as active progress and add CSS contract assertions for calm active treatment | unit |
-| FR-008 | partial | task list, card, and task detail already reuse shared `executionStatusPillClasses`, but not a shared shimmer modifier contract | wire the shared modifier into all supported surfaces through common helper/class usage and page render tests | integration |
-| FR-009 | missing | MM-488 traceability exists in spec only; no plan/test/export evidence exists yet | add MM-488 traceability expectations to tests and downstream artifacts | unit |
-| SCN-001 | partial | executing pills already share `status-running`, but no shimmer effect exists | verify list/card/detail executing pills render shared shimmer modifier | integration |
-| SCN-002 | missing | no preferred selector or fallback marker coverage exists | verify both selector paths activate the same modifier | unit + integration |
-| SCN-003 | partial | non-executing pills already render with other semantic classes | verify shimmer stays off for non-executing states | unit + integration |
-| SCN-004 | implemented_unverified | current status pills keep text content and layout stable | add render and CSS regression checks for text, icon, and layout stability | integration |
-| SCN-005 | missing | no reduced-motion executing-pill treatment exists | add and verify non-animated reduced-motion active treatment | unit + integration |
-| SC-001 | partial | shared executing-status classes exist across surfaces | add shimmer-specific render and CSS assertions across supported surfaces | unit + integration |
-| SC-002 | missing | no selector-path verification exists | add tests for preferred and fallback hooks | unit + integration |
-| SC-003 | partial | non-executing pills already map to other semantic classes | add executing-only shimmer regression tests | unit + integration |
-| SC-004 | implemented_unverified | existing pills are simple spans and live updates already work | verify no text/layout/live-update regressions while adopting shimmer | integration |
-| SC-005 | missing | no reduced-motion pill fallback exists | add reduced-motion CSS contract and render assertions | unit + integration |
-| SC-006 | missing | MM-488 is not yet represented in plan/test evidence beyond spec | add traceability assertions and preserve MM-488 through downstream artifacts | unit |
-| DESIGN-REQ-001 | partial | shared running pill color exists but not the shimmer semantics | add calm active shimmer treatment and guardrail tests against warning/error reads | unit |
-| DESIGN-REQ-002 | partial | current status pill is isolated from task-row layout and polling behavior | keep work limited to status-pill modifier activation and verify no unrelated UI behavior changes | integration |
-| DESIGN-REQ-003 | missing | host contract selectors are absent from pill markup and CSS | add preferred and fallback hook support | unit + integration |
-| DESIGN-REQ-004 | implemented_unverified | current pill markup preserves text and pill footprint | verify shimmer remains additive and layout-neutral | unit + integration |
-| DESIGN-REQ-011 | missing | no shared shimmer modifier contract exists yet | add shared status-pill modifier CSS rather than page-local animation | unit + integration |
-| DESIGN-REQ-013 | missing | no reduced-motion shimmer replacement exists | add static reduced-motion highlight treatment | unit + integration |
-| DESIGN-REQ-016 | partial | executing maps to shared running class today; finalizing also maps there in helper | narrow shimmer activation to explicit executing contract without changing broader status taxonomy unless required by implementation evidence | unit + integration |
+| FR-001 | implemented_verified | Shared executing shimmer contract now exists in `frontend/src/utils/executionStatusPillClasses.ts`, `frontend/src/styles/mission-control.css`, `frontend/src/entrypoints/tasks-list.tsx`, and `frontend/src/entrypoints/task-detail.tsx`; verified by focused Vitest helper/CSS and entrypoint tests plus `./tools/test_unit.sh`. | complete | unit + integration |
+| FR-002 | implemented_verified | Executing pills now expose the preferred `data-state="executing"` and `data-effect="shimmer-sweep"` selectors plus the fallback `.is-executing` marker through `executionStatusPillProps`; verified in helper, list, and detail tests. | complete | unit + integration |
+| FR-003 | implemented_verified | Only explicit executing pills opt into shimmer metadata and `.is-executing`; non-executing pills remain plain in helper, list, and detail tests. | complete | unit + integration |
+| FR-004 | implemented_verified | List and detail rendering still uses the existing visible status text while shimmer attaches additively through span props only; verified by entrypoint render tests. | complete | integration |
+| FR-005 | implemented_verified | Shimmer stays on existing pill spans without wrappers or layout changes, and reduced-motion fallback is CSS-only; verified by CSS contract and entrypoint tests. | complete | unit + integration |
+| FR-006 | implemented_verified | `frontend/src/styles/mission-control.css` now defines a reduced-motion non-animated active treatment for executing pills; verified in Mission Control CSS contract tests. | complete | unit + integration |
+| FR-007 | implemented_verified | Shared CSS uses bounded active-progress tokens and additive gradient sweep rather than warning/error styling; verified by CSS contract assertions. | complete | unit |
+| FR-008 | implemented_verified | Task list table/cards and task detail toolbar/dependency pills reuse the same shared helper contract; verified by entrypoint render tests. | complete | integration |
+| FR-009 | implemented_verified | MM-488 is preserved in spec, tasks, plan, helper traceability export, and verification output. | complete | unit |
+| SCN-001 | implemented_verified | Executing pills across supported surfaces render the shared shimmer modifier contract; verified by task list and task detail tests. | complete | integration |
+| SCN-002 | implemented_verified | Preferred hooks and fallback marker resolve to the same shared modifier contract; verified by helper and CSS contract tests. | complete | unit + integration |
+| SCN-003 | implemented_verified | Non-executing pills do not inherit shimmer metadata or selectors; verified by helper, list, and detail tests. | complete | unit + integration |
+| SCN-004 | implemented_verified | Text and surrounding layout remain stable while shimmer is active; verified by entrypoint render tests and additive CSS contract checks. | complete | integration |
+| SCN-005 | implemented_verified | Reduced-motion path disables animated sweep while preserving executing-state emphasis; verified by Mission Control CSS contract tests. | complete | unit + integration |
+| SC-001 | implemented_verified | Focused unit/integration tests confirm shared executing shimmer across supported surfaces. | complete | unit + integration |
+| SC-002 | implemented_verified | Focused tests confirm both activation paths land on the same contract. | complete | unit + integration |
+| SC-003 | implemented_verified | Focused tests confirm shimmer remains executing-only. | complete | unit + integration |
+| SC-004 | implemented_verified | Focused integration tests confirm no text/layout/live-update regressions from the additive modifier. | complete | integration |
+| SC-005 | implemented_verified | CSS contract tests confirm reduced-motion fallback remains active and non-animated. | complete | unit + integration |
+| SC-006 | implemented_verified | MM-488 appears in spec, plan, tasks, helper traceability export, and `verification.md`. | complete | unit |
+| DESIGN-REQ-001 | implemented_verified | Shared shimmer reads as active progress through calm cyan/white sweep tokens, not warning/error visuals; verified by CSS contract assertions. | complete | unit |
+| DESIGN-REQ-002 | implemented_verified | Work stayed limited to status-pill modifier activation with no unrelated page behavior changes; verified by entrypoint tests and unchanged surrounding markup. | complete | integration |
+| DESIGN-REQ-003 | implemented_verified | Host contract now supports preferred data attributes and fallback `.is-executing`; verified by helper and entrypoint tests. | complete | unit + integration |
+| DESIGN-REQ-004 | implemented_verified | Shimmer remains additive on existing pill hosts and preserves layout/text semantics; verified by CSS and entrypoint tests. | complete | unit + integration |
+| DESIGN-REQ-011 | implemented_verified | Shared Mission Control status-pill CSS implements the shimmer modifier instead of page-local animation forks; verified by helper/CSS contract tests and surface reuse. | complete | unit + integration |
+| DESIGN-REQ-013 | implemented_verified | Reduced-motion replacement treatment is present and verified in CSS contract tests. | complete | unit + integration |
+| DESIGN-REQ-016 | implemented_verified | Shimmer activation is constrained to explicit executing status via `executionStatusPillProps`; helper tests cover the future-state non-goal. | complete | unit + integration |
 
 ## Technical Context
 

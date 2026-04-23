@@ -4,7 +4,7 @@ import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
-import { executionStatusPillClasses } from '../utils/executionStatusPillClasses';
+import { executionStatusPillClasses, executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { formatRuntimeLabel } from '../utils/formatters';
 import {
@@ -3910,7 +3910,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
             <p className="page-meta">Task {taskId || '—'}</p>
             {execution ? (
               <span
-                className={executionStatusPillClasses(
+                {...executionStatusPillProps(
                   execution.rawState || execution.state || execution.status,
                 )}
               >
@@ -4247,7 +4247,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                               <strong>{item.title || item.workflowId}</strong>
                             </a>
                             <code className="text-xs break-all">{item.workflowId}</code>
-                            <span className={executionStatusPillClasses(stateLabel)}>{stateLabel}</span>
+                            <span {...executionStatusPillProps(stateLabel)}>{stateLabel}</span>
                             {item.summary ? <p className="small">{item.summary}</p> : null}
                             {outcome?.message ? <p className="small">{outcome.message}</p> : null}
                             {outcome?.failureCategory ? (
@@ -4276,7 +4276,7 @@ export function TaskDetailPage({ payload }: { payload: BootPayload }) {
                             <strong>{item.title || item.workflowId}</strong>
                           </a>
                           <code className="text-xs break-all">{item.workflowId}</code>
-                          <span className={executionStatusPillClasses(item.state)}>{item.state || 'unknown'}</span>
+                          <span {...executionStatusPillProps(item.state)}>{item.state || 'unknown'}</span>
                           {item.summary ? <p className="small">{item.summary}</p> : null}
                           {item.closeStatus ? <p className="small">Close status: {item.closeStatus}</p> : null}
                         </div>

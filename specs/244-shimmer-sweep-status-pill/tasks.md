@@ -17,17 +17,17 @@
 - SCN-001 through SCN-005: shared executing treatment, preferred/fallback selector paths, non-executing guardrails, text/layout stability, and reduced-motion replacement.
 - SC-001 through SC-006: cross-surface verification, selector-path verification, non-executing exclusion, no layout/live-update regressions, reduced-motion fallback, and MM-488 traceability.
 - DESIGN-REQ-001, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004, DESIGN-REQ-011, DESIGN-REQ-013, DESIGN-REQ-016: calm active intent, limited scope, selector contract, additive host behavior, shared modifier shape, reduced-motion fallback, and executing-only state matrix.
-- Requirement status summary from `plan.md`: 11 `partial`, 11 `missing`, 5 `implemented_unverified`, 0 `implemented_verified`.
+- Requirement status summary from `plan.md`: 0 `partial`, 0 `missing`, 0 `implemented_unverified`, 27 `implemented_verified`.
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify MM-488 planning inputs and target frontend files in `specs/244-shimmer-sweep-status-pill/spec.md`, `specs/244-shimmer-sweep-status-pill/plan.md`, `frontend/src/styles/mission-control.css`, `frontend/src/utils/executionStatusPillClasses.ts`, `frontend/src/entrypoints/tasks-list.tsx`, and `frontend/src/entrypoints/task-detail.tsx`.
-- [ ] T002 Create the focused unit-test file scaffold for MM-488 in `frontend/src/utils/executionStatusPillClasses.test.ts` so helper-level selector and traceability assertions have an isolated home.
+- [X] T001 Verify MM-488 planning inputs and target frontend files in `specs/244-shimmer-sweep-status-pill/spec.md`, `specs/244-shimmer-sweep-status-pill/plan.md`, `frontend/src/styles/mission-control.css`, `frontend/src/utils/executionStatusPillClasses.ts`, `frontend/src/entrypoints/tasks-list.tsx`, and `frontend/src/entrypoints/task-detail.tsx`.
+- [X] T002 Create the focused unit-test file scaffold for MM-488 in `frontend/src/utils/executionStatusPillClasses.test.ts` so helper-level selector and traceability assertions have an isolated home.
 
 ## Phase 2: Foundational
 
-- [ ] T003 Confirm no new package, service, database, or compose-backed integration dependency is needed for MM-488 in `specs/244-shimmer-sweep-status-pill/plan.md` and `specs/244-shimmer-sweep-status-pill/research.md`.
-- [ ] T004 Confirm the shared status-pill contract stays additive and page-neutral using `specs/244-shimmer-sweep-status-pill/contracts/status-pill-shimmer.md` and `specs/244-shimmer-sweep-status-pill/data-model.md` before story implementation begins.
+- [X] T003 Confirm no new package, service, database, or compose-backed integration dependency is needed for MM-488 in `specs/244-shimmer-sweep-status-pill/plan.md` and `specs/244-shimmer-sweep-status-pill/research.md`.
+- [X] T004 Confirm the shared status-pill contract stays additive and page-neutral using `specs/244-shimmer-sweep-status-pill/contracts/status-pill-shimmer.md` and `specs/244-shimmer-sweep-status-pill/data-model.md` before story implementation begins.
 
 ## Phase 3: Story - Shared Executing Shimmer Modifier
 
@@ -49,35 +49,35 @@
 
 ### Tests First
 
-- [ ] T005 [P] Add failing helper-level unit tests for executing-only selector metadata, preferred/fallback hook support, and MM-488 traceability in `frontend/src/utils/executionStatusPillClasses.test.ts` covering FR-002, FR-003, FR-009, SCN-002, SCN-003, SC-002, SC-003, SC-006, DESIGN-REQ-003, DESIGN-REQ-016.
-- [ ] T006 [P] Add failing shared CSS contract tests for shimmer selectors, calm active token usage, additive bounded styling, and reduced-motion fallback in `frontend/src/entrypoints/mission-control.test.tsx` covering FR-001, FR-005, FR-006, FR-007, SC-001, SC-004, SC-005, DESIGN-REQ-001, DESIGN-REQ-004, DESIGN-REQ-011, DESIGN-REQ-013.
-- [ ] T007 [P] Add failing task-list integration tests for executing table/card pills, non-executing exclusion, and selector-path reuse in `frontend/src/entrypoints/tasks-list.test.tsx` covering FR-001, FR-002, FR-003, FR-008, SCN-001, SCN-002, SCN-003, SC-001, SC-002, SC-003, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-016.
-- [ ] T008 [P] Add failing task-detail integration tests for executing detail pills, text/layout stability, and reduced-motion active treatment in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-004, FR-005, FR-006, FR-008, SCN-004, SCN-005, SC-004, SC-005, DESIGN-REQ-002, DESIGN-REQ-004, DESIGN-REQ-013.
-- [ ] T009 Run the focused unit and integration Vitest commands from `specs/244-shimmer-sweep-status-pill/quickstart.md` to confirm T005-T008 fail for the expected missing MM-488 behavior before production changes.
+- [X] T005 [P] Add failing helper-level unit tests for executing-only selector metadata, preferred/fallback hook support, and MM-488 traceability in `frontend/src/utils/executionStatusPillClasses.test.ts` covering FR-002, FR-003, FR-009, SCN-002, SCN-003, SC-002, SC-003, SC-006, DESIGN-REQ-003, DESIGN-REQ-016.
+- [X] T006 [P] Add failing shared CSS contract tests for shimmer selectors, calm active token usage, additive bounded styling, and reduced-motion fallback in `frontend/src/entrypoints/mission-control.test.tsx` covering FR-001, FR-005, FR-006, FR-007, SC-001, SC-004, SC-005, DESIGN-REQ-001, DESIGN-REQ-004, DESIGN-REQ-011, DESIGN-REQ-013.
+- [X] T007 [P] Add failing task-list integration tests for executing table/card pills, non-executing exclusion, and selector-path reuse in `frontend/src/entrypoints/tasks-list.test.tsx` covering FR-001, FR-002, FR-003, FR-008, SCN-001, SCN-002, SCN-003, SC-001, SC-002, SC-003, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-016.
+- [X] T008 [P] Add failing task-detail integration tests for executing detail pills, text/layout stability, and reduced-motion active treatment in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-004, FR-005, FR-006, FR-008, SCN-004, SCN-005, SC-004, SC-005, DESIGN-REQ-002, DESIGN-REQ-004, DESIGN-REQ-013.
+- [X] T009 Run the focused unit and integration Vitest commands from `specs/244-shimmer-sweep-status-pill/quickstart.md` to confirm T005-T008 fail for the expected missing MM-488 behavior before production changes.
 
 ### Conditional Fallback For Implemented-Unverified Rows
 
-- [ ] T010 If T007-T009 expose regressions in visible text, icon choice, layout footprint, polling, or live-update behavior, update `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css` to preserve FR-004, FR-005, SCN-004, SC-004, and DESIGN-REQ-004 while keeping the shimmer additive.
+- [X] T010 If T007-T009 expose regressions in visible text, icon choice, layout footprint, polling, or live-update behavior, update `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css` to preserve FR-004, FR-005, SCN-004, SC-004, and DESIGN-REQ-004 while keeping the shimmer additive.
 
 ### Implementation
 
-- [ ] T011 Implement executing-selector metadata and MM-488 traceability exports in `frontend/src/utils/executionStatusPillClasses.ts` for FR-002, FR-003, FR-009, SC-002, SC-003, SC-006, DESIGN-REQ-003, DESIGN-REQ-016.
-- [ ] T012 Implement the shared shimmer modifier, reduced-motion fallback, calm active token binding, and executing-only CSS guardrails in `frontend/src/styles/mission-control.css` for FR-001, FR-003, FR-005, FR-006, FR-007, SC-001, SC-003, SC-004, SC-005, DESIGN-REQ-001, DESIGN-REQ-004, DESIGN-REQ-011, DESIGN-REQ-013, DESIGN-REQ-016.
-- [ ] T013 [P] Implement task-list executing-pill opt-in markup for preferred/fallback selector support in `frontend/src/entrypoints/tasks-list.tsx` covering FR-001, FR-002, FR-003, FR-008, SCN-001, SCN-002, SCN-003, SC-001, SC-002, SC-003, DESIGN-REQ-002, DESIGN-REQ-003.
-- [ ] T014 [P] Implement task-detail executing-pill opt-in markup for preferred/fallback selector support in `frontend/src/entrypoints/task-detail.tsx` covering FR-001, FR-002, FR-004, FR-008, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004.
+- [X] T011 Implement executing-selector metadata and MM-488 traceability exports in `frontend/src/utils/executionStatusPillClasses.ts` for FR-002, FR-003, FR-009, SC-002, SC-003, SC-006, DESIGN-REQ-003, DESIGN-REQ-016.
+- [X] T012 Implement the shared shimmer modifier, reduced-motion fallback, calm active token binding, and executing-only CSS guardrails in `frontend/src/styles/mission-control.css` for FR-001, FR-003, FR-005, FR-006, FR-007, SC-001, SC-003, SC-004, SC-005, DESIGN-REQ-001, DESIGN-REQ-004, DESIGN-REQ-011, DESIGN-REQ-013, DESIGN-REQ-016.
+- [X] T013 [P] Implement task-list executing-pill opt-in markup for preferred/fallback selector support in `frontend/src/entrypoints/tasks-list.tsx` covering FR-001, FR-002, FR-003, FR-008, SCN-001, SCN-002, SCN-003, SC-001, SC-002, SC-003, DESIGN-REQ-002, DESIGN-REQ-003.
+- [X] T014 [P] Implement task-detail executing-pill opt-in markup for preferred/fallback selector support in `frontend/src/entrypoints/task-detail.tsx` covering FR-001, FR-002, FR-004, FR-008, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-002, DESIGN-REQ-003, DESIGN-REQ-004.
 
 ### Story Validation
 
-- [ ] T015 Run the focused unit validation command from `specs/244-shimmer-sweep-status-pill/quickstart.md` and verify the helper/CSS tests for MM-488 pass.
-- [ ] T016 Run the focused integration validation command from `specs/244-shimmer-sweep-status-pill/quickstart.md` and verify task list and task detail surfaces pass MM-488 executing/non-executing/reduced-motion checks.
-- [ ] T017 Update MM-488 requirement-status evidence in `specs/244-shimmer-sweep-status-pill/plan.md` after T015-T016 pass so `partial`, `missing`, and `implemented_unverified` rows reflect the final evidence.
+- [X] T015 Run the focused unit validation command from `specs/244-shimmer-sweep-status-pill/quickstart.md` and verify the helper/CSS tests for MM-488 pass.
+- [X] T016 Run the focused integration validation command from `specs/244-shimmer-sweep-status-pill/quickstart.md` and verify task list and task detail surfaces pass MM-488 executing/non-executing/reduced-motion checks.
+- [X] T017 Update MM-488 requirement-status evidence in `specs/244-shimmer-sweep-status-pill/plan.md` after T015-T016 pass so `partial`, `missing`, and `implemented_unverified` rows reflect the final evidence.
 
 ## Final Phase: Polish and Verification
 
-- [ ] T018 Expand or tighten edge-case assertions for rapid state flips, executing-only isolation, and future-state non-goals in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` as needed for FR-003, SCN-003, and DESIGN-REQ-016.
-- [ ] T019 Run the quickstart validation steps from `specs/244-shimmer-sweep-status-pill/quickstart.md`.
-- [ ] T020 Run `./tools/test_unit.sh` for final unit-test verification.
-- [ ] T021 Run `/moonspec-verify` by creating `specs/244-shimmer-sweep-status-pill/verification.md` with MM-488 traceability, DESIGN-REQ coverage, test evidence, and final verdict.
+- [X] T018 Expand or tighten edge-case assertions for rapid state flips, executing-only isolation, and future-state non-goals in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` as needed for FR-003, SCN-003, and DESIGN-REQ-016.
+- [X] T019 Run the quickstart validation steps from `specs/244-shimmer-sweep-status-pill/quickstart.md`.
+- [X] T020 Run `./tools/test_unit.sh` for final unit-test verification.
+- [X] T021 Run `/moonspec-verify` by creating `specs/244-shimmer-sweep-status-pill/verification.md` with MM-488 traceability, DESIGN-REQ coverage, test evidence, and final verdict.
 
 ## Dependencies and Execution Order
 
