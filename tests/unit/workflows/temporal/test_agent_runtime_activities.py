@@ -2676,3 +2676,55 @@ async def test_launch_session_failure_redacts_claude_auth_paths(
     assert "/home/app/.claude/credentials.json" not in message
     assert "[REDACTED]" in message
     assert "[REDACTED_AUTH_PATH]" in message
+
+
+async def test_launch_session_claude_auth_diagnostics_do_not_alias_workspace_or_artifacts(
+    tmp_path: Path,
+) -> None:
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-claude-2",
+                "sessionEpoch": 1,
+                "containerId": "ctr-claude-2",
+                "threadId": "thread-claude-2",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+            metadata={},
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+    workspace_path = str(tmp_path / "task-2" / "repo")
+    artifact_spool_path = str(tmp_path / "task-2" / "artifacts")
+
+    result = await activities.agent_runtime_launch_session(
+        {
+            "request": {
+                "taskRunId": "task-2",
+                "sessionId": "sess-claude-2",
+                "threadId": "thread-claude-2",
+                "workspacePath": workspace_path,
+                "sessionWorkspacePath": str(tmp_path / "task-2" / "session"),
+                "artifactSpoolPath": artifact_spool_path,
+                "codexHomePath": str(tmp_path / "task-2" / ".moonmind" / "codex-home"),
+                "imageRef": "moonmind:latest",
+            },
+            "profile": {
+                "runtimeId": "claude_code",
+                "profileId": "claude_anthropic",
+                "providerId": "anthropic",
+                "credentialSource": "oauth_volume",
+                "runtimeMaterializationMode": "oauth_home",
+                "volumeRef": "claude_auth_volume",
+                "volumeMountPath": "/home/app/.claude",
+            },
+        }
+    )
+
+    diagnostics = result.metadata["authDiagnostics"]
+    assert diagnostics["authMountTarget"] == "/home/app/.claude"
+    assert diagnostics["authMountTarget"] != workspace_path
+    assert diagnostics["authMountTarget"] != artifact_spool_path
+    assert diagnostics["volumeRef"] == "claude_auth_volume"

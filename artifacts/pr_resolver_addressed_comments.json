@@ -1,67 +1,22 @@
 [
   {
-    "id": 4166704069,
+    "id": 3134534895,
     "disposition": "addressed",
-    "rationale": "Aligned the resumed MM-494 feature artifacts so the branch metadata and source coverage IDs now match the current Jira brief across plan, tasks, quickstart, research, spec, and verification."
+    "rationale": "Replaced the managed-agent absolute feature path in .specify/feature.json with the repo-relative specs/245-claude-oauth-guardrails path."
   },
   {
-    "id": 3134446176,
-    "disposition": "addressed",
-    "rationale": "Updated plan branch metadata to the current MM-494 PR head branch in specs/230-mission-control-report-presentation/plan.md."
-  },
-  {
-    "id": 3134446179,
-    "disposition": "addressed",
-    "rationale": "Replaced the stale plan requirement-status DESIGN-REQ rows with the MM-494 coverage IDs DESIGN-REQ-005/014/015/016."
-  },
-  {
-    "id": 3134446182,
-    "disposition": "addressed",
-    "rationale": "Updated the quickstart traceability command to check the MM-494 coverage IDs DESIGN-REQ-005/014/015/016."
-  },
-  {
-    "id": 3134446197,
-    "disposition": "addressed",
-    "rationale": "Updated the research section headers to use the MM-494 coverage IDs instead of the prior MM-462-era ID set."
-  },
-  {
-    "id": 3134446201,
-    "disposition": "addressed",
-    "rationale": "Updated the tasks source-traceability summary and requirement-status summary to the MM-494 coverage IDs."
-  },
-  {
-    "id": 3134446204,
-    "disposition": "addressed",
-    "rationale": "Updated the T019 traceability gate command in tasks.md to check the MM-494 coverage IDs."
-  },
-  {
-    "id": 4166705870,
+    "id": 4166796428,
     "disposition": "not-applicable",
-    "rationale": "This top-level Codex review body is generic wrapper text; the actionable inline traceability comment was addressed separately in comment 3134447700."
+    "rationale": "Top-level Codex review wrapper comment; the actionable feedback was the linked review comment and has been addressed."
   },
   {
-    "id": 3134447700,
+    "id": 3134537750,
     "disposition": "addressed",
-    "rationale": "Aligned the traceability gate with the canonical MM-494 coverage IDs in tasks.md and quickstart.md and verified it with rg."
+    "rationale": "Updated .specify/feature.json to use the suggested repo-relative feature_directory value for portability across environments."
   },
   {
-    "id": 4166611138,
+    "id": 4166799430,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; the actionable feedback is tracked and resolved via the three inline review comments below."
-  },
-  {
-    "id": 3134370154,
-    "disposition": "addressed",
-    "rationale": "Extracted the shimmer width multipliers and layer offset into named CSS tokens and updated the shimmer block to consume them."
-  },
-  {
-    "id": 3134370157,
-    "disposition": "addressed",
-    "rationale": "Replaced brittle exact-string CSS assertions with regex assertions that tolerate formatting changes while still enforcing the tokenized shimmer contract."
-  },
-  {
-    "id": 3134370170,
-    "disposition": "addressed",
-    "rationale": "Extended the task-detail render test to assert the executing pill still renders the visible status label text unchanged."
+    "rationale": "Top-level Gemini summary review; the only actionable item duplicated the .specify/feature.json path issue and is now fixed."
   }
 ]

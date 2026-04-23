@@ -974,3 +974,81 @@ async def test_claude_manual_auth_commit_rejects_unsupported_profile_without_per
             )
         )
         assert result.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_claude_oauth_validate_failure_redacts_secret_like_reason(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_id = "claude-anthropic-oauth-validation-redaction"
+    raw_secret = "sk-ant-test-validation-secret"
+    raw_path = "/home/app/.claude/credentials.json"
+
+    async def _fake_verify(
+        *,
+        runtime_id: str,
+        volume_ref: str,
+        volume_mount_path: str | None,
+    ) -> dict[str, object]:
+        assert runtime_id == "claude_code"
+        assert volume_ref == "claude_auth_volume"
+        assert volume_mount_path == "/home/app/.claude"
+        return {
+            "verified": False,
+            "reason": f"token={raw_secret} in {raw_path}",
+        }
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _fake_verify,
+    )
+
+    async with db_base.async_session_maker() as session:
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="claude_code",
+                    provider_id="anthropic",
+                    provider_label="Anthropic",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref="claude_auth_volume",
+                    volume_mount_path="/home/app/.claude",
+                    enabled=True,
+                    command_behavior={
+                        "auth_strategy": "claude_credential_methods",
+                        "auth_actions": [
+                            "connect_oauth",
+                            "use_api_key",
+                            "validate_oauth",
+                            "disconnect_oauth",
+                        ],
+                    },
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/oauth/validate"
+        )
+
+    assert response.status_code == 400
+    assert raw_secret not in response.text
+    assert raw_path not in response.text
+    detail = response.json()["detail"]
+    assert "Claude OAuth validation failed:" in detail
+    assert "[REDACTED]" in detail
+    assert "[REDACTED_AUTH_PATH]" in detail
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        readiness = (profile.command_behavior or {}).get("auth_readiness", {})
+        assert raw_secret not in str(readiness)
+        assert raw_path not in str(readiness)
+        assert readiness["failure_reason"] == "token=[REDACTED] in [REDACTED_AUTH_PATH]"

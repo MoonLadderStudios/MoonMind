@@ -10,6 +10,8 @@ import re
 import shlex
 from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
 
+from moonmind.utils.logging import redact_sensitive_text
+
 logger = logging.getLogger(__name__)
 _MAX_RECORDED_TERMINAL_EVENTS = 256
 _MAX_STARTUP_ERROR_OUTPUT_CHARS = 600
@@ -87,6 +89,7 @@ def _redact_startup_output(output: bytes) -> str:
     if not text:
         return ""
     redacted = _SECRET_ASSIGNMENT_PATTERN.sub("[REDACTED]", text)
+    redacted = redact_sensitive_text(redacted)
     return redacted[-_MAX_STARTUP_ERROR_OUTPUT_CHARS:]
 
 
