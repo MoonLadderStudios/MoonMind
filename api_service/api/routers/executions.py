@@ -92,6 +92,8 @@ from moonmind.workflows.tasks.task_contract import (
     TaskInputAttachmentRef,
     TaskProposalPolicy,
     TaskSkillSelectors,
+    is_self_managed_publish_skill,
+    resolve_publish_mode_for_skill,
 )
 from api_service.api.schemas import CreateJobRequest
 from moonmind.workflows import get_temporal_artifact_service
@@ -2316,6 +2318,49 @@ def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
     return normalized
 
 
+def _task_publish_skill_id(
+    task_payload: Mapping[str, Any],
+    normalized_tool: Mapping[str, Any] | None,
+) -> object:
+    if isinstance(normalized_tool, Mapping):
+        tool_name = normalized_tool.get("name")
+        if tool_name:
+            return tool_name
+    skill_payload = _coerce_mapping(task_payload.get("skill"))
+    return skill_payload.get("id") or skill_payload.get("name")
+
+
+def _resolve_task_publish_payload(
+    *,
+    payload: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+    normalized_tool: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    publish_payload = _normalize_publish_payload(task_payload.get("publish"))
+    if not publish_payload:
+        publish_payload = _normalize_publish_payload(payload.get("publish"))
+
+    requested_mode = (
+        publish_payload.get("mode")
+        or task_payload.get("publishMode")
+        or payload.get("publishMode")
+    )
+    skill_id = _task_publish_skill_id(task_payload, normalized_tool)
+    if requested_mode is None and is_self_managed_publish_skill(skill_id):
+        requested_mode = "none"
+    try:
+        publish_mode = resolve_publish_mode_for_skill(
+            skill_id,
+            requested_mode,
+        )
+    except TaskContractError as exc:
+        raise _invalid_task_request(str(exc)) from exc
+
+    resolved = dict(publish_payload)
+    resolved["mode"] = publish_mode
+    return resolved
+
+
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
 
@@ -2899,7 +2944,6 @@ async def _create_execution_from_task_request(
         if isinstance(task_payload.get("runtime"), dict)
         else {}
     )
-    publish_payload = _normalize_publish_payload(task_payload.get("publish"))
     merge_automation_payload = _normalize_merge_automation_payload(
         payload.get("mergeAutomation") or payload.get("merge_automation")
     )
@@ -2910,6 +2954,11 @@ async def _create_execution_from_task_request(
         task_payload.get("storyOutput") or task_payload.get("story_output")
     )
     normalized_tool = _normalize_task_tool(task_payload)
+    publish_payload = _resolve_task_publish_payload(
+        payload=payload,
+        task_payload=task_payload,
+        normalized_tool=normalized_tool,
+    )
     normalized_task_skills = _normalize_task_skill_selectors(
         task_payload.get("skills"),
         field_name="payload.task.skills",
@@ -3071,7 +3120,7 @@ async def _create_execution_from_task_request(
         "modelSource": model_source,
         "profileId": raw_profile_id if _provider_profile is not None else None,
         "effort": runtime_payload.get("effort"),
-        "publishMode": ((task_payload.get("publish") or {}).get("mode")),
+        "publishMode": publish_payload["mode"],
         "proposeTasks": propose_tasks,
         "stepCount": step_count,
     }
@@ -3472,6 +3521,8 @@ async def create_remediation_execution(
         "planArtifactRef",
         "manifestArtifactRef",
         "targetRuntime",
+        "publish",
+        "publishMode",
         "profileId",
         "providerProfile",
         "idempotencyKey",
