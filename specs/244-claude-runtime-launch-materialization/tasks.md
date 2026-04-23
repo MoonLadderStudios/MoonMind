@@ -25,8 +25,8 @@
 
 **Purpose**: Confirm the active MM-481 story inputs and validation targets before test or code work begins.
 
-- [ ] T001 Confirm `specs/244-claude-runtime-launch-materialization/` contains `spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/claude-runtime-launch.md`
-- [ ] T002 Confirm focused validation targets exist in `tests/unit/services/temporal/runtime/test_launcher.py`, `tests/unit/workflows/temporal/test_agent_runtime_activities.py`, and `tests/unit/agents/codex_worker/test_cli.py`
+- [X] T001 Confirm `specs/244-claude-runtime-launch-materialization/` contains `spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/claude-runtime-launch.md`
+- [X] T002 Confirm focused validation targets exist in `tests/unit/services/temporal/runtime/test_launcher.py`, `tests/unit/workflows/temporal/test_agent_runtime_activities.py`, and `tests/unit/agents/codex_worker/test_cli.py`
 
 ---
 
@@ -36,9 +36,9 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T003 Confirm no database migration is required because MM-481 uses existing provider-profile rows, managed-session payloads, and launcher/session activity boundaries in `api_service/db/models.py` and `moonmind/schemas/agent_runtime_models.py`
-- [ ] T004 Confirm no new package dependency is required because MM-481 uses existing FastAPI, Temporal runtime, launcher materializer, and pytest infrastructure in `api_service/main.py`, `moonmind/workflows/temporal/runtime/launcher.py`, and `moonmind/workflows/temporal/activity_runtime.py`
-- [ ] T005 Confirm integration remains contingency-only unless launch/artifact behavior changes beyond current unit-testable seams, based on `specs/244-claude-runtime-launch-materialization/plan.md` and `quickstart.md`
+- [X] T003 Confirm no database migration is required because MM-481 uses existing provider-profile rows, managed-session payloads, and launcher/session activity boundaries in `api_service/db/models.py` and `moonmind/schemas/agent_runtime_models.py`
+- [X] T004 Confirm no new package dependency is required because MM-481 uses existing FastAPI, Temporal runtime, launcher materializer, and pytest infrastructure in `api_service/main.py`, `moonmind/workflows/temporal/runtime/launcher.py`, and `moonmind/workflows/temporal/activity_runtime.py`
+- [X] T005 Confirm integration remains contingency-only unless launch/artifact behavior changes beyond current unit-testable seams, based on `specs/244-claude-runtime-launch-materialization/plan.md` and `quickstart.md`. Initial review kept integration contingent; later red-state coverage justified T012 for the managed-session launch boundary.
 
 **Checkpoint**: Foundation ready. Story test and implementation work can now begin.
 
@@ -67,48 +67,48 @@
 
 > Write these tests FIRST. Run them, confirm they fail for the intended reason, then implement only enough code to make them pass.
 
-- [ ] T006 [P] Add failing Claude OAuth launcher test covering FR-001, FR-002, SC-001, DESIGN-REQ-003, and DESIGN-REQ-004 in `tests/unit/services/temporal/runtime/test_launcher.py`
-- [ ] T007 [P] Add failing Claude OAuth launcher env-materialization test covering FR-003, FR-004, FR-005, SC-002, SC-003, DESIGN-REQ-015, and DESIGN-REQ-018 in `tests/unit/services/temporal/runtime/test_launcher.py`
-- [ ] T008 [P] Add failing Claude auth-volume boundary test covering FR-006, FR-007, SC-004, DESIGN-REQ-017, and DESIGN-REQ-018 in `tests/unit/services/temporal/runtime/test_launcher.py`
-- [ ] T009 [P] Add failing Claude managed-session auth-diagnostics test covering FR-001, FR-003, FR-006, SC-001, SC-003, SC-004, and DESIGN-REQ-015 in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
-- [ ] T010 [P] Add failing Claude managed-session sanitization test covering FR-006, FR-007, SC-004, and DESIGN-REQ-017 in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
-- [ ] T011 [P] Add or update Claude OAuth preflight test coverage for `CLAUDE_HOME` launch requirements covering FR-004 and SC-003 in `tests/unit/agents/codex_worker/test_cli.py`
+- [X] T006 [P] Add failing Claude OAuth launcher test covering FR-001, FR-002, SC-001, DESIGN-REQ-003, and DESIGN-REQ-004 in `tests/unit/services/temporal/runtime/test_launcher.py`
+- [X] T007 [P] Add failing Claude OAuth launcher env-materialization test covering FR-003, FR-004, FR-005, SC-002, SC-003, DESIGN-REQ-015, and DESIGN-REQ-018 in `tests/unit/services/temporal/runtime/test_launcher.py`
+- [X] T008 [P] Add failing Claude auth-volume boundary test covering FR-006, FR-007, SC-004, DESIGN-REQ-017, and DESIGN-REQ-018 in `tests/unit/services/temporal/runtime/test_launcher.py`
+- [X] T009 [P] Add failing Claude managed-session auth-diagnostics test covering FR-001, FR-003, FR-006, SC-001, SC-003, SC-004, and DESIGN-REQ-015 in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
+- [X] T010 [P] Add failing Claude managed-session sanitization test covering FR-006, FR-007, SC-004, and DESIGN-REQ-017 in `tests/unit/workflows/temporal/test_agent_runtime_activities.py`
+- [X] T011 [P] Add or update Claude OAuth preflight test coverage for `CLAUDE_HOME` launch requirements covering FR-004 and SC-003 in `tests/unit/agents/codex_worker/test_cli.py`
 
 ### Integration Tests (write before implementation when required)
 
-- [ ] T012 Add contingent hermetic integration coverage for MM-481 launch/artifact boundaries in `tests/integration/temporal/test_claude_runtime_launch_materialization.py` only if T006-T010 expose behavior that cannot be proven safely by unit tests, covering FR-007 and SC-004, and document any deviation in `specs/244-claude-runtime-launch-materialization/tasks.md`
+- [X] T012 Add contingent hermetic integration coverage for MM-481 launch/artifact boundaries in `tests/integration/temporal/test_claude_runtime_launch_materialization.py` only if T006-T010 expose behavior that cannot be proven safely by unit tests, covering FR-007 and SC-004, and document any deviation in `specs/244-claude-runtime-launch-materialization/tasks.md`
 
 ### Red-First Confirmation
 
-- [ ] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_launcher.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/agents/codex_worker/test_cli.py` and confirm T006-T011 fail for the expected MM-481 reasons before production changes
-- [ ] T014 If T012 was required, run `./tools/test_integration.sh` and confirm the new MM-481 integration coverage fails for the expected reason before production changes
+- [X] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_launcher.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/agents/codex_worker/test_cli.py` and confirm T006-T011 fail for the expected MM-481 reasons before production changes
+- [X] T014 If T012 was required, run `./tools/test_integration.sh` and confirm the new MM-481 integration coverage fails for the expected reason before production changes. Deviation: this managed job has no Docker socket, so `./tools/test_integration.sh` could not start; equivalent red-first failure evidence was preserved with `pytest -q tests/integration/temporal/test_claude_runtime_launch_materialization.py -q --tb=short`, which failed on missing `MANAGED_AUTH_VOLUME_PATH` and unredacted `.claude` auth paths before production changes.
 
 ### Conditional Fallback Implementation Tasks for `implemented_unverified` Rows
 
-- [ ] T015 If T006 or T009 fails because Claude OAuth-backed launch/session work does not carry `claude_anthropic` profile resolution or safe diagnostic metadata through startup, update `moonmind/workflows/adapters/managed_agent_adapter.py` and `moonmind/workflows/temporal/activity_runtime.py` for FR-001, SC-001, DESIGN-REQ-004
-- [ ] T016 If T008 or T010 fails because operator-visible metadata leaks auth-path details or treats the auth volume like workspace/artifact state, update `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/temporal/runtime/launcher.py` for FR-006, FR-007, SC-004, DESIGN-REQ-017, DESIGN-REQ-018
+- [X] T015 If T006 or T009 fails because Claude OAuth-backed launch/session work does not carry `claude_anthropic` profile resolution or safe diagnostic metadata through startup, update `moonmind/workflows/adapters/managed_agent_adapter.py` and `moonmind/workflows/temporal/activity_runtime.py` for FR-001, SC-001, DESIGN-REQ-004. Skipped because the failing behavior was shared oauth-home environment shaping, not profile resolution or auth-diagnostics metadata propagation.
+- [X] T016 If T008 or T010 fails because operator-visible metadata leaks auth-path details or treats the auth volume like workspace/artifact state, update `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/temporal/runtime/launcher.py` for FR-006, FR-007, SC-004, DESIGN-REQ-017, DESIGN-REQ-018. Resolved via the shared redaction helper in `moonmind/utils/logging.py`, so no direct launcher or activity file edit was required.
 
 ### Models / Entities / Validation
 
-- [ ] T017 If T006 or T007 fails because OAuth-home profile validation is incomplete, update `moonmind/schemas/agent_runtime_models.py` for FR-002, FR-003, DESIGN-REQ-003, and DESIGN-REQ-015
+- [X] T017 If T006 or T007 fails because OAuth-home profile validation is incomplete, update `moonmind/schemas/agent_runtime_models.py` for FR-002, FR-003, DESIGN-REQ-003, and DESIGN-REQ-015. Skipped because schema validation already accepted the documented Claude OAuth-home profile shape.
 
 ### Services / Domain Logic
 
-- [ ] T018 If T007 fails because launch shaping does not preserve the OAuth-home profile contract or clear all competing keys, update `moonmind/workflows/adapters/materializer.py` for FR-002, FR-005, SC-002, DESIGN-REQ-003, and DESIGN-REQ-018
-- [ ] T019 If T007 or T011 fails because Claude OAuth launches do not set or validate Claude home paths consistently, update `moonmind/agents/base/adapter.py`, `moonmind/agents/codex_worker/runtime_mode.py`, and `moonmind/agents/codex_worker/cli.py` for FR-004 and SC-003
+- [X] T018 If T007 fails because launch shaping does not preserve the OAuth-home profile contract or clear all competing keys, update `moonmind/workflows/adapters/materializer.py` for FR-002, FR-005, SC-002, DESIGN-REQ-003, and DESIGN-REQ-018
+- [X] T019 If T007 or T011 fails because Claude OAuth launches do not set or validate Claude home paths consistently, update `moonmind/agents/base/adapter.py`, `moonmind/agents/codex_worker/runtime_mode.py`, and `moonmind/agents/codex_worker/cli.py` for FR-004 and SC-003. Skipped because existing Claude preflight validation already satisfied the documented `/home/app/.claude` requirement.
 
 ### Endpoints / Public Contracts / Runtime Boundaries
 
-- [ ] T020 If T006 or T007 fails because the seeded Claude OAuth profile contract is wrong or incomplete, update `api_service/main.py` and `moonmind/workflows/temporal/runtime/providers/registry.py` for FR-002, FR-003, SC-001, SC-003, DESIGN-REQ-003, and DESIGN-REQ-015
+- [X] T020 If T006 or T007 fails because the seeded Claude OAuth profile contract is wrong or incomplete, update `api_service/main.py` and `moonmind/workflows/temporal/runtime/providers/registry.py` for FR-002, FR-003, SC-001, SC-003, DESIGN-REQ-003, and DESIGN-REQ-015. Skipped because the seeded Claude OAuth profile and provider defaults were already correct.
 
 ### Integration Wiring
 
-- [ ] T021 If any MM-481 test shows the runtime launcher does not propagate auth-mount targets or workspace separation correctly, update `moonmind/workflows/temporal/runtime/launcher.py` for FR-003, FR-007, SC-003, SC-004, and DESIGN-REQ-018
+- [X] T021 If any MM-481 test shows the runtime launcher does not propagate auth-mount targets or workspace separation correctly, update `moonmind/workflows/temporal/runtime/launcher.py` for FR-003, FR-007, SC-003, SC-004, and DESIGN-REQ-018. Shared materializer shaping fixed launcher propagation without a dedicated launcher-file change.
 
 ### Story Validation
 
-- [ ] T022 Run the focused MM-481 unit validation command until all new Claude launch-materialization tests pass: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_launcher.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/agents/codex_worker/test_cli.py`
-- [ ] T023 Run `./tools/test_integration.sh` only if T012/T014 were required by changed launch/artifact seams; otherwise record the explicit reason integration coverage was not required for MM-481 in `specs/244-claude-runtime-launch-materialization/tasks.md`
+- [X] T022 Run the focused MM-481 unit validation command until all new Claude launch-materialization tests pass: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/temporal/runtime/test_launcher.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/agents/codex_worker/test_cli.py`
+- [X] T023 Run `./tools/test_integration.sh` only if T012/T014 were required by changed launch/artifact seams; otherwise record the explicit reason integration coverage was not required for MM-481 in `specs/244-claude-runtime-launch-materialization/tasks.md`. Attempted, but the managed job has no Docker socket (`unix:///var/run/docker.sock`), so compose-backed verification could not start; the targeted integration file passed locally with `pytest -q tests/integration/temporal/test_claude_runtime_launch_materialization.py -q --tb=short`.
 
 **Checkpoint**: The MM-481 story is functionally complete, independently testable, and validated against the Claude OAuth launch contract.
 
@@ -118,9 +118,9 @@
 
 **Purpose**: Strengthen the completed story without expanding scope.
 
-- [ ] T024 [P] Review `specs/244-claude-runtime-launch-materialization/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/claude-runtime-launch.md`, `quickstart.md`, and `tasks.md` for MM-481 traceability covering FR-008
-- [ ] T025 Run final unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
-- [ ] T026 If launch/artifact behavior changed beyond unit-testable seams, run final hermetic integration verification with `./tools/test_integration.sh`; otherwise preserve the documented no-integration rationale covering FR-007 and SC-004
+- [X] T024 [P] Review `specs/244-claude-runtime-launch-materialization/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/claude-runtime-launch.md`, `quickstart.md`, and `tasks.md` for MM-481 traceability covering FR-008
+- [X] T025 Run final unit verification with `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
+- [X] T026 If launch/artifact behavior changed beyond unit-testable seams, run final hermetic integration verification with `./tools/test_integration.sh`; otherwise preserve the documented no-integration rationale covering FR-007 and SC-004. Attempted, but `./tools/test_integration.sh` is blocked in this managed job because Docker is unavailable; targeted MM-481 integration coverage passed locally, but hermetic compose verification remains environment-blocked.
 - [ ] T027 Run `/moonspec-verify` after implementation and tests pass, using `specs/244-claude-runtime-launch-materialization/spec.md` and the preserved MM-481 Jira preset brief as the final alignment source
 
 ---

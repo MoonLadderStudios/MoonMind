@@ -113,11 +113,14 @@ class ProviderProfileMaterializer:
         for k, v in profile.home_path_overrides.items():
             env[k] = self._render_string(str(v), context)
 
-        # Step 7: Delta Overrides
+        # Step 7: Apply oauth_home mount-path environment shaping
+        self._apply_oauth_home_runtime_env(profile, env)
+
+        # Step 8: Delta Overrides
         for k, v in profile.env_overrides.items():
             env[k] = str(v)
 
-        # Step 8: Command Construction
+        # Step 9: Command Construction
         cmd = profile.command_template.copy()
         if not cmd:
             cmd = [profile.runtime_id]
@@ -143,6 +146,29 @@ class ProviderProfileMaterializer:
         temp_dir = Path(tempfile.mkdtemp(prefix="mm_profile_support_")).resolve()
         self.generated_dirs.append(str(temp_dir))
         return str(temp_dir)
+
+    def _apply_oauth_home_runtime_env(
+        self,
+        profile: ManagedRuntimeProfile,
+        env: dict[str, str],
+    ) -> None:
+        mount_path = str(profile.volume_mount_path or "").strip()
+        if (
+            str(profile.runtime_materialization_mode or "").strip() != "oauth_home"
+            or not mount_path
+        ):
+            return
+
+        env["MANAGED_AUTH_VOLUME_PATH"] = mount_path
+        runtime_id = str(profile.runtime_id or "").strip()
+        if runtime_id == "claude_code":
+            env["CLAUDE_HOME"] = mount_path
+            env["CLAUDE_VOLUME_PATH"] = mount_path
+        elif runtime_id == "codex_cli":
+            env["CODEX_HOME"] = mount_path
+        elif runtime_id == "gemini_cli":
+            env["GEMINI_HOME"] = mount_path
+            env["GEMINI_CLI_HOME"] = mount_path
 
     def _render_string(self, value: str, context: dict[str, Any]) -> str:
         def _replace(match: re.Match[str]) -> str:
