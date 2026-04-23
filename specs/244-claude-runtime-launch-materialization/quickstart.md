@@ -50,4 +50,6 @@ Run hermetic integration tests only if launch, artifact, or worker-topology beha
 ./tools/test_integration.sh
 ```
 
+Preferred integration file when MM-481 needs new compose-backed coverage: `tests/integration/temporal/test_claude_runtime_launch_materialization.py`.
+
 Use integration coverage to confirm end-to-end managed runtime behavior only when the implementation changes compose-backed seams or artifact publication behavior.

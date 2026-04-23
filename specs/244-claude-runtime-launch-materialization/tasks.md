@@ -76,7 +76,7 @@
 
 ### Integration Tests (write before implementation when required)
 
-- [ ] T012 Add contingent hermetic integration coverage for MM-481 launch/artifact boundaries in the relevant integration suite only if T006-T010 expose behavior that cannot be proven safely by unit tests, covering FR-007 and SC-004 in `tests/integration/` and document the chosen file path in `specs/244-claude-runtime-launch-materialization/tasks.md`
+- [ ] T012 Add contingent hermetic integration coverage for MM-481 launch/artifact boundaries in `tests/integration/temporal/test_claude_runtime_launch_materialization.py` only if T006-T010 expose behavior that cannot be proven safely by unit tests, covering FR-007 and SC-004, and document any deviation in `specs/244-claude-runtime-launch-materialization/tasks.md`
 
 ### Red-First Confirmation
 
