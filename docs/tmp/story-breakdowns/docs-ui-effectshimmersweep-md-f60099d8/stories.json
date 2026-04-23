@@ -1,0 +1,335 @@
+{
+  "source": {
+    "title": "Shimmer Sweep Effect \u2014 Declarative Design",
+    "path": "docs/UI/EffectShimmerSweep.md",
+    "referencePath": "docs/UI/EffectShimmerSweep.md",
+    "originalDesignText": "# Shimmer Sweep Effect \u2014 Declarative Design\n\n## Intent\n\nDefine a single reusable motion treatment for the `executing` workflow state.\n\nThe effect must communicate **active progress** without implying error, urgency, or instability. It should feel closer to a premium \u201cthinking\u201d shimmer than to a loading skeleton.\n\n## Scope\n\nThis document covers **only** the shimmer sweep effect in isolation.\n\nIt does not define:\n- status color mapping for other workflow states\n- border-glint or lens-flare variants\n- task row layout changes\n- icon changes\n- polling or live-update behavior\n\n## Host Contract\n\n```yaml\nhost:\n  kind: status-pill\n  semantic_state: executing\n  attachment_mode: modifier\n  trigger:\n    workflow_state_equals: executing\n    motion_preference_not: reduce\n  fallback_trigger:\n    workflow_state_equals: executing\n    motion_preference_equals: reduce\n\nhooks:\n  preferred:\n    data-state: executing\n    data-effect: shimmer-sweep\n  acceptable:\n    class: is-executing\n\nplacement:\n  inside_fill: true\n  inside_border: true\n  outside_bounds: false\n\ntext:\n  source: host-content\n  mutation: none\n  case: preserve\n```\n\n## Design Principles\n\n```yaml\nprinciples:\n  - motion_must_read_as_activity_not_alert\n  - text_legibility_must_remain_primary\n  - animation_must_be_attachable_to_existing_status_pill_markup\n  - effect_must_not_change_layout_or_pill_dimensions\n  - effect_must_use_existing_theme_tokens_before_new_tokens_are_added\n  - effect_must_degrade_to_a_static_highlight_when_motion_is_reduced\n```\n\n## Visual Model\n\nThe effect is composed of three layers.\n\n```yaml\nlayers:\n  base:\n    role: preserve normal executing pill appearance\n    opacity_behavior: constant\n    motion: none\n\n  sweep_band:\n    role: moving luminous diagonal band\n    shape: soft-edged stripe\n    travel: left-to-right\n    angle_deg: -18\n    blend_intent: brighten, not wash out\n\n  trailing_halo:\n    role: soft atmospheric bloom behind the sweep band\n    shape: wider and dimmer than the core band\n    travel: locked_to_sweep_band\n    emphasis: subtle\n```\n\n## Motion Profile\n\n```yaml\nmotion:\n  cycle:\n    duration_ms: 1450\n    repeat: infinite\n    repeat_delay_ms: 220\n    easing: cubic-bezier(0.22, 1, 0.36, 1)\n\n  path:\n    start_x_pct: -135\n    center_x_pct: 50\n    end_x_pct: 135\n    y_behavior: fixed\n    angle_deg: -18\n\n  band:\n    width_pct: 24\n    soft_edge_pct: 38\n    core_opacity: 0.34\n    halo_opacity: 0.14\n    blur_px: 6\n\n  pacing:\n    entry: quick_but_soft\n    midpoint: brightest_at_text_centerline\n    exit: smooth_fade\n\n  continuity:\n    allow_overlap_between_cycles: false\n    idle_gap_present: true\n```\n\n## Theme Binding\n\nThe shimmer should derive from the existing MoonMind theme vocabulary instead of inventing a disconnected color.\n\n```yaml\ntheme_binding:\n  source_tokens:\n    - --mm-accent\n    - --mm-accent-2\n    - --mm-panel\n    - --mm-border\n    - --mm-ink\n\n  derived_roles:\n    executing_base_tint:\n      from: --mm-accent\n      intent: calm-active\n\n    shimmer_core:\n      from: --mm-accent-2\n      intent: coolest-brightest point\n\n    shimmer_halo:\n      from: [--mm-accent, --mm-accent-2]\n      intent: atmospheric blend\n\n    text_protection:\n      from: --mm-panel\n      intent: maintain local contrast beneath moving light\n```\n\n## Isolation Rules\n\n```yaml\nisolation:\n  host_overflow: hidden\n  host_positioning: relative\n  effect_pointer_events: none\n  effect_hit_testing: none\n  effect_z_index:\n    base: 0\n    shimmer: 1\n    text: 2\n  layout_shift_allowed: false\n  text_reflow_allowed: false\n  scrollbar_interaction: none\n```\n\n## Reduced Motion Behavior\n\n```yaml\nreduced_motion:\n  animation: disabled\n  replacement:\n    static_inner_highlight: true\n    subtle_border_emphasis: true\n    text_emphasis: keep\n  preserved_signals:\n    - executing_still_reads_as_active\n    - no_animation_required_for_comprehension\n```\n\n## State Matrix\n\n```yaml\nstate_matrix:\n  idle:\n    shimmer_sweep: off\n\n  executing:\n    shimmer_sweep: on\n\n  paused:\n    shimmer_sweep: off\n\n  waiting_on_dependencies:\n    shimmer_sweep: off\n\n  awaiting_external:\n    shimmer_sweep: off\n\n  finalizing:\n    shimmer_sweep: optional_future_variant\n\n  succeeded:\n    shimmer_sweep: off\n\n  failed:\n    shimmer_sweep: off\n\n  canceled:\n    shimmer_sweep: off\n```\n\n## Semantic Feel\n\n```yaml\ntone:\n  emotional_read: focused, intelligent, in-progress\n  forbidden_reads:\n    - error_flash\n    - warning_pulse\n    - disco_glow\n    - scanner_beam\n    - loading-skeleton-placeholder\n\n  similarity_targets:\n    - codex-thinking-adjacent\n    - premium-terminal-ui\n    - ambient-sci-fi-control-surface\n```\n\n## Implementation Shape\n\nThis section stays declarative but provides enough structure to guide implementation.\n\n```yaml\nimplementation_shape:\n  host_selector:\n    any_of:\n      - [data-state=\"executing\"][data-effect=\"shimmer-sweep\"]\n      - .is-executing\n\n  rendering_strategy:\n    preferred: pseudo-element overlay\n    acceptable: nested span overlay\n    avoid: extra wrapper that changes layout\n\n  overlay_elements:\n    - ::before as trailing_halo\n    - ::after as sweep_band\n\n  text_strategy:\n    text_must_render_above_overlay: true\n    text_color_shift_during_pass: minimal_only\n```\n\n## Acceptance Criteria\n\n```yaml\nacceptance_criteria:\n  - the executing pill remains readable at all times during the sweep\n  - the shimmer never escapes the rounded bounds of the pill\n  - the shimmer produces no measurable layout shift\n  - one complete sweep occurs roughly every 1.6 to 1.8 seconds including delay\n  - the brightest moment occurs near the center of the pill, not at the edges\n  - the effect looks intentional in both light and dark themes\n  - reduced-motion users see a static active treatment with no animated sweep\n  - non-executing states never inherit the shimmer accidentally\n```\n\n## Suggested Token Block\n\n```yaml\neffect_tokens:\n  --mm-executing-sweep-duration: 1450ms\n  --mm-executing-sweep-delay: 220ms\n  --mm-executing-sweep-angle: -18deg\n  --mm-executing-sweep-band-width: 24%\n  --mm-executing-sweep-core-opacity: 0.34\n  --mm-executing-sweep-halo-opacity: 0.14\n  --mm-executing-sweep-blur: 6px\n  --mm-executing-sweep-start-x: -135%\n  --mm-executing-sweep-end-x: 135%\n  --mm-executing-sweep-radius-inset: 1px\n```\n\n## Non-Goals\n\n```yaml\nnon_goals:\n  - spinning_indicators\n  - pulsing_whole_pill_opacity\n  - animated_border_glint\n  - multi_color_rainbow_motion\n  - progress_percentage_visualization\n  - execution_time_estimation\n```\n\n## Hand-off Note\n\nIf this is implemented in MoonMind, the effect should be added as a **shared status-pill modifier** rather than a page-local animation so that list, card, and detail surfaces all read consistently.\n"
+  },
+  "extractedAt": "2026-04-23T00:02:47Z",
+  "outputMode": "jira",
+  "designSummary": "The EffectShimmerSweep design defines one reusable shimmer-sweep modifier for status pills when a workflow is executing. The treatment must attach to existing pill markup, stay inside the pill bounds, preserve text and layout, derive its colors from MoonMind theme tokens, and convey calm active progress rather than alerting or placeholder loading. The design also defines reduced-motion behavior, explicit state gating so non-executing states never inherit the shimmer, visual motion parameters, isolation rules, and a hand-off expectation that the effect be shared across list, card, and detail surfaces rather than implemented page-locally.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Reusable executing-state shimmer treatment",
+      "type": "requirement",
+      "source_section": "Intent",
+      "explanation": "Define one reusable shimmer sweep for the executing workflow state that communicates active progress without error, urgency, or instability."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Effect scope excludes broader status and layout changes",
+      "type": "non-goal",
+      "source_section": "Scope; Non-Goals",
+      "explanation": "The work covers only the shimmer effect and excludes status color mapping, border glints, layout changes, icon changes, polling/live updates, spinners, whole-pill pulsing, rainbow motion, percentages, and execution-time estimation."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Host contract attaches as a status-pill modifier",
+      "type": "integration",
+      "source_section": "Host Contract; Hand-off Note",
+      "explanation": "The effect attaches to an existing status-pill host when workflow_state is executing and motion is not reduced, preferably through data-state/data-effect hooks, with .is-executing as an acceptable fallback, and should be shared across list, card, and detail surfaces."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Text content is preserved and remains primary",
+      "type": "constraint",
+      "source_section": "Host Contract; Design Principles; Implementation Shape; Acceptance Criteria",
+      "explanation": "The host text remains source content with no mutation or case change; text renders above overlays and remains readable throughout the sweep with only minimal color shift."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Overlay stays inside bounds without layout change",
+      "type": "constraint",
+      "source_section": "Host Contract; Design Principles; Isolation Rules; Acceptance Criteria",
+      "explanation": "The shimmer is inside the fill and border, never outside bounds, uses hidden overflow and relative positioning, and causes no layout shift, dimension changes, reflow, or scrollbar interaction."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Layered visual model uses base, sweep band, and halo",
+      "type": "requirement",
+      "source_section": "Visual Model; Implementation Shape",
+      "explanation": "The normal executing pill appearance is preserved while a soft diagonal luminous band and wider dim trailing halo travel together, preferably rendered as pseudo-element overlays."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Motion profile and pacing match declared values",
+      "type": "requirement",
+      "source_section": "Motion Profile; Suggested Token Block; Acceptance Criteria",
+      "explanation": "The sweep repeats infinitely with a 1450 ms cycle, 220 ms delay, declared easing, left-to-right travel from -135% to 135%, -18 degree angle, 24% band width, specified opacity/blur values, no cycle overlap, and a visible idle gap; the complete sweep reads roughly every 1.6 to 1.8 seconds including delay."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Theme binding derives from existing MoonMind tokens",
+      "type": "constraint",
+      "source_section": "Theme Binding; Design Principles; Acceptance Criteria",
+      "explanation": "The effect derives base tint, core, halo, and text-protection roles from existing MoonMind theme tokens before adding new tokens and must look intentional in light and dark themes."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Isolation and interaction safety are enforced",
+      "type": "security",
+      "source_section": "Isolation Rules",
+      "explanation": "Effect overlays have pointer-events and hit testing disabled, maintain base/shimmer/text z-index ordering, and do not interfere with host interaction or scrolling."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Reduced-motion users receive a static active treatment",
+      "type": "requirement",
+      "source_section": "Reduced Motion Behavior; Host Contract; Acceptance Criteria",
+      "explanation": "When motion preference is reduce, animation is disabled and replaced with a static inner highlight and subtle border emphasis while executing still reads as active without requiring animation."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Only executing state enables shimmer sweep",
+      "type": "state-model",
+      "source_section": "State Matrix; Host Contract; Acceptance Criteria",
+      "explanation": "The shimmer is on only for executing; idle, paused, waiting_on_dependencies, awaiting_external, succeeded, failed, and canceled are off, with finalizing only an optional future variant."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Semantic feel avoids alert and placeholder readings",
+      "type": "constraint",
+      "source_section": "Semantic Feel; Intent",
+      "explanation": "The effect should read as focused, intelligent, and in-progress while avoiding error flash, warning pulse, disco glow, scanner beam, and loading-skeleton-placeholder interpretations."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Add shared executing status-pill shimmer sweep modifier",
+      "shortName": "executing-shimmer-modifier",
+      "description": "As a Mission Control user, I need executing status pills to show a reusable shimmer sweep modifier so active workflow progress is visible across task list, card, and detail surfaces without changing existing pill text or layout.",
+      "why": "This delivers the core reusable visual treatment and keeps it attached to the existing status-pill component instead of duplicating page-local animations.",
+      "sourceReference": {
+        "path": "docs/UI/EffectShimmerSweep.md",
+        "title": "Shimmer Sweep Effect \u2014 Declarative Design",
+        "sections": [
+          "Intent",
+          "Host Contract",
+          "Design Principles",
+          "Visual Model",
+          "Implementation Shape",
+          "Hand-off Note"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006"
+        ]
+      },
+      "scope": [
+        "Add the shimmer sweep as a shared status-pill modifier for the executing workflow state.",
+        "Support preferred hooks [data-state=\"executing\"][data-effect=\"shimmer-sweep\"] and acceptable .is-executing attachment where needed by existing markup.",
+        "Render the sweep with overlay elements such as ::before for the trailing halo and ::after for the sweep band, or an equivalent nested span overlay when pseudo-elements are not viable.",
+        "Keep host text sourced from existing content, preserve case, render text above overlays, and avoid text mutation.",
+        "Ensure the overlay stays within the pill fill and border and does not change host dimensions."
+      ],
+      "outOfScope": [
+        "Changing task row, card, or detail page layout.",
+        "Changing status icons or status text labels.",
+        "Adding polling, live-update, or execution progress-percentage behavior.",
+        "Implementing border-glint, lens-flare, spinner, or whole-pill pulse variants."
+      ],
+      "independentTest": "Render representative executing status pills in list, card, and detail contexts and assert the shared modifier hooks are present, text content and case are unchanged, overlay layers render above the base and below text, pill dimensions do not change before/after enabling the modifier, and the shimmer is clipped to the rounded pill bounds.",
+      "acceptanceCriteria": [
+        "Executing status pills can opt into the effect through data-state/data-effect hooks or the existing .is-executing class without extra layout wrappers.",
+        "The normal executing pill base appearance remains visible beneath the overlay.",
+        "The overlay includes a soft diagonal sweep band and a wider dim trailing halo locked to the same travel path.",
+        "Status text remains readable, unmutated, case-preserved, and visually above the overlay for the full sweep.",
+        "The effect remains inside the rounded fill and border and produces no measurable layout shift, dimension change, text reflow, or scrollbar interaction.",
+        "The implementation is shared by status-pill styling so list, card, and detail surfaces can read consistently."
+      ],
+      "requirements": [
+        "Attach the effect to existing status-pill markup as a modifier rather than a page-local animation.",
+        "Use overlay rendering that preserves host content and host layout.",
+        "Preserve text content, case, and legibility as the primary visual priority.",
+        "Clip shimmer visuals within existing rounded pill bounds."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the reusable executing-state shimmer treatment.",
+        "DESIGN-REQ-003": "Owns modifier attachment hooks and shared status-pill placement.",
+        "DESIGN-REQ-004": "Owns text preservation and stacking above overlay layers.",
+        "DESIGN-REQ-005": "Owns inside-bounds rendering and zero layout shift for the shared modifier.",
+        "DESIGN-REQ-006": "Owns the base, sweep band, and trailing halo visual layer structure."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "Existing Mission Control status pills expose, or can be given, data attributes/classes without changing their semantic content."
+      ],
+      "needsClarification": [],
+      "handoff": "Specify a story that implements the shared executing status-pill shimmer modifier with overlay layers, stable attachment hooks, preserved text, clipped bounds, and no layout shift across existing status-pill surfaces."
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Bind shimmer motion and color to MoonMind theme tokens",
+      "shortName": "shimmer-motion-theme",
+      "description": "As a Mission Control user, I need the executing shimmer to move and glow with the declared timing, pacing, and MoonMind theme-derived colors so the treatment feels premium, calm, and active in both light and dark themes.",
+      "why": "The effect quality depends on the exact motion profile, theme binding, and semantic restraint; otherwise the shimmer can read as an alert, scanner, or disconnected decoration.",
+      "sourceReference": {
+        "path": "docs/UI/EffectShimmerSweep.md",
+        "title": "Shimmer Sweep Effect \u2014 Declarative Design",
+        "sections": [
+          "Motion Profile",
+          "Theme Binding",
+          "Semantic Feel",
+          "Suggested Token Block",
+          "Acceptance Criteria"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-012"
+        ]
+      },
+      "scope": [
+        "Implement the declared sweep timing, delay, easing, travel positions, angle, band width, opacity, blur, and no-overlap idle gap behavior.",
+        "Expose or use effect tokens matching the suggested token block where local conventions support CSS custom properties.",
+        "Derive executing base tint, shimmer core, shimmer halo, and text-protection roles from existing MoonMind theme tokens.",
+        "Tune light and dark theme rendering so the brightest moment occurs near the pill center and brightens without washing out text.",
+        "Verify the semantic feel avoids warning, error, disco, scanner, and loading-skeleton readings."
+      ],
+      "outOfScope": [
+        "Introducing a disconnected new color palette for executing status.",
+        "Changing the status color mapping for non-executing workflow states.",
+        "Adding finalizing-state variants beyond leaving room for future work."
+      ],
+      "independentTest": "Use frontend unit or visual tests to inspect computed CSS variables/keyframes for duration, delay, easing, travel, angle, opacity, and blur values, then capture light and dark theme screenshots or visual assertions confirming centerline brightness, text contrast, and calm active semantics.",
+      "acceptanceCriteria": [
+        "One complete sweep reads roughly every 1.6 to 1.8 seconds including the idle delay.",
+        "The sweep travels left-to-right from off-pill start to off-pill end at the declared diagonal angle.",
+        "The sweep band uses the declared relative width, soft edge intent, core opacity, halo opacity, and blur.",
+        "There is no visual overlap between cycles and an idle gap is perceptible.",
+        "The shimmer derives from existing MoonMind theme tokens before adding any new effect-specific tokens.",
+        "The effect looks intentional in both light and dark themes and does not wash out the text.",
+        "The animation reads as focused active progress, not error, warning, scanner, disco, or skeleton placeholder behavior."
+      ],
+      "requirements": [
+        "Match the declared shimmer motion profile and pacing.",
+        "Use MoonMind theme vocabulary for color derivation and text protection.",
+        "Preserve premium calm-active semantic feel across themes."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-007": "Owns declared motion timing, travel, angle, opacity, blur, and pacing values.",
+        "DESIGN-REQ-008": "Owns derivation from MoonMind theme tokens and light/dark theme quality.",
+        "DESIGN-REQ-012": "Owns the semantic feel guardrails for calm active progress."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "The existing Mission Control theme custom properties are available to status-pill CSS in both light and dark modes."
+      ],
+      "needsClarification": [],
+      "handoff": "Specify a story that tunes the shimmer keyframes, timing, token binding, and theme rendering so the shared modifier matches the declarative motion and semantic quality contract."
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Gate shimmer by workflow state and reduced-motion preference",
+      "shortName": "shimmer-state-accessibility",
+      "description": "As a Mission Control user with or without reduced-motion preferences, I need the shimmer to appear only for executing workflows and degrade to a static active treatment when motion is reduced so status remains accurate and accessible.",
+      "why": "State gating and reduced-motion behavior prevent accidental shimmer on non-executing states and ensure the active signal remains understandable without animation.",
+      "sourceReference": {
+        "path": "docs/UI/EffectShimmerSweep.md",
+        "title": "Shimmer Sweep Effect \u2014 Declarative Design",
+        "sections": [
+          "Host Contract",
+          "Reduced Motion Behavior",
+          "State Matrix",
+          "Isolation Rules",
+          "Scope",
+          "Non-Goals"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "scope": [
+        "Apply shimmer animation only when workflow state equals executing and motion preference is not reduce.",
+        "Disable shimmer animation for prefers-reduced-motion and provide a static inner highlight plus subtle border emphasis that still reads as active.",
+        "Ensure idle, paused, waiting_on_dependencies, awaiting_external, succeeded, failed, and canceled states never inherit shimmer styling accidentally.",
+        "Keep finalizing shimmer behavior out of scope except for avoiding accidental activation.",
+        "Disable pointer events and hit testing for effect overlays and preserve base/shimmer/text z-index ordering.",
+        "Add regression coverage for explicit non-goals so unrelated status mappings, icons, layout, live updates, progress percentages, and timing estimates are not introduced as part of this effect."
+      ],
+      "outOfScope": [
+        "Adding animated behavior for finalizing or any non-executing state.",
+        "Adding progress percentage, ETA, live-update, polling, icon, or broader layout behavior.",
+        "Creating spinner, whole-pill pulse, rainbow, border-glint, or lens-flare alternatives."
+      ],
+      "independentTest": "Run status-state rendering tests for every state in the matrix with normal and reduced-motion media settings, asserting only executing/non-reduced receives animation, executing/reduced receives static active styling with no animation, all other states have no shimmer, and overlay pointer-events/hit-testing remain disabled.",
+      "acceptanceCriteria": [
+        "Normal-motion executing status pills show the shimmer sweep.",
+        "Reduced-motion executing status pills show a static active treatment with no animated sweep.",
+        "Reduced-motion active treatment includes static inner highlight and subtle border emphasis while keeping text emphasis.",
+        "Non-executing states do not receive shimmer or reduced-motion shimmer fallback styling accidentally.",
+        "Effect overlays do not intercept pointer events, hit testing, or scrolling.",
+        "No out-of-scope indicators, layout changes, icon changes, progress percentages, ETAs, or live-update behavior are introduced."
+      ],
+      "requirements": [
+        "Gate shimmer activation by executing workflow state and motion preference.",
+        "Provide accessible reduced-motion fallback that preserves active status comprehension without animation.",
+        "Protect non-executing states and explicit non-goals with regression coverage.",
+        "Keep overlays interaction-safe through pointer-event and hit-testing isolation."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-002": "Owns explicit scope exclusions and non-goal regression protection.",
+        "DESIGN-REQ-009": "Owns pointer-event, hit-testing, z-index, and interaction isolation constraints.",
+        "DESIGN-REQ-010": "Owns reduced-motion fallback and no-animation comprehension.",
+        "DESIGN-REQ-011": "Owns the state matrix and executing-only activation behavior."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Frontend tests can mock or emulate prefers-reduced-motion for status-pill rendering."
+      ],
+      "needsClarification": [],
+      "handoff": "Specify a story that enforces executing-only shimmer activation, reduced-motion static fallback, interaction-safe overlays, and regression checks for non-executing states and explicit non-goals."
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-002"
+    ]
+  }
+}
