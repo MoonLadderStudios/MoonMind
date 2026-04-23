@@ -1,4 +1,4 @@
-# Research: Mission Control Report Presentation
+# Research: Surface Canonical Reports in Mission Control
 
 ## FR-001 / DESIGN-REQ-011 - Server-Driven Latest Report
 

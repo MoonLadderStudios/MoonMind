@@ -1,4 +1,4 @@
-# Implementation Plan: Mission Control Report Presentation
+# Implementation Plan: Surface Canonical Reports in Mission Control
 
 **Branch**: `run-jira-orchestrate-for-mm-462-mission-67b1d4e7` | **Date**: 2026-04-22 | **Spec**: [spec.md](spec.md)
 **Input**: Single-story feature specification from `specs/230-mission-control-report-presentation/spec.md`

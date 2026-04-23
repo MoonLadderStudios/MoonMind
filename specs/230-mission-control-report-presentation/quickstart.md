@@ -1,4 +1,4 @@
-# Quickstart: Mission Control Report Presentation
+# Quickstart: Surface Canonical Reports in Mission Control
 
 ## Focused Frontend Validation
 

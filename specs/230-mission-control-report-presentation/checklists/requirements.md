@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Mission Control Report Presentation
+# Specification Quality Checklist: Surface Canonical Reports in Mission Control
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-04-22

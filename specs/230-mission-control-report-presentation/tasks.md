@@ -1,4 +1,4 @@
-# Tasks: Mission Control Report Presentation
+# Tasks: Surface Canonical Reports in Mission Control
 
 **Input**: `specs/230-mission-control-report-presentation/spec.md`
 **Plan**: `specs/230-mission-control-report-presentation/plan.md`
