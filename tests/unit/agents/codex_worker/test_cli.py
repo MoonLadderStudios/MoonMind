@@ -945,3 +945,34 @@ def test_main_success_path(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_run", _ok)
 
     assert cli.main(["--once"]) == 0
+
+
+def test_run_preflight_claude_oauth_with_configured_mount_path_succeeds(monkeypatch) -> None:
+    """Claude oauth mode should accept the documented Claude auth mount path."""
+
+    verifications: list[str] = []
+
+    def fake_verify(name: str) -> str:
+        verifications.append(name)
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, *args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(os.path, "isdir", lambda path: path == "/home/app/.claude")
+    monkeypatch.setattr(os, "access", lambda _p, _m: True)
+
+    cli.run_preflight(
+        env={
+            "MOONMIND_WORKER_RUNTIME": "claude",
+            "MOONMIND_CLAUDE_CLI_AUTH_MODE": "oauth",
+            "CLAUDE_HOME": "/home/app/.claude",
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+        }
+    )
+
+    assert "claude" in verifications

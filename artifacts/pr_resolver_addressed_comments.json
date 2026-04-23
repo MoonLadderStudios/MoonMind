@@ -1,22 +1,12 @@
 [
   {
-    "id": 3134120640,
+    "id": 3134202207,
     "disposition": "addressed",
-    "rationale": "Extended report retention defaults and unit coverage so report.appendix, report.findings_index, and report.export now retain for the long window like primary and summary reports."
+    "rationale": "Converted _apply_oauth_home_runtime_env to a static method because it does not use instance state."
   },
   {
-    "id": 3134120652,
-    "disposition": "addressed",
-    "rationale": "Added the Report Projection Summary entity to the MM-492 data model, including report_status mapping and the projection-only finding_counts/severity_counts constraints."
-  },
-  {
-    "id": 4166314916,
+    "id": 4166409108,
     "disposition": "not-applicable",
-    "rationale": "This review body is a bot summary of the underlying inline comments, which were handled individually in this change."
-  },
-  {
-    "id": 3134120669,
-    "disposition": "addressed",
-    "rationale": "Documented the internal-metadata exception so validation rules now explicitly cover system keys such as preview_artifact_id when the validation context allows them."
+    "rationale": "Summary review only; the only actionable feedback in the review was the inline static-method refactor, which is addressed separately."
   }
 ]
