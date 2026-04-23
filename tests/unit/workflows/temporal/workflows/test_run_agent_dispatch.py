@@ -611,6 +611,12 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         from unittest.mock import patch
 
         wf = MoonMindRunWorkflow()
+        wf._profile_snapshots = {
+            "codex_default": {
+                "profile_id": "codex_default",
+                "runtime_id": "codex_cli",
+            },
+        }
 
         class MockInfo:
             workflow_id = "test-wf-id"
@@ -640,6 +646,86 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
 
         self.assertEqual(request.agent_id, "codex")
         self.assertEqual(request.execution_profile_ref, "codex_default")
+
+    def test_build_agent_execution_request_does_not_inherit_cross_runtime_profile(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+        wf._profile_snapshots = {
+            "codex_default": {
+                "profile_id": "codex_default",
+                "runtime_id": "codex_cli",
+            },
+        }
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "claude",
+                    },
+                },
+                node_id="node-cross-runtime-profile",
+                tool_name="pr-resolver",
+                workflow_parameters={
+                    "task": {
+                        "runtime": {
+                            "mode": "codex",
+                            "executionProfileRef": "codex_default",
+                        },
+                    },
+                },
+            )
+
+        self.assertEqual(request.agent_id, "claude")
+        self.assertIsNone(request.execution_profile_ref)
+
+    def test_build_agent_execution_request_does_not_inherit_unknown_profile(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+        wf._profile_snapshots = {
+            "codex_default": {
+                "profile_id": "codex_default",
+                "runtime_id": "codex_cli",
+            },
+        }
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "codex",
+                    },
+                },
+                node_id="node-unknown-inherited-profile",
+                tool_name="pr-resolver",
+                workflow_parameters={
+                    "task": {
+                        "runtime": {
+                            "mode": "codex",
+                            "executionProfileRef": "hallucinated-profile",
+                        },
+                    },
+                },
+            )
+
+        self.assertEqual(request.agent_id, "codex")
+        self.assertIsNone(request.execution_profile_ref)
 
     def test_build_agent_execution_request_prefers_runtime_block_profile_over_top_level(self) -> None:
         """Runtime planner sets profile fields inside the runtime block; these

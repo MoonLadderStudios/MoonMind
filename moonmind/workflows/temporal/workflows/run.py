@@ -3775,22 +3775,16 @@ class MoonMindRunWorkflow:
         execution_profile_ref = None
         if raw_execution_profile_ref is not None:
             candidate = str(raw_execution_profile_ref).strip() or None
-            # Validate against known profiles when the manager has synced them.
-            # An invalid profile ref here usually means stale plan data or
-            # AI-hallucinated profile IDs — fall back to auto-selection.
-            profile_snapshots = getattr(self, "_profile_snapshots", None)
-            if candidate is not None and profile_snapshots is not None:
-                if candidate not in profile_snapshots:
-                    self._get_logger().warning(
-                        "Plan node execution_profile_ref '%s' is not a known "
-                        "profile for this runtime; falling back to auto-selection.",
-                        candidate,
-                    )
-                    candidate = None
+            candidate = self._validated_execution_profile_ref(
+                candidate,
+                agent_id=agent_id,
+                source_label="Plan node",
+            )
             execution_profile_ref = candidate
         if execution_profile_ref is None and workflow_parameters is not None:
             execution_profile_ref = self._inherited_execution_profile_ref(
-                workflow_parameters
+                workflow_parameters,
+                agent_id=agent_id,
             )
         wf_info = workflow.info()
         correlation_id = wf_info.workflow_id
@@ -3917,6 +3911,8 @@ class MoonMindRunWorkflow:
     def _inherited_execution_profile_ref(
         self,
         parameters: Mapping[str, Any],
+        *,
+        agent_id: str | None = None,
     ) -> str | None:
         """Resolve the parent-request provider profile for child workflow launches."""
         task_payload = self._mapping_value(parameters, "task") or {}
@@ -3938,8 +3934,70 @@ class MoonMindRunWorkflow:
                 max_chars=160,
             )
             if profile_id:
-                return profile_id
+                source_agent_id = self._agent_id_from_runtime_inputs(
+                    node_inputs={"runtime": source},
+                )
+                if agent_id and source_agent_id:
+                    if self._managed_runtime_id(agent_id) != self._managed_runtime_id(
+                        source_agent_id
+                    ):
+                        self._get_logger().warning(
+                            "Inherited execution_profile_ref '%s' targets runtime "
+                            "'%s' but child runtime is '%s'; falling back to "
+                            "auto-selection.",
+                            profile_id,
+                            self._managed_runtime_id(source_agent_id),
+                            self._managed_runtime_id(agent_id),
+                        )
+                        return None
+                return self._validated_execution_profile_ref(
+                    profile_id,
+                    agent_id=agent_id,
+                    source_label="Inherited",
+                )
         return None
+
+    def _validated_execution_profile_ref(
+        self,
+        profile_id: str | None,
+        *,
+        agent_id: str | None,
+        source_label: str,
+    ) -> str | None:
+        """Validate a profile ref against known snapshots when they are available."""
+        if profile_id is None:
+            return None
+        profile_snapshots = getattr(self, "_profile_snapshots", None)
+        if profile_snapshots is None:
+            return profile_id
+        if profile_id not in profile_snapshots:
+            self._get_logger().warning(
+                "%s execution_profile_ref '%s' is not a known profile for this "
+                "runtime; falling back to auto-selection.",
+                source_label,
+                profile_id,
+            )
+            return None
+        if not isinstance(profile_snapshots, Mapping):
+            return profile_id
+        snapshot = profile_snapshots.get(profile_id)
+        if not isinstance(snapshot, Mapping):
+            return profile_id
+        runtime_id = self._coerce_text(snapshot.get("runtime_id"), max_chars=160)
+        if not runtime_id or not agent_id:
+            return profile_id
+        child_runtime_id = self._managed_runtime_id(agent_id)
+        if runtime_id != child_runtime_id:
+            self._get_logger().warning(
+                "%s execution_profile_ref '%s' belongs to runtime '%s' but child "
+                "runtime is '%s'; falling back to auto-selection.",
+                source_label,
+                profile_id,
+                runtime_id,
+                child_runtime_id,
+            )
+            return None
+        return profile_id
 
     @staticmethod
     def _managed_runtime_id(agent_id: str) -> str:

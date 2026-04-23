@@ -1,27 +1,22 @@
 [
   {
-    "id": 3127250580,
+    "id": 3128925097,
     "disposition": "addressed",
-    "rationale": "Updated Pentest orphan cleanup name fallback so it is used only when no explicit task, step, or runner-profile selector filter is requested; added a regression assertion for filtered lookup."
+    "rationale": "Inherited execution profiles now fall back to auto-selection when the parent runtime does not match the child runtime."
   },
   {
-    "id": 4158282600,
+    "id": 4160334281,
     "disposition": "not-applicable",
-    "rationale": "Automated review summary with no distinct actionable request beyond the inline review comments."
+    "rationale": "Review summary comment only; the actionable runtime-compatibility feedback was handled in the code change."
   },
   {
-    "id": 3127256646,
+    "id": 3128933234,
     "disposition": "addressed",
-    "rationale": "Changed PentestExecutionPolicy max_attempts and automatic_retries_enabled from Literal constants to standard int/bool fields with conservative defaults."
+    "rationale": "Inherited execution profiles are now validated against synced profile snapshots before being passed to child workflows."
   },
   {
-    "id": 3127256656,
-    "disposition": "addressed",
-    "rationale": "Changed failure-classification diagnostics to dict[str, Any] and added recursive string redaction that preserves structured metadata."
-  },
-  {
-    "id": 4158288444,
+    "id": 4160343819,
     "disposition": "not-applicable",
-    "rationale": "Human-readable review summary whose actionable points are covered by inline comments 3127256646 and 3127256656."
+    "rationale": "Review summary comment only; the actionable profile-validation feedback was handled in the code change."
   }
 ]
