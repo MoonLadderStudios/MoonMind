@@ -25,12 +25,10 @@ Mission Control task detail already uses server-selected report linkage to rende
 
 | ID | Status | Evidence |
 | --- | --- | --- |
-| DESIGN-REQ-011 | VERIFIED | Latest report query is server-side through `link_type=report.primary&latest_only=true`. |
-| DESIGN-REQ-012 | VERIFIED | Report section includes canonical report and related report content while preserving Artifacts and observability. |
-| DESIGN-REQ-013 | VERIFIED | Viewer/open helpers honor artifact presentation fields. |
-| DESIGN-REQ-014 | VERIFIED | Report-first UI appears before generic artifact inspection. |
-| DESIGN-REQ-020 | VERIFIED | Related evidence remains individually openable and generic observability remains separate. |
-| DESIGN-REQ-022 | VERIFIED | Existing artifact read model is used; no report-specific storage plane introduced. |
+| DESIGN-REQ-005 | VERIFIED | Latest report query stays server-side through `link_type=report.primary&latest_only=true` and avoids browser-side inference. |
+| DESIGN-REQ-014 | VERIFIED | Report-first UI appears before generic artifact inspection and includes related report content. |
+| DESIGN-REQ-015 | VERIFIED | Viewer/open helpers honor artifact presentation fields. |
+| DESIGN-REQ-016 | VERIFIED | Related evidence remains individually openable, generic observability remains separate, and the existing artifact read model is preserved. |
 
 ## Test Evidence
 

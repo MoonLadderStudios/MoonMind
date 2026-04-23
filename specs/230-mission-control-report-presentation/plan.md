@@ -1,6 +1,6 @@
 # Implementation Plan: Surface Canonical Reports in Mission Control
 
-**Branch**: `run-jira-orchestrate-for-mm-462-mission-67b1d4e7` | **Date**: 2026-04-22 | **Spec**: [spec.md](spec.md)
+**Branch**: `mm-494-1c104bae` | **Date**: 2026-04-22 | **Spec**: [spec.md](spec.md)
 **Input**: Single-story feature specification from `specs/230-mission-control-report-presentation/spec.md`
 
 ## Summary
@@ -19,12 +19,10 @@ The existing Mission Control report-presentation implementation already satisfie
 | FR-006 | implemented_verified | Implementation consumes the existing artifact endpoint/read model only; no new storage or mutation route was added. | No additional plan work; preserve existing verified behavior. | unit + contract |
 | FR-007 | implemented_verified | Report section renders only when latest report response contains an actual `report.primary` link. | No additional plan work; preserve existing verified behavior. | frontend unit |
 | FR-008 | implemented_verified | MM-494 is preserved in `spec.md`, `plan.md`, `tasks.md`, `quickstart.md`, `verification.md`, and the orchestration input. | No additional plan work; preserve traceability across resumed artifacts. | traceability check |
-| DESIGN-REQ-011 | implemented_verified | Latest report query remains server-side through `link_type=report.primary&latest_only=true`. | No additional plan work; preserve existing verified behavior. | frontend unit |
-| DESIGN-REQ-012 | implemented_verified | Report section includes canonical report and related report content while preserving generic artifacts and observability. | No additional plan work; preserve existing verified behavior. | frontend unit |
-| DESIGN-REQ-013 | implemented_verified | Viewer/open helpers honor artifact presentation fields. | No additional plan work; preserve existing verified behavior. | frontend unit |
-| DESIGN-REQ-014 | implemented_verified | Report-first UI appears before generic artifact inspection. | No additional plan work; preserve existing verified behavior. | frontend unit |
-| DESIGN-REQ-020 | implemented_verified | Related evidence remains individually openable and generic observability remains separate. | No additional plan work; preserve existing verified behavior. | frontend unit |
-| DESIGN-REQ-022 | implemented_verified | Existing artifact endpoint remains a read model over artifacts; no report-specific storage plane was introduced. | No additional plan work; preserve existing verified behavior. | contract |
+| DESIGN-REQ-005 | implemented_verified | Latest report query and report-first presentation use the existing `report.primary` artifact path instead of browser-side inference. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-014 | implemented_verified | Report section includes canonical report and related report content before generic artifact inspection. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-015 | implemented_verified | Viewer/open helpers honor `default_read_ref`, `render_hint`, `content_type`, and metadata title/name. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-016 | implemented_verified | Evidence remains individually openable, observability stays separate, and the existing artifact endpoint remains the read-model boundary. | No additional plan work; preserve existing verified behavior. | frontend unit + contract |
 
 ## Technical Context
 

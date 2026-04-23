@@ -1,12 +1,47 @@
 [
   {
-    "id": 3134202207,
+    "id": 4166704069,
     "disposition": "addressed",
-    "rationale": "Converted _apply_oauth_home_runtime_env to a static method because it does not use instance state."
+    "rationale": "Aligned the resumed MM-494 feature artifacts so the branch metadata and source coverage IDs now match the current Jira brief across plan, tasks, quickstart, research, spec, and verification."
   },
   {
-    "id": 4166409108,
+    "id": 3134446176,
+    "disposition": "addressed",
+    "rationale": "Updated plan branch metadata to the current MM-494 PR head branch in specs/230-mission-control-report-presentation/plan.md."
+  },
+  {
+    "id": 3134446179,
+    "disposition": "addressed",
+    "rationale": "Replaced the stale plan requirement-status DESIGN-REQ rows with the MM-494 coverage IDs DESIGN-REQ-005/014/015/016."
+  },
+  {
+    "id": 3134446182,
+    "disposition": "addressed",
+    "rationale": "Updated the quickstart traceability command to check the MM-494 coverage IDs DESIGN-REQ-005/014/015/016."
+  },
+  {
+    "id": 3134446197,
+    "disposition": "addressed",
+    "rationale": "Updated the research section headers to use the MM-494 coverage IDs instead of the prior MM-462-era ID set."
+  },
+  {
+    "id": 3134446201,
+    "disposition": "addressed",
+    "rationale": "Updated the tasks source-traceability summary and requirement-status summary to the MM-494 coverage IDs."
+  },
+  {
+    "id": 3134446204,
+    "disposition": "addressed",
+    "rationale": "Updated the T019 traceability gate command in tasks.md to check the MM-494 coverage IDs."
+  },
+  {
+    "id": 4166705870,
     "disposition": "not-applicable",
-    "rationale": "Summary review only; the only actionable feedback in the review was the inline static-method refactor, which is addressed separately."
+    "rationale": "This top-level Codex review body is generic wrapper text; the actionable inline traceability comment was addressed separately in comment 3134447700."
+  },
+  {
+    "id": 3134447700,
+    "disposition": "addressed",
+    "rationale": "Aligned the traceability gate with the canonical MM-494 coverage IDs in tasks.md and quickstart.md and verified it with rg."
   }
 ]

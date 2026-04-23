@@ -1,6 +1,6 @@
 # Research: Surface Canonical Reports in Mission Control
 
-## FR-001 / DESIGN-REQ-011 - Server-Driven Latest Report
+## FR-001 / DESIGN-REQ-005 - Server-Driven Latest Report
 
 Decision: Use the existing execution artifact endpoint with `link_type=report.primary&latest_only=true` to identify the canonical final report.
 Evidence: `api_service/api/routers/temporal_artifacts.py` exposes `link_type` and `latest_only`; `moonmind/workflows/temporal/artifacts.py` routes latest lookup through `latest_for_execution_link`.
@@ -16,7 +16,7 @@ Rationale: A dedicated report region makes the canonical report visible before g
 Alternatives considered: Highlight report rows inside the existing artifact table. Rejected because the story requires report-first presentation before generic artifact inspection.
 Test implications: Frontend unit test asserting Report appears before Artifacts.
 
-## FR-003 / DESIGN-REQ-012 / DESIGN-REQ-020 - Related Report Content
+## FR-003 / DESIGN-REQ-014 / DESIGN-REQ-016 - Related Report Content
 
 Decision: Parse artifact links and metadata in the frontend schema, then derive related report content from existing artifact list rows with `report.summary`, `report.structured`, or `report.evidence` links.
 Evidence: `ArtifactMetadataModel` includes `links`, `metadata`, `default_read_ref`, and `download_url`; current frontend schema only normalizes basic artifact fields.
@@ -32,7 +32,7 @@ Rationale: Curated reports must complement observability, not replace it.
 Alternatives considered: Move artifacts into the report panel. Rejected because generic artifacts must remain accessible for non-report deliverables and diagnostics.
 Test implications: Existing task detail tests plus a report test that still finds the Artifacts section.
 
-## FR-005 / DESIGN-REQ-013 - Viewer Target Selection
+## FR-005 / DESIGN-REQ-015 - Viewer Target Selection
 
 Decision: Add frontend helpers that choose report open targets from `default_read_ref` first, then explicit download URL, then artifact ID; label the viewer from `render_hint`, `content_type`, `metadata.name`, and `metadata.title`.
 Evidence: API metadata includes `default_read_ref`; existing `artifactDownloadHref` uses only download URL or artifact ID.
@@ -40,7 +40,7 @@ Rationale: The UI can honor preview/raw read policy while keeping the first impl
 Alternatives considered: Build full inline renderers for every content type. Rejected because the source allows binary/download behavior and this story focuses on presentation and openability.
 Test implications: Frontend unit tests for default-read-ref target and content-type labels.
 
-## FR-006 / DESIGN-REQ-022 - Read Model Boundary
+## FR-006 / DESIGN-REQ-016 - Read Model Boundary
 
 Decision: Treat report presentation as a read model over normal artifact metadata; do not add storage, mutation routes, or report-specific tables.
 Evidence: `ArtifactMetadataModel` and execution artifact listing already provide the needed data.

@@ -150,12 +150,10 @@ Needs Clarification
 
 | ID | Source | Requirement | Scope | Mapped Requirements |
 | --- | --- | --- | --- | --- |
-| DESIGN-REQ-011 | `docs/Artifacts/ReportArtifacts.md` §11.4 | Latest-report selection is server query behavior or an explicit projection; clients must not infer the canonical report by sorting arbitrary artifacts in the browser. | In scope | FR-001, FR-007 |
-| DESIGN-REQ-012 | `docs/Artifacts/ReportArtifacts.md` §12.1 | Report-producing executions expose a Report panel or top-level report card, a Related Evidence section, and continued access to artifacts and observability surfaces. | In scope | FR-002, FR-003, FR-004 |
-| DESIGN-REQ-013 | `docs/Artifacts/ReportArtifacts.md` §12.2-§12.3 | Primary report rendering uses `default_read_ref`, `render_hint`, `content_type`, and metadata name/title to choose an appropriate viewer and raw access behavior. | In scope | FR-005 |
-| DESIGN-REQ-014 | `docs/Artifacts/ReportArtifacts.md` §12.4 | If an execution has a canonical `report.primary`, Mission Control presents that artifact before generic artifact list inspection and shows related report content. | In scope | FR-002, FR-003 |
-| DESIGN-REQ-020 | `docs/Artifacts/ReportArtifacts.md` §12.5, §13 | Evidence artifacts remain individually addressable and viewable, and curated reports remain separate from stdout, stderr, diagnostics, provider snapshots, and other observability outputs. | In scope | FR-003, FR-004 |
-| DESIGN-REQ-022 | `docs/Artifacts/ReportArtifacts.md` §18 | Optional execution summary fields and report projection endpoints are read models over normal artifacts, not a separate report storage or mutation path. | In scope | FR-001, FR-006 |
+| DESIGN-REQ-005 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Canonical report presentation MUST remain server-driven through existing `report.primary` artifact selection and must not rely on browser-side inference. | In scope | FR-001, FR-007 |
+| DESIGN-REQ-014 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Executions with a canonical report MUST surface a report-first panel with related report content before generic artifact inspection. | In scope | FR-002, FR-003 |
+| DESIGN-REQ-015 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Viewer selection MUST honor `default_read_ref`, `render_hint`, `content_type`, and `metadata.name` or `metadata.title` for the report surface. | In scope | FR-005 |
+| DESIGN-REQ-016 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Related evidence MUST remain individually addressable, observability surfaces MUST remain accessible outside the report panel, and the implementation MUST stay on the existing artifact read model. | In scope | FR-003, FR-004, FR-006 |
 
 ## Requirements *(mandatory)*
 
