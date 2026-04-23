@@ -17,7 +17,7 @@
 - SCN-001 through SCN-005: additive base preservation, bright-band/wider-halo semantics, theme coherence, interaction safety, and bounded in-pill rendering.
 - SC-001 through SC-007: measurable proof for base visibility, dual-layer semantics, theme coherence, readability, bounded layout, token surface, and MM-489 traceability.
 - DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-012, DESIGN-REQ-015: legibility-first design, layered visual model, theme binding, isolation rules, attachable host treatment, and reusable token surface.
-- Requirement status summary from `plan.md`: 2 `missing`, 4 `partial`, 19 `implemented_unverified`, 0 `implemented_verified`.
+- Requirement status summary from `plan.md`: 2 `missing`, 3 `partial`, 20 `implemented_unverified`, 0 `implemented_verified`.
 
 ## Phase 1: Setup
 
@@ -33,7 +33,7 @@
 
 **Summary**: As a Mission Control user, I want the executing shimmer treatment to render a distinct bright band and trailing halo so active progress feels premium while status text remains readable.
 
-**Independent Test**: Put an executing status pill into light theme, dark theme, and reduced-motion contexts, then verify the treatment keeps the base appearance visible, renders a bright sweep band with a wider dimmer halo, preserves text readability and interaction behavior, stays bounded to the pill, exposes reusable effect tokens or equivalent variables, and preserves MM-489 traceability.
+**Independent Test**: Put an executing status pill into light theme and dark theme contexts, then verify the treatment keeps the base appearance visible, renders a bright sweep band with a wider dimmer halo, preserves text readability and interaction behavior, stays bounded to the pill, exposes reusable effect tokens or equivalent variables, and preserves MM-489 traceability.
 
 **Traceability IDs**: FR-001 through FR-007; SCN-001 through SCN-005; SC-001 through SC-007; DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-012, DESIGN-REQ-015.
 

@@ -104,7 +104,7 @@ Needs Clarification
 
 **Goal**: The executing state reads as calm, intelligent activity through a layered shimmer treatment that preserves the pill's base appearance, remains legible in both themes, and avoids interaction or layout side effects.
 
-**Independent Test**: Put an executing status pill into light theme, dark theme, and reduced-motion contexts, then verify the treatment keeps the base appearance visible, renders a bright sweep band with a wider dimmer halo, preserves text readability and interaction behavior, and maintains MM-489 traceability in the produced artifacts.
+**Independent Test**: Put an executing status pill into light theme and dark theme contexts, then verify the treatment keeps the base appearance visible, renders a bright sweep band with a wider dimmer halo, preserves text readability and interaction behavior, and maintains MM-489 traceability in the produced artifacts.
 
 **Acceptance Scenarios**:
 
