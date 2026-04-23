@@ -112,6 +112,7 @@ describe('Tasks List Entrypoint', () => {
     }
 
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
 
     const waitingPills = screen.getAllByText('waiting_on_dependencies');
     expect(waitingPills.length).toBeGreaterThan(0);

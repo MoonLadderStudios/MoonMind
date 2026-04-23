@@ -42,6 +42,7 @@
   --mm-font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --mm-executing-sweep-duration: 1450ms;
   --mm-executing-sweep-delay: 220ms;
+  --mm-executing-sweep-cycle-duration: 1670ms;
   --mm-executing-sweep-angle: -18deg;
   --mm-executing-sweep-band-width: 24%;
   --mm-executing-sweep-halo-width-multiplier: 10;
@@ -1311,8 +1312,7 @@ tr[data-proposal-id].proposal-consuming td {
   background-position:
     var(--mm-executing-sweep-start-x) 0,
     calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset)) 0;
-  animation: mm-status-pill-shimmer var(--mm-executing-sweep-duration) cubic-bezier(0.22, 1, 0.36, 1) infinite;
-  animation-delay: var(--mm-executing-sweep-delay);
+  animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
 @keyframes mm-status-pill-shimmer {
@@ -1320,16 +1320,34 @@ tr[data-proposal-id].proposal-consuming td {
     background-position:
       var(--mm-executing-sweep-start-x) 0,
       calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset)) 0;
+    background-size:
+      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) 100%,
+      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) 100%;
   }
 
   65% {
     background-position: 50% 0, 62% 0;
+    background-size:
+      calc(var(--mm-executing-sweep-band-width) * 10.8) 100%,
+      calc(var(--mm-executing-sweep-band-width) * 10.25) 100%;
+  }
+
+  86.83% {
+    background-position:
+      var(--mm-executing-sweep-end-x) 0,
+      calc(var(--mm-executing-sweep-end-x) + var(--mm-executing-sweep-layer-offset)) 0;
+    background-size:
+      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) 100%,
+      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) 100%;
   }
 
   100% {
     background-position:
       var(--mm-executing-sweep-end-x) 0,
       calc(var(--mm-executing-sweep-end-x) + var(--mm-executing-sweep-layer-offset)) 0;
+    background-size:
+      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) 100%,
+      calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) 100%;
   }
 }
 

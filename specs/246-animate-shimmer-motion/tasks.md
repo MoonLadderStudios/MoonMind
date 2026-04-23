@@ -17,17 +17,17 @@
 - SCN-001 through SCN-006: bounded sweep travel, cadence/no-overlap timing, center emphasis, reduced-motion static fallback, reduced-motion active comprehension, and executing-only isolation.
 - SC-001 through SC-007: measurable proof for bounded travel, 1.6 to 1.8 second cadence, center emphasis, reduced-motion static highlight, reduced-motion active comprehension, non-executing exclusion, and MM-490 traceability.
 - DESIGN-REQ-007, DESIGN-REQ-010, DESIGN-REQ-012, DESIGN-REQ-014: executing-state trigger, motion profile, reduced-motion behavior, and executing-only state matrix.
-- Requirement status summary from `plan.md`: 2 `missing`, 7 `partial`, 11 `implemented_unverified`, 4 `implemented_verified`.
+- Requirement status summary from `plan.md`: 24 `implemented_verified`.
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify MM-490 planning inputs and target frontend files in `specs/246-animate-shimmer-motion/spec.md`, `specs/246-animate-shimmer-motion/plan.md`, `specs/246-animate-shimmer-motion/research.md`, `frontend/src/styles/mission-control.css`, `frontend/src/utils/executionStatusPillClasses.ts`, `frontend/src/entrypoints/tasks-list.tsx`, and `frontend/src/entrypoints/task-detail.tsx`.
-- [ ] T002 Confirm the focused unit and integration validation commands in `specs/246-animate-shimmer-motion/quickstart.md` remain the active test path for MM-490 and require no new package or service setup.
+- [X] T001 Verify MM-490 planning inputs and target frontend files in `specs/246-animate-shimmer-motion/spec.md`, `specs/246-animate-shimmer-motion/plan.md`, `specs/246-animate-shimmer-motion/research.md`, `frontend/src/styles/mission-control.css`, `frontend/src/utils/executionStatusPillClasses.ts`, `frontend/src/entrypoints/tasks-list.tsx`, and `frontend/src/entrypoints/task-detail.tsx`.
+- [X] T002 Confirm the focused unit and integration validation commands in `specs/246-animate-shimmer-motion/quickstart.md` remain the active test path for MM-490 and require no new package or service setup.
 
 ## Phase 2: Foundational
 
-- [ ] T003 Reconcile the MM-490 motion contract and data model in `specs/246-animate-shimmer-motion/contracts/status-pill-shimmer-motion.md` and `specs/246-animate-shimmer-motion/data-model.md` with the current shared Mission Control shimmer seams before story verification begins.
-- [ ] T004 Confirm MM-490 stays within the existing shared status-pill helper, Mission Control stylesheet, and list/detail render surfaces in `specs/246-animate-shimmer-motion/plan.md` and `specs/246-animate-shimmer-motion/research.md`, with no new component, route, or infrastructure.
+- [X] T003 Reconcile the MM-490 motion contract and data model in `specs/246-animate-shimmer-motion/contracts/status-pill-shimmer-motion.md` and `specs/246-animate-shimmer-motion/data-model.md` with the current shared Mission Control shimmer seams before story verification begins.
+- [X] T004 Confirm MM-490 stays within the existing shared status-pill helper, Mission Control stylesheet, and list/detail render surfaces in `specs/246-animate-shimmer-motion/plan.md` and `specs/246-animate-shimmer-motion/research.md`, with no new component, route, or infrastructure.
 
 ## Phase 3: Story - Calm Executing Shimmer Motion
 
@@ -49,35 +49,35 @@
 
 ### Tests First
 
-- [ ] T005 [P] Add failing CSS contract tests for bounded left-to-right travel, total 1.6 to 1.8 second cadence including idle gap, no-overlap timing, center-focused emphasis, and reduced-motion static fallback semantics in `frontend/src/entrypoints/mission-control.test.tsx` covering FR-001, FR-002, FR-003, FR-004, FR-005, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-002, SC-003, SC-004, SC-005, DESIGN-REQ-007, DESIGN-REQ-010, DESIGN-REQ-012.
-- [ ] T006 [P] Add failing helper tests for MM-490 traceability preservation in `frontend/src/utils/executionStatusPillClasses.test.ts` covering FR-007 and SC-007 while preserving the existing verified executing-only selector behavior.
-- [ ] T007 [P] Add failing task-list integration tests for reduced-motion active comprehension and bounded executing-pill rendering in `frontend/src/entrypoints/tasks-list.test.tsx` covering FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-007, DESIGN-REQ-012.
-- [ ] T008 [P] Add failing task-detail integration tests for reduced-motion active comprehension and bounded executing-pill rendering in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-007, DESIGN-REQ-012.
-- [ ] T009 Run the focused unit and integration validation commands from `specs/246-animate-shimmer-motion/quickstart.md` to confirm T005-T008 fail for the expected MM-490 gaps before production changes.
+- [X] T005 [P] Add failing CSS contract tests for bounded left-to-right travel, total 1.6 to 1.8 second cadence including idle gap, no-overlap timing, center-focused emphasis, and reduced-motion static fallback semantics in `frontend/src/entrypoints/mission-control.test.tsx` covering FR-001, FR-002, FR-003, FR-004, FR-005, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-002, SC-003, SC-004, SC-005, DESIGN-REQ-007, DESIGN-REQ-010, DESIGN-REQ-012.
+- [X] T006 [P] Add failing helper tests for MM-490 traceability preservation in `frontend/src/utils/executionStatusPillClasses.test.ts` covering FR-007 and SC-007 while preserving the existing verified executing-only selector behavior.
+- [X] T007 [P] Add failing task-list integration tests for reduced-motion active comprehension and bounded executing-pill rendering in `frontend/src/entrypoints/tasks-list.test.tsx` covering FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-007, DESIGN-REQ-012.
+- [X] T008 [P] Add failing task-detail integration tests for reduced-motion active comprehension and bounded executing-pill rendering in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-007, DESIGN-REQ-012.
+- [X] T009 Run the focused unit and integration validation commands from `specs/246-animate-shimmer-motion/quickstart.md` to confirm T005-T008 fail for the expected MM-490 gaps before production changes.
 
 ### Conditional Fallback For Implemented-Unverified Rows
 
-- [ ] T010 If T005 or T009 shows the existing sweep path or reduced-motion fallback semantics are weaker than MM-490 requires, update `frontend/src/styles/mission-control.css` to preserve bounded travel, static fallback clarity, and executing-state comprehension for FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-007, and DESIGN-REQ-012.
-- [ ] T011 If T007-T009 show list/detail surfaces do not preserve the reduced-motion active read on supported executing pills, update `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css` for FR-005, SCN-005, SC-005, and DESIGN-REQ-012.
+- [X] T010 If T005 or T009 shows the existing sweep path or reduced-motion fallback semantics are weaker than MM-490 requires, update `frontend/src/styles/mission-control.css` to preserve bounded travel, static fallback clarity, and executing-state comprehension for FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-007, and DESIGN-REQ-012.
+- [X] T011 If T007-T009 show list/detail surfaces do not preserve the reduced-motion active read on supported executing pills, update `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css` for FR-005, SCN-005, SC-005, and DESIGN-REQ-012.
 
 ### Implementation
 
-- [ ] T012 Add the missing MM-490 traceability surface in `frontend/src/utils/executionStatusPillClasses.ts` and `frontend/src/utils/executionStatusPillClasses.test.ts` for FR-007 and SC-007 while preserving adjacent MM-488/MM-489 references.
-- [ ] T013 Implement the missing MM-490 timing contract in `frontend/src/styles/mission-control.css` for FR-002, FR-003, SCN-002, SCN-003, SC-002, SC-003, and DESIGN-REQ-010 by refining shimmer tokens and keyframes to encode per-cycle idle gap, no-overlap timing, and center-focused emphasis.
-- [ ] T014 Re-run the focused unit validation command from `specs/246-animate-shimmer-motion/quickstart.md`, fix any failing MM-490 CSS/helper assertions in `frontend/src/styles/mission-control.css` and `frontend/src/utils/executionStatusPillClasses.ts`, and confirm the verification-first tasks now pass.
-- [ ] T015 Re-run the focused integration validation command from `specs/246-animate-shimmer-motion/quickstart.md`, fix any failing MM-490 render assertions in `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css`, and confirm the story passes end to end on supported surfaces.
+- [X] T012 Add the missing MM-490 traceability surface in `frontend/src/utils/executionStatusPillClasses.ts` and `frontend/src/utils/executionStatusPillClasses.test.ts` for FR-007 and SC-007 while preserving adjacent MM-488/MM-489 references.
+- [X] T013 Implement the missing MM-490 timing contract in `frontend/src/styles/mission-control.css` for FR-002, FR-003, SCN-002, SCN-003, SC-002, SC-003, and DESIGN-REQ-010 by refining shimmer tokens and keyframes to encode per-cycle idle gap, no-overlap timing, and center-focused emphasis.
+- [X] T014 Re-run the focused unit validation command from `specs/246-animate-shimmer-motion/quickstart.md`, fix any failing MM-490 CSS/helper assertions in `frontend/src/styles/mission-control.css` and `frontend/src/utils/executionStatusPillClasses.ts`, and confirm the verification-first tasks now pass.
+- [X] T015 Re-run the focused integration validation command from `specs/246-animate-shimmer-motion/quickstart.md`, fix any failing MM-490 render assertions in `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css`, and confirm the story passes end to end on supported surfaces.
 
 ### Story Validation
 
-- [ ] T016 Update MM-490 requirement-status evidence in `specs/246-animate-shimmer-motion/plan.md` after T014-T015 so `missing`, `partial`, and `implemented_unverified` rows reflect the final proof.
-- [ ] T017 Verify the independent story criteria in `specs/246-animate-shimmer-motion/quickstart.md` and record any remaining MM-490-specific gaps before polish work.
+- [X] T016 Update MM-490 requirement-status evidence in `specs/246-animate-shimmer-motion/plan.md` after T014-T015 so `missing`, `partial`, and `implemented_unverified` rows reflect the final proof.
+- [X] T017 Verify the independent story criteria in `specs/246-animate-shimmer-motion/quickstart.md` and record any remaining MM-490-specific gaps before polish work.
 
 ## Final Phase: Polish and Verification
 
-- [ ] T018 Expand edge-case coverage for rapid re-renders, non-overlap cadence guardrails, and reduced-motion active comprehension in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` as needed for SCN-002, SCN-005, SC-002, SC-005, and DESIGN-REQ-010.
-- [ ] T019 Run the quickstart validation steps from `specs/246-animate-shimmer-motion/quickstart.md`.
-- [ ] T020 Run `./tools/test_unit.sh` for final unit-test verification.
-- [ ] T021 Run `/moonspec-verify` by creating `specs/246-animate-shimmer-motion/verification.md` with MM-490 traceability, DESIGN-REQ coverage, test evidence, and final verdict.
+- [X] T018 Expand edge-case coverage for rapid re-renders, non-overlap cadence guardrails, and reduced-motion active comprehension in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` as needed for SCN-002, SCN-005, SC-002, SC-005, and DESIGN-REQ-010.
+- [X] T019 Run the quickstart validation steps from `specs/246-animate-shimmer-motion/quickstart.md`.
+- [X] T020 Run `./tools/test_unit.sh` for final unit-test verification.
+- [X] T021 Run `/moonspec-verify` by creating `specs/246-animate-shimmer-motion/verification.md` with MM-490 traceability, DESIGN-REQ coverage, test evidence, and final verdict.
 
 ## Dependencies and Execution Order
 

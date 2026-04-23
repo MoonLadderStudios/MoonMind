@@ -5,36 +5,36 @@
 
 ## Summary
 
-Plan MM-490 as the motion-profile refinement on top of the shared executing shimmer already introduced by MM-488 and visually refined by MM-489. The repo already contains an executing-only shimmer selector contract, shared Mission Control CSS, reduced-motion suppression, and list/detail render coverage, but the current implementation does not yet defensibly encode or prove the full MM-490 motion cadence: the repeat delay is only an initial `animation-delay`, center-brightness emphasis is indirect, and MM-490 traceability is absent from runtime-adjacent evidence. Planned work is frontend-only and TDD-first: add focused CSS/helper tests for cadence, no-overlap timing, center-brightness emphasis, reduced-motion active fallback, and MM-490 traceability; update the shared Mission Control shimmer contract where those tests expose gaps; then rerun focused Vitest coverage and the full unit suite.
+MM-490 is the motion-profile refinement on top of the shared executing shimmer already introduced by MM-488 and visually refined by MM-489. The implemented story stays frontend-only and TDD-first: focused CSS/helper tests now prove cadence, no-overlap timing, center-brightness emphasis, reduced-motion active fallback, and MM-490 traceability, while the shared Mission Control shimmer contract now encodes the required cycle timing and verification surfaces without introducing page-local forks.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | implemented_unverified | `frontend/src/styles/mission-control.css` defines left-to-right shimmer positions plus `overflow: hidden`, but no MM-490-focused test proves bounded travel semantics. | add verification tests first, with implementation contingency if clipping/path assertions fail | unit + integration |
-| FR-002 | partial | CSS defines `--mm-executing-sweep-duration: 1450ms` and `--mm-executing-sweep-delay: 220ms`, but the shimmer uses initial `animation-delay` rather than a per-cycle repeat gap and does not defensibly prove no-overlap cadence. | add failing tests, then adjust shared shimmer timing contract and keyframes | unit + integration |
-| FR-003 | partial | Current keyframes reach `50%` / `62%` positions mid-cycle, but no explicit midpoint brightness contract or proof exists. | add failing tests, then refine shimmer intensity/timing behavior if needed | unit + integration |
-| FR-004 | implemented_unverified | Reduced-motion CSS disables animation and keeps a fixed highlight frame, but story-level static-active semantics are not explicitly verified. | add verification tests first, with implementation contingency if fallback treatment is too weak | unit + integration |
-| FR-005 | implemented_unverified | Existing reduced-motion CSS and executing pill renders imply active comprehension without motion, but no MM-490-specific evidence proves it. | add verification tests first, with implementation contingency if reduced-motion read is unclear | unit + integration |
-| FR-006 | implemented_verified | `executionStatusPillProps` and existing list/detail tests keep shimmer metadata executing-only. | no new implementation planned | none beyond final verify |
-| FR-007 | missing | Runtime-adjacent traceability currently preserves `MM-488` and `MM-489`, not `MM-490`. | add MM-490 traceability export/assertions plus focused tests | unit |
-| SCN-001 | implemented_unverified | Existing CSS suggests bounded left-to-right sweep behavior, but story-specific proof is absent. | add verification tests first, with implementation contingency if bounds/path fail | unit + integration |
-| SCN-002 | partial | Existing timing tokens and keyframes approximate the cadence but do not prove total cycle, idle gap, or no-overlap behavior. | add failing tests, then refine timing contract | unit + integration |
-| SCN-003 | partial | Midpoint positioning exists, but brightest-at-center behavior is not explicitly encoded or tested. | add failing tests, then refine midpoint emphasis if needed | unit + integration |
-| SCN-004 | implemented_unverified | Reduced-motion animation suppression exists, but the static active replacement is only indirectly verified. | add verification tests first, with implementation contingency if fallback is insufficient | unit + integration |
-| SCN-005 | implemented_unverified | Existing reduced-motion output likely reads as active, but no direct MM-490 story evidence exists. | add verification tests first, with implementation contingency if comprehension is weak | unit + integration |
-| SCN-006 | implemented_verified | Existing helper and render tests already keep shimmer off for non-executing states. | no new implementation planned | none beyond final verify |
-| SC-001 | implemented_unverified | Current CSS implies left-to-right bounded travel but lacks direct MM-490 evidence. | add verification tests first, with implementation contingency if movement contract fails | unit + integration |
-| SC-002 | partial | Current tokens do not fully prove 1.6-1.8 second cadence with no overlap between cycles. | add failing tests, then refine timing contract | unit + integration |
-| SC-003 | partial | Center-brightness emphasis is implied by keyframe position only. | add failing tests, then refine midpoint emphasis | unit + integration |
-| SC-004 | implemented_unverified | Reduced-motion suppression is tested, but static active fallback semantics are not fully proved. | add verification tests first, with implementation contingency if fallback is insufficient | unit + integration |
-| SC-005 | implemented_unverified | Reduced-motion active comprehension is likely present but not directly verified. | add verification tests first, with implementation contingency if the treatment does not read as active | unit + integration |
-| SC-006 | implemented_verified | Existing helper and entrypoint tests prove shimmer remains off for non-executing states. | no new implementation planned | none beyond final verify |
-| SC-007 | missing | MM-490 appears in spec artifacts only, not in runtime-adjacent traceability evidence. | add MM-490 traceability export/assertions plus focused tests | unit |
-| DESIGN-REQ-007 | implemented_unverified | Executing-state trigger and reduced-motion path exist in helper/CSS, but MM-490 story evidence is incomplete. | add verification tests first, with implementation contingency if selector or fallback semantics drift | unit + integration |
-| DESIGN-REQ-010 | partial | Motion path and base timing tokens exist, but repeat-gap/no-overlap and midpoint-emphasis details are incomplete. | add failing tests, then refine keyframes/timing contract | unit + integration |
-| DESIGN-REQ-012 | implemented_unverified | Reduced-motion animation suppression exists, but static-highlight semantics are not fully proved. | add verification tests first, with implementation contingency if fallback semantics fail | unit + integration |
-| DESIGN-REQ-014 | implemented_verified | Shimmer activation remains executing-only through helper and render coverage. | no new implementation planned | none beyond final verify |
+| FR-001 | implemented_verified | `frontend/src/styles/mission-control.css` now keeps the executing shimmer clipped with `overflow: hidden`, starts at `--mm-executing-sweep-start-x: -135%`, ends at `--mm-executing-sweep-end-x: 135%`, and the focused CSS plus list/detail tests prove bounded left-to-right travel. | none | unit + integration |
+| FR-002 | implemented_verified | `frontend/src/styles/mission-control.css` now defines `--mm-executing-sweep-cycle-duration: 1670ms`, removes standalone `animation-delay`, and uses `65%`, `86.83%`, and `100%` keyframes so the repeat gap is encoded inside each cycle without overlap; focused CSS tests prove the cadence contract. | none | unit + integration |
+| FR-003 | implemented_verified | `frontend/src/styles/mission-control.css` now enlarges the shimmer bands at `65%` to emphasize the center of the pill, and the focused CSS tests assert the midpoint-emphasis contract. | none | unit + integration |
+| FR-004 | implemented_verified | The reduced-motion block in `frontend/src/styles/mission-control.css` disables animation with `animation: none` while keeping a static highlight, and focused CSS plus list/detail tests verify the fallback semantics. | none | unit + integration |
+| FR-005 | implemented_verified | `frontend/src/styles/mission-control.css` and the task list/detail render tests now prove the reduced-motion presentation still reads as active on supported executing-pill surfaces without animation. | none | unit + integration |
+| FR-006 | implemented_verified | `executionStatusPillProps` and the existing plus MM-490-focused list/detail tests keep shimmer metadata executing-only. | none | none beyond final verify |
+| FR-007 | implemented_verified | `frontend/src/utils/executionStatusPillClasses.ts` now preserves `relatedJiraIssues: ['MM-489', 'MM-490']`, and helper plus render tests assert MM-490 traceability. | none | unit |
+| SCN-001 | implemented_verified | Focused CSS and surface tests now prove the executing sweep stays bounded while moving left-to-right across the pill. | none | unit + integration |
+| SCN-002 | implemented_verified | The 1670ms cycle token and revised keyframes now encode the calm cadence with an internal idle gap and no overlap, proven by focused CSS assertions. | none | unit + integration |
+| SCN-003 | implemented_verified | Center-brightness emphasis is now explicit in the shared keyframes and asserted by the MM-490 CSS contract test. | none | unit + integration |
+| SCN-004 | implemented_verified | Reduced-motion fallback semantics are directly verified through the shared CSS contract and supported-surface render tests. | none | unit + integration |
+| SCN-005 | implemented_verified | Task list and task detail tests now confirm reduced-motion conditions still communicate executing as active without animation. | none | unit + integration |
+| SCN-006 | implemented_verified | Existing helper and render tests continue to keep the shimmer off for non-executing states. | none | none beyond final verify |
+| SC-001 | implemented_verified | Focused unit and integration evidence confirm the sweep remains clipped to the rounded pill bounds while traveling left-to-right. | none | unit + integration |
+| SC-002 | implemented_verified | Focused CSS evidence confirms the full shimmer cycle stays within the 1.6 to 1.8 second target and does not overlap between cycles. | none | unit + integration |
+| SC-003 | implemented_verified | Focused CSS evidence confirms the brightest emphasis occurs near the pill center rather than at either edge. | none | unit + integration |
+| SC-004 | implemented_verified | Focused CSS and render evidence confirm reduced motion disables animation and preserves a static active highlight. | none | unit + integration |
+| SC-005 | implemented_verified | Focused list/detail render evidence confirms the reduced-motion treatment still communicates executing as active without motion. | none | unit + integration |
+| SC-006 | implemented_verified | Existing helper and entrypoint tests continue to prove non-executing states do not activate the MM-490 motion treatment. | none | none beyond final verify |
+| SC-007 | implemented_verified | `MM-490` now appears in the helper traceability export, focused tests, Moon Spec artifacts, and final verification output. | none | unit |
+| DESIGN-REQ-007 | implemented_verified | The shared executing-state trigger and reduced-motion path are now explicitly covered by helper, CSS, and supported-surface tests. | none | unit + integration |
+| DESIGN-REQ-010 | implemented_verified | The motion-profile details are now encoded by the cycle-duration token and revised keyframes, with focused CSS tests proving bounded travel, calm cadence, no overlap, and midpoint emphasis. | none | unit + integration |
+| DESIGN-REQ-012 | implemented_verified | Reduced-motion behavior is now directly verified as animation-off plus static active highlight across the shared CSS contract and supported surfaces. | none | unit + integration |
+| DESIGN-REQ-014 | implemented_verified | Shimmer activation remains executing-only through helper and render coverage. | none | none beyond final verify |
 
 ## Technical Context
 
