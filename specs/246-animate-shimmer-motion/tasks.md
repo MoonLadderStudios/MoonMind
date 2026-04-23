@@ -40,25 +40,25 @@
 ### Unit Test Plan
 
 - CSS contract tests verify bounded left-to-right sweep travel, 1.6 to 1.8 second total cadence including idle gap, no overlap between cycles, center-focused emphasis, and reduced-motion static fallback semantics.
-- Helper tests verify executing-only activation remains stable and MM-490 traceability is exported alongside adjacent shimmer-story references.
+- Helper tests verify MM-490 traceability is exported alongside adjacent shimmer-story references while preserving the existing verified executing-only activation behavior.
 
 ### Integration Test Plan
 
-- Task list entrypoint tests verify executing pills continue to use the shared shimmer contract, reduced-motion conditions still read as active without animation, and non-executing pills stay plain.
-- Task detail entrypoint tests verify the same shared shimmer contract, reduced-motion active read, and executing-only behavior on detail surfaces.
+- Task list entrypoint tests verify executing pills continue to use the shared shimmer contract and reduced-motion conditions still read as active without animation.
+- Task detail entrypoint tests verify the same shared shimmer contract and reduced-motion active read on detail surfaces.
 
 ### Tests First
 
 - [ ] T005 [P] Add failing CSS contract tests for bounded left-to-right travel, total 1.6 to 1.8 second cadence including idle gap, no-overlap timing, center-focused emphasis, and reduced-motion static fallback semantics in `frontend/src/entrypoints/mission-control.test.tsx` covering FR-001, FR-002, FR-003, FR-004, FR-005, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-002, SC-003, SC-004, SC-005, DESIGN-REQ-007, DESIGN-REQ-010, DESIGN-REQ-012.
-- [ ] T006 [P] Add failing helper tests for MM-490 traceability preservation while keeping executing-only selector behavior intact in `frontend/src/utils/executionStatusPillClasses.test.ts` covering FR-006, FR-007, SCN-006, SC-006, SC-007, DESIGN-REQ-014.
-- [ ] T007 [P] Add failing task-list integration tests for reduced-motion active comprehension, bounded executing-pill rendering, and non-executing exclusion in `frontend/src/entrypoints/tasks-list.test.tsx` covering FR-001, FR-004, FR-005, FR-006, SCN-001, SCN-004, SCN-005, SCN-006, SC-001, SC-004, SC-005, SC-006, DESIGN-REQ-007, DESIGN-REQ-012, DESIGN-REQ-014.
-- [ ] T008 [P] Add failing task-detail integration tests for reduced-motion active comprehension, bounded executing-pill rendering, and executing-only behavior in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-001, FR-004, FR-005, FR-006, SCN-001, SCN-004, SCN-005, SCN-006, SC-001, SC-004, SC-005, SC-006, DESIGN-REQ-007, DESIGN-REQ-012, DESIGN-REQ-014.
+- [ ] T006 [P] Add failing helper tests for MM-490 traceability preservation in `frontend/src/utils/executionStatusPillClasses.test.ts` covering FR-007 and SC-007 while preserving the existing verified executing-only selector behavior.
+- [ ] T007 [P] Add failing task-list integration tests for reduced-motion active comprehension and bounded executing-pill rendering in `frontend/src/entrypoints/tasks-list.test.tsx` covering FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-007, DESIGN-REQ-012.
+- [ ] T008 [P] Add failing task-detail integration tests for reduced-motion active comprehension and bounded executing-pill rendering in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-007, DESIGN-REQ-012.
 - [ ] T009 Run the focused unit and integration validation commands from `specs/246-animate-shimmer-motion/quickstart.md` to confirm T005-T008 fail for the expected MM-490 gaps before production changes.
 
 ### Conditional Fallback For Implemented-Unverified Rows
 
 - [ ] T010 If T005 or T009 shows the existing sweep path or reduced-motion fallback semantics are weaker than MM-490 requires, update `frontend/src/styles/mission-control.css` to preserve bounded travel, static fallback clarity, and executing-state comprehension for FR-001, FR-004, FR-005, SCN-001, SCN-004, SCN-005, SC-001, SC-004, SC-005, DESIGN-REQ-007, and DESIGN-REQ-012.
-- [ ] T011 If T007-T009 show list/detail surfaces do not preserve the active read or executing-only guardrails under reduced motion, update `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css` for FR-005, FR-006, SCN-005, SCN-006, SC-005, SC-006, and DESIGN-REQ-014.
+- [ ] T011 If T007-T009 show list/detail surfaces do not preserve the reduced-motion active read on supported executing pills, update `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css` for FR-005, SCN-005, SC-005, and DESIGN-REQ-012.
 
 ### Implementation
 
@@ -74,7 +74,7 @@
 
 ## Final Phase: Polish and Verification
 
-- [ ] T018 Expand edge-case coverage for rapid re-renders, non-overlap cadence guardrails, reduced-motion active comprehension, and executing-only isolation in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` as needed for SCN-002, SCN-005, SCN-006, SC-002, SC-005, SC-006, and DESIGN-REQ-010.
+- [ ] T018 Expand edge-case coverage for rapid re-renders, non-overlap cadence guardrails, and reduced-motion active comprehension in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` as needed for SCN-002, SCN-005, SC-002, SC-005, and DESIGN-REQ-010.
 - [ ] T019 Run the quickstart validation steps from `specs/246-animate-shimmer-motion/quickstart.md`.
 - [ ] T020 Run `./tools/test_unit.sh` for final unit-test verification.
 - [ ] T021 Run `/moonspec-verify` by creating `specs/246-animate-shimmer-motion/verification.md` with MM-490 traceability, DESIGN-REQ coverage, test evidence, and final verdict.

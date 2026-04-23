@@ -128,9 +128,9 @@ Needs Clarification
 
 | ID | Source | Requirement | Scope | Mapped Requirements |
 | --- | --- | --- | --- | --- |
-| DESIGN-REQ-007 | `docs/UI/EffectShimmerSweep.md` Host Contract | The shimmer effect attaches to executing status-pill hosts, uses the executing state as its semantic trigger, and provides a reduced-motion fallback trigger rather than expanding to unrelated states. | In scope | FR-001, FR-005 |
+| DESIGN-REQ-007 | `docs/UI/EffectShimmerSweep.md` Host Contract | The shimmer effect attaches to executing status-pill hosts, uses the executing state as its semantic trigger, and provides a reduced-motion fallback trigger rather than expanding to unrelated states. | In scope | FR-001, FR-004, FR-005, FR-006 |
 | DESIGN-REQ-010 | `docs/UI/EffectShimmerSweep.md` Motion Profile | The shimmer uses a left-to-right sweep path, soft pacing, brightest midpoint emphasis, a total cycle near 1.67 seconds including delay, and no overlap between cycles. | In scope | FR-001, FR-002, FR-003 |
-| DESIGN-REQ-012 | `docs/UI/EffectShimmerSweep.md` Reduced Motion Behavior | Reduced-motion behavior disables animation, keeps a static active highlight, and preserves comprehension of the executing state without requiring motion. | In scope | FR-003, FR-004 |
+| DESIGN-REQ-012 | `docs/UI/EffectShimmerSweep.md` Reduced Motion Behavior | Reduced-motion behavior disables animation, keeps a static active highlight, and preserves comprehension of the executing state without requiring motion. | In scope | FR-004, FR-005 |
 | DESIGN-REQ-014 | `docs/UI/EffectShimmerSweep.md` State Matrix and Non-Goals | The shimmer remains an executing-only treatment and does not expand into unrelated state variants or alternate effect families for this story. | In scope | FR-005 |
 | DESIGN-REQ-OUT-001 | `docs/UI/EffectShimmerSweep.md` Visual Model and Theme Binding | Layer composition, theme-token binding, and text-isolation details belong to adjacent shimmer stories and are not required to complete MM-490. | Out of scope: this story focuses on motion behavior and reduced-motion fallback only. | None |
 
