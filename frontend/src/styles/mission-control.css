@@ -2514,9 +2514,9 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 .queue-floating-bar-row {
   display: grid;
   grid-template-columns:
-    minmax(18rem, 1.65fr)
-    minmax(15rem, 1.45fr)
-    minmax(12rem, 1fr)
+    minmax(12rem, 1.65fr)
+    minmax(10rem, 1.45fr)
+    minmax(8rem, 1fr)
     auto;
   gap: 0.5rem;
   align-items: center;

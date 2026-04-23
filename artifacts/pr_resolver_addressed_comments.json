@@ -1,27 +1,27 @@
 [
   {
-    "id": 3133634364,
-    "disposition": "addressed",
-    "rationale": "Added an explicit TemporalExecutionRecord | TemporalExecutionCanonicalRecord type hint to the snapshot helper record parameter."
-  },
-  {
-    "id": 3133634368,
-    "disposition": "addressed",
-    "rationale": "Moved session.refresh(record) inside the snapshot_ref block so it only runs after a persisted snapshot commit."
-  },
-  {
-    "id": 4165735428,
+    "id": 4166160843,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable child comments were handled individually."
+    "rationale": "Top-level Gemini summary review duplicated the actionable inline width feedback that is addressed below."
   },
   {
-    "id": 3133637367,
+    "id": 3133984746,
     "disposition": "addressed",
-    "rationale": "Changed direct-run snapshot creation to use parameters from the returned persisted record instead of the incoming request payload, preserving idempotency replay semantics."
+    "rationale": "Reduced desktop floating-bar grid minimums from 18/15/12rem to 12/10/8rem so the widened bar stays fluid on mid-width viewports."
   },
   {
-    "id": 4165738806,
+    "id": 3133984751,
+    "disposition": "addressed",
+    "rationale": "Updated the Create page CSS expectation test to match the relaxed 12/10/8rem floating-bar grid minimums."
+  },
+  {
+    "id": 3133987413,
+    "disposition": "addressed",
+    "rationale": "Restored shrinkable mid-width behavior by reducing the desktop column minimums rather than keeping overflow-prone fixed widths."
+  },
+  {
+    "id": 4166164127,
     "disposition": "not-applicable",
-    "rationale": "Informational Codex review wrapper with no distinct actionable feedback beyond the child comment."
+    "rationale": "Top-level Codex review wrapper contained no additional actionable feedback beyond the inline comment already addressed."
   }
 ]
