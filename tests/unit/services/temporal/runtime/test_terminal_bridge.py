@@ -331,3 +331,36 @@ async def test_start_terminal_bridge_container_uses_configured_runner_user(
 
     assert "--user" in observed
     assert "2001:2001" in observed
+
+
+@pytest.mark.asyncio
+async def test_start_terminal_bridge_container_redacts_claude_auth_paths_in_startup_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess(
+            returncode=1,
+            stderr=b"/home/app/.claude/credentials.json token=super-secret failed",
+        )
+
+    monkeypatch.setattr(
+        terminal_bridge.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await start_terminal_bridge_container(
+            session_id="oas_terminal_runner_claude_failed",
+            runtime_id="claude_code",
+            volume_ref="claude_auth_volume",
+            volume_mount_path="/home/app/.claude",
+            session_ttl=1800,
+            bootstrap_command=("claude", "login"),
+        )
+
+    message = str(exc_info.value)
+    assert "super-secret" not in message
+    assert "/home/app/.claude/credentials.json" not in message
+    assert "[REDACTED]" in message
+    assert "[REDACTED_AUTH_PATH]" in message

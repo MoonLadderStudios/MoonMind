@@ -1947,3 +1947,61 @@ async def test_launch_materializes_claude_anthropic_oauth_home_profile(
     assert "OPENAI_API_KEY" not in captured_env
     assert captured_cwd["value"] == str(workspace.resolve())
     assert captured_cwd["value"] != captured_env["MANAGED_AUTH_VOLUME_PATH"]
+
+
+@pytest.mark.asyncio
+async def test_launch_materializes_claude_oauth_home_profile_without_auth_volume_cleanup_paths(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    workspace = tmp_path / "workspace-cleanup"
+    workspace.mkdir()
+    profile = _make_profile(
+        profile_id="claude_anthropic",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+        command_template=["claude", "-p", "hello"],
+        clear_env_keys=["ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "OPENAI_API_KEY"],
+        volume_ref="claude_auth_volume",
+        volume_mount_path="/home/app/.claude",
+        passthrough_env_keys=[],
+    )
+    request = _make_request(execution_profile_ref="claude_anthropic")
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 1006) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.shutil.which",
+        lambda command: "/usr/bin/gh" if command == "gh" else None,
+    )
+
+    _record, process, cleanup_paths, _deferred_cleanup = await launcher.launch(
+        run_id="run-claude-oauth-home-cleanup-1",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    assert all("/home/app/.claude" not in str(path) for path in cleanup_paths)
