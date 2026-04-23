@@ -274,7 +274,7 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
 
 
 async def test_report_artifact_contract_accepts_supported_link_types() -> None:
-    """MM-460: Report artifact link types should be explicit and stable."""
+    """MM-492: Report artifact link types should be explicit and stable."""
 
     assert REPORT_ARTIFACT_LINK_TYPES == frozenset(
         {
@@ -395,7 +395,7 @@ async def test_report_primary_and_summary_default_to_long_retention(
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
 
-            for link_type in ("report.primary", "report.summary"):
+            for link_type in ("report.primary", "report.summary", "report.appendix", "report.findings_index", "report.export"):
                 artifact, _upload = await service.create(
                     principal="workflow-producer",
                     content_type="text/markdown",
