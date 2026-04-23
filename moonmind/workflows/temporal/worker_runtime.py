@@ -1124,7 +1124,7 @@ def _build_agent_runtime_deps() -> tuple[
     session_moonmind_url = (
         os.environ.get("MOONMIND_MANAGED_SESSION_MOONMIND_URL")
         or os.environ.get("MOONMIND_URL")
-        or "http://api:5000"
+        or "http://api:8000"
     ).strip() or None
     session_network_name = _managed_session_docker_network(
         {"MOONMIND_URL": session_moonmind_url or ""}

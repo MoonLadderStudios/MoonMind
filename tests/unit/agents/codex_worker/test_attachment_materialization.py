@@ -62,7 +62,7 @@ class _FakeHandler:
 def _worker(tmp_path: Path, queue: _FakeQueueClient | None = None) -> CodexWorker:
     return CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=100,

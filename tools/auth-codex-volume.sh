@@ -212,7 +212,7 @@ cmd_check() {
 # --register: register the volume in the MoonMind provider profile API
 # ---------------------------------------------------------------------------
 cmd_register() {
-  local API_URL="${MOONMIND_API_URL:-http://localhost:5000}"
+  local API_URL="${MOONMIND_API_URL:-http://localhost:8000}"
   local PROFILE_ID="${CODEX_PROFILE_ID:-codex_default}"
   local CREATE_URL="${API_URL}/api/v1/provider-profiles"
   local UPDATE_URL="${API_URL}/api/v1/provider-profiles/${PROFILE_ID}"

@@ -812,6 +812,100 @@ def test_create_task_shaped_execution_prefers_task_depends_on(
     assert "dependsOn" not in kwargs["initial_parameters"]["task"]
 
 
+def test_create_task_shaped_execution_applies_default_publish_mode(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "default_publish_mode", "pr")
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "task": {
+                    "instructions": "Fix the failing workflow.",
+                    "runtime": {"mode": "codex"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    service.create_execution.assert_awaited_once()
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["publishMode"] == "pr"
+    assert initial_parameters["task"]["publish"]["mode"] == "pr"
+
+
+def test_create_task_shaped_execution_prefers_task_publish_mode_alias_over_top_publish(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publish": {
+                    "mode": "branch",
+                    "commitMessage": "Top-level publish details",
+                },
+                "task": {
+                    "instructions": "Fix the failing workflow.",
+                    "runtime": {"mode": "codex"},
+                    "publish_mode": "none",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["publishMode"] == "none"
+    assert initial_parameters["task"]["publish"] == {
+        "mode": "none",
+        "commitMessage": "Top-level publish details",
+    }
+
+
+def test_create_task_shaped_execution_rejects_falsy_non_string_publish_mode(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": False,
+                "task": {
+                    "instructions": "Fix the failing workflow.",
+                    "runtime": {"mode": "codex"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] == (
+        "publish.mode must be one of: branch, none, pr"
+    )
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_preserves_remediation_payload(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -910,6 +1004,8 @@ def test_create_remediation_convenience_route_expands_to_task_create_contract(
         "authorityMode": "observe_only",
         "trigger": {"type": "manual"},
     }
+    assert kwargs["initial_parameters"]["publishMode"] == "pr"
+    assert kwargs["initial_parameters"]["task"]["publish"]["mode"] == "pr"
 
 
 def test_create_remediation_convenience_route_uses_top_level_overrides(
@@ -933,6 +1029,7 @@ def test_create_remediation_convenience_route_uses_top_level_overrides(
             },
             "instructions": "Top-level instructions",
             "runtime": {"mode": "codex"},
+            "publish_mode": "none",
             "remediation": {
                 "mode": "snapshot",
                 "authorityMode": "observe_only",
@@ -963,6 +1060,8 @@ def test_create_remediation_convenience_route_uses_top_level_overrides(
         "authorityMode": "observe_only",
         "trigger": {"type": "manual"},
     }
+    assert initial_parameters["publishMode"] == "none"
+    assert initial_parameters["task"]["publish"]["mode"] == "none"
 
 
 def test_create_remediation_convenience_route_rejects_malformed_remediation(

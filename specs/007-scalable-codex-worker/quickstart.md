@@ -80,7 +80,7 @@ gemini-embedding-2-preview
 ## 6) Validate workflow API compatibility
 
 ```bash
-curl http://localhost:5000/api/workflows/runs
+curl http://localhost:8000/api/workflows/runs
 ```
 
 Task payloads in run detail continue to include stage execution metadata:

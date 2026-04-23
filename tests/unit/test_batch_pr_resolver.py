@@ -615,7 +615,7 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
         created, errors = asyncio.run(
             submit_jobs_via_http(
                 [submission],
-                moonmind_url="http://api:5000",
+                moonmind_url="http://api:8000",
                 worker_token="test-token-abc",
             )
         )
@@ -662,7 +662,7 @@ def test_submit_jobs_records_temporal_workflow_id(monkeypatch: Any) -> None:
         created, errors = asyncio.run(
             submit_jobs_via_http(
                 [submission],
-                moonmind_url="http://api:5000",
+                moonmind_url="http://api:8000",
                 worker_token=None,
             )
         )
@@ -676,7 +676,7 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     module = _load_module()
     submit_jobs = module["_submit_jobs"]
 
-    monkeypatch.setenv("MOONMIND_URL", "http://api:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
     monkeypatch.delenv("MOONMIND_WORKER_TOKEN", raising=False)
     monkeypatch.delenv("MOONMIND_WORKER_TOKEN_FILE", raising=False)
 
@@ -695,7 +695,7 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_http", fake_http)
     created, errors = asyncio.run(submit_jobs([submission]))
 
-    assert http_called == ["http://api:5000"]
+    assert http_called == ["http://api:8000"]
     assert len(created) == 1
     assert errors == []
 

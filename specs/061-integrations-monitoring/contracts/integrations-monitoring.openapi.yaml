@@ -8,7 +8,7 @@ info:
     components to keep workflow/activity contracts aligned with the API layer.
 x-runtime-mode: runtime
 servers:
-  - url: http://localhost:5000
+  - url: http://localhost:8000
 paths:
   /api/executions/{workflowId}/integration:
     post:

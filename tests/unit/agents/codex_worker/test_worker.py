@@ -686,7 +686,7 @@ async def test_run_once_returns_false_when_no_job() -> None:
     """No claim should produce a no-work cycle."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -718,7 +718,7 @@ async def test_run_once_returns_false_when_system_paused(tmp_path: Path) -> None
         updated_at=now,
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -754,7 +754,7 @@ async def test_system_metadata_logging_occurs_once_per_version(
         updated_at=now,
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -814,7 +814,7 @@ async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -879,7 +879,7 @@ async def test_run_once_reports_rag_unavailable_when_embedding_provider_unexecut
         WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -941,7 +941,7 @@ async def test_run_once_writes_runtime_config_into_task_context(tmp_path: Path) 
         WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -998,7 +998,7 @@ async def test_run_once_passes_runtime_inheritance_args_to_batch_pr_resolver_ski
         WorkerExecutionResult(succeeded=True, summary="queued", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1045,7 +1045,7 @@ async def test_run_once_skips_empty_artifacts(tmp_path: Path) -> None:
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1104,7 +1104,7 @@ async def test_run_once_optional_artifact_upload_failures_are_non_fatal(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1132,7 +1132,7 @@ async def test_worker_submits_task_proposals(tmp_path: Path) -> None:
     """Workers should submit proposals when the feature flag is enabled."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1205,7 +1205,7 @@ async def test_task_proposal_request_uses_task_flag_with_config_gate(
 
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -1252,7 +1252,7 @@ async def test_run_once_exception_still_records_terminal_failure_when_upload_fai
     queue = FailingUploadQueueClient(jobs=[job])
     handler = FakeHandler(RuntimeError("execute exploded"))
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1297,7 +1297,7 @@ async def test_run_once_redacts_task_context_payload(
         WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1325,7 +1325,7 @@ async def test_run_once_unsupported_type_fails_job(tmp_path: Path) -> None:
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1358,7 +1358,7 @@ async def test_run_once_codex_skill_routes_through_skill_path(tmp_path: Path) ->
         WorkerExecutionResult(succeeded=True, summary="skill ok", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1405,7 +1405,7 @@ async def test_run_once_task_routes_through_direct_exec_path(tmp_path: Path) -> 
         WorkerExecutionResult(succeeded=True, summary="task ok", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1469,7 +1469,7 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1561,7 +1561,7 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
         ]
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1650,7 +1650,7 @@ async def test_run_once_self_heal_soft_resets_retryable_step_and_recovers(
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -1732,7 +1732,7 @@ async def test_run_once_self_heal_exhaustion_marks_retryable_failure(
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -1791,7 +1791,7 @@ async def test_run_once_self_heal_deterministic_failure_does_not_retry(
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -1846,7 +1846,7 @@ async def test_run_once_task_steps_step_log_excludes_previous_session_headers(
         segments=[step_one_segment, step_two_segment],
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1907,7 +1907,7 @@ async def test_run_once_task_step_log_without_truncation_skips_companion_artifac
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -1985,7 +1985,7 @@ async def test_run_once_task_step_transcript_truncated_mid_command_fails_with_re
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2055,7 +2055,7 @@ async def test_run_once_task_step_transcript_with_completion_marker_succeeds(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2131,7 +2131,7 @@ async def test_run_once_task_step_transcript_with_multiple_codex_exec_cycles_suc
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2197,7 +2197,7 @@ async def test_run_once_task_step_transcript_with_missing_multi_cycle_completion
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2272,7 +2272,7 @@ async def test_run_once_task_step_transcript_ignores_stale_unmatched_starts_befo
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2340,7 +2340,7 @@ async def test_run_once_task_step_transcript_ignores_stale_cross_step_start_mark
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2408,7 +2408,7 @@ async def test_run_once_task_step_transcript_unmatched_start_after_last_complete
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2474,7 +2474,7 @@ async def test_run_once_task_step_transcript_ignores_stale_legacy_unmatched_star
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2534,7 +2534,7 @@ async def test_run_once_task_step_transcript_ignores_untrusted_completion_marker
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2595,7 +2595,7 @@ async def test_run_once_task_step_transcript_with_correlated_marker_ids_succeeds
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2656,7 +2656,7 @@ async def test_run_once_task_step_transcript_reconciles_legacy_multiline_start_m
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2717,7 +2717,7 @@ async def test_run_once_task_step_transcript_with_mismatched_marker_ids_fails(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2778,7 +2778,7 @@ async def test_run_once_retryable_run_quality_retry_skips_proposal_submission(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2859,7 +2859,7 @@ async def test_run_once_task_step_transcript_uses_full_companion_when_preview_tr
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2919,7 +2919,7 @@ async def test_run_once_task_step_transcript_ignores_unscoped_marker_like_output
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -2976,7 +2976,7 @@ async def test_run_once_task_step_log_truncation_writes_full_companion_artifact(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3073,7 +3073,7 @@ async def test_run_once_task_steps_bounds_log_size_and_keeps_failure_tail(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3127,7 +3127,7 @@ async def test_run_once_task_steps_step_log_growth_is_bounded_per_step(
         segments=[step_one_segment, step_two_segment],
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3189,7 +3189,7 @@ async def test_run_once_task_step_log_truncation_preserves_utf8(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3216,7 +3216,7 @@ async def test_copy_incremental_step_log_rejects_symlink_source(tmp_path: Path) 
     """Incremental log copy should reject symlink inputs to avoid disclosure."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3307,7 +3307,7 @@ async def test_run_once_task_steps_write_incremental_step_logs_without_duplicati
     )
     queue = FakeQueueClient(jobs=[job])
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3341,7 +3341,7 @@ async def test_run_execute_stage_step_log_deltas_survive_worker_restart(
     step_two_segment = "== SESSION HEADER step-2 ==\nstep-two output\n"
     queue = FakeQueueClient()
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3425,7 +3425,7 @@ async def test_run_execute_stage_step_log_deltas_handle_source_truncation_on_res
     step_two_segment = "== SESSION HEADER step-2 ==\nbeta\n"
     queue = FakeQueueClient()
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3551,7 +3551,7 @@ async def test_run_once_task_step_logs_dedupe_replay_blocks_and_keep_distinct_tu
     queue = FakeQueueClient(jobs=[job])
     handler = StreamingReplayStepHandler(workdir_root=tmp_path)
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3630,7 +3630,7 @@ async def test_run_once_task_step_completion_identity_dedupes_exact_duplicate_re
     queue = FakeQueueClient(jobs=[job])
     handler = StreamingReplayStepHandler(workdir_root=tmp_path)
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3707,7 +3707,7 @@ async def test_run_once_task_step_completion_identity_dedupes_near_duplicate_res
     queue = FakeQueueClient(jobs=[job])
     handler = StreamingReplayStepHandler(workdir_root=tmp_path)
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3770,7 +3770,7 @@ async def test_run_once_task_step_completion_identity_preserves_repeated_text_ac
     queue = FakeQueueClient(jobs=[job])
     handler = StreamingReplayStepHandler(workdir_root=tmp_path)
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3841,7 +3841,7 @@ async def test_run_once_task_step_and_exec_logs_dedupe_mixed_prefix_final_replay
     queue = FakeQueueClient(jobs=[job])
     handler = StreamingReplayStepHandler(workdir_root=tmp_path)
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3870,7 +3870,7 @@ async def test_load_step_log_offsets_checkpoint_ignores_large_payload(
     """Oversized checkpoint payloads should be ignored instead of loaded into memory."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3901,7 +3901,7 @@ async def test_persist_step_log_offsets_checkpoint_safely_skips_symlinked_parent
     """Checkpoint writes must avoid symlinked checkpoint state directories."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -3937,7 +3937,7 @@ async def test_persist_step_log_offsets_checkpoint_handles_temp_path_directory(
     """Cleanup handling should tolerate a pre-existing temporary path directory."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4052,7 +4052,7 @@ async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4166,7 +4166,7 @@ async def test_run_once_skill_gate_step_succeeds_when_gate_reports_pass(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4235,7 +4235,7 @@ async def test_run_once_skill_gate_step_fails_when_gate_path_is_outside_allowed_
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4338,7 +4338,7 @@ async def test_run_once_skill_gate_step_treats_missing_status_as_invalid(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4364,7 +4364,7 @@ async def test_compose_step_instruction_dedupes_objective_text(
     """Duplicate step/objective text should collapse to a single objective copy."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4416,7 +4416,7 @@ async def test_compose_step_instruction_keeps_distinct_step_text(
     """Distinct step instructions should remain visible after objective rendering."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4466,7 +4466,7 @@ async def test_compose_step_instruction_allows_pr_resolver_self_publish_when_pub
     """`pr-resolver` should be told to commit/push directly when publish is disabled."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4515,7 +4515,7 @@ async def test_compose_step_instruction_keeps_skill_workspace_lines_under_worksp
     """Non-auto steps should keep skill-location guidance within WORKSPACE."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4567,7 +4567,7 @@ async def test_compose_step_instruction_injects_current_attachment_context_befor
     tmp_path: Path,
 ) -> None:
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4621,7 +4621,7 @@ async def test_compose_step_instruction_omits_non_current_step_attachment_contex
     tmp_path: Path,
 ) -> None:
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4663,7 +4663,7 @@ async def test_compose_planning_attachment_inventory_is_compact(
     tmp_path: Path,
 ) -> None:
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4702,7 +4702,7 @@ async def test_attachment_context_is_absent_without_manifest_and_rejects_data_ur
     tmp_path: Path,
 ) -> None:
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -4767,7 +4767,7 @@ async def test_attachment_context_ignores_non_object_manifest_payloads(
 ) -> None:
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -4808,7 +4808,7 @@ async def test_attachment_context_ignores_non_object_vision_index_payloads(
 ) -> None:
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -4853,7 +4853,7 @@ async def test_attachment_context_preserves_zero_values_and_single_lines_metadat
 ) -> None:
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -4899,7 +4899,7 @@ async def test_attachment_context_matches_normalized_step_ref(
 ) -> None:
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -5000,7 +5000,7 @@ async def test_run_once_task_steps_fail_fast_on_first_failed_step(
         ]
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5111,7 +5111,7 @@ async def test_run_once_task_steps_materialize_union_of_selected_skills(
         ]
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5154,7 +5154,7 @@ async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5199,7 +5199,7 @@ async def test_run_once_rejects_when_required_capabilities_missing(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5242,7 +5242,7 @@ async def test_run_once_rejects_resolve_pr_publish_none_without_pr_resolver(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5349,7 +5349,7 @@ async def test_run_once_fails_resolve_pr_when_final_state_unresolved(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5459,7 +5459,7 @@ async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5568,7 +5568,7 @@ async def test_run_once_fails_resolve_pr_when_ci_is_running_or_failing(
         )
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5622,7 +5622,7 @@ async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) ->
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5672,7 +5672,7 @@ async def test_run_once_task_container_executes_generic_docker_path(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5752,7 +5752,7 @@ async def test_run_once_task_container_supports_distinct_images(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5811,7 +5811,7 @@ async def test_run_once_task_container_with_steps_fails_contract_validation(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5861,7 +5861,7 @@ async def test_run_once_task_container_timeout_attempts_stop_and_fails(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5933,7 +5933,7 @@ async def test_run_once_task_container_precreates_artifact_subdir(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -5984,7 +5984,7 @@ async def test_run_once_codex_skill_disallowed_skill_fails(tmp_path: Path) -> No
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6035,7 +6035,7 @@ async def test_run_once_codex_skill_permissive_mode_allows_non_allowlisted_skill
         WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6064,7 +6064,7 @@ async def test_heartbeat_loop_runs_on_lease_interval(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6130,7 +6130,7 @@ async def test_heartbeat_loop_sets_pause_event_for_quiesce(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6188,7 +6188,7 @@ async def test_should_bootstrap_live_session_respects_default_enable(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6211,7 +6211,7 @@ async def test_ensure_live_session_started_skips_opt_in_without_request(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6261,7 +6261,7 @@ async def test_ensure_live_session_started_is_no_op_with_none_provider(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6316,7 +6316,7 @@ async def test_run_once_acks_cancellation_requested_via_heartbeat(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6350,7 +6350,7 @@ async def test_determine_finish_outcome_pr_publish_without_pr_url_maps_to_publis
 
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -6390,7 +6390,7 @@ async def test_live_log_chunk_callback_emits_redacted_step_metadata(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6433,7 +6433,7 @@ async def test_live_log_chunk_callback_emits_redacted_step_metadata(
 async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     """Worker config should respect documented defaults and env overrides."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000/")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000/")
     monkeypatch.setenv("MOONMIND_WORKER_ID", "executor-01")
     monkeypatch.setenv("MOONMIND_WORKER_TOKEN", "token-123")
     monkeypatch.setenv("MOONMIND_POLL_INTERVAL_MS", "2500")
@@ -6455,7 +6455,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
 
     config = CodexWorkerConfig.from_env()
 
-    assert config.moonmind_url == "http://localhost:5000"
+    assert config.moonmind_url == "http://localhost:8000"
     assert config.worker_id == "executor-01"
     assert config.worker_token == "token-123"
     assert config.poll_interval_ms == 2500
@@ -6481,7 +6481,7 @@ async def test_config_from_env_rejects_non_integer_step_log_max_bytes(
 ) -> None:
     """Non-integer step log cap values should include actionable context."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_STEP_LOG_MAX_BYTES", "abc")
 
     with pytest.raises(ValueError, match="must be an integer"):
@@ -6493,7 +6493,7 @@ async def test_config_from_env_rejects_excessive_step_log_max_bytes(
 ) -> None:
     """Step log cap should enforce a safe upper bound."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_STEP_LOG_MAX_BYTES", str(70 * 1024 * 1024))
 
     with pytest.raises(ValueError, match="must be <="):
@@ -6503,7 +6503,7 @@ async def test_config_from_env_rejects_excessive_step_log_max_bytes(
 async def test_config_from_env_supports_legacy_spec_git_user_env(monkeypatch) -> None:
     """Legacy WORKFLOW git user env vars should remain supported by worker config."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
     monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
     monkeypatch.delenv("MOONMIND_GIT_USER_NAME", raising=False)
@@ -6520,7 +6520,7 @@ async def test_config_from_env_supports_legacy_spec_git_user_env(monkeypatch) ->
 async def test_config_from_env_git_user_precedence(monkeypatch) -> None:
     """Worker config should resolve git user vars as WORKFLOW > WORKFLOW > MOONMIND."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "MoonMind Name")
     monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "moonmind@example.com")
     monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Spec Name")
@@ -6539,7 +6539,7 @@ async def test_config_from_env_supports_legacy_skill_policy_mode_env(
 ) -> None:
     """Legacy SKILL_POLICY_MODE should remain supported for compatibility."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.delenv("WORKFLOW_SKILL_POLICY_MODE", raising=False)
     monkeypatch.delenv("WORKFLOW_SKILL_POLICY_MODE", raising=False)
     monkeypatch.setenv("SKILL_POLICY_MODE", "allowlist")
@@ -6554,7 +6554,7 @@ async def test_config_from_env_supports_legacy_moonmind_allowed_skills(
 ) -> None:
     """Legacy MOONMIND_ALLOWED_SKILLS should still participate in resolution."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.delenv("WORKFLOW_ALLOWED_SKILLS", raising=False)
     monkeypatch.delenv("WORKFLOW_ALLOWED_SKILLS", raising=False)
     monkeypatch.setenv("MOONMIND_ALLOWED_SKILLS", "custom,speckit")
@@ -6567,7 +6567,7 @@ async def test_config_from_env_supports_legacy_moonmind_allowed_skills(
 async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     """Unset optional values should fall back to defaults."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.delenv("MOONMIND_WORKER_ID", raising=False)
     monkeypatch.delenv("MOONMIND_WORKER_TOKEN", raising=False)
     monkeypatch.delenv("MOONMIND_POLL_INTERVAL_MS", raising=False)
@@ -6618,7 +6618,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
 async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
     """Flag should toggle worker proposal submission behavior."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_ENABLE_TASK_PROPOSALS", "true")
     config = CodexWorkerConfig.from_env()
     assert config.enable_task_proposals is True
@@ -6631,7 +6631,7 @@ async def test_config_from_env_enables_task_proposals(monkeypatch) -> None:
 async def test_config_from_env_parses_live_session_settings(monkeypatch) -> None:
     """Live session config should parse from MOONMIND_LIVE_SESSION_* variables."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT", "false")
     monkeypatch.setenv("MOONMIND_LIVE_SESSION_PROVIDER", "none")
     monkeypatch.setenv("MOONMIND_LIVE_SESSION_TTL_MINUTES", "120")
@@ -6652,7 +6652,7 @@ async def test_config_from_env_parses_live_session_settings(monkeypatch) -> None
 async def test_config_from_env_rejects_invalid_skill_policy_mode(monkeypatch) -> None:
     """Invalid policy mode should fail fast during worker startup."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "invalid")
 
     with pytest.raises(ValueError, match="WORKFLOW_SKILL_POLICY_MODE must be one of"):
@@ -6664,7 +6664,7 @@ async def test_config_from_env_rejects_non_integer_stage_command_timeout(
 ) -> None:
     """Stage command timeout env must be an integer for actionable startup errors."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", "abc")
 
     with pytest.raises(
@@ -6679,7 +6679,7 @@ async def test_config_from_env_runtime_mode_controls_default_capabilities(
 ) -> None:
     """Runtime mode should derive safe default capabilities when unset."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "universal")
     monkeypatch.delenv("MOONMIND_WORKER_CAPABILITIES", raising=False)
     monkeypatch.setenv("JULES_ENABLED", "false")
@@ -6697,7 +6697,7 @@ async def test_config_from_env_rejects_jules_runtime_when_disabled(
 ) -> None:
     """Jules runtime mode should fail fast when Jules API config is missing."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "jules")
     monkeypatch.delenv("JULES_ENABLED", raising=False)
     monkeypatch.delenv("JULES_API_URL", raising=False)
@@ -6715,7 +6715,7 @@ async def test_config_from_env_accepts_jules_runtime_when_configured(
 ) -> None:
     """Jules runtime mode should parse enabled API configuration."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "jules")
     monkeypatch.setenv("JULES_ENABLED", "true")
     monkeypatch.setenv("JULES_API_URL", "https://jules.example.test")
@@ -6740,7 +6740,7 @@ async def test_config_from_env_rejects_invalid_jules_max_inflight(
 ) -> None:
     """Jules max inflight must be a positive integer."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "jules")
     monkeypatch.setenv("JULES_ENABLED", "true")
     monkeypatch.setenv("JULES_API_URL", "https://jules.example.test")
@@ -6756,7 +6756,7 @@ async def test_config_from_env_disables_legacy_job_types_when_flag_is_off(
 ) -> None:
     """Workers should be task-only when legacy compatibility flag is disabled."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_ENABLE_LEGACY_JOB_TYPES", "false")
 
     config = CodexWorkerConfig.from_env()
@@ -6772,7 +6772,7 @@ async def test_config_from_env_loads_vault_settings(
 
     token_file = tmp_path / "vault.token"
     token_file.write_text("vault-file-token\n", encoding="utf-8")
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv("MOONMIND_VAULT_ADDR", "https://vault.local")
     monkeypatch.setenv("MOONMIND_VAULT_TOKEN_FILE", str(token_file))
     monkeypatch.setenv("MOONMIND_VAULT_NAMESPACE", "moonmind")
@@ -6796,7 +6796,7 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
     """Runtime model/effort should resolve as task override then worker default."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6866,7 +6866,7 @@ async def test_build_proposal_task_request_template_defers_runtime_defaults(
     """Proposal templates should leave runtime unset until promotion."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6898,7 +6898,7 @@ async def test_run_jules_runtime_instruction_emits_canonical_events_and_records(
     """Jules execution should emit canonical runtime events and persist task metadata."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -6994,7 +6994,7 @@ async def test_finish_reports_include_jules_runtime_artifact(
     """Finish reports should include a structured Jules runtime metadata artifact."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -7176,7 +7176,7 @@ async def test_jules_worker_multiplexes_inflight_jobs_without_llm_execution(
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-jules",
             worker_token=None,
             poll_interval_ms=1,
@@ -7284,7 +7284,7 @@ async def test_jules_worker_heartbeat_only_tick_returns_inflight(
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-jules",
             worker_token=None,
             poll_interval_ms=1,
@@ -7395,7 +7395,7 @@ async def test_jules_worker_resumes_checkpoint_without_resubmitting_task(
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-jules",
             worker_token=None,
             poll_interval_ms=1,
@@ -7501,7 +7501,7 @@ async def test_jules_worker_cancellation_stays_truthful_when_provider_cancel_mis
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-jules",
             worker_token=None,
             poll_interval_ms=1,
@@ -7625,7 +7625,7 @@ async def test_jules_worker_resume_preserves_canceled_checkpoint_status(
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-jules",
             worker_token=None,
             poll_interval_ms=1,
@@ -7667,7 +7667,7 @@ def codex_worker_components(
     """Provides a configured worker with fake queue/handler dependencies."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -8113,7 +8113,7 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -8239,7 +8239,7 @@ async def test_run_publish_stage_fails_without_verification_evidence_for_source_
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -8339,7 +8339,7 @@ async def test_run_publish_stage_auto_runs_default_test_script_when_evidence_mis
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -8443,7 +8443,7 @@ async def test_run_publish_stage_no_local_changes_does_not_reference_preflight_a
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -8523,7 +8523,7 @@ async def test_run_publish_stage_fails_for_renamed_source_change_without_evidenc
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -8601,7 +8601,7 @@ async def test_run_publish_stage_allows_structured_verification_skip_reason(
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -8718,7 +8718,7 @@ def publish_stage_test_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -8929,7 +8929,7 @@ async def test_run_stage_command_fallback_masks_sensitive_command_arguments(
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -8981,7 +8981,7 @@ async def test_run_stage_command_records_structured_verification_report(
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -9023,7 +9023,7 @@ async def test_run_stage_command_enforces_timeout(tmp_path: Path, monkeypatch) -
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -9091,7 +9091,7 @@ async def test_resolve_pr_base_branch_prefers_publish_override() -> None:
 async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None:
     """Legacy env defaults should hydrate model/effort when MoonMind overrides unset."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
     monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
     monkeypatch.setenv("CODEX_MODEL", "gpt-5.3-codex")
@@ -9106,7 +9106,7 @@ async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None
 async def test_config_from_env_defaults_gemini_model(monkeypatch) -> None:
     """Gemini worker config should default to the supported production model."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.delenv("MOONMIND_GEMINI_MODEL", raising=False)
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
 
@@ -9118,7 +9118,7 @@ async def test_config_from_env_defaults_gemini_model(monkeypatch) -> None:
 async def test_config_from_env_parses_gemini_allowed_tools(monkeypatch) -> None:
     """Gemini allowed tools should parse from a comma-separated env override."""
 
-    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:8000")
     monkeypatch.setenv(
         "MOONMIND_GEMINI_ALLOWED_TOOLS",
         "run_shell_command, activate_skill,run_shell_command,write_file",
@@ -9139,7 +9139,7 @@ async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
     """Gemini runtime commands should allow worker-required tools in non-interactive mode."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -9192,7 +9192,7 @@ async def test_resolve_task_auth_context_includes_git_identity_without_token(
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -9257,7 +9257,7 @@ async def test_prepare_git_identity_preflight_sets_local_identity_for_commit_cap
     )
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -9325,7 +9325,7 @@ async def test_prepare_git_identity_preflight_allows_commit_without_global_ident
     real_handler = CodexExecHandler(workdir_root=tmp_path)
     worker = CodexWorker(
         config=CodexWorkerConfig(
-            moonmind_url="http://localhost:5000",
+            moonmind_url="http://localhost:8000",
             worker_id="worker-1",
             worker_token=None,
             poll_interval_ms=1500,
@@ -9398,7 +9398,7 @@ async def test_run_once_claims_with_configured_policy_fields(tmp_path: Path) -> 
     """Claim request should forward local policy hints without adding repo overrides."""
 
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-9",
         worker_token=None,
         poll_interval_ms=1500,
@@ -9453,7 +9453,7 @@ async def test_run_once_fails_auth_ref_when_vault_not_configured(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-1",
         worker_token=None,
         poll_interval_ms=1500,
@@ -9485,7 +9485,7 @@ async def test_run_once_fails_legacy_job_when_feature_flag_disabled(
         WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
     )
     config = CodexWorkerConfig(
-        moonmind_url="http://localhost:5000",
+        moonmind_url="http://localhost:8000",
         worker_id="worker-9",
         worker_token=None,
         poll_interval_ms=1500,

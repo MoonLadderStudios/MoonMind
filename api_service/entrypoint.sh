@@ -12,7 +12,7 @@ fi
 
 echo "Starting Uvicorn server..."
 if [ "$FASTAPI_RELOAD" = "true" ]; then
-    exec uvicorn api_service.main:app --host 0.0.0.0 --port 5000 --reload
+    exec uvicorn api_service.main:app --host 0.0.0.0 --port 8000 --reload
 else
-    exec uvicorn api_service.main:app --host 0.0.0.0 --port 5000
+    exec uvicorn api_service.main:app --host 0.0.0.0 --port 8000
 fi

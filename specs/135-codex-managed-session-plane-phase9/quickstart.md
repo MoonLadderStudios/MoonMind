@@ -18,7 +18,7 @@ SPECIFY_FEATURE=135-codex-managed-session-plane-phase9 ./.specify/scripts/bash/v
 
 ```bash
 curl -s \
-  "http://localhost:5000/api/task-runs/<task_run_id>/artifact-sessions/<session_id>"
+  "http://localhost:8000/api/task-runs/<task_run_id>/artifact-sessions/<session_id>"
 ```
 
 Expected result:

@@ -10,7 +10,7 @@
 ## 1) Configure environment
 
 ```bash
-export MOONMIND_URL="http://localhost:5000"
+export MOONMIND_URL="http://localhost:8000"
 export MOONMIND_WORKER_ID="executor-01"
 export MOONMIND_WORKER_TOKEN="<worker-token-if-required>"
 export GITHUB_TOKEN="<github-pat>"

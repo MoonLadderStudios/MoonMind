@@ -17,7 +17,7 @@ MoonMind is an open-source platform that orchestrates leading AI agents out of t
 2. Install git
 3. `git clone https://github.com/MoonLadderStudios/MoonMind.git`
 4. run `docker compose up -d` to start the service
-5. open [http://localhost:5000/tasks](http://localhost:5000/tasks)
+5. open [http://localhost:8000/tasks](http://localhost:8000/tasks)
 6. add the few secrets you need for your first workload, such as a model-provider API key and GitHub PAT, through Mission Control
 7. submit a task
 

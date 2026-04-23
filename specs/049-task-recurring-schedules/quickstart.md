@@ -21,7 +21,7 @@ Optional if validating manifest/housekeeping queue handling in a broader environ
 Set auth values for your environment first:
 
 ```bash
-export MOONMIND_API_BASE="http://localhost:5000"
+export MOONMIND_API_BASE="http://localhost:8000"
 export MOONMIND_TOKEN="<bearer-token>"
 ```
 

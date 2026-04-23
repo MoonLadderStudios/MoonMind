@@ -136,7 +136,7 @@ The shape of `result` is tool-specific (for Jules tools, task payloads are JSON-
 
 ### Configuring Codex (and similar clients)
 
-Point your tool server at the **MoonMind API base** (for example `http://localhost:5000` from the host, or `http://api:5000` from another compose service). Use:
+Point your tool server at the **MoonMind API base** (for example `http://localhost:8000` from the host, or `http://api:8000` from another compose service). Use:
 
 - **List tools**: `GET {base}/mcp/tools`
 - **Call tool**: `POST {base}/mcp/tools/call` with `Content-Type: application/json`
@@ -150,7 +150,7 @@ The API container advertises the context endpoint for discovery. In `docker-comp
 ```yaml
 environment:
   - MODEL_CONTEXT_PROTOCOL_ENABLED=true
-  - MODEL_CONTEXT_PROTOCOL_PORT=5000
+  - MODEL_CONTEXT_PROTOCOL_PORT=8000
   - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
 labels:
   - "ai.model.context.protocol.version=0.1"
@@ -161,7 +161,7 @@ Those variables describe the **context** surface; the MCP tool paths are always 
 
 ## Example client (`examples/context_protocol_client.py`)
 
-The repository includes a small Python script that `POST`s to `/context` with a default base URL of `http://localhost:5000` (override with `MOONMIND_API_URL`). As above, add auth headers if your environment requires them.
+The repository includes a small Python script that `POST`s to `/context` with a default base URL of `http://localhost:8000` (override with `MOONMIND_API_URL`). As above, add auth headers if your environment requires them.
 
 ```bash
 python examples/context_protocol_client.py
@@ -173,13 +173,13 @@ python examples/context_protocol_client.py gemini-pro
 From another container on the compose network, the context URL is typically:
 
 ```
-http://api:5000/context
+http://api:8000/context
 ```
 
 From the host:
 
 ```
-http://localhost:5000/context
+http://localhost:8000/context
 ```
 
 For tool use, the same host and port apply to `/mcp/tools` and `/mcp/tools/call`.

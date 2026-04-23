@@ -9,7 +9,7 @@
 ## 1) Create a worker token (admin/operator)
 
 ```bash
-curl -sS -X POST http://localhost:5000/api/queue/workers/tokens \
+curl -sS -X POST http://localhost:8000/api/queue/workers/tokens \
   -H 'Content-Type: application/json' \
   -d '{
     "workerId":"executor-01",
@@ -25,7 +25,7 @@ Capture `token` from response.
 ## 2) Enqueue a capability-scoped job
 
 ```bash
-curl -sS -X POST http://localhost:5000/api/queue/jobs \
+curl -sS -X POST http://localhost:8000/api/queue/jobs \
   -H 'Content-Type: application/json' \
   -d '{
     "type":"codex_exec",
@@ -41,7 +41,7 @@ curl -sS -X POST http://localhost:5000/api/queue/jobs \
 ## 3) Claim with worker token and capabilities
 
 ```bash
-curl -sS -X POST http://localhost:5000/api/queue/jobs/claim \
+curl -sS -X POST http://localhost:8000/api/queue/jobs/claim \
   -H 'Content-Type: application/json' \
   -H "X-MoonMind-Worker-Token: $WORKER_TOKEN" \
   -d '{
@@ -54,14 +54,14 @@ curl -sS -X POST http://localhost:5000/api/queue/jobs/claim \
 ## 4) Append and poll events
 
 ```bash
-curl -sS -X POST http://localhost:5000/api/queue/jobs/<job_id>/events \
+curl -sS -X POST http://localhost:8000/api/queue/jobs/<job_id>/events \
   -H 'Content-Type: application/json' \
   -H "X-MoonMind-Worker-Token: $WORKER_TOKEN" \
   -d '{"workerId":"executor-01","level":"info","message":"started"}'
 ```
 
 ```bash
-curl -sS "http://localhost:5000/api/queue/jobs/<job_id>/events?limit=50"
+curl -sS "http://localhost:8000/api/queue/jobs/<job_id>/events?limit=50"
 ```
 
 ## 5) Validate retry + dead-letter behavior

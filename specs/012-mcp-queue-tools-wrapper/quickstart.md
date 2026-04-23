@@ -1,6 +1,6 @@
 # Quickstart: Agent Queue MCP Tools Wrapper (Milestone 4)
 
-**Feature**: Agent Queue MCP Tools Wrapper  
+**Feature**: Agent Queue MCP Tools Wrapper
 **Branch**: `012-mcp-queue-tools-wrapper`
 
 ## Prerequisites
@@ -13,7 +13,7 @@
 
 ```bash
 curl -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
-  "http://localhost:5000/mcp/tools"
+  "http://localhost:8000/mcp/tools"
 ```
 
 Verify queue tools are present (enqueue/claim/heartbeat/complete/fail/get/list).
@@ -21,7 +21,7 @@ Verify queue tools are present (enqueue/claim/heartbeat/complete/fail/get/list).
 ## 2. Call `queue.enqueue`
 
 ```bash
-curl -X POST "http://localhost:5000/mcp/tools/call" \
+curl -X POST "http://localhost:8000/mcp/tools/call" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
   -d '{
@@ -49,7 +49,7 @@ Capture `result.id` as `JOB_ID`.
 ## 3. Call `queue.get`
 
 ```bash
-curl -X POST "http://localhost:5000/mcp/tools/call" \
+curl -X POST "http://localhost:8000/mcp/tools/call" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
   -d '{
@@ -61,7 +61,7 @@ curl -X POST "http://localhost:5000/mcp/tools/call" \
 ## 4. Call `queue.list`
 
 ```bash
-curl -X POST "http://localhost:5000/mcp/tools/call" \
+curl -X POST "http://localhost:8000/mcp/tools/call" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $MOONMIND_API_TOKEN" \
   -d '{

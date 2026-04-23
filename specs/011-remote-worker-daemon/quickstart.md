@@ -17,7 +17,7 @@ Run `moonmind-codex-worker` with:
 ## 1) Configure environment
 
 ```bash
-export MOONMIND_URL="http://localhost:5000"
+export MOONMIND_URL="http://localhost:8000"
 export MOONMIND_WORKER_ID="executor-01"
 export MOONMIND_WORKER_TOKEN="<token-if-required>"
 export MOONMIND_POLL_INTERVAL_MS="1500"
