@@ -1,52 +1,12 @@
 [
   {
-    "id": 4166333325,
+    "id": 3134202207,
     "disposition": "addressed",
-    "rationale": "Removed the deprecated executionStatusPillClasses compatibility alias and updated remaining call sites plus tests to use executionStatusPillProps directly."
+    "rationale": "Converted _apply_oauth_home_runtime_env to a static method because it does not use instance state."
   },
   {
-    "id": 3134136568,
-    "disposition": "addressed",
-    "rationale": "Dropped the unused executionStatusPillClasses import from task-detail.tsx and kept only executionStatusPillProps."
-  },
-  {
-    "id": 3134136587,
-    "disposition": "addressed",
-    "rationale": "Deleted the executionStatusPillClasses export and migrated all remaining frontend callers off the alias."
-  },
-  {
-    "id": 3134136591,
-    "disposition": "addressed",
-    "rationale": "Removed executionStatusPillClasses from the test imports so the spec exercises the canonical helper only."
-  },
-  {
-    "id": 3134136597,
-    "disposition": "addressed",
-    "rationale": "Updated the class-name expectations to assert executionStatusPillProps(...).className directly."
-  },
-  {
-    "id": 4166160843,
+    "id": 4166409108,
     "disposition": "not-applicable",
-    "rationale": "Top-level Gemini summary review duplicated the actionable inline width feedback that is addressed below."
-  },
-  {
-    "id": 3133984746,
-    "disposition": "addressed",
-    "rationale": "Reduced desktop floating-bar grid minimums from 18/15/12rem to 12/10/8rem so the widened bar stays fluid on mid-width viewports."
-  },
-  {
-    "id": 3133984751,
-    "disposition": "addressed",
-    "rationale": "Updated the Create page CSS expectation test to match the relaxed 12/10/8rem floating-bar grid minimums."
-  },
-  {
-    "id": 3133987413,
-    "disposition": "addressed",
-    "rationale": "Restored shrinkable mid-width behavior by reducing the desktop column minimums rather than keeping overflow-prone fixed widths."
-  },
-  {
-    "id": 4166164127,
-    "disposition": "not-applicable",
-    "rationale": "Top-level Codex review wrapper contained no additional actionable feedback beyond the inline comment already addressed."
+    "rationale": "Summary review only; the only actionable feedback in the review was the inline static-method refactor, which is addressed separately."
   }
 ]
