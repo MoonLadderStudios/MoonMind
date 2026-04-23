@@ -13,5 +13,25 @@
     "id": 4159873032,
     "disposition": "not-applicable",
     "rationale": "Codex review summary; actionable inline review comment handled separately."
+  },
+  {
+    "id": 3128925097,
+    "disposition": "addressed",
+    "rationale": "Inherited execution profiles now fall back to auto-selection when the parent runtime does not match the child runtime."
+  },
+  {
+    "id": 4160334281,
+    "disposition": "not-applicable",
+    "rationale": "Review summary comment only; the actionable runtime-compatibility feedback was handled in the code change."
+  },
+  {
+    "id": 3128933234,
+    "disposition": "addressed",
+    "rationale": "Inherited execution profiles are now validated against synced profile snapshots before being passed to child workflows."
+  },
+  {
+    "id": 4160343819,
+    "disposition": "not-applicable",
+    "rationale": "Review summary comment only; the actionable profile-validation feedback was handled in the code change."
   }
 ]
