@@ -1,17 +1,22 @@
 [
   {
-    "id": 3127450221,
+    "id": 4300922049,
+    "disposition": "not-applicable",
+    "rationale": "Quota warning from gemini-code-assist; no code feedback to address."
+  },
+  {
+    "id": 3127713027,
     "disposition": "addressed",
-    "rationale": "Backfilled missing CLAUDE_API_KEY into existing claude_anthropic clear_env_keys while preserving existing custom clear keys."
+    "rationale": "Persisted released mutation lock state, cleared active lock fields, and added restart regression coverage."
   },
   {
-    "id": 4158522745,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary metadata; no actionable code feedback."
+    "id": 3127713030,
+    "disposition": "addressed",
+    "rationale": "Validated authority and guard remediation workflow, target, target run, and idempotency context before action execution; added regression coverage."
   },
   {
-    "id": 4158526722,
+    "id": 4158858359,
     "disposition": "not-applicable",
-    "rationale": "Review body explicitly states there is no feedback to address."
+    "rationale": "Automated review summary container; actionable child review comments are tracked separately."
   }
 ]
