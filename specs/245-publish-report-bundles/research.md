@@ -58,11 +58,11 @@ Test implications: Focused unit rerun only.
 
 ## FR-008 Immutable Coexistence Of Intermediate And Final Reports
 
-Decision: implemented_unverified.
-Evidence: Artifacts are immutable by ID and latest report lookup is link-driven, but MM-493-specific evidence for later intermediate/final coexistence is distributed across artifact and query tests rather than isolated under this story.
-Rationale: The implementation likely already satisfies the story, but the verification evidence should explicitly confirm coexistence and non-mutation before the story is treated as fully verified.
-Alternatives considered: Mark it fully verified based on artifact immutability alone. Rejected because the story calls out coexistence explicitly.
-Test implications: Verification-first unit or contract assertions should be generated in downstream tasks, with implementation only if the new checks expose drift.
+Decision: implemented_verified.
+Evidence: `test_latest_report_primary_coexists_with_intermediate_report_without_mutation` in `tests/unit/workflows/temporal/test_artifacts.py` proves a later intermediate report produces a new artifact ID, leaves the prior final report artifact readable and marked final, and lets latest `report.primary` resolution move forward without mutating the earlier artifact.
+Rationale: The story-specific coexistence and non-mutation evidence is now explicit in the unit suite rather than inferred indirectly from artifact immutability alone.
+Alternatives considered: Keep the item as unverified until a separate contract or UI test was added. Rejected because the new unit test directly exercises the runtime publication and retrieval path that the requirement depends on.
+Test implications: Focused unit rerun plus the existing contract/frontend verification remain sufficient.
 
 ## FR-009 Traceability
 
