@@ -1,30 +1,28 @@
-# Implementation Plan: Mission Control Report Presentation
+# Implementation Plan: Surface Canonical Reports in Mission Control
 
-**Branch**: `run-jira-orchestrate-for-mm-462-mission-67b1d4e7` | **Date**: 2026-04-22 | **Spec**: [spec.md](spec.md)
+**Branch**: `mm-494-1c104bae` | **Date**: 2026-04-22 | **Spec**: [spec.md](spec.md)
 **Input**: Single-story feature specification from `specs/230-mission-control-report-presentation/spec.md`
 
 ## Summary
 
-Implement MM-462 by extending Mission Control's task detail surface to query the server for the latest `report.primary` artifact, present that canonical report before the generic artifact list, show related report summary/structured/evidence artifacts as report content, and choose open/download targets from artifact presentation metadata. Backend artifact APIs already expose execution-scoped filtering with `link_type` and `latest_only`; the primary implementation work is frontend parsing, report presentation, and focused UI tests with an API contract regression.
+The existing Mission Control report-presentation implementation already satisfies the MM-494 runtime story. This resumed plan preserves MM-494 as the canonical Jira source brief, reuses the verified implementation in `frontend/src/entrypoints/task-detail.tsx` and its tests, and limits current work to source-traceability alignment rather than reopening implementation.
 
 ## Requirement Status
 
 | ID | Status | Evidence | Planned Work | Required Tests |
 | --- | --- | --- | --- | --- |
-| FR-001 | implemented_unverified | `api_service/api/routers/temporal_artifacts.py` accepts `link_type` and `latest_only`; `TemporalArtifactService.list_for_execution` uses `latest_for_execution_link`. | Use this query from Mission Control and add contract/UI coverage. | unit + contract |
-| FR-002 | missing | `frontend/src/entrypoints/task-detail.tsx` shows Summary, Steps, Timeline, then Artifacts; no report-first panel exists. | Add report-first panel before Timeline/Artifacts. | frontend unit |
-| FR-003 | partial | Artifact list payload includes links/metadata, but frontend schema discards links/default read refs and does not group report content. | Parse links/default read refs and render related report content. | frontend unit |
-| FR-004 | implemented_unverified | Existing sections preserve Artifacts, Timeline, stdout/stderr/diagnostics, run summary, and session panels. | Ensure report panel is additive and tests assert generic artifacts remain visible. | frontend unit |
-| FR-005 | partial | `artifactDownloadHref` uses download URL or artifact ID only; no report viewer target helper reads `default_read_ref`, `render_hint`, or content metadata. | Add viewer target/label helper based on artifact presentation fields. | frontend unit |
-| FR-006 | implemented_unverified | Artifact list endpoint serializes metadata and links from normal artifact rows; no separate report store exists. | Keep report UI as read model over existing artifact responses. | contract + frontend unit |
-| FR-007 | missing | UI currently fetches all artifacts and would need local filtering for report identity. | Query `link_type=report.primary&latest_only=true`; do not infer canonical report from arbitrary artifacts. | frontend unit |
-| FR-008 | implemented_unverified | MM-462 preserved in `spec.md` and orchestration input. | Preserve through plan, tasks, verification, and code/test names where practical. | traceability check |
-| DESIGN-REQ-011 | implemented_unverified | Server latest-report query exists for execution/link type. | Consume latest query from UI and test query URL. | frontend unit |
-| DESIGN-REQ-012 | partial | Generic surfaces exist; report panel and related evidence section do not. | Add report panel and related content. | frontend unit |
-| DESIGN-REQ-013 | partial | API serializes `default_read_ref`; UI does not parse/use it. | Parse presentation fields and choose open target/label. | frontend unit |
-| DESIGN-REQ-014 | missing | No report-first UX in task detail. | Render report before generic artifacts. | frontend unit |
-| DESIGN-REQ-020 | partial | Generic observability surfaces exist; evidence is not report-related. | Keep evidence individually openable while preserving observability sections. | frontend unit |
-| DESIGN-REQ-022 | implemented_unverified | Existing endpoint is a read model over artifacts; optional projection not needed for this slice. | Use existing endpoint only. | contract |
+| FR-001 | implemented_verified | `frontend/src/entrypoints/task-detail.tsx` queries `link_type=report.primary&latest_only=true`; `tests/contract/test_temporal_artifact_api.py` verifies the existing artifact endpoint contract. | No additional plan work; preserve existing verified behavior. | unit + contract |
+| FR-002 | implemented_verified | `ReportPresentationSection` renders before Timeline and Artifacts; `frontend/src/entrypoints/task-detail.test.tsx` asserts Report appears before Artifacts. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| FR-003 | implemented_verified | Frontend artifact normalization preserves links and renders related report content with open actions. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| FR-004 | implemented_verified | Generic Artifacts and observability surfaces remain rendered; fallback tests verify generic artifacts still show without report fabrication. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| FR-005 | implemented_verified | `reportOpenHref` and `reportViewerLabel` honor `default_read_ref`, `download_url`, `render_hint`, `content_type`, and metadata title/name. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| FR-006 | implemented_verified | Implementation consumes the existing artifact endpoint/read model only; no new storage or mutation route was added. | No additional plan work; preserve existing verified behavior. | unit + contract |
+| FR-007 | implemented_verified | Report section renders only when latest report response contains an actual `report.primary` link. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| FR-008 | implemented_verified | MM-494 is preserved in `spec.md`, `plan.md`, `tasks.md`, `quickstart.md`, `verification.md`, and the orchestration input. | No additional plan work; preserve traceability across resumed artifacts. | traceability check |
+| DESIGN-REQ-005 | implemented_verified | Latest report query and report-first presentation use the existing `report.primary` artifact path instead of browser-side inference. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-014 | implemented_verified | Report section includes canonical report and related report content before generic artifact inspection. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-015 | implemented_verified | Viewer/open helpers honor `default_read_ref`, `render_hint`, `content_type`, and metadata title/name. | No additional plan work; preserve existing verified behavior. | frontend unit |
+| DESIGN-REQ-016 | implemented_verified | Evidence remains individually openable, observability stays separate, and the existing artifact endpoint remains the read-model boundary. | No additional plan work; preserve existing verified behavior. | frontend unit + contract |
 
 ## Technical Context
 
@@ -52,7 +50,7 @@ Implement MM-462 by extending Mission Control's task detail surface to query the
 - VII. Runtime Configurability: PASS. Uses existing configured API endpoints.
 - VIII. Modular and Extensible Architecture: PASS. Changes stay in task detail UI and artifact API contract.
 - IX. Resilient by Default: PASS. Report identity comes from durable artifact links, not browser heuristics.
-- X. Facilitate Continuous Improvement: PASS. Verification will produce traceable MM-462 evidence.
+- X. Facilitate Continuous Improvement: PASS. Verification preserves traceable MM-494 evidence for the resumed feature artifacts.
 - XI. Spec-Driven Development: PASS. Spec, plan, tasks, and verification drive work.
 - XII. Canonical Documentation Separation: PASS. Orchestration input remains under `docs/tmp`.
 - XIII. Pre-release Compatibility Policy: PASS. No compatibility aliases or internal semantic transforms are introduced.

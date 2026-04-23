@@ -501,7 +501,7 @@ async def validate_claude_oauth_profile(
         ) from exc
 
     if not verification.get("verified", False):
-        reason = str(verification.get("reason") or "unknown")
+        reason = redact_sensitive_payload(str(verification.get("reason") or "unknown"))
         _update_claude_auth_behavior(
             profile,
             auth_state="validation_failed",

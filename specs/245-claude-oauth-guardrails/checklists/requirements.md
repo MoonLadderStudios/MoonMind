@@ -1,7 +1,7 @@
-# Specification Quality Checklist: Surface Canonical Reports in Mission Control
+# Specification Quality Checklist: Claude OAuth Authorization and Redaction Guardrails
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: 2026-04-22
+**Created**: 2026-04-23
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -36,4 +36,5 @@
 
 ## Notes
 
-- Specification preserves MM-494 traceability while reusing the existing single-story report-presentation artifacts for the same runtime behavior.
+- Checklist validated against `specs/245-claude-oauth-guardrails/spec.md` on 2026-04-23.
+- Runtime intent is explicit, the original MM-482 Jira preset brief is preserved verbatim, and every in-scope `DESIGN-REQ-*` maps to one or more functional requirements.

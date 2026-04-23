@@ -1,12 +1,12 @@
-# Verification: Mission Control Report Presentation
+# Verification: Surface Canonical Reports in Mission Control
 
 **Verdict**: FULLY_IMPLEMENTED  
 **Date**: 2026-04-22  
-**Jira**: MM-462
+**Jira**: MM-494
 
 ## Summary
 
-Mission Control task detail now uses server-selected report linkage to render a canonical Report section for executions with `report.primary`, displays related `report.summary`, `report.structured`, and `report.evidence` artifacts as report content, preserves the generic Artifacts and observability surfaces, and avoids fabricating report state when the latest primary report query returns no report artifact.
+Mission Control task detail already uses server-selected report linkage to render a canonical Report section for executions with `report.primary`, displays related `report.summary`, `report.structured`, and `report.evidence` artifacts as report content, preserves the generic Artifacts and observability surfaces, and avoids fabricating report state when the latest primary report query returns no report artifact. This alignment run preserves MM-494 as the canonical Jira source without reopening the completed implementation.
 
 ## Requirement Coverage
 
@@ -19,18 +19,16 @@ Mission Control task detail now uses server-selected report linkage to render a 
 | FR-005 | VERIFIED | `reportOpenHref` and `reportViewerLabel` use `default_read_ref`, `download_url`, `render_hint`, `content_type`, and metadata title/name. |
 | FR-006 | VERIFIED | Implementation consumes existing artifact endpoint/read model only; no new storage or mutation route added. |
 | FR-007 | VERIFIED | Report section renders only when latest report response contains an actual `report.primary` link. |
-| FR-008 | VERIFIED | MM-462 appears in spec, plan, tasks, quickstart, and verification. |
+| FR-008 | VERIFIED | MM-494 appears in spec, plan, tasks, quickstart, and verification. |
 
 ## Source Design Coverage
 
 | ID | Status | Evidence |
 | --- | --- | --- |
-| DESIGN-REQ-011 | VERIFIED | Latest report query is server-side through `link_type=report.primary&latest_only=true`. |
-| DESIGN-REQ-012 | VERIFIED | Report section includes canonical report and related report content while preserving Artifacts and observability. |
-| DESIGN-REQ-013 | VERIFIED | Viewer/open helpers honor artifact presentation fields. |
-| DESIGN-REQ-014 | VERIFIED | Report-first UI appears before generic artifact inspection. |
-| DESIGN-REQ-020 | VERIFIED | Related evidence remains individually openable and generic observability remains separate. |
-| DESIGN-REQ-022 | VERIFIED | Existing artifact read model is used; no report-specific storage plane introduced. |
+| DESIGN-REQ-005 | VERIFIED | Latest report query stays server-side through `link_type=report.primary&latest_only=true` and avoids browser-side inference. |
+| DESIGN-REQ-014 | VERIFIED | Report-first UI appears before generic artifact inspection and includes related report content. |
+| DESIGN-REQ-015 | VERIFIED | Viewer/open helpers honor artifact presentation fields. |
+| DESIGN-REQ-016 | VERIFIED | Related evidence remains individually openable, generic observability remains separate, and the existing artifact read model is preserved. |
 
 ## Test Evidence
 
