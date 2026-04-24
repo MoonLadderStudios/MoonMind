@@ -4333,15 +4333,19 @@ class TemporalAgentRuntimeActivities:
                 )
 
             # pr-resolver runs inside the session container where GitHub auth
-            # may be unavailable; transient auth errors get misclassified as
-            # pr_not_found. The activity worker has a valid token, so re-check
-            # against GitHub before surfacing execution_error. If the PR is
-            # actually merged, clear the failure so the workflow sees success.
+            # or mergeability state may lag the activity worker's view. Re-check
+            # against GitHub before surfacing a terminal resolver failure. If
+            # the PR is actually merged, clear the stale failure so the workflow
+            # sees success.
+            pr_number = self._pr_number_from_run_id(run_id)
             if (
                 pr_resolver_expected
                 and result.failure_class is not None
-                and head_branch
-                and "pr_not_found" in (result.summary or "").lower()
+                and (head_branch or pr_number is not None)
+                and (
+                    "pr-resolver" in (result.summary or "").lower()
+                    or pr_number is not None
+                )
             ):
                 merged_pr = self._reverify_pr_merged_state(
                     run_id=run_id,
@@ -5511,6 +5515,19 @@ class TemporalAgentRuntimeActivities:
         match = re.search(r"github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$", url)
         return match.group(1) if match else ""
 
+    @staticmethod
+    def _pr_number_from_run_id(run_id: str | None) -> int | None:
+        """Extract a resolver PR number from stable run ids when present."""
+        import re
+
+        match = re.search(r"(?:^|:)pr:(\d+)(?::|$)", str(run_id or ""))
+        if match is None:
+            return None
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+
     def _reverify_pr_merged_state(
         self,
         *,
@@ -5520,14 +5537,17 @@ class TemporalAgentRuntimeActivities:
     ) -> dict[str, Any] | None:
         """Return PR metadata when *head_branch*'s PR is merged on GitHub.
 
-        Used to recover from pr-resolver's pr_not_found misclassification when
-        the managed session container lacks working GitHub CLI auth.
+        Used to recover from stale pr-resolver failures after GitHub has already
+        accepted or observed the merge.
         """
         import subprocess
 
         branch = (head_branch or "").strip()
         expected_base = (base_branch or "").strip()
-        if not branch or self._run_store is None:
+        pr_number = self._pr_number_from_run_id(run_id)
+        if not branch and pr_number is None:
+            return None
+        if self._run_store is None:
             return None
         record = self._run_store.load(run_id)
         if record is None or not record.workspace_path:
@@ -5538,16 +5558,23 @@ class TemporalAgentRuntimeActivities:
             repo = self._detect_repo_from_workspace(workspace)
             if not repo:
                 return None
-            pr_list_cmd = [
-                "gh", "pr", "list",
-                "--repo", repo,
-                "--head", branch,
-                "--state", "all",
-                "--json", "number,state,mergedAt,url,baseRefName,headRefName",
-                "--limit", "20",
-            ]
-            if expected_base:
-                pr_list_cmd.extend(["--base", expected_base])
+            if pr_number is not None:
+                pr_list_cmd = [
+                    "gh", "pr", "view", str(pr_number),
+                    "--repo", repo,
+                    "--json", "number,state,mergedAt,url,baseRefName,headRefName",
+                ]
+            else:
+                pr_list_cmd = [
+                    "gh", "pr", "list",
+                    "--repo", repo,
+                    "--head", branch,
+                    "--state", "all",
+                    "--json", "number,state,mergedAt,url,baseRefName,headRefName",
+                    "--limit", "20",
+                ]
+                if expected_base:
+                    pr_list_cmd.extend(["--base", expected_base])
             pr_result = subprocess.run(
                 pr_list_cmd,
                 capture_output=True,
@@ -5560,7 +5587,7 @@ class TemporalAgentRuntimeActivities:
                 return None
             raw_stdout = pr_result.stdout.strip()
             try:
-                prs = json.loads(raw_stdout or "[]")
+                parsed = json.loads(raw_stdout or "null")
             except json.JSONDecodeError:
                 logger.debug(
                     "Failed to parse GitHub PR re-verify output for run %s; "
@@ -5579,7 +5606,8 @@ class TemporalAgentRuntimeActivities:
             )
             return None
 
-        if not isinstance(prs, list) or not prs:
+        prs = parsed if isinstance(parsed, list) else [parsed]
+        if not prs:
             return None
         for pr in prs:
             if not isinstance(pr, dict):
@@ -5609,8 +5637,7 @@ class TemporalAgentRuntimeActivities:
             override_meta["pull_request_url"] = url
         number = merged_pr.get("number")
         new_summary = (
-            f"pr-resolver reported pr_not_found; PR "
-            f"#{number} confirmed merged on GitHub"
+            f"pr-resolver result was stale; PR #{number} confirmed merged on GitHub"
         )
         return result.model_copy(
             update={
