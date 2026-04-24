@@ -129,7 +129,7 @@
 
 **Purpose**: Verify the runtime scope, documentation tracker alignment, and full test suite.
 
-- [X] T039 [P] Update Phase 3 completion tracking in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`.
+- [X] T039 [P] Update Phase 3 completion tracking in `docs/ManagedAgents/DockerOutOfDocker.md`.
 - [X] T040 [P] Run focused Phase 3 verification from `specs/153-dood-executable-tools/quickstart.md` using `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_activity_runtime.py::test_default_skill_registry_payload_uses_dood_tool_definitions tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_runtime_activities_reconciles_managed_sessions_only_on_agent_runtime_fleet tests/unit/workflows/temporal/workflows/test_run_integration.py::test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activity`.
 - [X] T041 Run existing workload launcher regression coverage using `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py`.
 - [X] T042 Run full unit verification with `./tools/test_unit.sh`.

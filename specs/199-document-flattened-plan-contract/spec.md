@@ -35,15 +35,15 @@ Source Reference
 - Source Document: docs/Tasks/PresetComposability.md
 - Source Title: Preset Composability
 - Source Sections:
-  - 4. docs/Tasks/SkillAndPlanContracts.md
-  - 8. Cross-document invariants
+ - 4. docs/Tasks/SkillAndPlanContracts.md
+ - 8. Cross-document invariants
 - Coverage IDs:
-  - DESIGN-REQ-020
-  - DESIGN-REQ-021
-  - DESIGN-REQ-001
-  - DESIGN-REQ-019
-  - DESIGN-REQ-025
-  - DESIGN-REQ-026
+ - DESIGN-REQ-020
+ - DESIGN-REQ-021
+ - DESIGN-REQ-001
+ - DESIGN-REQ-019
+ - DESIGN-REQ-025
+ - DESIGN-REQ-026
 
 User Story
 As a runtime contract owner, I want SkillAndPlanContracts to reject unresolved preset includes and treat provenance as optional metadata so the executor remains a flat graph executor regardless of authoring origin.
@@ -65,7 +65,7 @@ Requirements
 Relevant Implementation Notes
 - The canonical active documentation target is `docs/Tasks/SkillAndPlanContracts.md`.
 - The issue references `docs/Tasks/PresetComposability.md`, but that source document is not present in the current checkout; preserve the reference as Jira traceability while applying the requested SkillAndPlanContracts changes against the repository state.
-- Preserve desired-state documentation under canonical `docs/` files and keep volatile migration or implementation tracking under `docs/tmp/`.
+- Preserve desired-state documentation under canonical `docs/` files and keep volatile migration or implementation tracking under `local-only handoffs`.
 - Preset composition must be documented as an authoring-time concern before a plan artifact is finalized.
 - Stored plan artifacts must be flat DAG execution contracts made of executable nodes and edges; unresolved include objects are invalid runtime input.
 - Source provenance on a plan node is optional metadata for traceability, not executable logic.

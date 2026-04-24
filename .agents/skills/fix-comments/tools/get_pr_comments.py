@@ -22,10 +22,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-
 def eprint(message: str) -> None:
     print(message, file=sys.stderr)
-
 
 def parse_repo_slug(slug: str) -> tuple[str, str]:
     match = _parse_remote_url(slug)
@@ -36,7 +34,6 @@ def parse_repo_slug(slug: str) -> tuple[str, str]:
     if not match:
         raise ValueError(f"Invalid --repo value '{slug}'. Expected format: owner/repo")
     return match.group(1), match.group(2)
-
 
 def _split_owner_repo_path(path: str) -> tuple[str, str] | None:
     trimmed = path.strip().strip("/")
@@ -52,7 +49,6 @@ def _split_owner_repo_path(path: str) -> tuple[str, str] | None:
     if not owner or not repo:
         return None
     return owner, repo
-
 
 def _parse_remote_url(remote_url: str) -> tuple[str, str] | None:
     candidate = remote_url.strip()
@@ -70,7 +66,6 @@ def _parse_remote_url(remote_url: str) -> tuple[str, str] | None:
 
     return None
 
-
 def detect_repo_from_git() -> tuple[str, str] | None:
     try:
         remote_bytes = subprocess.check_output(
@@ -82,7 +77,6 @@ def detect_repo_from_git() -> tuple[str, str] | None:
 
     remote_url = remote_bytes.decode("utf-8").strip()
     return _parse_remote_url(remote_url)
-
 
 def resolve_token(cli_token: str | None) -> str | None:
     if cli_token:
@@ -102,10 +96,8 @@ def resolve_token(cli_token: str | None) -> str | None:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
 
-
 def is_retryable_http_status(status: int) -> bool:
     return status == 429 or status >= 500
-
 
 def api_get_json(
     url: str,
@@ -167,7 +159,6 @@ def api_get_json(
             raise RuntimeError(f"Invalid JSON returned from {url}: {exc}") from exc
 
     raise RuntimeError(f"Failed to fetch {url} after {max_attempts} attempts")
-
 
 def api_post_json(
     url: str,
@@ -232,7 +223,6 @@ def api_post_json(
             raise RuntimeError(f"Invalid JSON returned from {url}: {exc}") from exc
 
     raise RuntimeError(f"Failed to POST {url} after {max_attempts} attempts")
-
 
 def fetch_review_thread_status(
     owner: str, repo: str, pr_number: int, token: str | None
@@ -314,7 +304,6 @@ def fetch_review_thread_status(
 
     return result
 
-
 def fetch_paginated(url: str, token: str | None) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     page = 1
@@ -334,7 +323,6 @@ def fetch_paginated(url: str, token: str | None) -> list[dict[str, Any]]:
 
     return items
 
-
 def normalize_issue_comment(comment: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "issue_comment",
@@ -345,7 +333,6 @@ def normalize_issue_comment(comment: dict[str, Any]) -> dict[str, Any]:
         "updated_at": comment.get("updated_at"),
         "url": comment.get("html_url"),
     }
-
 
 def normalize_review_comment(
     comment: dict[str, Any],
@@ -373,7 +360,6 @@ def normalize_review_comment(
             normalized["thread_outdated"] = status["isOutdated"]
     return normalized
 
-
 def normalize_review(review: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "review",
@@ -385,7 +371,6 @@ def normalize_review(review: dict[str, Any]) -> dict[str, Any]:
         "updated_at": review.get("submitted_at") or review.get("updated_at"),
         "url": review.get("html_url"),
     }
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -485,7 +470,6 @@ def main() -> None:
         eprint(f"Wrote {len(comments)} comments to {out_path}")
     else:
         print(json_output)
-
 
 if __name__ == "__main__":
     main()

@@ -10,15 +10,15 @@ Alternatives considered: Treating the input as a broad declarative design was re
 
 ## Source Document Availability
 
-Decision: Use the preserved MM-389 Jira preset brief, `docs/tmp/101-PlansOverview.md`, `docs/Tasks/TaskPresetsSystem.md`, and `docs/Tasks/SkillAndPlanContracts.md` as active sources.
+Decision: Use the preserved MM-389 Jira preset brief, `docs/MoonMindRoadmap.md`, `docs/Tasks/TaskPresetsSystem.md`, and `docs/Tasks/SkillAndPlanContracts.md` as active sources.
 
-Rationale: The brief references `docs/Tasks/PresetComposability.md`, but that file is absent in the current checkout. It also references `docs/Temporal/101-PlansOverview.md`, while the current repository exposes the plans overview at `docs/tmp/101-PlansOverview.md`. The target documents contain the required current semantics: `TaskPresetsSystem` describes preset expansion into `PlanDefinition`, and `SkillAndPlanContracts` describes flattened runtime plan semantics.
+Rationale: The brief references `docs/Tasks/PresetComposability.md`, but that file is absent in the current checkout. It also references `docs/Temporal/101-PlansOverview.md`, while the current repository exposes the plans overview at `docs/MoonMindRoadmap.md`. The target documents contain the required current semantics: `TaskPresetsSystem` describes preset expansion into `PlanDefinition`, and `SkillAndPlanContracts` describes flattened runtime plan semantics.
 
 Alternatives considered: Blocking on missing source paths was rejected because the preserved brief is specific and the repository-current equivalent files contain the required semantics.
 
 ## Implementation Surface
 
-Decision: Update `docs/tmp/101-PlansOverview.md` and MoonSpec artifacts only unless verification discovers executable drift.
+Decision: Update `docs/MoonMindRoadmap.md` and MoonSpec artifacts only unless verification discovers executable drift.
 
 Rationale: MM-389 asks for the plans overview or equivalent index to include a concise cross-document boundary clarification. The implementation target is a documentation index, not a runtime code path.
 
@@ -30,7 +30,7 @@ Decision: Add one paragraph directly below the tasks, skills, presets, and plans
 
 Rationale: This keeps the alignment near plan overview content and avoids adding a new migration checklist. The paragraph can link both source documents and state the control-plane/runtime boundary in one place.
 
-Alternatives considered: Adding a new subsection was rejected as heavier than the requested concise clarification. Editing canonical docs was rejected because the repository-current overview is under `docs/tmp/` and the story asks not to add canonical migration checklist content.
+Alternatives considered: Adding a new subsection was rejected as heavier than the requested concise clarification. Editing canonical docs was rejected because the repository-current overview is under `local-only handoffs` and the story asks not to add canonical migration checklist content.
 
 ## Test Strategy
 

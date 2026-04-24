@@ -16,7 +16,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-381 orchestration input exists in `docs/tmp/jira-orchestration-inputs/MM-381-moonspec-orchestration-input.md` and is preserved in `specs/200-jira-import-declared-targets/spec.md` (FR-027)
+- [X] T001 Confirm MM-381 orchestration input exists in `spec.md` (Input) and is preserved in `specs/200-jira-import-declared-targets/spec.md` (FR-027)
 - [X] T002 Confirm active feature artifacts exist in `specs/200-jira-import-declared-targets/`: spec, plan, research, data model, contract, quickstart, checklist, and tasks
 
 ## Phase 2: Foundational
@@ -43,7 +43,7 @@
 - [X] T008 Add or confirm integration-style Create page coverage for Jira failures staying local and manual task submission payload shape remaining unchanged in `frontend/src/entrypoints/task-create.test.tsx` (FR-013, FR-014, FR-021, FR-022, FR-026, SC-006, scenario 5, DESIGN-REQ-003, DESIGN-REQ-022, DESIGN-REQ-025)
 - [X] T009 Add or confirm integration-style Create page coverage for preset reapply and template-bound step text detachment after Jira import in `frontend/src/entrypoints/task-create.test.tsx` (FR-010, FR-015, FR-017, FR-026, SC-005, scenario 7, DESIGN-REQ-010, DESIGN-REQ-018)
 - [X] T010 Add or confirm integration-style Create page coverage for post-import focus or visible success context in `frontend/src/entrypoints/task-create.test.tsx` (FR-025, FR-026, scenario 8, DESIGN-REQ-023, DESIGN-REQ-024)
-- [X] T011 Confirm MM-381 traceability appears in feature artifacts and verification inputs in `specs/200-jira-import-declared-targets/spec.md`, `specs/200-jira-import-declared-targets/tasks.md`, and `docs/tmp/jira-orchestration-inputs/MM-381-moonspec-orchestration-input.md` (FR-027)
+- [X] T011 Confirm MM-381 traceability appears in feature artifacts and verification inputs in `specs/200-jira-import-declared-targets/spec.md`, `specs/200-jira-import-declared-targets/tasks.md`, and `spec.md` (Input) (FR-027)
 
 ### Red-First Confirmation
 

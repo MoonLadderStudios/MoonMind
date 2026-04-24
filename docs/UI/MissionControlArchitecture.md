@@ -1,10 +1,10 @@
 # Mission Control Architecture
 
-Status: Active  
-Owners: MoonMind Engineering  
+Status: Active 
+Owners: MoonMind Engineering 
 Last updated: 2026-04-04
 
-**Implementation tracking:** [`docs/tmp/remaining-work/UI-MissionControlArchitecture.md`](../tmp/remaining-work/UI-MissionControlArchitecture.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 ## 1. Purpose
 
@@ -298,22 +298,22 @@ Representative shape:
 
 ```json
 {
-  "sources": {
-    "temporal": {
-      "list": "/api/executions",
-      "create": "/api/executions",
-      "detail": "/api/executions/{workflowId}",
-      "steps": "/api/executions/{workflowId}/steps",
-      "update": "/api/executions/{workflowId}/update",
-      "signal": "/api/executions/{workflowId}/signal",
-      "cancel": "/api/executions/{workflowId}/cancel",
-      "artifacts": "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
-      "artifactCreate": "/api/artifacts",
-      "artifactMetadata": "/api/artifacts/{artifactId}",
-      "artifactPresignDownload": "/api/artifacts/{artifactId}/presign-download",
-      "artifactDownload": "/api/artifacts/{artifactId}/download"
-    }
-  }
+ "sources": {
+ "temporal": {
+ "list": "/api/executions",
+ "create": "/api/executions",
+ "detail": "/api/executions/{workflowId}",
+ "steps": "/api/executions/{workflowId}/steps",
+ "update": "/api/executions/{workflowId}/update",
+ "signal": "/api/executions/{workflowId}/signal",
+ "cancel": "/api/executions/{workflowId}/cancel",
+ "artifacts": "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
+ "artifactCreate": "/api/artifacts",
+ "artifactMetadata": "/api/artifacts/{artifactId}",
+ "artifactPresignDownload": "/api/artifacts/{artifactId}/presign-download",
+ "artifactDownload": "/api/artifacts/{artifactId}/download"
+ }
+ }
 }
 ```
 
@@ -424,38 +424,38 @@ Temporal-backed detail should render:
 
 * primary summary header:
 
-  * title
-  * normalized status badge
-  * concise summary
-  * allowed actions
+ * title
+ * normalized status badge
+ * concise summary
+ * allowed actions
 
 * compact execution facts row:
 
-  * workflow label
-  * runtime
-  * model/effort when applicable
-  * started time
-  * updated time or duration
-  * current run state
+ * workflow label
+ * runtime
+ * model/effort when applicable
+ * started time
+ * updated time or duration
+ * current run state
 
 * secondary facts rail or metadata panel:
 
-  * workflow ID
-  * latest `temporalRunId`
-  * namespace
-  * repository
-  * integration
-  * owner
-  * terminal timestamps
-  * optional execution-context metadata
+ * workflow ID
+ * latest `temporalRunId`
+ * namespace
+ * repository
+ * integration
+ * owner
+ * terminal timestamps
+ * optional execution-context metadata
 
 * durable evidence section:
 
-  * steps
-  * step-scoped logs, diagnostics, and checks
-  * artifacts
-  * outcome summaries
-  * timeline/state transitions
+ * steps
+ * step-scoped logs, diagnostics, and checks
+ * artifacts
+ * outcome summaries
+ * timeline/state transitions
 
 ## 12.2 Steps and Observability sections
 
@@ -644,30 +644,30 @@ The list page should use a two-width strategy:
 
 ## 13.4 Row model for Temporal-backed items
 
-| Dashboard field     | Temporal source                                |
+| Dashboard field | Temporal source |
 | ------------------- | ---------------------------------------------- |
-| `id` / `taskId`     | `workflowId`                                   |
-| `title`             | `memo.title` or fallback                       |
-| `summary`           | `memo.summary`                                 |
-| `workflowType`      | `workflowType`                                 |
-| `runtime`           | runtime target from execution fields           |
-| `entry`             | `searchAttributes.mm_entry`                    |
-| `status`            | `dashboardStatus`                              |
-| `rawState`          | exact `state`                                  |
-| `temporalStatus`    | `temporalStatus`                               |
-| `closeStatus`       | `closeStatus`                                  |
-| `ownerType`         | `searchAttributes.mm_owner_type`               |
-| `ownerId`           | `searchAttributes.mm_owner_id`                 |
-| `repository`        | `searchAttributes.mm_repo`                     |
-| `integration`       | `searchAttributes.mm_integration`              |
-| `waitingReason`     | bounded waiting reason                         |
+| `id` / `taskId` | `workflowId` |
+| `title` | `memo.title` or fallback |
+| `summary` | `memo.summary` |
+| `workflowType` | `workflowType` |
+| `runtime` | runtime target from execution fields |
+| `entry` | `searchAttributes.mm_entry` |
+| `status` | `dashboardStatus` |
+| `rawState` | exact `state` |
+| `temporalStatus` | `temporalStatus` |
+| `closeStatus` | `closeStatus` |
+| `ownerType` | `searchAttributes.mm_owner_type` |
+| `ownerId` | `searchAttributes.mm_owner_id` |
+| `repository` | `searchAttributes.mm_repo` |
+| `integration` | `searchAttributes.mm_integration` |
+| `waitingReason` | bounded waiting reason |
 | `attentionRequired` | whether current user/operator action is needed |
-| `startedAt`         | `startedAt`                                    |
-| `updatedAt`         | `updatedAt`                                    |
-| `closedAt`          | `closedAt`                                     |
-| `duration`          | derived                                        |
-| `workflowId`        | `workflowId`                                   |
-| `temporalRunId`     | latest run instance ID                         |
+| `startedAt` | `startedAt` |
+| `updatedAt` | `updatedAt` |
+| `closedAt` | `closedAt` |
+| `duration` | derived |
+| `workflowId` | `workflowId` |
+| `temporalRunId` | latest run instance ID |
 
 Recommended desktop priorities:
 
@@ -708,28 +708,28 @@ Pagination rules:
 
 ## 14.1 Supported Temporal actions
 
-| Dashboard action | Temporal API                               | Contract                   |
+| Dashboard action | Temporal API | Contract |
 | ---------------- | ------------------------------------------ | -------------------------- |
-| Create execution | `POST /api/executions`                     | Start workflow             |
-| Edit inputs      | `POST /api/executions/{workflowId}/update` | `UpdateInputs`             |
-| Rename / retitle | `POST /api/executions/{workflowId}/update` | `SetTitle`                 |
-| Rerun            | `POST /api/executions/{workflowId}/update` | `RequestRerun`             |
-| Approve          | `POST /api/executions/{workflowId}/signal` | `Approve`                  |
-| Pause            | `POST /api/executions/{workflowId}/signal` | `Pause`                    |
-| Resume           | `POST /api/executions/{workflowId}/signal` | `Resume`                   |
-| Cancel           | `POST /api/executions/{workflowId}/cancel` | Graceful cancel by default |
+| Create execution | `POST /api/executions` | Start workflow |
+| Edit inputs | `POST /api/executions/{workflowId}/update` | `UpdateInputs` |
+| Rename / retitle | `POST /api/executions/{workflowId}/update` | `SetTitle` |
+| Rerun | `POST /api/executions/{workflowId}/update` | `RequestRerun` |
+| Approve | `POST /api/executions/{workflowId}/signal` | `Approve` |
+| Pause | `POST /api/executions/{workflowId}/signal` | `Pause` |
+| Resume | `POST /api/executions/{workflowId}/signal` | `Resume` |
+| Cancel | `POST /api/executions/{workflowId}/cancel` | Graceful cancel by default |
 
 `ExternalEvent` is part of the execution contract, but normally appears as a system/integration path rather than a direct user-facing button.
 
 ## 14.2 Initial UI action matrix
 
-| Temporal state                                                                          | Allowed actions                                |
+| Temporal state | Allowed actions |
 | --------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `scheduled` / `initializing` / `waiting_on_dependencies` / `awaiting_slot` / `planning` | cancel, set title                              |
-| `executing` / `proposals`                                                               | cancel, pause, set title                       |
-| `awaiting_external`                                                                     | cancel, pause, resume, approve when applicable |
-| `finalizing`                                                                            | cancel only if policy allows                   |
-| terminal (`completed`, `failed`, `canceled`)                                            | rerun, view/download artifacts                 |
+| `scheduled` / `initializing` / `waiting_on_dependencies` / `awaiting_slot` / `planning` | cancel, set title |
+| `executing` / `proposals` | cancel, pause, set title |
+| `awaiting_external` | cancel, pause, resume, approve when applicable |
+| `finalizing` | cancel only if policy allows |
+| terminal (`completed`, `failed`, `canceled`) | rerun, view/download artifacts |
 
 ## 14.3 Copy guidance
 

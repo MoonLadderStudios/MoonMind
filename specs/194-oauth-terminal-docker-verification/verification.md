@@ -2,7 +2,7 @@
 
 **Feature**: OAuth Terminal Docker Verification  
 **Spec**: `specs/194-oauth-terminal-docker-verification/spec.md`  
-**Original Request Source**: `spec.md` `Input` preserving Jira issue `MM-363` and `docs/tmp/jira-orchestration-inputs/MM-363-moonspec-orchestration-input.md`  
+**Original Request Source**: `spec.md` `Input` preserving Jira issue `MM-363` and `spec.md` (Input)  
 **Verdict**: ADDITIONAL_WORK_NEEDED  
 **Confidence**: HIGH for blocker classification; LOW for runtime closure because Docker-backed tests could not run.
 

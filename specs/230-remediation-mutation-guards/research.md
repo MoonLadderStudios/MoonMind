@@ -3,7 +3,7 @@
 ## Input Classification
 
 Decision: MM-455 is a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-455-moonspec-orchestration-input.md` defines one user story, one source design path, one acceptance-criteria set, and one bounded runtime behavior area.
+Evidence: `spec.md` (Input) defines one user story, one source design path, one acceptance-criteria set, and one bounded runtime behavior area.
 Rationale: The story focuses on mutation guardrails for remediation action execution and does not require story splitting.
 Alternatives considered: Treating `docs/Tasks/TaskRemediation.md` as a broad declarative design was rejected because the Jira preset brief already selected one independently testable slice.
 Test implications: Unit and service-boundary tests should target this single story.

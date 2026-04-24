@@ -8,7 +8,7 @@
 ## Source Traceability
 
 - Original Jira issue: MM-404.
-- Canonical input: `docs/tmp/jira-orchestration-inputs/MM-404-moonspec-orchestration-input.md`.
+- Canonical input: `spec.md` (Input).
 - Active spec: `specs/207-jira-breakdown-orchestrate-skill/spec.md`.
 - Requirement status summary: 7 missing, 8 partial, 2 implemented-verified, 2 implemented-unverified across functional requirements and success criteria in `plan.md`.
 - Code-and-test work: FR-001 through FR-011, FR-014, SC-001 through SC-006.

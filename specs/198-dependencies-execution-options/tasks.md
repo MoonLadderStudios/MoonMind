@@ -15,7 +15,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-379 orchestration input exists in `docs/tmp/jira-orchestration-inputs/MM-379-moonspec-orchestration-input.md` and the original Jira preset brief is preserved in `specs/198-dependencies-execution-options/spec.md` (FR-010, SC-007)
+- [X] T001 Confirm MM-379 orchestration input exists in `spec.md` (Input) and the original Jira preset brief is preserved in `specs/198-dependencies-execution-options/spec.md` (FR-010, SC-007)
 - [X] T002 Create Moon Spec artifact directory `specs/198-dependencies-execution-options/` with spec, plan, research, data model, contract, quickstart, and tasks
 
 ## Phase 2: Foundational

@@ -35,15 +35,15 @@ Source Reference
 - Source Document: docs/Tasks/PresetComposability.md
 - Source Title: Preset Composability
 - Source Sections:
-  - 3. docs/Tasks/TaskArchitecture.md
-  - 8. Cross-document invariants
+ - 3. docs/Tasks/TaskArchitecture.md
+ - 8. Cross-document invariants
 - Coverage IDs:
-  - DESIGN-REQ-017
-  - DESIGN-REQ-018
-  - DESIGN-REQ-019
-  - DESIGN-REQ-015
-  - DESIGN-REQ-025
-  - DESIGN-REQ-026
+ - DESIGN-REQ-017
+ - DESIGN-REQ-018
+ - DESIGN-REQ-019
+ - DESIGN-REQ-015
+ - DESIGN-REQ-025
+ - DESIGN-REQ-026
 
 User Story
 As a control-plane maintainer, I want TaskArchitecture to treat preset compilation as a control-plane phase and preserve authored preset metadata alongside flat steps so submitted work remains executable and reconstructible without live preset lookup.
@@ -65,7 +65,7 @@ Requirements
 Relevant Implementation Notes
 - The canonical active documentation target is `docs/Tasks/TaskArchitecture.md`.
 - The issue references `docs/Tasks/PresetComposability.md`, but that source document is not present in the current checkout; preserve the reference as Jira traceability while applying the requested TaskArchitecture changes against the repository state.
-- Preserve desired-state documentation under canonical `docs/` files and keep volatile migration or implementation tracking under `docs/tmp/`.
+- Preserve desired-state documentation under canonical `docs/` files and keep volatile migration or implementation tracking under `local-only handoffs`.
 - Preset compilation belongs in the control plane before execution contract finalization.
 - Runtime workers consume fully resolved execution payloads and must not expand presets or depend on live preset catalog correctness.
 - Authored preset binding metadata, flattened step provenance, manual and preset-derived ordering, pinned bindings, include-tree summary, detachment state, and final submitted order must remain reconstructible from the submitted task snapshot.

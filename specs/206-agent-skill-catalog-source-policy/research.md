@@ -3,7 +3,7 @@
 ## Classification
 
 Decision: MM-405 is a single-story runtime feature request.
-Evidence: `specs/206-agent-skill-catalog-source-policy/spec.md`; `docs/tmp/jira-orchestration-inputs/MM-405-moonspec-orchestration-input.md`.
+Evidence: `specs/206-agent-skill-catalog-source-policy/spec.md`; `spec.md` (Input).
 Rationale: The brief has one operator story and one validation surface: distinguish agent-skill instruction bundles from executable tools, preserve immutable versions, and enforce source policy before resolution/materialization.
 Alternatives considered: Documentation-only alignment was rejected because the user selected runtime mode and the brief describes system behavior.
 Test implications: Unit and adapter-boundary verification are required.
@@ -51,7 +51,7 @@ Test implications: Existing test remains final verification evidence.
 ## FR-012 and SC-007
 
 Decision: implemented_verified.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-405-moonspec-orchestration-input.md`; `specs/206-agent-skill-catalog-source-policy/spec.md`.
+Evidence: `spec.md` (Input); `specs/206-agent-skill-catalog-source-policy/spec.md`.
 Rationale: MM-405 and the original Jira brief are preserved in the source artifact and spec.
 Alternatives considered: None.
 Test implications: Add traceability checks in quickstart/tasks and final verification.

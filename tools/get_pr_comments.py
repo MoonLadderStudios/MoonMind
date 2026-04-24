@@ -21,17 +21,14 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-
 def eprint(message: str) -> None:
     print(message, file=sys.stderr)
-
 
 def parse_repo_slug(slug: str) -> tuple[str, str]:
     match = re.match(r"^([^/\s]+)/([^/\s]+)$", slug.strip())
     if not match:
         raise ValueError(f"Invalid --repo value '{slug}'. Expected format: owner/repo")
     return match.group(1), match.group(2)
-
 
 def detect_repo_from_git() -> tuple[str, str] | None:
     try:
@@ -48,7 +45,6 @@ def detect_repo_from_git() -> tuple[str, str] | None:
         return None
 
     return match.group(1), match.group(2)
-
 
 def resolve_token(cli_token: str | None) -> str | None:
     if cli_token:
@@ -67,7 +63,6 @@ def resolve_token(cli_token: str | None) -> str | None:
         return token or None
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
-
 
 def api_get_json(url: str, token: str | None) -> Any:
     headers = {
@@ -97,7 +92,6 @@ def api_get_json(url: str, token: str | None) -> Any:
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid JSON returned from {url}: {exc}") from exc
 
-
 def fetch_paginated(url: str, token: str | None) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     page = 1
@@ -117,7 +111,6 @@ def fetch_paginated(url: str, token: str | None) -> list[dict[str, Any]]:
 
     return items
 
-
 def normalize_issue_comment(comment: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "issue_comment",
@@ -128,7 +121,6 @@ def normalize_issue_comment(comment: dict[str, Any]) -> dict[str, Any]:
         "updated_at": comment.get("updated_at"),
         "url": comment.get("html_url"),
     }
-
 
 def normalize_review_comment(
     comment: dict[str, Any],
@@ -154,7 +146,6 @@ def normalize_review_comment(
         "thread_outdated": ts.get("outdated", False),
     }
 
-
 def normalize_review(review: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "review",
@@ -166,7 +157,6 @@ def normalize_review(review: dict[str, Any]) -> dict[str, Any]:
         "updated_at": review.get("submitted_at") or review.get("updated_at"),
         "url": review.get("html_url"),
     }
-
 
 _REVIEW_THREADS_QUERY = """
 query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
@@ -186,7 +176,6 @@ query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
   }
 }
 """
-
 
 def fetch_review_thread_states(
     owner: str,
@@ -260,7 +249,6 @@ def fetch_review_thread_states(
         cursor = page_info.get("endCursor")
 
     return result
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -359,7 +347,6 @@ def main() -> None:
         eprint(f"Wrote {len(comments)} comments to {args.output}")
     else:
         print(json_output)
-
 
 if __name__ == "__main__":
     main()

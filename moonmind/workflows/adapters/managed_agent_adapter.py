@@ -49,7 +49,6 @@ from moonmind.workflows.tasks.runtime_defaults import resolve_runtime_defaults
 
 logger = logging.getLogger(__name__)
 
-
 # GitHub CLI authentication is required for workflows like pr-resolver.
 # Only the *key names* are propagated through workflow/activity payloads; the
 # values are injected at launch time by the agent-runtime activity worker.
@@ -74,7 +73,6 @@ _PR_RESOLVER_BLOCKED_STATUSES: frozenset[str] = frozenset(
 )
 _PR_RESOLVER_MERGED_STATUSES: frozenset[str] = frozenset({"merged"})
 
-
 @dataclass(frozen=True, slots=True)
 class ManagedProfileLaunchContext:
     """Resolved managed-profile launch context shared across adapters."""
@@ -85,7 +83,6 @@ class ManagedProfileLaunchContext:
     passthrough_env_keys: list[str]
     env_keys_count: int
 
-
 def default_credential_source_for_runtime(runtime_id: str) -> str:
     """Return the deterministic default credential source for one runtime."""
 
@@ -94,7 +91,6 @@ def default_credential_source_for_runtime(runtime_id: str) -> str:
     strategy = get_strategy(runtime_id)
     default_auth = strategy.default_auth_mode if strategy is not None else "api_key"
     return "oauth_volume" if default_auth == "oauth" else "secret_ref"
-
 
 def build_managed_profile_launch_context(
     *,
@@ -151,7 +147,6 @@ def build_managed_profile_launch_context(
         env_keys_count=len(delta_env_overrides) + len(passthrough_env_keys),
     )
 
-
 def _in_workflow_context() -> bool:
     try:
         from temporalio import workflow
@@ -162,7 +157,6 @@ def _in_workflow_context() -> bool:
     except RuntimeError:
         return False
 
-
 def _generate_run_id() -> str:
     if _in_workflow_context():
         from temporalio import workflow
@@ -170,14 +164,12 @@ def _generate_run_id() -> str:
         return str(workflow.uuid4())
     return str(uuid4())
 
-
 def _current_time() -> datetime:
     if _in_workflow_context():
         from temporalio import workflow
 
         return workflow.now()
     return datetime.now(tz=UTC)
-
 
 def _load_json_dict(path: Path) -> dict[str, Any] | None:
     try:
@@ -187,7 +179,6 @@ def _load_json_dict(path: Path) -> dict[str, Any] | None:
     if isinstance(payload, dict):
         return payload
     return None
-
 
 def _parse_payload_timestamp(value: Any) -> datetime | None:
     text = str(value or "").strip()
@@ -200,7 +191,6 @@ def _parse_payload_timestamp(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
-
 
 def _payload_sort_timestamp(path: Path, payload: dict[str, Any]) -> datetime:
     for key in ("timestamp", "finished_at", "finishedAt", "updated_at", "updatedAt"):
@@ -215,7 +205,6 @@ def _payload_sort_timestamp(path: Path, payload: dict[str, Any]) -> datetime:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
     except OSError:
         return datetime.min.replace(tzinfo=UTC)
-
 
 def _load_pr_resolver_result(workspace_path: str | None) -> dict[str, Any] | None:
     """Load the most recent pr-resolver payload from result/attempt artifacts."""
@@ -261,8 +250,6 @@ CooldownReportFunc = Callable[..., Awaitable[Any]]
 RunLauncherFunc = Callable[..., Awaitable[Any]]
 LaunchContextBuilderFunc = Callable[..., Awaitable[ManagedProfileLaunchContext | dict[str, Any]]]
 
-
-
 def _derive_pr_resolver_failure(
     workspace_path: str | None,
 ) -> tuple[str | None, str | None]:
@@ -288,7 +275,6 @@ def _derive_pr_resolver_failure(
         "user_error" if status in _PR_RESOLVER_BLOCKED_STATUSES else "execution_error"
     )
     return failure_class, "; ".join(summary_parts)
-
 
 def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
     """Return compact metadata from pr-resolver artifacts for parent workflows."""
@@ -316,7 +302,6 @@ def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
         metadata["headSha"] = head_sha
     return metadata
 
-
 def _is_generic_process_exit_summary(summary: str | None) -> bool:
     """Return whether a run summary only reports generic process exit."""
 
@@ -325,10 +310,8 @@ def _is_generic_process_exit_summary(summary: str | None) -> bool:
         return True
     return text.startswith("process exited with code")
 
-
 class ProfileResolutionError(RuntimeError):
     """Raised when a profile cannot be resolved from the activity result."""
-
 
 class ManagedAgentAdapter:
     """Lifecycle adapter for managed agent runtimes with auth-profile controls.
@@ -773,7 +756,6 @@ class ManagedAgentAdapter:
             reverse=True,
         )
         return eligible_profiles[0]
-
 
 __all__ = [
     "ManagedAgentAdapter",

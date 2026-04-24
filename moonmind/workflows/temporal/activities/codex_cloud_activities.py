@@ -23,7 +23,6 @@ from moonmind.workflows.adapters.codex_cloud_agent_adapter import (
 )
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient
 
-
 def _build_adapter() -> CodexCloudAgentAdapter:
     """Build a gated CodexCloudAgentAdapter using env-based configuration.
 
@@ -43,14 +42,12 @@ def _build_adapter() -> CodexCloudAgentAdapter:
     client = CodexCloudClient(base_url=cloud_url, api_key=cloud_key)
     return CodexCloudAgentAdapter(client_factory=lambda: client)
 
-
 @activity.defn(name="integration.codex_cloud.start")
 async def codex_cloud_start_activity(request: AgentExecutionRequest) -> AgentRunHandle:
     """Start a Codex Cloud-backed run via the canonical adapter contract."""
 
     adapter = _build_adapter()
     return await adapter.start(request)
-
 
 @activity.defn(name="integration.codex_cloud.status")
 async def codex_cloud_status_activity(run_id: str) -> AgentRunStatus:
@@ -59,7 +56,6 @@ async def codex_cloud_status_activity(run_id: str) -> AgentRunStatus:
     adapter = _build_adapter()
     return await adapter.status(run_id)
 
-
 @activity.defn(name="integration.codex_cloud.fetch_result")
 async def codex_cloud_fetch_result_activity(run_id: str) -> AgentRunResult:
     """Fetch terminal result for one completed Codex Cloud task."""
@@ -67,14 +63,12 @@ async def codex_cloud_fetch_result_activity(run_id: str) -> AgentRunResult:
     adapter = _build_adapter()
     return await adapter.fetch_result(run_id)
 
-
 @activity.defn(name="integration.codex_cloud.cancel")
 async def codex_cloud_cancel_activity(run_id: str) -> AgentRunStatus:
     """Attempt best-effort cancellation for one Codex Cloud task."""
 
     adapter = _build_adapter()
     return await adapter.cancel(run_id)
-
 
 __all__ = [
     "codex_cloud_cancel_activity",

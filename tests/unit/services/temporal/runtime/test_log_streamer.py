@@ -14,7 +14,6 @@ from moonmind.workflows.temporal.runtime.output_parser import (
     PlainTextOutputParser,
 )
 
-
 class _StubArtifactStorage:
     """Minimal file-based artifact storage for tests (replaces AgentQueueArtifactStorage)."""
 
@@ -33,12 +32,10 @@ class _StubArtifactStorage:
     def resolve_storage_path(self, ref: str) -> Path:
         return self._root / ref
 
-
 @pytest.fixture
 def streamer(tmp_path):
     storage = _StubArtifactStorage(tmp_path)
     return RuntimeLogStreamer(storage), storage
-
 
 @pytest.mark.asyncio
 async def test_stream_writes_file(streamer, tmp_path):
@@ -55,7 +52,6 @@ async def test_stream_writes_file(streamer, tmp_path):
     resolved = storage.resolve_storage_path(ref)
     assert resolved.read_bytes() == b"line 1\nline 2\n"
     assert events == []
-
 
 @pytest.mark.asyncio
 async def test_stream_redacts_secret_like_values_from_artifacts_and_live_events(
@@ -84,7 +80,6 @@ async def test_stream_redacts_secret_like_values_from_artifacts_and_live_events(
     assert "ghp_" not in published.text
     assert "abc123" not in published.text
 
-
 @pytest.mark.asyncio
 async def test_stream_empty(streamer, tmp_path):
     log_streamer, storage = streamer
@@ -98,7 +93,6 @@ async def test_stream_empty(streamer, tmp_path):
     resolved = storage.resolve_storage_path(ref)
     assert resolved.read_bytes() == b""
     assert events == []
-
 
 def test_diagnostics_json_structure(streamer, tmp_path):
     log_streamer, storage = streamer
@@ -117,7 +111,6 @@ def test_diagnostics_json_structure(streamer, tmp_path):
     assert data["log_refs"]["stdout"] == "run-3/stdout.log"
     assert len(data["events"]) == 1
     assert data["events"][0]["type"] == "step"
-
 
 def test_diagnostics_json_includes_annotations(streamer, tmp_path):
     log_streamer, storage = streamer
@@ -138,7 +131,6 @@ def test_diagnostics_json_includes_annotations(streamer, tmp_path):
     data = json.loads(resolved.read_text())
     assert len(data["annotations"]) == 2
     assert data["annotations"][0]["annotation_type"] == "run_started"
-
 
 @pytest.mark.asyncio
 async def test_emit_system_annotation_preserves_global_sequence_with_stream_chunks(streamer):
@@ -173,7 +165,6 @@ async def test_emit_system_annotation_preserves_global_sequence_with_stream_chun
 # stream_and_parse tests
 # ---------------------------------------------------------------------------
 
-
 @pytest.mark.asyncio
 async def test_stream_and_parse_with_plain_text_parser(streamer):
     log_streamer, _ = streamer
@@ -196,7 +187,6 @@ async def test_stream_and_parse_with_plain_text_parser(streamer):
     assert isinstance(parsed, ParsedOutput)
     assert not parsed.has_structured_output
     assert any("Error:" in m for m in parsed.error_messages)
-
 
 @pytest.mark.asyncio
 async def test_stream_and_parse_with_ndjson_parser(streamer):
@@ -221,7 +211,6 @@ async def test_stream_and_parse_with_ndjson_parser(streamer):
     assert len(parsed.events) == 2
     assert not parsed.rate_limited
 
-
 @pytest.mark.asyncio
 async def test_stream_and_parse_detects_rate_limit(streamer):
     log_streamer, _ = streamer
@@ -239,7 +228,6 @@ async def test_stream_and_parse_detects_rate_limit(streamer):
 
     assert parsed.rate_limited
     assert len(parsed.error_messages) > 0
-
 
 @pytest.mark.asyncio
 async def test_stream_and_parse_invokes_event_callback(streamer):
@@ -267,7 +255,6 @@ async def test_stream_and_parse_invokes_event_callback(streamer):
     assert parsed.rate_limited
     assert any(event.get("type") == "rate_limit" for event in seen_events)
 
-
 def test_diagnostics_includes_parsed_output(streamer):
     log_streamer, storage = streamer
     parsed = ParsedOutput(
@@ -294,7 +281,6 @@ def test_diagnostics_includes_parsed_output(streamer):
     assert po["rate_limited"] is True
     assert "Error: something" in po["error_messages"]
 
-
 @pytest.mark.asyncio
 async def test_stream_and_parse_no_parser_uses_default(streamer):
     """When no explicit parser is passed, PlainTextOutputParser is used."""
@@ -313,7 +299,6 @@ async def test_stream_and_parse_no_parser_uses_default(streamer):
     assert isinstance(parsed, ParsedOutput)
     assert not parsed.has_structured_output
     assert parsed.raw_text == "hello\n"
-
 
 @pytest.mark.asyncio
 async def test_stream_to_artifact_calls_publisher(streamer):
@@ -346,7 +331,6 @@ async def test_stream_to_artifact_calls_publisher(streamer):
 
     combined_text = "".join(chunk.text for chunk in published_chunks)
     assert combined_text == "chunk1\nchunk2\n"
-
 
 def test_emit_observability_event_publishes_session_metadata(streamer):
     log_streamer, _ = streamer
@@ -383,7 +367,6 @@ def test_emit_observability_event_publishes_session_metadata(streamer):
     assert persisted_events[0]["sessionId"] == "sess-1"
     assert persisted_events[0]["sessionEpoch"] == 2
     assert "session_id" not in persisted_events[0]
-
 
 def test_persist_observability_events_promotes_spool_to_artifact(
     streamer,
@@ -430,7 +413,6 @@ def test_persist_observability_events_promotes_spool_to_artifact(
     persisted = storage.resolve_storage_path(ref).read_text(encoding="utf-8")
     assert persisted == spool_payload + "\n"
 
-
 def test_persist_observability_events_returns_none_on_io_error(
     streamer,
     tmp_path: Path,
@@ -454,7 +436,6 @@ def test_persist_observability_events_returns_none_on_io_error(
 
     assert ref is None
 
-
 def test_emit_system_annotation_keeps_annotations_out_of_observability_events(streamer):
     log_streamer, _ = streamer
 
@@ -471,7 +452,6 @@ def test_emit_system_annotation_keeps_annotations_out_of_observability_events(st
     assert len(annotations) == 1
     assert annotations[0]["annotation_type"] == "run_started"
     assert observability_events == []
-
 
 def test_observability_publish_reuses_one_spool_publisher_per_workspace(
     streamer,
@@ -508,7 +488,6 @@ def test_observability_publish_reuses_one_spool_publisher_per_workspace(
 
     assert len(created_publishers) == 1
     assert len(created_publishers[0].published) == 2
-
 
 @pytest.mark.asyncio
 async def test_stream_and_parse_uses_one_global_sequence_across_streams(tmp_path):

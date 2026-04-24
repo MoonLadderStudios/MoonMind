@@ -10,7 +10,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Review `.specify/memory/constitution.md`, `README.md`, Jira Orchestrate preset behavior, `docs/UI/MissionControlDesignSystem.md`, and the trusted MM-426 Jira preset brief in `docs/tmp/jira-orchestration-inputs/MM-426-moonspec-orchestration-input.md`. (FR-009, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-019)
+- [X] T001 Review `.specify/memory/constitution.md`, `README.md`, Jira Orchestrate preset behavior, `docs/UI/MissionControlDesignSystem.md`, and the trusted MM-426 Jira preset brief in `spec.md` (Input). (FR-009, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-019)
 - [X] T002 Create and align MM-426 MoonSpec artifacts under `specs/214-mission-control-layout-table-composition/`, preserving the trusted Jira preset brief and source design coverage IDs. (FR-009, SC-005)
 
 ## Phase 2: Tests First

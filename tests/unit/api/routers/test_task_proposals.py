@@ -16,7 +16,6 @@ from moonmind.workflows.task_proposals.models import (
 )
 from moonmind.workflows.task_proposals.service import TaskProposalStatusError
 
-
 @pytest.fixture
 def client() -> tuple[TestClient, AsyncMock, AsyncMock]:
     app = FastAPI()
@@ -45,7 +44,6 @@ def client() -> tuple[TestClient, AsyncMock, AsyncMock]:
     with TestClient(app) as test_client:
         yield test_client, service, execution_service
 
-
 def _build_proposal() -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),
@@ -73,7 +71,6 @@ def _build_proposal() -> SimpleNamespace:
         task_create_request={"payload": {"repository": "Moon/Repo"}},
         similar=[],
     )
-
 
 def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
     test_client, service, _execution_service = client
@@ -104,7 +101,6 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock, Asy
     assert kwargs["review_priority"] == "high"
     payload = response.json()
     assert payload["repository"] == "Moon/Repo"
-
 
 def test_create_proposal_accepts_workflow_origin(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
     test_client, service, _execution_service = client
@@ -160,7 +156,6 @@ def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock, As
     payload = response.json()
     assert payload["items"]
 
-
 def test_promote_proposal_returns_proposal(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
@@ -190,7 +185,6 @@ def test_promote_proposal_returns_proposal(
     assert call_kwargs["initial_parameters"] == final_request["payload"]
     assert call_kwargs["title"] == "do something"
 
-
 def test_promote_proposal_uses_first_non_empty_instruction_line_for_title(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
@@ -214,7 +208,6 @@ def test_promote_proposal_uses_first_non_empty_instruction_line_for_title(
     assert response.status_code == 200
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["title"] == "First line with spaces"
-
 
 def test_promote_proposal_accepts_override_payload(
     client: tuple[TestClient, AsyncMock, AsyncMock],
@@ -253,7 +246,6 @@ def test_promote_proposal_accepts_override_payload(
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["title"] == "edit"
 
-
 def test_promote_proposal_rejects_invalid_state(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
@@ -270,7 +262,6 @@ def test_promote_proposal_rejects_invalid_state(
     body = response.json()
     assert body["detail"]["code"] == "invalid_state"
 
-
 def test_dismiss_proposal_returns_payload(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
@@ -286,7 +277,6 @@ def test_dismiss_proposal_returns_payload(client: tuple[TestClient, AsyncMock, A
     body = response.json()
     assert body["status"] == "dismissed"
 
-
 def test_get_proposal_includes_similar(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
@@ -300,7 +290,6 @@ def test_get_proposal_includes_similar(client: tuple[TestClient, AsyncMock, Asyn
     service.get_similar_proposals.assert_awaited()
     body = response.json()
     assert body["similar"]
-
 
 def test_get_proposal_preview_includes_preset_provenance(
     client: tuple[TestClient, AsyncMock, AsyncMock],
@@ -339,7 +328,6 @@ def test_get_proposal_preview_includes_preset_provenance(
     assert preview["authoredPresetCount"] == 1
     assert preview["stepSourceKinds"] == ["preset-derived"]
 
-
 def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
@@ -352,7 +340,6 @@ def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock, AsyncMock
 
     assert response.status_code == 200
     service.update_review_priority.assert_awaited()
-
 
 def test_promote_proposal_with_runtime_mode_shortcut(
     client: tuple[TestClient, AsyncMock, AsyncMock],

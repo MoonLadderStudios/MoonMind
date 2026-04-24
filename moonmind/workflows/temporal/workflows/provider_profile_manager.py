@@ -50,7 +50,6 @@ _VERIFY_WORKFLOW_STATUS_BATCH_SIZE = 100
 
 logger = logging.getLogger(__name__)
 
-
 def workflow_id_for_runtime(runtime_id: str) -> str:
     """Return the canonical ProviderProfileManager workflow ID for a runtime."""
 
@@ -59,11 +58,9 @@ def workflow_id_for_runtime(runtime_id: str) -> str:
         raise ValueError("runtime_id is required")
     return f"{WORKFLOW_ID_PREFIX}:{normalized}"
 
-
 # ---------------------------------------------------------------------------
 # Input / Output types
 # ---------------------------------------------------------------------------
-
 
 class ProviderProfileManagerInput(TypedDict, total=False):
     """Input payload for starting or continuing the manager."""
@@ -76,16 +73,13 @@ class ProviderProfileManagerInput(TypedDict, total=False):
     pending_requests: list[dict[str, str]]
     handoff_reservations: dict[str, dict[str, str]]
 
-
 class ProviderProfileManagerOutput(TypedDict):
     status: str
     runtime_id: Optional[str]
 
-
 # ---------------------------------------------------------------------------
 # Signal payloads (documented as TypedDicts for clarity; actual transport is dict)
 # ---------------------------------------------------------------------------
-
 
 class SlotRequestPayload(TypedDict):
     """Signal payload: an AgentRun requests a profile slot."""
@@ -95,7 +89,6 @@ class SlotRequestPayload(TypedDict):
     execution_profile_ref: str | None
     lease_group_id: str | None
 
-
 class SlotReleasePayload(TypedDict):
     """Signal payload: an AgentRun releases its profile slot."""
 
@@ -104,28 +97,23 @@ class SlotReleasePayload(TypedDict):
     lease_group_id: str | None
     handoff_ttl_seconds: int | None
 
-
 class CooldownReportPayload(TypedDict):
     """Signal payload: report a 429 cooldown on a profile."""
 
     profile_id: str
     cooldown_seconds: int
 
-
 class ProfileSyncPayload(TypedDict):
     """Signal payload: updated profile list from DB."""
 
     profiles: list[dict[str, Any]]
 
-
 # ---------------------------------------------------------------------------
 # Internal state helpers
 # ---------------------------------------------------------------------------
 
-
 _MAX_LEASE_DURATION_SECONDS = 5400  # 1.5 hours — safety net for leaked slots
 _MAX_HANDOFF_RESERVATION_SECONDS = 30
-
 
 @dataclass
 class ProfileSlotState:
@@ -215,7 +203,6 @@ class ProfileSlotState:
             "runtime_materialization_mode": self.runtime_materialization_mode,
         }
 
-
 @dataclass
 class PendingRequest:
     """A queued slot request waiting for assignment."""
@@ -226,7 +213,6 @@ class PendingRequest:
     profile_selector: Optional[dict[str, Any]] = None
     lease_group_id: str | None = None
 
-
 @dataclass
 class HandoffReservation:
     """Short-lived profile reservation for the next step in the same run."""
@@ -234,11 +220,9 @@ class HandoffReservation:
     profile_id: str
     expires_at: str
 
-
 # ---------------------------------------------------------------------------
 # Workflow definition
 # ---------------------------------------------------------------------------
-
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindProviderProfileManagerWorkflow:

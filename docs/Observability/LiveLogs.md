@@ -12,7 +12,7 @@ Last updated: 2026-04-08
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ArtifactPresentationContract.md`](../Temporal/ArtifactPresentationContract.md)
-- [`docs/tmp/009-LiveLogsPlan.md`](../tmp/009-LiveLogsPlan.md)
+- 
 
 ## 1. Summary
 
@@ -39,7 +39,7 @@ This keeps observability deterministic, persistent, auditable, and independent f
 
 This document is the canonical desired-state architecture for managed-run observability.
 
-Rollout sequencing, implementation status, and remaining migration work belong in [`docs/tmp/009-LiveLogsPlan.md`](../tmp/009-LiveLogsPlan.md).
+Rollout sequencing, implementation status, and remaining migration work belong in .
 
 ---
 
@@ -1103,7 +1103,7 @@ If MoonMind later supports a debug session for managed runs, it must be:
 
 ## 18. Implementation tracking
 
-Phased rollout notes, migration sequencing, and remaining implementation work are tracked in [`docs/tmp/009-LiveLogsPlan.md`](../tmp/009-LiveLogsPlan.md) so this document stays focused on the target-state contract.
+Phased rollout notes, migration sequencing, and remaining implementation work are tracked in  so this document stays focused on the target-state contract.
 
 ---
 

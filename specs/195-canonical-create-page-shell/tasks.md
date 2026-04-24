@@ -24,7 +24,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-376 source input and single-story traceability in `docs/tmp/jira-orchestration-inputs/MM-376-moonspec-orchestration-input.md` and `specs/195-canonical-create-page-shell/spec.md`.
+- [X] T001 Confirm MM-376 source input and single-story traceability in `spec.md` (Input) and `specs/195-canonical-create-page-shell/spec.md`.
 - [X] T002 Confirm existing Create page route and shell surfaces in `api_service/api/routers/task_dashboard.py`, `api_service/api/routers/task_dashboard_view_model.py`, and `frontend/src/entrypoints/task-create.tsx`.
 
 ## Phase 2: Foundational

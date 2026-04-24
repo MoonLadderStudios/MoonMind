@@ -3,7 +3,7 @@
 **Feature Branch**: `120-live-logs-phase-4-affordances`
 **Created**: 2026-03-31
 **Status**: Draft
-**Input**: User description: "Fully implement Phase 4 of docs/tmp/009-LiveLogsPlan.md using test-driven development."
+**Input**: User description: "Fully implement Phase 4 of docs/ManagedAgents/LiveLogs.md using test-driven development."
 
 ## User Scenarios & Testing *(mandatory)*
 

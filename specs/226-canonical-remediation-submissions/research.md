@@ -3,7 +3,7 @@
 ## Classification
 
 Decision: Treat MM-451 as a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-451-moonspec-orchestration-input.md` contains one user story, one source design, one bounded submission/linkage slice, and no request for documentation-only work.
+Evidence: `spec.md` (Input) contains one user story, one source design, one bounded submission/linkage slice, and no request for documentation-only work.
 Rationale: The story can be independently validated by creating a remediation task and inspecting persisted payload/linkage behavior.
 Alternatives considered: Broad design classification was rejected because the brief already selected one story from `docs/Tasks/TaskRemediation.md`; existing feature directory classification was rejected because no pre-existing `specs/*` artifact referenced MM-451.
 Test implications: Use focused runtime unit tests, not docs-only checks.

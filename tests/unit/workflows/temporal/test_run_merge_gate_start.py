@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
-
 def test_merge_automation_disabled_by_default() -> None:
     workflow = MoonMindRunWorkflow()
 
     assert workflow._merge_automation_request({"publishMode": "pr"}) is None
-
 
 def test_merge_automation_request_can_be_enabled_from_task_publish() -> None:
     workflow = MoonMindRunWorkflow()
@@ -31,7 +29,6 @@ def test_merge_automation_request_can_be_enabled_from_task_publish() -> None:
     assert request is not None
     assert request["mergeMethod"] == "squash"
     assert request["jiraIssueKey"] == "MM-341"
-
 
 def test_build_merge_gate_start_payload_from_published_pr() -> None:
     workflow = MoonMindRunWorkflow()
@@ -69,7 +66,6 @@ def test_build_merge_gate_start_payload_from_published_pr() -> None:
     assert payload["mergeAutomationConfig"]["resolver"]["mergeMethod"] == "squash"
     assert payload["resolverTemplate"]["repository"] == "MoonLadderStudios/MoonMind"
 
-
 def test_build_merge_gate_start_payload_preserves_parent_runtime_profile() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._repo = "MoonLadderStudios/MoonMind"
@@ -105,7 +101,6 @@ def test_build_merge_gate_start_payload_preserves_parent_runtime_profile() -> No
     assert "profileId" not in resolver_template
     assert "providerProfile" not in resolver_template
 
-
 def test_build_merge_gate_start_payload_inherits_task_runtime_profile() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._repo = "MoonLadderStudios/MoonMind"
@@ -137,7 +132,6 @@ def test_build_merge_gate_start_payload_inherits_task_runtime_profile() -> None:
     assert resolver_template["targetRuntime"] == "codex"
     assert resolver_template["executionProfileRef"] == "codex_default"
 
-
 def test_build_merge_gate_start_payload_normalizes_timeout_values() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._repo = "MoonLadderStudios/MoonMind"
@@ -166,7 +160,6 @@ def test_build_merge_gate_start_payload_normalizes_timeout_values() -> None:
         "fallbackPollSeconds": 120,
         "expireAfterSeconds": 900,
     }
-
 
 def test_build_merge_gate_start_payload_requires_real_head_sha() -> None:
     workflow = MoonMindRunWorkflow()

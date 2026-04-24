@@ -3,7 +3,6 @@ import re
 import urllib.error
 import urllib.request
 
-
 def get_latest_version(package_name):
     """Fetches the latest version of a package from PyPI."""
     try:
@@ -17,7 +16,6 @@ def get_latest_version(package_name):
         return f"URL Error for {package_name}: {e.reason}"
     except Exception as e:
         return f"Error fetching version for {package_name}: {e}"
-
 
 def parse_dependencies_from_toml(file_path):
     """Manually parse dependencies from pyproject.toml file."""
@@ -47,7 +45,6 @@ def parse_dependencies_from_toml(file_path):
 
     return dependencies
 
-
 def main():
     """
     Reads pyproject.toml, extracts dependencies, and finds the latest version for each.
@@ -73,7 +70,6 @@ def main():
         print("pyproject.toml not found in the current directory.")
     except Exception as e:
         print(f"An error occurred: {e}")
-
 
 if __name__ == "__main__":
     main()

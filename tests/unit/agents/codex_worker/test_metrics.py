@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from moonmind.agents.codex_worker.metrics import WorkerMetrics
 
-
 class FakeEmitter:
     def __init__(self) -> None:
         self.enabled = True
@@ -19,7 +18,6 @@ class FakeEmitter:
         self, metric: str, *, value: float, tags: dict[str, object] | None = None
     ) -> None:
         self.calls.append(("observe", metric, {"value": value, "tags": tags or {}}))
-
 
 def test_record_self_heal_attempt_emits_counter() -> None:
     """Self-heal attempt metrics should forward tags to the emitter."""
@@ -51,7 +49,6 @@ def test_record_self_heal_attempt_emits_counter() -> None:
             },
         )
     ]
-
 
 def test_record_step_duration_emits_timer() -> None:
     """Step duration metrics should use observe with milliseconds conversion."""

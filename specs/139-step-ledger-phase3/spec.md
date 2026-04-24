@@ -7,7 +7,7 @@
 
 ## Source Document Requirements
 
-Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Temporal/TaskExecutionCompatibilityModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/tmp/remaining-work/Api-ExecutionsApiContract.md`, `docs/tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md`
+Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Temporal/TaskExecutionCompatibilityModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/StepLedgerAndProgressModel.md`
 
 | ID | Source Section | Requirement Summary |
 | --- | --- | --- |

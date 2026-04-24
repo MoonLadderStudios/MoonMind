@@ -11,12 +11,10 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-
 revision: str = "d0e1f2a3b4c5"
 down_revision: Union[str, None] = "c9d0e1f2a3b4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
-
 
 __all__ = [
     "revision",
@@ -26,7 +24,6 @@ __all__ = [
     "upgrade",
     "downgrade",
 ]
-
 
 def upgrade() -> None:
     op.add_column(
@@ -41,7 +38,6 @@ def upgrade() -> None:
         ["artifact_id"],
         ondelete="SET NULL",
     )
-
 
 def downgrade() -> None:
     op.drop_constraint(

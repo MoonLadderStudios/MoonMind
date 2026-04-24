@@ -3,7 +3,7 @@
 ## Input Classification
 
 Decision: Treat MM-408 as a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-408-moonspec-orchestration-input.md` contains one user story focused on operator/maintainer inspection and boundary verification.
+Evidence: `spec.md` (Input) contains one user story focused on operator/maintainer inspection and boundary verification.
 Rationale: The brief has one actor, one operational goal, and one coherent acceptance set. It references implementation documents, but the selected mode is runtime, so those documents are source requirements rather than docs-only targets.
 Alternatives considered: Route through story breakdown; rejected because no multiple independent stories are present.
 Test implications: Unit, UI, and focused boundary tests are required.

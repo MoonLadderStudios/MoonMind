@@ -1,6 +1,6 @@
 # Implementation Plan: Canonical Create Page Shell
 
-**Branch**: `195-canonical-create-page-shell` | **Date**: 2026-04-17 | **Spec**: `specs/195-canonical-create-page-shell/spec.md`  
+**Branch**: `195-canonical-create-page-shell` | **Date**: 2026-04-17 | **Spec**: `specs/195-canonical-create-page-shell/spec.md` 
 **Input**: Single-story feature specification from `specs/195-canonical-create-page-shell/spec.md`
 
 ## Summary
@@ -9,15 +9,15 @@ Implement MM-376 by making the existing Create page shell explicitly expose the 
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI, Python 3.12 for FastAPI route tests  
-**Primary Dependencies**: React, FastAPI, existing boot payload helpers, existing task dashboard router, Vitest, pytest  
-**Storage**: No new persistent storage  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_task_dashboard.py` and `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx`  
-**Integration Testing**: Existing UI request-shape tests exercise the browser-to-MoonMind REST boundary; no new compose dependency is required for this shell story  
-**Target Platform**: Mission Control browser UI served by FastAPI  
-**Project Type**: Web UI plus FastAPI shell route  
-**Performance Goals**: No additional network requests and no extra render-blocking data dependencies  
-**Constraints**: Keep `/tasks/new` canonical, keep compatibility routes redirect-only, keep optional integrations optional, keep browser calls behind MoonMind REST endpoints, and preserve edit/rerun reuse of the task composition surface  
+**Language/Version**: TypeScript/React for Mission Control UI, Python 3.12 for FastAPI route tests 
+**Primary Dependencies**: React, FastAPI, existing boot payload helpers, existing task dashboard router, Vitest, pytest 
+**Storage**: No new persistent storage 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_task_dashboard.py` and `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-create.test.tsx` 
+**Integration Testing**: Existing UI request-shape tests exercise the browser-to-MoonMind REST boundary; no new compose dependency is required for this shell story 
+**Target Platform**: Mission Control browser UI served by FastAPI 
+**Project Type**: Web UI plus FastAPI shell route 
+**Performance Goals**: No additional network requests and no extra render-blocking data dependencies 
+**Constraints**: Keep `/tasks/new` canonical, keep compatibility routes redirect-only, keep optional integrations optional, keep browser calls behind MoonMind REST endpoints, and preserve edit/rerun reuse of the task composition surface 
 **Scale/Scope**: One Create page shell and its existing route/tests
 
 ## Constitution Check
@@ -33,7 +33,7 @@ Implement MM-376 by making the existing Create page shell explicitly expose the 
 - IX. Resilient by Default: PASS. Optional integrations remain non-blocking and manual authoring stays available.
 - X. Continuous Improvement: PASS. Verification evidence will be recorded in `verification.md`.
 - XI. Spec-Driven Development: PASS. Runtime changes follow this one-story Moon Spec.
-- XII. Canonical Documentation Separation: PASS. Desired-state docs remain canonical; implementation evidence stays under `specs/` and `docs/tmp`.
+- XII. Canonical Documentation Separation: PASS. Desired-state docs remain canonical; implementation evidence stays under `specs/` and `local-only handoffs`.
 - XIII. Pre-Release Compatibility Policy: PASS. No compatibility alias is added; existing redirect behavior is tested and preserved.
 
 ## Project Structure
@@ -48,7 +48,7 @@ specs/195-canonical-create-page-shell/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── create-page-shell.md
+│ └── create-page-shell.md
 ├── tasks.md
 └── verification.md
 ```

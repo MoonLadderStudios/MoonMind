@@ -3,7 +3,7 @@
 **Feature Branch**: `run-jira-orchestrate-for-mm-426-standard-7f2da784`  
 **Created**: 2026-04-21  
 **Status**: Draft  
-**Input**: Jira issue MM-426 from the trusted Jira preset brief in `docs/tmp/jira-orchestration-inputs/MM-426-moonspec-orchestration-input.md`: "Standardize Mission Control layout and table composition patterns." Source design: `docs/UI/MissionControlDesignSystem.md` sections 7, 10.1, 10.4, 10.5, 10.6, and 11.1. Coverage IDs: DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-019.
+**Input**: Jira issue MM-426 from the trusted Jira preset brief in `spec.md` (Input): "Standardize Mission Control layout and table composition patterns." Source design: `docs/UI/MissionControlDesignSystem.md` sections 7, 10.1, 10.4, 10.5, 10.6, and 11.1. Coverage IDs: DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-019.
 
 ## Original Jira Preset Brief
 

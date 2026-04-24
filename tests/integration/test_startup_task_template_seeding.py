@@ -11,7 +11,6 @@ from api_service.main import startup_event
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @pytest.mark.asyncio
 async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
@@ -169,7 +168,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "mode": "{{ inputs.publish_mode }}",
             "mergeAutomation": {"enabled": True},
         }
-
 
 @pytest.mark.asyncio
 async def test_startup_deactivates_legacy_speckit_orchestrate_template(

@@ -733,7 +733,7 @@ Where MoonMind supports multiple owners/operators:
 
 ## 18. Rollout plan
 
-Phased delivery and actionable checklists are maintained in **`docs/tmp/090-OpenTelemetryPlans.md`** so this design doc stays declarative. That tracker expands the four rollout themes used here—**Foundations → Temporal worker instrumentation → Domain telemetry → Hardening**—and maps them to §15 (service-by-service), §19 (testing expectations), and privacy/hardening notes in §17.
+Phased delivery and actionable checklists are maintained in **`docs/Observability/OpenTelemetrySystem.md`** so this design doc stays declarative. That tracker expands the four rollout themes used here—**Foundations → Temporal worker instrumentation → Domain telemetry → Hardening**—and maps them to §15 (service-by-service), §19 (testing expectations), and privacy/hardening notes in §17.
 
 ## 19. Testing strategy
 
@@ -770,4 +770,4 @@ Telemetry failure must never break workflow correctness.
 
 ## 21. Implementation tracker
 
-The former numbered implementation checklist is folded into the phase checklists in **`docs/tmp/090-OpenTelemetryPlans.md`** (see §18).
+The former numbered implementation checklist is folded into the phase checklists in **`docs/Observability/OpenTelemetrySystem.md`** (see §18).

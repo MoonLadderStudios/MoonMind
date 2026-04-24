@@ -38,7 +38,6 @@ GRACEFUL_TERMINATE_WAIT_SECONDS = (
     1.0  # seconds to wait for graceful SIGTERM before SIGKILL
 )
 
-
 class ManagedRunSupervisor:
     """Supervises managed agent subprocess lifecycle."""
 

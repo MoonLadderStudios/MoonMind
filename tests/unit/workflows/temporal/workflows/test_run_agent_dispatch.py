@@ -17,7 +17,6 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_skill_models import ResolvedSkillSet
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
-
 class TestAgentKindForId(unittest.TestCase):
     """Verify the _agent_kind_for_id static method."""
 
@@ -44,7 +43,6 @@ class TestAgentKindForId(unittest.TestCase):
                 "managed",
                 f"{agent_id} should be managed",
             )
-
 
 class TestSlotContinuityMetadata(unittest.TestCase):
     def test_marks_request_when_next_step_uses_same_managed_runtime(self) -> None:
@@ -101,7 +99,6 @@ class TestSlotContinuityMetadata(unittest.TestCase):
         )
 
         self.assertEqual(request.parameters, {})
-
 
 class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
     async def test_agent_node_resolves_effective_task_and_step_skills_before_launch(self) -> None:
@@ -311,7 +308,6 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ref, "artifact://skillsets/from-input")
 
-
 class TestJiraAgentPublishHelpers(unittest.TestCase):
     def test_jira_issue_creator_agent_plan_makes_pr_publish_optional(self) -> None:
         nodes = [
@@ -401,7 +397,6 @@ class TestJiraAgentPublishHelpers(unittest.TestCase):
             )
         )
 
-
 class TestMapAgentRunResult(unittest.TestCase):
     """Verify the _map_agent_run_result helper."""
 
@@ -444,7 +439,6 @@ class TestMapAgentRunResult(unittest.TestCase):
         result = wf._map_agent_run_result(model)
         self.assertEqual(result["status"], "FAILED")
         self.assertEqual(result["outputs"]["error"], "execution_error")
-
 
 class TestBuildAgentExecutionRequest(unittest.TestCase):
     """Verify the _build_agent_execution_request helper."""
@@ -918,7 +912,6 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         moonmind = metadata.get("moonmind") or {}
         self.assertEqual(moonmind.get("selectedSkill"), "pr-resolver")
 
-
 class TestReviewGateHelpers(unittest.TestCase):
     def test_review_gate_skips_matching_tool_identifier(self) -> None:
         wf = MoonMindRunWorkflow()
@@ -957,7 +950,6 @@ class TestReviewGateHelpers(unittest.TestCase):
             wf._accepted_review_summary("PASS", retry_count=2),
             "Approved after 2 retries",
         )
-
 
 class TestFetchProfileSnapshots(unittest.TestCase):
     """Verify the _fetch_profile_snapshots method populates profile snapshots."""

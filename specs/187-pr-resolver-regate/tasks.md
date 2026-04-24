@@ -19,7 +19,7 @@
 
 **Purpose**: Confirm existing workflow surfaces and MM-352 traceability before modifying tests or code.
 
-- [X] T001 Review the active MM-352 orchestration input in `docs/tmp/jira-orchestration-inputs/MM-352-moonspec-orchestration-input.md` for FR-010 and DESIGN-REQ-029
+- [X] T001 Review the active MM-352 orchestration input in `spec.md` (Input) for FR-010 and DESIGN-REQ-029
 - [X] T002 Review resolver child request construction in `moonmind/workflows/temporal/workflows/merge_gate.py` for FR-001 through FR-003 and DESIGN-REQ-014, DESIGN-REQ-016
 - [X] T003 Review disposition handling and re-gating loop behavior in `moonmind/workflows/temporal/workflows/merge_automation.py` for FR-004 through FR-009 and DESIGN-REQ-019 through DESIGN-REQ-022
 - [X] T004 [P] Review focused tests in `tests/unit/workflows/temporal/test_merge_gate_workflow.py` for resolver child request coverage

@@ -82,7 +82,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 def _get_managed_session_store_root() -> str:
     import os
 
@@ -169,18 +168,14 @@ _TERMINAL_WORKFLOW_UPDATE_ERROR_PATTERNS: tuple[str, ...] = (
     "workflow execution already closed",
 )
 
-
 class TemporalExecutionError(RuntimeError):
     """Base class for temporal execution service errors."""
-
 
 class TemporalExecutionNotFoundError(TemporalExecutionError):
     """Raised when a workflow execution cannot be located."""
 
-
 class TemporalExecutionValidationError(TemporalExecutionError):
     """Raised when lifecycle invariants are violated."""
-
 
 @dataclass(slots=True)
 class TemporalExecutionListResult:
@@ -189,7 +184,6 @@ class TemporalExecutionListResult:
     items: list[TemporalExecutionRecord | TemporalExecutionCanonicalRecord]
     next_page_token: str | None
     count: int
-
 
 @dataclass(slots=True)
 class ExecutionDependencySummary:
@@ -201,7 +195,6 @@ class ExecutionDependencySummary:
     state: str | None
     close_status: str | None
     workflow_type: str | None
-
 
 class TemporalExecutionService:
     """Canonical execution store for Temporal workflows."""
@@ -3522,10 +3515,8 @@ class TemporalExecutionService:
         for field, value in payload.items():
             setattr(projection, field, value)
 
-
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
 
 def _format_search_attribute_datetime(value: datetime) -> str:
     if value.tzinfo is None:

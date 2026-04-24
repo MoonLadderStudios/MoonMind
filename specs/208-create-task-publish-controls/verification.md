@@ -52,7 +52,7 @@
 | DESIGN-REQ-006 - DESIGN-REQ-008 | `temporalTaskEditing.ts`, hydration and resolver tests | VERIFIED | Stored state and invalid selection handling are covered. |
 | DESIGN-REQ-009 - DESIGN-REQ-010 | Accessible label tests and `docs/UI/CreatePage.md` | VERIFIED | Compact accessibility and docs alignment are covered. |
 | Constitution XI | Moon Spec artifacts and TDD evidence | VERIFIED | Spec, plan, tasks, tests, implementation, and verification are present. |
-| Constitution XII | `docs/UI/CreatePage.md` remains desired-state; implementation notes stay in `specs/` and `docs/tmp/` | VERIFIED | Canonical/tmp separation preserved. |
+| Constitution XII | `docs/UI/CreatePage.md` remains desired-state; implementation notes stay in `specs/` and `local-only handoffs` | VERIFIED | Canonical/tmp separation preserved. |
 | Constitution XIII | No backend enum compatibility layer introduced | VERIFIED | UI-only value normalizes before submission. |
 
 ## Original Request Alignment

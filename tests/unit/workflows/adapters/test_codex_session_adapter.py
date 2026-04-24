@@ -32,9 +32,7 @@ from moonmind.workflows.adapters.codex_session_adapter import (
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
-
 pytestmark = [pytest.mark.asyncio]
-
 
 def _fake_profiles(profiles: list[dict[str, Any]]):
     async def _fetcher(*, runtime_id: str):
@@ -42,10 +40,8 @@ def _fake_profiles(profiles: list[dict[str, Any]]):
 
     return _fetcher
 
-
 async def _async_noop(*_args: Any, **_kwargs: Any) -> None:
     return None
-
 
 async def _prepare_turn_instructions(payload: dict[str, Any]) -> str:
     request = payload.get("request") if isinstance(payload, dict) else {}
@@ -61,7 +57,6 @@ async def _prepare_turn_instructions(payload: dict[str, Any]) -> str:
                 return f"{inline}\n\nManaged Codex CLI note:"
     return f"{instruction_ref}\n\nManaged Codex CLI note:"
 
-
 def _binding() -> CodexManagedSessionBinding:
     return CodexManagedSessionBinding(
         workflowId="wf-task-1:session:codex_cli",
@@ -71,7 +66,6 @@ def _binding() -> CodexManagedSessionBinding:
         runtimeId="codex_cli",
         executionProfileRef="codex-default",
     )
-
 
 def _snapshot(
     *,
@@ -94,7 +88,6 @@ def _snapshot(
         activeTurnId=active_turn_id,
         terminationRequested=False,
     )
-
 
 def _request(
     binding: CodexManagedSessionBinding,
@@ -122,7 +115,6 @@ def _request(
         timeoutPolicy=timeout_policy,
     )
 
-
 def _session_handle(
     *,
     session_id: str,
@@ -143,7 +135,6 @@ def _session_handle(
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
         controlUrl=f"docker-exec://{container_id}",
     )
-
 
 def _turn_response(
     *,
@@ -169,7 +160,6 @@ def _turn_response(
         metadata={"assistantText": assistant_text},
     )
 
-
 def _summary(
     *,
     session_id: str,
@@ -192,7 +182,6 @@ def _summary(
         latestResetBoundaryRef=None,
         metadata={"lastAssistantText": last_assistant_text},
     )
-
 
 def _publication(
     *,
@@ -222,7 +211,6 @@ def _publication(
         latestControlEventRef=None,
         latestResetBoundaryRef=None,
     )
-
 
 async def test_start_launches_missing_task_scoped_session_and_persists_result(
     tmp_path: Path,
@@ -375,7 +363,6 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
     assert control_calls[-1]["containerId"] == "container-1"
     assert control_calls[-1]["threadId"] == "thread-1"
 
-
 async def test_start_omits_large_inline_instruction_from_result_metadata(
     tmp_path: Path,
 ) -> None:
@@ -449,7 +436,6 @@ async def test_start_omits_large_inline_instruction_from_result_metadata(
     assert result.metadata["instructionRefLengthChars"] == len(large_instruction.strip())
     assert len(result.metadata["instructionRefSha256"]) == 64
     assert "instructionRef" not in result.metadata
-
 
 async def test_start_passes_oauth_profile_auth_target_to_launch_session(
     tmp_path: Path,
@@ -546,7 +532,6 @@ async def test_start_passes_oauth_profile_auth_target_to_launch_session(
         launch_request["environment"]["MANAGED_AUTH_VOLUME_PATH"]
     )
     assert launch_payload["profile"]["credentialSource"] == "oauth_volume"
-
 
 async def test_start_persists_running_live_capable_record_before_send_turn_completes(
     tmp_path: Path,
@@ -647,7 +632,6 @@ async def test_start_persists_running_live_capable_record_before_send_turn_compl
     assert persisted_completed is not None
     assert persisted_completed.status == "completed"
     assert persisted_completed.live_stream_capable is True
-
 
 async def test_start_fails_jira_issue_creator_when_no_issues_created(
     tmp_path: Path,
@@ -752,7 +736,6 @@ async def test_start_fails_jira_issue_creator_when_no_issues_created(
     assert persisted_record.status == "failed"
     assert persisted_record.failure_class == "execution_error"
 
-
 async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
     tmp_path: Path,
 ) -> None:
@@ -855,7 +838,6 @@ async def test_start_fails_jira_pr_verify_when_issue_body_unavailable(
     assert persisted_record.status == "failed"
     assert persisted_record.failure_class == "execution_error"
 
-
 async def test_jira_verify_blocker_summary_detects_comment_posting_failure() -> None:
     summary = _jira_skill_blocker_summary(
         parameters={
@@ -870,7 +852,6 @@ async def test_jira_verify_blocker_summary_detects_comment_posting_failure() -> 
 
     assert summary == "jira.add_comment failed with HTTP 403: policy denied"
 
-
 async def test_jira_verify_blocker_summary_detects_auth_error_code() -> None:
     summary = _jira_skill_blocker_summary(
         parameters={
@@ -884,7 +865,6 @@ async def test_jira_verify_blocker_summary_detects_auth_error_code() -> None:
     )
 
     assert summary == "jira_auth_failed"
-
 
 async def test_start_allows_jira_issue_creator_mixed_output_with_created_issue_keys(
     tmp_path: Path,
@@ -982,7 +962,6 @@ async def test_start_allows_jira_issue_creator_mixed_output_with_created_issue_k
     assert persisted_record.failure_class is None
     assert result.failure_class is None
     assert result.summary == assistant_text
-
 
 async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path) -> None:
     binding = _binding()
@@ -1085,7 +1064,6 @@ async def test_start_raises_when_send_turn_returns_failed_status(tmp_path: Path)
     assert persisted_record.container_id == "container-2"
     assert persisted_record.thread_id == "thread-2"
 
-
 async def test_start_classifies_codex_provider_capacity_failure_and_publishes_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -1183,7 +1161,6 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
     assert persisted_record.stderr_artifact_ref == "artifact:stderr"
     assert persisted_record.diagnostics_ref == "artifact:diagnostics"
 
-
 async def test_start_classifies_codex_auth_failure_as_user_error(
     tmp_path: Path,
 ) -> None:
@@ -1264,7 +1241,6 @@ async def test_start_classifies_codex_auth_failure_as_user_error(
     assert persisted_record.failure_class == "user_error"
     assert persisted_record.provider_error_code == "401"
 
-
 async def test_publish_failure_artifacts_logs_best_effort_failure(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -1323,7 +1299,6 @@ async def test_publish_failure_artifacts_logs_best_effort_failure(
     )
     assert "artifact store unavailable" in caplog.text
 
-
 async def test_publish_failure_artifacts_preserves_cancellation(
     tmp_path: Path,
 ) -> None:
@@ -1370,7 +1345,6 @@ async def test_publish_failure_artifacts_preserves_cancellation(
             managed_run_id=binding.task_run_id,
             run_id="run-1",
         )
-
 
 @pytest.mark.parametrize(
     ("failure_stage", "expected_message"),
@@ -1481,7 +1455,6 @@ async def test_start_finalizes_failed_record_for_post_save_exceptions(
     assert persisted_record.session_epoch == expected_epoch
     assert persisted_record.live_stream_capable is True
 
-
 async def test_start_marks_run_failed_when_post_turn_follow_up_raises(
     tmp_path: Path,
 ) -> None:
@@ -1563,7 +1536,6 @@ async def test_start_marks_run_failed_when_post_turn_follow_up_raises(
     assert persisted_record.container_id == "container-2"
     assert persisted_record.thread_id == "thread-2"
 
-
 async def test_start_resolves_workspace_path_once_per_turn(tmp_path: Path) -> None:
     binding = _binding()
     expected_workspace_path = tmp_path / "agent_jobs" / binding.task_run_id / "repo"
@@ -1644,7 +1616,6 @@ async def test_start_resolves_workspace_path_once_per_turn(tmp_path: Path) -> No
     await adapter.start(_request(binding, workspace_path=str(expected_workspace_path)))
 
     assert workspace_path_calls == 1
-
 
 async def test_start_passes_profile_materialization_payload_to_launch_session(
     tmp_path: Path,
@@ -1745,7 +1716,6 @@ async def test_start_passes_profile_materialization_payload_to_launch_session(
         "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
     }
 
-
 async def test_start_passes_task_timeout_policy_to_launch_session(
     tmp_path: Path,
 ) -> None:
@@ -1816,7 +1786,6 @@ async def test_start_passes_task_timeout_policy_to_launch_session(
     assert len(launch_calls) == 1
     launch_payload = launch_calls[0]
     assert launch_payload["request"]["turnCompletionTimeoutSeconds"] == 1800
-
 
 async def test_start_uses_profile_default_timeout_when_request_timeout_missing(
     tmp_path: Path,
@@ -1895,7 +1864,6 @@ async def test_start_uses_profile_default_timeout_when_request_timeout_missing(
     launch_payload = launch_calls[0]
     assert launch_payload["request"]["turnCompletionTimeoutSeconds"] == 1800
 
-
 async def test_start_clamps_requested_timeout_to_supported_send_turn_budget(
     tmp_path: Path,
 ) -> None:
@@ -1969,7 +1937,6 @@ async def test_start_clamps_requested_timeout_to_supported_send_turn_budget(
         launch_payload["request"]["turnCompletionTimeoutSeconds"]
         == MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS
     )
-
 
 async def test_start_falls_back_to_clamped_profile_default_on_timeout_overflow(
     tmp_path: Path,
@@ -2050,7 +2017,6 @@ async def test_start_falls_back_to_clamped_profile_default_on_timeout_overflow(
         launch_payload["request"]["turnCompletionTimeoutSeconds"]
         == MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS
     )
-
 
 async def test_start_delegates_turn_instruction_preparation_before_sending_turn(
     tmp_path: Path,
@@ -2133,7 +2099,6 @@ async def test_start_delegates_turn_instruction_preparation_before_sending_turn(
     assert send_turn_calls[0].instructions.startswith("Injected context instruction")
     assert "Managed Codex CLI note:" in send_turn_calls[0].instructions
 
-
 async def test_start_rejects_non_text_input_refs_for_session_turns(
     tmp_path: Path,
 ) -> None:
@@ -2170,7 +2135,6 @@ async def test_start_rejects_non_text_input_refs_for_session_turns(
         match="does not support inputRefs",
     ):
         await adapter.start(request)
-
 
 async def test_start_reuses_existing_task_scoped_session_without_launching(
     tmp_path: Path,
@@ -2263,7 +2227,6 @@ async def test_start_reuses_existing_task_scoped_session_without_launching(
         "threadId": "thread-existing",
     }
 
-
 async def test_clear_session_rotates_epoch_and_signals_session_workflow(
     tmp_path: Path,
 ) -> None:
@@ -2332,7 +2295,6 @@ async def test_clear_session_rotates_epoch_and_signals_session_workflow(
             "threadId": "thread-2",
         }
     ]
-
 
 async def test_cancel_interrupts_active_turn_and_marks_run_canceled(
     tmp_path: Path,
@@ -2413,7 +2375,6 @@ async def test_cancel_interrupts_active_turn_and_marks_run_canceled(
     assert result.failure_class == "user_error"
     assert result.summary == "Canceled Codex managed-session turn."
 
-
 async def test_save_run_state_persists_blank_workspace_path_as_none(
     tmp_path: Path,
 ) -> None:
@@ -2471,7 +2432,6 @@ async def test_save_run_state_persists_blank_workspace_path_as_none(
 
     assert persisted_record is not None
     assert persisted_record.workspace_path is None
-
 
 async def test_save_run_state_clears_active_turn_id_when_explicitly_none(
     tmp_path: Path,
@@ -2553,7 +2513,6 @@ async def test_save_run_state_clears_active_turn_id_when_explicitly_none(
     assert persisted_record is not None
     assert persisted_record.active_turn_id is None
 
-
 async def test_terminate_session_uses_remote_session_control_surface(
     tmp_path: Path,
 ) -> None:
@@ -2612,7 +2571,6 @@ async def test_terminate_session_uses_remote_session_control_surface(
     assert terminate_calls[0].container_id == "container-1"
     assert handle.status == "terminated"
     assert control_calls == [{"action": "terminate_session", "reason": "task-complete"}]
-
 
 async def test_fetch_result_maps_failed_pr_resolver_artifact_for_completed_run(
     tmp_path: Path,
@@ -2695,7 +2653,6 @@ async def test_fetch_result_maps_failed_pr_resolver_artifact_for_completed_run(
     assert "pr-resolver reported status 'failed'" in result.summary
     assert "pr_not_found" in result.summary
 
-
 async def test_fetch_result_maps_blocked_pr_resolver_artifact_for_completed_run(
     tmp_path: Path,
 ) -> None:
@@ -2776,7 +2733,6 @@ async def test_fetch_result_maps_blocked_pr_resolver_artifact_for_completed_run(
     assert result.summary is not None
     assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
     assert "run_fix_comments_skill" in result.summary
-
 
 async def test_fetch_result_maps_merged_pr_resolver_artifact_metadata(
     tmp_path: Path,

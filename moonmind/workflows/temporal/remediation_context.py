@@ -75,10 +75,8 @@ SECRET_LIKE_POLICY_KEY_PARTS = (
 )
 SAFE_POLICY_KEYS = frozenset({"authorityMode"})
 
-
 class RemediationContextError(RuntimeError):
     """Raised when a remediation context artifact cannot be generated."""
-
 
 @dataclass(slots=True)
 class RemediationContextBuildResult:
@@ -87,7 +85,6 @@ class RemediationContextBuildResult:
     artifact: db_models.TemporalArtifact
     link: db_models.TemporalExecutionRemediationLink
     payload: dict[str, Any]
-
 
 class RemediationContextBuilder:
     """Build bounded remediation context artifacts from persisted remediation links."""
@@ -363,7 +360,6 @@ class RemediationContextBuilder:
     def _string_or_none(value: Any) -> str | None:
         return _string_or_none(value)
 
-
 class RemediationLifecyclePublisher:
     """Publish bounded remediation lifecycle artifacts for one remediation run."""
 
@@ -454,20 +450,17 @@ class RemediationLifecyclePublisher:
         await self._session.refresh(artifact)
         return artifact
 
-
 def normalize_remediation_phase(value: Any) -> str:
     """Return a bounded remediation phase value."""
 
     normalized = str(value or "").strip()
     return normalized if normalized in REMEDIATION_PHASES else "failed"
 
-
 def normalize_remediation_resolution(value: Any) -> str:
     """Return a bounded remediation resolution value."""
 
     normalized = str(value or "").strip()
     return normalized if normalized in REMEDIATION_RESOLUTIONS else "failed"
-
 
 def build_remediation_summary_block(
     *,
@@ -509,7 +502,6 @@ def build_remediation_summary_block(
         summary["resultingTargetRunId"] = resulting_target_run_id
     return summary
 
-
 def build_remediation_audit_event(
     *,
     event_id: str,
@@ -548,7 +540,6 @@ def build_remediation_audit_event(
         "metadata": _safe_policy_mapping(metadata) or {},
     }
 
-
 def build_remediation_continue_as_new_state(
     *,
     target_workflow_id: str,
@@ -572,7 +563,6 @@ def build_remediation_continue_as_new_state(
         "retryBudgetState": _safe_policy_mapping(retry_budget_state) or {},
         "liveFollowCursor": _safe_policy_mapping(live_follow_cursor) or {},
     }
-
 
 def build_target_remediation_linkage_summary(
     *,
@@ -607,7 +597,6 @@ def build_target_remediation_linkage_summary(
         summary["lastUpdatedAt"] = _timestamp_string(last_updated_at)
     return summary
 
-
 def _artifact_ref_payload(raw_ref: Any, *, kind: str | None) -> dict[str, str] | None:
     ref = _string_or_none(raw_ref)
     if not ref or not ref.startswith("art_"):
@@ -616,7 +605,6 @@ def _artifact_ref_payload(raw_ref: Any, *, kind: str | None) -> dict[str, str] |
     if kind:
         payload["kind"] = kind
     return payload
-
 
 def _safe_policy_mapping(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
@@ -630,7 +618,6 @@ def _safe_policy_mapping(value: Any) -> dict[str, Any] | None:
         if safe_item is not None:
             sanitized[key] = safe_item
     return sanitized
-
 
 def _safe_policy_value(value: Any) -> Any:
     if isinstance(value, Mapping):
@@ -648,10 +635,8 @@ def _safe_policy_value(value: Any) -> Any:
         return value
     return None
 
-
 def _safe_lifecycle_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     return _safe_policy_mapping(value) or {}
-
 
 def _bounded_action_summaries(
     actions_attempted: Sequence[Mapping[str, Any]],
@@ -669,7 +654,6 @@ def _bounded_action_summaries(
             summaries.append(summary)
     return summaries
 
-
 def _safe_string_list(values: Sequence[Any]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -681,7 +665,6 @@ def _safe_string_list(values: Sequence[Any]) -> list[str]:
         result.append(item)
     return result
 
-
 def _required_string(value: Any, field_name: str) -> str:
     normalized = _string_or_none(value)
     if not normalized:
@@ -690,13 +673,11 @@ def _required_string(value: Any, field_name: str) -> str:
         raise RemediationContextError(f"{field_name} is unsafe")
     return normalized
 
-
 def _safe_optional_string(value: Any) -> str | None:
     normalized = _string_or_none(value)
     if not normalized or _is_unsafe_context_string(normalized):
         return None
     return normalized
-
 
 def _timestamp_string(value: datetime | str) -> str:
     if isinstance(value, datetime):
@@ -713,18 +694,15 @@ def _timestamp_string(value: datetime | str) -> str:
         timestamp = timestamp.replace(tzinfo=UTC)
     return timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
-
 def _is_secret_like_key(key: str) -> bool:
     if key in SAFE_POLICY_KEYS:
         return False
     normalized = key.strip().lower().replace("-", "_")
     return any(part in normalized for part in SECRET_LIKE_POLICY_KEY_PARTS)
 
-
 def _is_identifier_field(field_name: str) -> bool:
     normalized = field_name.strip()
     return normalized.endswith("_id") or normalized.endswith("Id")
-
 
 def _is_unsafe_context_string(value: str) -> bool:
     normalized = value.strip().lower()
@@ -741,13 +719,11 @@ def _is_unsafe_context_string(value: str) -> bool:
         or "password=" in normalized
     )
 
-
 def _string_or_none(value: Any) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip()
     return normalized or None
-
 
 def _positive_int_or_none(value: Any) -> int | None:
     try:
@@ -757,7 +733,6 @@ def _positive_int_or_none(value: Any) -> int | None:
     if parsed < 0:
         return None
     return parsed
-
 
 def _enum_value(value: Any) -> str | None:
     if value is None:

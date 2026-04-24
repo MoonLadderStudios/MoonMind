@@ -3,11 +3,11 @@
 **Feature Branch**: `109-provider-profiles-p1`  
 **Created**: 2026-03-28  
 **Status**: Draft  
-**Input**: User description: "Fully implement Phase 1 of docs/tmp/005-ProviderProfilesPlan.md"
+**Input**: User description: "Fully implement Phase 1 of docs/Tasks/SkillAndPlanContracts.md"
 
 ## Source Document Requirements
 
-Extracted from `docs/tmp/005-ProviderProfilesPlan.md`:
+Extracted from `docs/Tasks/SkillAndPlanContracts.md`:
 
 - **DOC-REQ-001** *(§6.3.A)*: Rename all code symbols and files from `AuthProfileManager` to `ProviderProfileManager`, including `auth_profile_service.py`, `MoonMind.AuthProfileManager`, temporal task names, activity prefixes, docstrings, and logger messages.
 - **DOC-REQ-002** *(§6.3.B)*: Align Pydantic and runtime contracts by replacing `ManagedAgentAuthProfile` with `ManagedAgentProviderProfile` runtime schemas, updating `ManagedRuntimeProfile` shape, removing obsolete sentinel values (`"auto"`), and normalizing `AgentExecutionRequest` to accept `profile_selector` while making `execution_profile_ref` an optional exact-reference.

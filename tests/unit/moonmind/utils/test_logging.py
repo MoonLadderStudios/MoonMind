@@ -13,7 +13,6 @@ from moonmind.utils.logging import (
     scrub_github_tokens,
 )
 
-
 @pytest.mark.parametrize(
     ("key", "expected"),
     [
@@ -30,7 +29,6 @@ from moonmind.utils.logging import (
 def test_is_sensitive_key(key, expected):
     assert _is_sensitive_key(key) is expected
 
-
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -46,7 +44,6 @@ def test_is_sensitive_key(key, expected):
 )
 def test_is_non_secret_sentinel(value, expected):
     assert _is_non_secret_sentinel(value) is expected
-
 
 @pytest.mark.parametrize(
     ("input_text", "expected_text"),
@@ -70,7 +67,6 @@ def test_is_non_secret_sentinel(value, expected):
 def test_scrub_github_tokens(input_text, expected_text):
     assert scrub_github_tokens(input_text) == expected_text
 
-
 @pytest.mark.parametrize(
     ("text", "expected"),
     [("hello", ["hello", "aGVsbG8="]), ("hello world", ["hello world", "hello+world"])],
@@ -79,7 +75,6 @@ def test_secret_variants(text, expected):
     variants = _secret_variants(text)
     assert expected[0] in variants
     assert expected[1] in variants
-
 
 def test_secret_redactor_init():
     redactor = SecretRedactor(secrets=["my_secret", "true", "", "another_secret"])
@@ -98,7 +93,6 @@ def test_secret_redactor_init():
     lengths = [len(s) for s in redactor._secrets]
     assert lengths == sorted(lengths, reverse=True)
 
-
 @patch.dict(
     os.environ,
     {"API_TOKEN": "my_super_secret", "NORMAL_VAR": "just_a_value"},
@@ -114,7 +108,6 @@ def test_secret_redactor_from_environ():
     # also checking that variants are generated
     assert "bXlfc3VwZXJfc2VjcmV0" in redactor._secrets  # base64 of my_super_secret
 
-
 def test_secret_redactor_scrub():
     redactor = SecretRedactor(secrets=["my_secret"])
 
@@ -123,13 +116,11 @@ def test_secret_redactor_scrub():
     assert redactor.scrub("") == ""
     assert redactor.scrub(None) == ""
 
-
 def test_secret_redactor_scrub_sequence():
     redactor = SecretRedactor(secrets=["my_secret"])
 
     result = redactor.scrub_sequence(["This is my_secret", "No secrets"])
     assert result == ["This is ***", "No secrets"]
-
 
 def test_redact_profile_file_templates_redacts_nested_content_fields():
     raw_secret = "sk-template-raw-secret"
@@ -156,7 +147,6 @@ def test_redact_profile_file_templates_redacts_nested_content_fields():
     assert result[0]["content_template"]["model"] == "gpt-test"
     assert result[1]["contentTemplate"]["token"] == "[REDACTED]"
     assert result[2]["content"] == "[REDACTED]"
-
 
 def test_redact_sensitive_payload_preserves_auth_readiness_metadata_string():
     payload = {

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 def text_to_adf_document(text: str) -> dict[str, Any]:
     """Convert plain text into a minimal Atlassian Document Format document."""
 
@@ -23,7 +22,6 @@ def text_to_adf_document(text: str) -> dict[str, Any]:
         content.append({"type": "paragraph", "content": paragraph_content})
 
     return {"type": "doc", "version": 1, "content": content}
-
 
 def ensure_adf_document(value: str | dict[str, Any] | None) -> dict[str, Any] | None:
     """Return an ADF document for one Jira rich-text field value."""

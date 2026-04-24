@@ -15,7 +15,6 @@ CODEX_CLOUD_DISABLED_MESSAGE = (
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
-
 @dataclass(frozen=True, slots=True)
 class CodexCloudRuntimeGate:
     """Represents whether Codex Cloud runtime is enabled plus diagnostics context."""
@@ -24,10 +23,8 @@ class CodexCloudRuntimeGate:
     missing: tuple[str, ...]
     error_message: str
 
-
 def _clean_value(value: object | None) -> str:
     return str(value or "").strip()
-
 
 def _resolve_enabled_flag(
     *, enabled: bool | None = None, env: Mapping[str, Any] | None = None
@@ -44,7 +41,6 @@ def _resolve_enabled_flag(
     if lowered in _FALSE_VALUES:
         return False
     return False
-
 
 def build_codex_cloud_gate(
     *,
@@ -79,7 +75,6 @@ def build_codex_cloud_gate(
         error_message=error_message,
     )
 
-
 def is_codex_cloud_enabled(
     *,
     enabled: bool | None = None,
@@ -95,7 +90,6 @@ def is_codex_cloud_enabled(
         api_key=api_key,
         env=env,
     ).enabled
-
 
 __all__ = [
     "CODEX_CLOUD_DISABLED_MESSAGE",

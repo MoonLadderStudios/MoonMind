@@ -33,7 +33,7 @@ Implement MM-377 by making the Create page draft explicitly target-aware for obj
 - **VIII. Modular and Extensible Architecture**: PASS. Work is scoped to the existing Create page entrypoint and tests.
 - **IX. Resilient by Default**: PASS. Upload failures remain explicit and no partial execution is submitted after failed validation.
 - **XI. Spec-Driven Development Is the Source of Truth**: PASS. MM-377 input is preserved in spec artifacts and implementation tasks.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Runtime implementation artifacts live under `specs/` and `docs/tmp`, not canonical docs.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Runtime implementation artifacts live under `specs/` and `local-only handoffs`, not canonical docs.
 - **XIII. Pre-Release Compatibility Policy**: PASS. No compatibility aliases or hidden fallback semantics are introduced.
 
 ## Project Structure
@@ -48,7 +48,7 @@ specs/196-step-first-draft-attachment-targets/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── create-page-attachment-targets.md
+│ └── create-page-attachment-targets.md
 └── tasks.md
 ```
 
@@ -59,7 +59,6 @@ frontend/src/entrypoints/
 ├── task-create.tsx
 └── task-create.test.tsx
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-377-moonspec-orchestration-input.md
 ```
 

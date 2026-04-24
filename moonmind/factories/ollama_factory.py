@@ -7,14 +7,12 @@ from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-
 def get_ollama_model(model_name: str) -> str:
     """
     Get the Ollama model name. For now, just return the model name as-is.
     In the future, this could handle model name mapping or validation.
     """
     return model_name
-
 
 async def chat_with_ollama(
     model_name: str, messages: List[Dict[str, str]], **kwargs
@@ -56,7 +54,6 @@ async def chat_with_ollama(
     except httpx.RequestError as e:
         logger.error(f"Error calling Ollama API: {e}")
         raise e
-
 
 async def list_ollama_models() -> List[Any]:
     """

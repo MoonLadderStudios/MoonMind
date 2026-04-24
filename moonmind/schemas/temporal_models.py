@@ -70,7 +70,6 @@ def normalize_dependency_ids(raw_value: Any) -> list[str]:
         normalized.append(candidate)
     return normalized
 
-
 class PullRequestRefModel(BaseModel):
     """Compact pull request identity carried through merge automation history."""
 
@@ -98,11 +97,9 @@ class PullRequestRefModel(BaseModel):
             raise ValueError("number must be positive")
         return value
 
-
 MergeAutomationPolicySetting = Literal["required", "optional", "disabled"]
 MergeMethod = Literal["merge", "squash", "rebase"]
 PostMergeJiraStrategy = Literal["done_category"]
-
 
 class MergeAutomationGitHubGateModel(BaseModel):
     """GitHub readiness policy for merge automation."""
@@ -114,7 +111,6 @@ class MergeAutomationGitHubGateModel(BaseModel):
         "required", alias="automatedReview"
     )
 
-
 class MergeAutomationJiraGateModel(BaseModel):
     """Jira readiness policy for merge automation."""
 
@@ -124,7 +120,6 @@ class MergeAutomationJiraGateModel(BaseModel):
     issue_key: str | None = Field(None, alias="issueKey")
     allowed_statuses: list[str] = Field(default_factory=list, alias="allowedStatuses")
     status: MergeAutomationPolicySetting = Field("optional", alias="status")
-
 
 class MergeAutomationGateModel(BaseModel):
     """Readiness policy for one merge automation workflow."""
@@ -140,7 +135,6 @@ class MergeAutomationGateModel(BaseModel):
         alias="jira",
     )
 
-
 class MergeAutomationResolverModel(BaseModel):
     """Resolver configuration for merge automation."""
 
@@ -148,7 +142,6 @@ class MergeAutomationResolverModel(BaseModel):
 
     skill: str = Field("pr-resolver", alias="skill")
     merge_method: MergeMethod = Field("squash", alias="mergeMethod")
-
 
 class MergeAutomationTimeoutsModel(BaseModel):
     """Bounded wait settings for merge automation."""
@@ -182,7 +175,6 @@ class MergeAutomationTimeoutsModel(BaseModel):
             return None
         return min(candidate, 2_592_000)
 
-
 class MergeAutomationPostMergeJiraModel(BaseModel):
     """Runtime policy for Jira completion after verified merge success."""
 
@@ -209,7 +201,6 @@ class MergeAutomationPostMergeJiraModel(BaseModel):
     def _validate_fields(cls, value: Any) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="postMergeJira.fields")
 
-
 class MergeAutomationConfigModel(BaseModel):
     """Full merge automation configuration carried by workflow input."""
 
@@ -232,7 +223,6 @@ class MergeAutomationConfigModel(BaseModel):
         alias="postMergeJira",
     )
 
-
 ReadinessBlockerKind = Literal[
     "checks_running",
     "checks_failed",
@@ -246,7 +236,6 @@ ReadinessBlockerKind = Literal[
     "failed",
     "resolver_disposition_invalid",
 ]
-
 
 class ReadinessBlockerModel(BaseModel):
     """Bounded operator-visible reason a merge gate is not open."""
@@ -265,7 +254,6 @@ class ReadinessBlockerModel(BaseModel):
         if not candidate:
             raise ValueError("summary must be a non-empty string")
         return candidate[:500]
-
 
 class ReadinessEvidenceModel(BaseModel):
     """Compact result of evaluating external PR readiness."""
@@ -299,7 +287,6 @@ class ReadinessEvidenceModel(BaseModel):
             raise ValueError("ready evidence cannot include blockers")
         return self
 
-
 class ResolverRunRefModel(BaseModel):
     """Reference to the resolver follow-up run launched by merge automation."""
 
@@ -308,7 +295,6 @@ class ResolverRunRefModel(BaseModel):
     workflow_id: str = Field(..., alias="workflowId")
     run_id: str | None = Field(None, alias="runId")
     created: bool = Field(True, alias="created")
-
 
 class MergeAutomationStartInput(BaseModel):
     """Start input for ``MoonMind.MergeAutomation``."""
@@ -354,7 +340,6 @@ class MergeAutomationStartInput(BaseModel):
             raise ValueError("cycleCount must be non-negative")
         return value
 
-
 class DependencyResolvedSignalPayload(BaseModel):
     """Signal payload emitted when a prerequisite execution reaches a terminal state."""
 
@@ -366,7 +351,6 @@ class DependencyResolvedSignalPayload(BaseModel):
     resolved_at: datetime = Field(..., alias="resolvedAt")
     failure_category: str | None = Field(None, alias="failureCategory")
     message: str | None = Field(None, alias="message")
-
 
 from moonmind.schemas.manifest_ingest_models import (
     ManifestExecutionPolicyModel,
@@ -382,7 +366,6 @@ NormalizedIntegrationStatus = Literal[
     "canceled",
     "unknown",
 ]
-
 
 class ScheduleParameters(BaseModel):
     """Inline scheduling parameters for deferred or recurring execution."""
@@ -416,7 +399,6 @@ class ScheduleParameters(BaseModel):
                 "cron is required when schedule mode is 'recurring'"
             )
         return self
-
 
 class CreateExecutionRequest(BaseModel):
     """Request payload for starting a workflow execution."""
@@ -455,7 +437,6 @@ class CreateExecutionRequest(BaseModel):
             )
         return self
 
-
 class UpdateExecutionRequest(BaseModel):
     """Request payload for workflow updates."""
 
@@ -478,7 +459,6 @@ class UpdateExecutionRequest(BaseModel):
     node_ids: list[str] = Field(default_factory=list, alias="nodeIds")
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
-
 class SignalExecutionRequest(BaseModel):
     """Request payload for asynchronous workflow signals."""
 
@@ -491,7 +471,6 @@ class SignalExecutionRequest(BaseModel):
     )
     payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
     payload_artifact_ref: Optional[str] = Field(None, alias="payloadArtifactRef")
-
 
 class ConfigureIntegrationMonitoringRequest(BaseModel):
     """Request payload for starting Temporal-side external monitoring."""
@@ -526,7 +505,6 @@ class ConfigureIntegrationMonitoringRequest(BaseModel):
             field_name="providerSummary",
         )
 
-
 class PollIntegrationRequest(BaseModel):
     """Request payload for polling updates while awaiting external completion."""
 
@@ -555,7 +533,6 @@ class PollIntegrationRequest(BaseModel):
             field_name="providerSummary",
         )
 
-
 class IntegrationCallbackRequest(BaseModel):
     """Generic provider callback payload resolved through correlation storage."""
 
@@ -583,7 +560,6 @@ class IntegrationCallbackRequest(BaseModel):
             value,
             field_name="providerSummary",
         )
-
 
 class IntegrationStateModel(BaseModel):
     """Compact persisted state for a monitored external integration."""
@@ -623,7 +599,6 @@ class IntegrationStateModel(BaseModel):
             field_name="providerSummary",
         )
 
-
 class CancelExecutionRequest(BaseModel):
     """Request payload for cancellation."""
 
@@ -633,14 +608,12 @@ class CancelExecutionRequest(BaseModel):
     reason: Optional[str] = Field(None, alias="reason")
     graceful: bool = Field(True, alias="graceful")
 
-
 class RescheduleExecutionRequest(BaseModel):
     """Request payload for rescheduling a deferred execution."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     scheduled_for: datetime = Field(..., alias="scheduledFor")
-
 
 class ExecutionActionCapabilityModel(BaseModel):
     """State-aware Temporal action visibility returned to the dashboard."""
@@ -662,7 +635,6 @@ class ExecutionActionCapabilityModel(BaseModel):
         default_factory=dict, alias="disabledReasons"
     )
 
-
 class ExecutionInterventionAuditEntryModel(BaseModel):
     """One explicit operator intervention record shown outside stdout/stderr logs."""
 
@@ -673,7 +645,6 @@ class ExecutionInterventionAuditEntryModel(BaseModel):
     summary: str = Field(..., alias="summary")
     detail: Optional[str] = Field(None, alias="detail")
     created_at: datetime = Field(..., alias="createdAt")
-
 
 class ExecutionDebugFieldsModel(BaseModel):
     """Optional debug metadata gated by Temporal dashboard settings."""
@@ -690,7 +661,6 @@ class ExecutionDebugFieldsModel(BaseModel):
     waiting_reason: Optional[str] = Field(None, alias="waitingReason")
     attention_required: bool = Field(False, alias="attentionRequired")
 
-
 class ExecutionDependencyOutcomeModel(BaseModel):
     """One resolved prerequisite outcome surfaced on execution detail."""
 
@@ -702,7 +672,6 @@ class ExecutionDependencyOutcomeModel(BaseModel):
     resolved_at: Optional[datetime] = Field(None, alias="resolvedAt")
     failure_category: Optional[str] = Field(None, alias="failureCategory")
     message: Optional[str] = Field(None, alias="message")
-
 
 class ExecutionDependencySummaryModel(BaseModel):
     """Compact linked execution metadata for prerequisites or dependents."""
@@ -716,7 +685,6 @@ class ExecutionDependencySummaryModel(BaseModel):
     close_status: Optional[str] = Field(None, alias="closeStatus")
     workflow_type: Optional[str] = Field(None, alias="workflowType")
 
-
 class ExecutionSkillVersionSummaryModel(BaseModel):
     """Compact operator-safe summary of one selected skill version."""
 
@@ -729,7 +697,6 @@ class ExecutionSkillVersionSummaryModel(BaseModel):
     content_ref: Optional[str] = Field(None, alias="contentRef")
     content_digest: Optional[str] = Field(None, alias="contentDigest")
 
-
 class ExecutionSkillProvenanceModel(BaseModel):
     """Compact source provenance for one selected skill."""
 
@@ -738,7 +705,6 @@ class ExecutionSkillProvenanceModel(BaseModel):
     name: str = Field(..., alias="name")
     source_kind: Optional[str] = Field(None, alias="sourceKind")
     source_path: Optional[str] = Field(None, alias="sourcePath")
-
 
 class ExecutionProjectionDiagnosticModel(BaseModel):
     """Sanitized projection diagnostic for operator-visible skill failures."""
@@ -751,7 +717,6 @@ class ExecutionProjectionDiagnosticModel(BaseModel):
     remediation: Optional[str] = Field(None, alias="remediation")
     cause: Optional[str] = Field(None, alias="cause")
 
-
 class ExecutionSkillLifecycleIntentModel(BaseModel):
     """How skill intent or snapshot reuse is preserved across lifecycle paths."""
 
@@ -762,7 +727,6 @@ class ExecutionSkillLifecycleIntentModel(BaseModel):
     resolved_skillset_ref: Optional[str] = Field(None, alias="resolvedSkillsetRef")
     resolution_mode: str = Field(..., alias="resolutionMode")
     explanation: str = Field(..., alias="explanation")
-
 
 class ExecutionSkillRuntimeModel(BaseModel):
     """Compact skill runtime evidence exposed by execution detail APIs."""
@@ -791,7 +755,6 @@ class ExecutionSkillRuntimeModel(BaseModel):
         None, alias="lifecycleIntent"
     )
 
-
 class ExecutionProgressModel(BaseModel):
     """Bounded latest-run progress summary derived from workflow-owned step state."""
 
@@ -810,7 +773,6 @@ class ExecutionProgressModel(BaseModel):
     current_step_title: str | None = Field(None, alias="currentStepTitle")
     updated_at: datetime = Field(..., alias="updatedAt")
 
-
 class ExecutionMergeAutomationBlockerModel(BaseModel):
     """Operator-visible merge automation blocker."""
 
@@ -821,7 +783,6 @@ class ExecutionMergeAutomationBlockerModel(BaseModel):
     retryable: bool | None = Field(None, alias="retryable")
     source: str | None = Field(None, alias="source")
 
-
 class ExecutionMergeAutomationArtifactRefsModel(BaseModel):
     """Artifact refs produced by merge automation."""
 
@@ -830,7 +791,6 @@ class ExecutionMergeAutomationArtifactRefsModel(BaseModel):
     summary: str | None = Field(None, alias="summary")
     gate_snapshots: list[str] = Field(default_factory=list, alias="gateSnapshots")
     resolver_attempts: list[str] = Field(default_factory=list, alias="resolverAttempts")
-
 
 class ExecutionMergeAutomationResolverChildModel(BaseModel):
     """Resolver child workflow reference plus observability binding when known."""
@@ -841,7 +801,6 @@ class ExecutionMergeAutomationResolverChildModel(BaseModel):
     task_run_id: str | None = Field(None, alias="taskRunId")
     status: str | None = Field(None, alias="status")
     detail_href: str | None = Field(None, alias="detailHref")
-
 
 class ExecutionMergeAutomationModel(BaseModel):
     """Live or terminal merge automation visibility for an execution."""
@@ -881,7 +840,6 @@ class ExecutionMergeAutomationModel(BaseModel):
             self.child_workflow_id = self.workflow_id
         return self
 
-
 class TaskInputSnapshotDescriptorModel(BaseModel):
     """Compact pointer to the authoritative original task input snapshot."""
 
@@ -911,7 +869,6 @@ class TaskInputSnapshotDescriptorModel(BaseModel):
             raise ValueError("authoritative reconstruction requires artifactRef")
         return self
 
-
 class StepLedgerCheckModel(BaseModel):
     """Structured step-level review or check result."""
 
@@ -923,7 +880,6 @@ class StepLedgerCheckModel(BaseModel):
     retry_count: int = Field(0, alias="retryCount", ge=0)
     artifact_ref: str | None = Field(None, alias="artifactRef")
 
-
 class StepLedgerRefsModel(BaseModel):
     """Stable ref slots for child workflow and task-run linkage."""
 
@@ -932,7 +888,6 @@ class StepLedgerRefsModel(BaseModel):
     child_workflow_id: str | None = Field(None, alias="childWorkflowId")
     child_run_id: str | None = Field(None, alias="childRunId")
     task_run_id: str | None = Field(None, alias="taskRunId")
-
 
 class StepLedgerArtifactsModel(BaseModel):
     """Stable semantic artifact slots for step evidence."""
@@ -946,7 +901,6 @@ class StepLedgerArtifactsModel(BaseModel):
     runtime_merged_logs: str | None = Field(None, alias="runtimeMergedLogs")
     runtime_diagnostics: str | None = Field(None, alias="runtimeDiagnostics")
     provider_snapshot: str | None = Field(None, alias="providerSnapshot")
-
 
 class StepLedgerWorkloadModel(BaseModel):
     """Bounded Docker-backed workload metadata linked to a producing step."""
@@ -969,7 +923,6 @@ class StepLedgerWorkloadModel(BaseModel):
         None,
         alias="artifactPublication",
     )
-
 
 class StepLedgerRowModel(BaseModel):
     """Current/latest attempt state for one logical step in the active run."""
@@ -1006,7 +959,6 @@ class StepLedgerRowModel(BaseModel):
     workload: StepLedgerWorkloadModel | None = Field(None, alias="workload")
     last_error: str | None = Field(None, alias="lastError")
 
-
 class StepLedgerSnapshotModel(BaseModel):
     """Latest-run step-ledger query payload."""
 
@@ -1016,7 +968,6 @@ class StepLedgerSnapshotModel(BaseModel):
     run_id: str = Field(..., alias="runId", min_length=1)
     run_scope: Literal["latest"] = Field("latest", alias="runScope")
     steps: list[StepLedgerRowModel] = Field(default_factory=list, alias="steps")
-
 
 class ExecutionReportProjectionModel(BaseModel):
     """Bounded report summary surfaced on execution detail responses."""
@@ -1039,7 +990,6 @@ class ExecutionReportProjectionModel(BaseModel):
     def _serialize_without_nulls(self, handler):
         payload = handler(self)
         return {key: value for key, value in payload.items() if value is not None}
-
 
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
@@ -1189,7 +1139,6 @@ class ExecutionModel(BaseModel):
     stale_state: bool = Field(False, alias="staleState")
     refreshed_at: datetime | None = Field(None, alias="refreshedAt")
 
-
 class ExecutionRefreshEnvelope(BaseModel):
     """Compatibility metadata for patching one acted-on row and refetching lists."""
 
@@ -1202,7 +1151,6 @@ class ExecutionRefreshEnvelope(BaseModel):
     list_stale: bool = Field(..., alias="listStale")
     refetch_suggested: bool = Field(..., alias="refetchSuggested")
     refreshed_at: datetime = Field(..., alias="refreshedAt")
-
 
 class UpdateExecutionResponse(BaseModel):
     """Outcome from an update command."""
@@ -1218,7 +1166,6 @@ class UpdateExecutionResponse(BaseModel):
     execution: ExecutionModel | None = Field(None, alias="execution")
     refresh: ExecutionRefreshEnvelope | None = Field(None, alias="refresh")
 
-
 class ScheduleCreatedResponse(BaseModel):
     """Response returned when a recurring schedule is created from the create endpoint."""
 
@@ -1231,7 +1178,6 @@ class ScheduleCreatedResponse(BaseModel):
     timezone: str = Field(..., alias="timezone")
     next_run_at: datetime = Field(..., alias="nextRunAt")
     redirect_path: str = Field(..., alias="redirectPath")
-
 
 class ExecutionListResponse(BaseModel):
     """Paginated list response for executions."""

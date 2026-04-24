@@ -7,7 +7,7 @@
 
 **Organization**: This task list covers exactly one user story: `Complete Jira After Merge`.
 
-**Source Traceability**: Original Jira issue `MM-403` and the original Jira preset brief are preserved in `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-403-moonspec-orchestration-input.md`. The plan marks 16 requirements missing, 16 partial, 1 implemented-unverified, and 0 implemented-verified, so all requirement rows need test or implementation coverage here.
+**Source Traceability**: Original Jira issue `MM-403` and the original Jira preset brief are preserved in `spec.md` and `spec.md` (Input). The plan marks 16 requirements missing, 16 partial, 1 implemented-unverified, and 0 implemented-verified, so all requirement rows need test or implementation coverage here.
 
 **Test Commands**:
 
@@ -29,7 +29,7 @@
 - Backend workflow code lives under `moonmind/`.
 - Unit tests live under `tests/unit/`.
 - Workflow-boundary integration-style tests for this story live under `tests/unit/workflows/temporal/workflows/`.
-- Canonical docs live under `docs/`; volatile orchestration input remains under `docs/tmp/`.
+- Canonical docs live under `docs/`; volatile orchestration input remains under `local-only handoffs`.
 
 ---
 
@@ -119,7 +119,7 @@
 ### Story Validation
 
 - [X] T039 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_merge_gate_models.py tests/unit/workflows/temporal/test_post_merge_jira_completion.py tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py tests/unit/integrations/test_jira_tool_service.py` and fix failures until the story passes independently covering FR-016 and DESIGN-REQ-009
-- [X] T040 Run `rg -n "MM-403|postMergeJira|Post-Merge Jira Completion" specs/205-post-merge-jira-completion docs/tmp/jira-orchestration-inputs/MM-403-moonspec-orchestration-input.md docs/Tasks/PrMergeAutomation.md docs/Tools/JiraIntegration.md docs/Tasks/TaskPublishing.md` and confirm traceability evidence exists for FR-017, SC-009, and DESIGN-REQ-010
+- [X] T040 Run `rg -n "MM-403|postMergeJira|Post-Merge Jira Completion" specs/205-post-merge-jira-completion docs/Tasks/PrMergeAutomation.md docs/Tools/JiraIntegration.md docs/Tasks/TaskPublishing.md` and confirm traceability evidence exists for FR-017, SC-009, and DESIGN-REQ-010
 
 **Checkpoint**: The story is fully functional, covered by unit and workflow-boundary integration tests, and independently testable.
 

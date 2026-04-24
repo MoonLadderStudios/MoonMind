@@ -30,11 +30,9 @@ RUNNER_ACTIVITY_TASK_QUEUE = "mm.activity.agent_runtime"
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
 # Input / Output types
 # ---------------------------------------------------------------------------
-
 
 class OAuthSessionInput(TypedDict, total=False):
     """Input payload for starting an OAuth session workflow."""
@@ -48,12 +46,10 @@ class OAuthSessionInput(TypedDict, total=False):
     profile_settings: dict[str, Any]
     session_transport: str
 
-
 class OAuthSessionOutput(TypedDict):
     session_id: str
     status: str
     failure_reason: Optional[str]
-
 
 # ---------------------------------------------------------------------------
 # Workflow definition
@@ -65,14 +61,12 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(token|password|secret|api[_-]?key)=\S+"
 )
 
-
 def _redact_workflow_failure(prefix: str, error: object) -> str:
     """Return a bounded workflow-safe failure reason."""
     message = str(error)
     if _SECRET_ASSIGNMENT_PATTERN.search(message):
         return f"{prefix}: redacted provider output"
     return f"{prefix}: {message}"
-
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindOAuthSessionWorkflow:

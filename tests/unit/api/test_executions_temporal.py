@@ -13,7 +13,6 @@ import api_service.api.routers.executions as executions_module
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 
-
 def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> MagicMock:
     # Plain MagicMock: AsyncMock user objects can trigger "never awaited" warnings
     # when routes or FastAPI touch attributes during teardown.
@@ -27,7 +26,6 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> MagicMoc
                 if dep.call.__name__ == "_current_user_fallback":
                     app.dependency_overrides[dep.call] = lambda: mock_user
     return mock_user
-
 
 @pytest.fixture
 def client() -> Iterator[tuple[TestClient, AsyncMock, MagicMock, MagicMock]]:
@@ -57,7 +55,6 @@ def client() -> Iterator[tuple[TestClient, AsyncMock, MagicMock, MagicMock]]:
         yield test_client, service, user, mock_session
 
     app.dependency_overrides.clear()
-
 
 def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
     client,
@@ -122,7 +119,6 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         assert item["entry"] == "run"
         assert item["waitingReason"] == "external_completion"
 
-
 def test_task_detail_instructions_include_task_and_step_text() -> None:
     assert executions_module._derive_full_task_instructions(
         {
@@ -138,7 +134,6 @@ def test_task_detail_instructions_include_task_and_step_text() -> None:
         "Step 1: Plan\nWrite the plan.\n\n"
         "Step 2\nApply the change."
     )
-
 
 def test_list_executions_source_temporal_merges_canonical_parameters(
     client,
@@ -214,7 +209,6 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
         item = response.json()["items"][0]
         assert item["targetRuntime"] == "codex"
         assert item["targetSkill"] == "fix-ci"
-
 
 def test_list_executions_source_temporal_orders_scheduled_runs_by_latest_scheduled_time(
     client,
@@ -299,7 +293,6 @@ def test_list_executions_source_temporal_orders_scheduled_runs_by_latest_schedul
     )
     assert items[0]["startedAt"] is None
     assert items[1]["startedAt"] is None
-
 
 def test_list_executions_source_temporal_orders_immediate_runs_by_updated_at(
     client,
@@ -389,7 +382,6 @@ def test_list_executions_source_temporal_orders_immediate_runs_by_updated_at(
         == newer_created
     )
 
-
 def test_describe_execution_source_temporal_syncs_projection(client) -> None:
     test_client, service, user, _mock_session = client
 
@@ -446,7 +438,6 @@ def test_describe_execution_source_temporal_syncs_projection(client) -> None:
             "mm:wf-123",
             include_orphaned=True,
         )
-
 
 def test_describe_execution_source_temporal_keeps_updated_at_stable_while_refreshing_freshness(
     client,
@@ -525,7 +516,6 @@ def test_describe_execution_source_temporal_keeps_updated_at_stable_while_refres
         )
         assert mock_sync.await_count == 2
 
-
 def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
     test_client, service, user, _mock_session = client
 
@@ -581,7 +571,6 @@ def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
             include_orphaned=False,
         )
 
-
 def test_temporal_unavailability_returns_503(client) -> None:
     test_client, service, user, _mock_session = client
 
@@ -610,6 +599,5 @@ def test_temporal_unavailability_returns_503(client) -> None:
 
         assert response.status_code == 503
         assert response.json()["detail"]["code"] == "temporal_unavailable"
-
 
 # Trigger CI

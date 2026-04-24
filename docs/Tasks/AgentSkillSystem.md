@@ -3,8 +3,7 @@
 Status: Active  
 Owners: MoonMind Engineering  
 Last Updated: 2026-03-30  
-Related: `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/UI/MissionControlArchitecture.md`, `AGENTS.md`  
-Implementation tracking: `docs/tmp/AgentSkillSystemPlan.md`
+Related: `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/UI/MissionControlArchitecture.md`, `AGENTS.md`
 
 ---
 
@@ -861,7 +860,7 @@ Use related docs for:
 * managed and external runtime execution: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 * Temporal orchestration boundaries: `docs/Temporal/TemporalArchitecture.md`
 * Mission Control surfaces: `docs/UI/MissionControlArchitecture.md`
-* implementation phases and backlog: `docs/tmp/AgentSkillSystemPlan.md`
+* implementation phases and backlog: `docs/Tasks/AgentSkillSystem.md`
 
 ---
 

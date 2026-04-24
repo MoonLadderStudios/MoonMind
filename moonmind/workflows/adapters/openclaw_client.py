@@ -8,7 +8,6 @@ from typing import Any
 
 import httpx
 
-
 class OpenClawClientError(RuntimeError):
     """Raised when the OpenClaw gateway returns an error response."""
 
@@ -16,13 +15,11 @@ class OpenClawClientError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
 
-
 def _scrub_error_message(text: str) -> str:
     lowered = text.lower()
     if "bearer" in lowered or "authorization" in lowered:
         return "OpenClaw gateway request failed (authorization error)"
     return text
-
 
 class OpenClawHttpClient:
     """Async client for ``POST /v1/chat/completions`` with ``stream: true``."""
@@ -101,7 +98,6 @@ class OpenClawHttpClient:
                 _scrub_error_message(f"OpenClaw transport error: {exc!s}")
             ) from exc
 
-
 def parse_sse_lines_for_deltas(lines: list[str]) -> list[str]:
     """Parse SSE lines for unit tests (same rules as ``stream_chat_completion``)."""
 
@@ -124,7 +120,6 @@ def parse_sse_lines_for_deltas(lines: list[str]) -> list[str]:
         if content:
             out.append(str(content))
     return out
-
 
 __all__ = [
     "OpenClawClientError",

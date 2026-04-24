@@ -11,7 +11,6 @@ from moonmind.workflows.temporal.workflows.merge_gate import (
     legacy_resolver_idempotency_key,
 )
 
-
 def _pull_request() -> dict[str, object]:
     return {
         "repo": "MoonLadderStudios/MoonMind",
@@ -22,10 +21,8 @@ def _pull_request() -> dict[str, object]:
         "baseBranch": "main",
     }
 
-
 def test_merge_gate_module_does_not_define_legacy_workflow_class() -> None:
     assert not hasattr(merge_gate, "MoonMindMergeAutomationWorkflow")
-
 
 def test_legacy_resolver_run_activity_is_not_registered() -> None:
     activity_types = {
@@ -35,7 +32,6 @@ def test_legacy_resolver_run_activity_is_not_registered() -> None:
     assert "merge_automation.evaluate_readiness" in activity_types
     assert "merge_automation.create_resolver_run" not in activity_types
     assert "merge_automation.create_resolver_run" not in _ACTIVITY_HANDLER_ATTRS
-
 
 def test_classify_readiness_marks_stale_revision_terminal() -> None:
     evidence = classify_readiness(
@@ -54,7 +50,6 @@ def test_classify_readiness_marks_stale_revision_terminal() -> None:
     assert not evidence.ready
     assert evidence.blockers[0].kind == "stale_revision"
     assert evidence.blockers[0].retryable is False
-
 
 def test_classify_readiness_treats_merged_pr_as_terminal_success_evidence() -> None:
     evidence = classify_readiness(
@@ -75,7 +70,6 @@ def test_classify_readiness_treats_merged_pr_as_terminal_success_evidence() -> N
     assert evidence.pull_request_merged is True
     assert evidence.ready is False
     assert evidence.blockers == []
-
 
 def test_classify_readiness_sanitizes_secret_like_blocker_summary() -> None:
     evidence = classify_readiness(
@@ -100,7 +94,6 @@ def test_classify_readiness_sanitizes_secret_like_blocker_summary() -> None:
     )
 
     assert "token=" not in evidence.blockers[0].summary
-
 
 def test_classify_readiness_allows_resolver_launch_when_checks_failed_but_are_complete() -> None:
     evidence = classify_readiness(
@@ -128,7 +121,6 @@ def test_classify_readiness_allows_resolver_launch_when_checks_failed_but_are_co
     assert evidence.ready is True
     assert evidence.blockers == []
 
-
 def test_classify_readiness_maps_unknown_blocker_kind_to_external_unavailable() -> None:
     evidence = classify_readiness(
         {
@@ -147,7 +139,6 @@ def test_classify_readiness_maps_unknown_blocker_kind_to_external_unavailable() 
     )
 
     assert evidence.blockers[0].kind == "external_state_unavailable"
-
 
 def test_deterministic_resolver_idempotency_key_is_revision_scoped() -> None:
     first = deterministic_resolver_idempotency_key(
@@ -170,7 +161,6 @@ def test_deterministic_resolver_idempotency_key_is_revision_scoped() -> None:
     assert "MoonLadderStudios" not in first
     assert "/" not in first
 
-
 def test_legacy_resolver_idempotency_key_preserves_replay_format() -> None:
     legacy = legacy_resolver_idempotency_key(
         parent_workflow_id="mm:parent",
@@ -180,7 +170,6 @@ def test_legacy_resolver_idempotency_key_preserves_replay_format() -> None:
     )
 
     assert legacy == "resolver:mm:parent:pr:341:head:abc123"
-
 
 def test_build_resolver_run_request_uses_pr_resolver_and_publish_none() -> None:
     request = build_resolver_run_request(
@@ -198,7 +187,6 @@ def test_build_resolver_run_request_uses_pr_resolver_and_publish_none() -> None:
     assert request["initial_parameters"]["task"]["tool"]["version"] == "1.0"
     assert request["initial_parameters"]["publishMode"] == "none"
     assert request["initial_parameters"]["task"]["skill"]["args"]["pr"] == "341"
-
 
 def test_build_resolver_run_request_pins_parent_provider_profile() -> None:
     request = build_resolver_run_request(
@@ -225,7 +213,6 @@ def test_build_resolver_run_request_pins_parent_provider_profile() -> None:
     assert runtime["effort"] == "high"
     assert "profileId" not in runtime
     assert "providerProfile" not in runtime
-
 
 def test_build_continue_as_new_input_preserves_compact_wait_state() -> None:
     payload = build_continue_as_new_input(

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Iterator
@@ -18,7 +17,6 @@ from api_service.api.routers.mcp_tools import _get_service, router
 from api_service.auth_providers import get_current_user
 
 pytestmark = []
-
 
 def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
     now = datetime.now(UTC)
@@ -47,7 +45,6 @@ def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):
         created_at=now,
         updated_at=now,
     )
-
 
 @pytest.fixture
 def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
@@ -81,7 +78,6 @@ def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
 
     app.dependency_overrides.clear()
 
-
 def test_list_tools_returns_queue_definitions(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -105,7 +101,6 @@ def test_list_tools_returns_queue_definitions(
         "queue.list",
         "queue.upload_artifact",
     }.issubset(names)
-
 
 @pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 def test_call_queue_enqueue_success_returns_wrapped_job(
@@ -139,7 +134,6 @@ def test_call_queue_enqueue_success_returns_wrapped_job(
     assert called_kwargs["created_by_user_id"] == user.id
     assert called_kwargs["requested_by_user_id"] == user.id
 
-
 def test_call_unknown_tool_returns_404(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -155,7 +149,6 @@ def test_call_unknown_tool_returns_404(
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "tool_not_found"
 
-
 def test_call_invalid_arguments_returns_422(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -170,7 +163,6 @@ def test_call_invalid_arguments_returns_422(
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_tool_arguments"
-
 
 def test_call_queue_get_not_found_maps_404(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],

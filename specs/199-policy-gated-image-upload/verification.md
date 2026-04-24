@@ -34,7 +34,7 @@
 | FR-012 | Existing step payload tests at `task-create.test.tsx`; payload contract remains `task.steps[n].inputAttachments` | VERIFIED | Step refs stay step-scoped. |
 | FR-013 | Submit gate at lines 4051-4062 and `isSubmitting` submit lock; focused and full suites passed | VERIFIED | Invalid and failed attachments block submission. Uploading state is covered by the existing submit busy state. |
 | FR-014 | Tests at lines 3622-3778 plus existing upload and payload tests | VERIFIED | Automated coverage exists for policy, validation, failure isolation, upload-before-submit, canonical payload fields, and submit blocking. |
-| FR-015 | `docs/tmp/jira-orchestration-inputs/MM-380-moonspec-orchestration-input.md`, `spec.md`, `tasks.md`, and this report | VERIFIED | MM-380 is preserved for downstream traceability. |
+| FR-015 | `spec.md` (Input), `spec.md`, `tasks.md`, and this report | VERIFIED | MM-380 is preserved for downstream traceability. |
 
 ## Acceptance Scenario Coverage
 

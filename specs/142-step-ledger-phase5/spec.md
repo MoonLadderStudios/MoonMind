@@ -7,7 +7,7 @@
 
 ## Source Document Requirements
 
-Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Tasks/StepReviewGateSystem.md`, `docs/UI/MissionControlArchitecture.md`, `docs/UI/MissionControlStyleGuide.md`, `docs/tmp/remaining-work/Temporal-WorkflowTypeCatalogAndLifecycle.md`
+Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Tasks/StepReviewGateSystem.md`, `docs/UI/MissionControlArchitecture.md`, `docs/UI/MissionControlStyleGuide.md`, `docs/Temporal/StepLedgerAndProgressModel.md`
 
 | ID | Source Section | Requirement Summary |
 | --- | --- | --- |

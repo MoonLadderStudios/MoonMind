@@ -1,10 +1,10 @@
 # Integrations Monitoring Design
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-IntegrationsMonitoringDesign.md`](../tmp/remaining-work/Temporal-IntegrationsMonitoringDesign.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
-Status: Draft (Temporal-first, migration-aware)  
-Owner: MoonMind Platform  
-Last updated: 2026-03-05  
+Status: Draft (Temporal-first, migration-aware) 
+Owner: MoonMind Platform 
+Last updated: 2026-03-05 
 Audience: backend, workflow, API, worker, and dashboard implementers
 
 ## 1) Purpose
@@ -67,29 +67,29 @@ This document does not:
 
 ## 4) Design principles
 
-1. **`MoonMind.Run` is the default orchestration anchor.**  
-   External monitoring usually belongs inside the main run lifecycle. Use a child workflow only when isolation, history pressure, or a materially different retry/failure domain justifies it.
+1. **`MoonMind.Run` is the default orchestration anchor.** 
+ External monitoring usually belongs inside the main run lifecycle. Use a child workflow only when isolation, history pressure, or a materially different retry/failure domain justifies it.
 
-2. **Workflow code stays deterministic.**  
-   Provider APIs, webhook verification, filesystem access, and artifact writes all happen in Activities or the API layer.
+2. **Workflow code stays deterministic.** 
+ Provider APIs, webhook verification, filesystem access, and artifact writes all happen in Activities or the API layer.
 
-3. **Callback-first, hybrid by default.**  
-   If a provider can call back, prefer callback handling and keep polling as a safety net unless reliability is already proven.
+3. **Callback-first, hybrid by default.** 
+ If a provider can call back, prefer callback handling and keep polling as a safety net unless reliability is already proven.
 
-4. **Artifacts hold large or volatile payloads.**  
-   Raw provider responses, webhook bodies, logs, and fetched outputs should not bloat workflow history.
+4. **Artifacts hold large or volatile payloads.** 
+ Raw provider responses, webhook bodies, logs, and fetched outputs should not bloat workflow history.
 
-5. **Use MoonMind's existing Temporal vocabulary.**  
-   Async external events enter workflows through the `ExternalEvent` signal. Visibility uses the canonical `mm_*` search attributes already defined by the lifecycle docs.
+5. **Use MoonMind's existing Temporal vocabulary.** 
+ Async external events enter workflows through the `ExternalEvent` signal. Visibility uses the canonical `mm_*` search attributes already defined by the lifecycle docs.
 
-6. **Idempotency must survive retries and Continue-As-New.**  
-   Use a stable `correlation_id`, not `run_id`, as the long-lived provider correlation handle.
+6. **Idempotency must survive retries and Continue-As-New.** 
+ Use a stable `correlation_id`, not `run_id`, as the long-lived provider correlation handle.
 
-7. **Keep worker topology minimal until operations prove otherwise.**  
-   Start on `mm.activity.integrations`. Split into provider-specific queues only for distinct secrets, quota isolation, or scaling pressure.
+7. **Keep worker topology minimal until operations prove otherwise.** 
+ Start on `mm.activity.integrations`. Split into provider-specific queues only for distinct secrets, quota isolation, or scaling pressure.
 
-8. **Provider specifics stay behind adapters.**  
-   Jules may be the first profile, but the contract must remain portable to other integrations.
+8. **Provider specifics stay behind adapters.** 
+ Jules may be the first profile, but the contract must remain portable to other integrations.
 
 ## 5) Canonical model: external operation state
 
@@ -97,16 +97,16 @@ Each monitored provider operation should map into a small workflow-side state ob
 
 ### Required workflow state
 
-* `integration_name`  
-  Example: `jules`
-* `correlation_id`  
-  Stable MoonMind-generated identifier that survives Continue-As-New
-* `external_operation_id`  
-  Provider handle such as a Jules `taskId`
-* `normalized_status`  
-  Portable MoonMind-facing status such as `queued | running | succeeded | failed | canceled | unknown`
-* `provider_status`  
-  Raw provider status token for debugging and display
+* `integration_name` 
+ Example: `jules`
+* `correlation_id` 
+ Stable MoonMind-generated identifier that survives Continue-As-New
+* `external_operation_id` 
+ Provider handle such as a Jules `taskId`
+* `normalized_status` 
+ Portable MoonMind-facing status such as `queued | running | succeeded | failed | canceled | unknown`
+* `provider_status` 
+ Raw provider status token for debugging and display
 * `started_at`
 * `last_observed_at`
 * `monitor_attempt_count`
@@ -246,14 +246,14 @@ For most integrations:
 
 1. `MoonMind.Run` executes `integration.<provider>.start`
 2. Workflow updates visibility:
-   * `mm_state = awaiting_external`
-   * optional `mm_integration = <provider>`
-   * memo summary reflects the wait condition
+ * `mm_state = awaiting_external`
+ * optional `mm_integration = <provider>`
+ * memo summary reflects the wait condition
 3. Workflow waits for:
-   * `ExternalEvent` signal
-   * polling timer
-   * user cancellation
-   * optional pause/resume controls
+ * `ExternalEvent` signal
+ * polling timer
+ * user cancellation
+ * optional pause/resume controls
 4. On terminal success, workflow runs `integration.<provider>.fetch_result`
 5. Workflow resumes execution or finalization
 
@@ -263,23 +263,23 @@ Use when the provider can reliably notify MoonMind.
 
 ```mermaid
 sequenceDiagram
-  participant W as MoonMind.Run
-  participant IA as integration.<provider>.start
-  participant X as External provider
-  participant API as MoonMind API
+ participant W as MoonMind.Run
+ participant IA as integration.<provider>.start
+ participant X as External provider
+ participant API as MoonMind API
 
-  W->>IA: start(correlation_id, input_refs, callback metadata)
-  IA->>X: create external operation
-  X-->>IA: external_operation_id
-  IA-->>W: operation id + callback support
+ W->>IA: start(correlation_id, input_refs, callback metadata)
+ IA->>X: create external operation
+ X-->>IA: external_operation_id
+ IA-->>W: operation id + callback support
 
-  Note over W: mm_state=awaiting_external
+ Note over W: mm_state=awaiting_external
 
-  X->>API: webhook / callback
-  API->>W: Signal ExternalEvent(...)
-  W->>W: validate correlation + dedupe
-  W->>IA: fetch_result(...)
-  IA-->>W: output_refs
+ X->>API: webhook / callback
+ API->>W: Signal ExternalEvent(...)
+ W->>W: validate correlation + dedupe
+ W->>IA: fetch_result(...)
+ IA-->>W: output_refs
 ```
 
 ### 7.3 Polling fallback path
@@ -577,7 +577,7 @@ At minimum, Jules result handling should produce:
 
 ## 15) Build order (reference)
 
-Integrations should land in an order that preserves **contract clarity**, **durable callback correlation**, **`ExternalEvent` handling**, **polling/CAN fallbacks**, **visibility `mm_*` updates**, and **tests** before optional reconciliation jobs. Detailed sequencing lives in [`docs/tmp/remaining-work/Temporal-IntegrationsMonitoringDesign.md`](../tmp/remaining-work/Temporal-IntegrationsMonitoringDesign.md).
+Integrations should land in an order that preserves **contract clarity**, **durable callback correlation**, **`ExternalEvent` handling**, **polling/CAN fallbacks**, **visibility `mm_*` updates**, and **tests** before optional reconciliation jobs. Detailed sequencing lives in .
 
 ## 16) Open decisions
 

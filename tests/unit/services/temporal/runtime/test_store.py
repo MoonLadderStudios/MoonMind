@@ -3,7 +3,6 @@ from datetime import UTC, datetime, timedelta
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
-
 def _make_record(run_id: str = "test-run-1", status: str = "running") -> ManagedRunRecord:
     return ManagedRunRecord(
         run_id=run_id,
@@ -12,7 +11,6 @@ def _make_record(run_id: str = "test-run-1", status: str = "running") -> Managed
         status=status,
         started_at=datetime.now(tz=UTC),
     )
-
 
 def test_save_and_load_round_trip(tmp_path):
     store = ManagedRunStore(tmp_path)
@@ -43,11 +41,9 @@ def test_save_and_load_round_trip(tmp_path):
     assert loaded.thread_id == "thread-2"
     assert loaded.active_turn_id == "turn-7"
 
-
 def test_load_missing_returns_none(tmp_path):
     store = ManagedRunStore(tmp_path)
     assert store.load("nonexistent") is None
-
 
 def test_update_status(tmp_path):
     store = ManagedRunStore(tmp_path)
@@ -61,12 +57,10 @@ def test_update_status(tmp_path):
     assert reloaded.status == "completed"
     assert reloaded.exit_code == 0
 
-
 def test_update_status_missing_raises(tmp_path):
     store = ManagedRunStore(tmp_path)
     with pytest.raises(ValueError, match="run record not found"):
         store.update_status("nonexistent", "failed")
-
 
 def test_list_active(tmp_path):
     store = ManagedRunStore(tmp_path)
@@ -77,7 +71,6 @@ def test_list_active(tmp_path):
     active = store.list_active()
     active_ids = {r.run_id for r in active}
     assert active_ids == {"run-1", "run-3"}
-
 
 def test_find_latest_for_workflow_prefers_newest_active_run(tmp_path):
     store = ManagedRunStore(tmp_path)
@@ -106,7 +99,6 @@ def test_find_latest_for_workflow_prefers_newest_active_run(tmp_path):
     assert found is not None
     assert found.run_id == "run-new-active"
 
-
 def test_find_latest_for_workflow_returns_latest_terminal_when_no_active_exists(tmp_path):
     store = ManagedRunStore(tmp_path)
     started_at = datetime.now(tz=UTC)
@@ -134,7 +126,6 @@ def test_find_latest_for_workflow_returns_latest_terminal_when_no_active_exists(
 
     assert found is not None
     assert found.run_id == "run-second"
-
 
 def test_find_latest_by_workflow_ids_returns_latest_for_each_requested_workflow(
     tmp_path,
@@ -180,7 +171,6 @@ def test_find_latest_by_workflow_ids_returns_latest_for_each_requested_workflow(
         "mm:wf-1": "run-wf-1-active",
         "mm:wf-2": "run-wf-2",
     }
-
 
 def test_path_traversal_rejected(tmp_path):
     store = ManagedRunStore(tmp_path)

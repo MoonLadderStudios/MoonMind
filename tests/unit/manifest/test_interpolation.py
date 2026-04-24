@@ -3,7 +3,6 @@ import pytest
 from moonmind.manifest import InterpolationError, interpolate
 from moonmind.schemas import Manifest
 
-
 def test_interpolate_success():
     yaml_str = """
 apiVersion: moonmind/v1
@@ -32,7 +31,6 @@ spec:
     assert init["url"] == "http://example.com"
     assert init["home"] == "/tmp"
 
-
 def test_interpolate_unresolved():
     yaml_str = """
 apiVersion: moonmind/v1
@@ -51,7 +49,6 @@ spec:
     manifest = Manifest.model_validate_yaml(yaml_str)
     with pytest.raises(InterpolationError):
         interpolate(manifest, {})
-
 
 def test_secretref_profile_provider_with_env_fallback():
     yaml_str = """
@@ -77,7 +74,6 @@ spec:
     init = result.spec.readers[0].init
     assert init["token"] == "profiletok"
 
-
 def test_secretref_env_provider():
     yaml_str = """
 apiVersion: moonmind/v1
@@ -99,7 +95,6 @@ spec:
     env = {"ENV_ONLY": "envtok"}
     result = interpolate(manifest, env)
     assert result.spec.readers[0].init["token"] == "envtok"
-
 
 def test_secretref_unsupported_provider():
     yaml_str = """

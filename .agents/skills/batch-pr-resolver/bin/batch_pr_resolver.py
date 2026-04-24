@@ -20,12 +20,10 @@ import httpx
 from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skill
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 
-
 logger = logging.getLogger(__name__)
 
 API_EXECUTIONS_ENDPOINT = "/api/executions"
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
-
 
 @dataclass
 class JobSubmission:
@@ -33,14 +31,12 @@ class JobSubmission:
     pr_number: int | str
     branch: str
 
-
 @dataclass(frozen=True)
 class RuntimeSelection:
     mode: str | None = None
     model: str | None = None
     effort: str | None = None
     provider_profile: str | None = None
-
 
 def _run_command(cmd: list[str]) -> str:
     """Run a command and return trimmed stdout text."""
@@ -60,7 +56,6 @@ def _run_command(cmd: list[str]) -> str:
         raise RuntimeError(f"command failed: {' '.join(cmd)}: {message}") from exc
     return (result.stdout or "").strip()
 
-
 def _normalize_repo(value: str | None) -> str | None:
     if not value:
         return None
@@ -70,7 +65,6 @@ def _normalize_repo(value: str | None) -> str | None:
     if re.fullmatch(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", candidate):
         return candidate
     return None
-
 
 def _infer_repo_from_remote() -> str | None:
     remote = _run_command(["git", "remote", "get-url", "origin"])
@@ -88,7 +82,6 @@ def _infer_repo_from_remote() -> str | None:
         return match.group("repo")
     return None
 
-
 def _repo_context_candidates(task_context_path: str | None = None) -> list[Path]:
     candidates: list[Path] = []
     if task_context_path:
@@ -101,7 +94,6 @@ def _repo_context_candidates(task_context_path: str | None = None) -> list[Path]
         [Path("../artifacts/task_context.json"), Path("artifacts/task_context.json")]
     )
     return candidates
-
 
 def _load_parent_repository(task_context_path: str | None = None) -> str | None:
     seen: set[str] = set()
@@ -124,7 +116,6 @@ def _load_parent_repository(task_context_path: str | None = None) -> str | None:
             return normalized
     return None
 
-
 def _resolve_repo(raw_repo: str | None, task_context_path: str | None = None) -> str:
     if raw_repo is not None:
         normalized = _normalize_repo(raw_repo)
@@ -146,7 +137,6 @@ def _resolve_repo(raw_repo: str | None, task_context_path: str | None = None) ->
             return normalized
     return ""
 
-
 def _run_pr_list(repo: str, state: str) -> list[dict[str, Any]]:
     raw = _run_command(
         [
@@ -167,7 +157,6 @@ def _run_pr_list(repo: str, state: str) -> list[dict[str, Any]]:
     if not isinstance(parsed, list):
         raise RuntimeError("Unexpected `gh pr list` payload shape.")
     return parsed
-
 
 def _is_local_head(pr: dict[str, Any], repo: str) -> bool:
     target_repo = repo.strip().lower()
@@ -209,13 +198,11 @@ def _is_local_head(pr: dict[str, Any], repo: str) -> bool:
 
     return False
 
-
 def _parse_repo_parts(repo: str) -> tuple[str, str]:
     parts = (repo or "").strip().split("/", 1)
     if len(parts) != 2:
         return "", ""
     return parts[0], parts[1]
-
 
 def _extract_branch(pr: dict[str, Any]) -> str:
     branch = str(pr.get("headRefName") or "").strip()
@@ -223,22 +210,18 @@ def _extract_branch(pr: dict[str, Any]) -> str:
         raise RuntimeError(f"PR #{pr.get('number')}: missing headRefName")
     return branch
 
-
 def _normalize_runtime_mode(value: str | None) -> str | None:
     candidate = str(value or "").strip().lower()
     return candidate if candidate else None
-
 
 def _runtime_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
 
-
 def _runtime_modes_match(left: str | None, right: str | None) -> bool:
     if not left or not right:
         return False
     return normalize_runtime_id(left) == normalize_runtime_id(right)
-
 
 def _session_artifact_spool_path() -> Path | None:
     raw = _runtime_text(os.getenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH"))
@@ -246,13 +229,11 @@ def _session_artifact_spool_path() -> Path | None:
         return None
     return Path(raw)
 
-
 def _resolve_path(path: Path) -> Path:
     try:
         return path.resolve(strict=False)
     except OSError:
         return path
-
 
 def _default_artifacts_dir_requested(raw_artifacts_dir: str) -> bool:
     raw = str(raw_artifacts_dir or "").strip()
@@ -261,13 +242,11 @@ def _default_artifacts_dir_requested(raw_artifacts_dir: str) -> bool:
     candidate = Path(raw)
     return not candidate.is_absolute() and candidate.parts == ("artifacts",)
 
-
 def _artifacts_dir_from_task_context_path(path: Path) -> Path | None:
     resolved = _resolve_path(path)
     if resolved.name == "task_context.json" and resolved.parent.name == "artifacts":
         return resolved.parent
     return None
-
 
 def _looks_like_parent_run_scope(value: str) -> bool:
     if re.fullmatch(
@@ -278,12 +257,10 @@ def _looks_like_parent_run_scope(value: str) -> bool:
         return True
     return bool(re.fullmatch(r"(?:mm:|task-)[A-Za-z0-9_.:-]+", value))
 
-
 def _stable_scope_from_path(path: Path) -> str:
     resolved = _resolve_path(path)
     digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:24]
     return f"path:{digest}"
-
 
 def _parent_run_scope_from_artifacts_dir(path: Path) -> str | None:
     resolved = _resolve_path(path)
@@ -296,7 +273,6 @@ def _parent_run_scope_from_artifacts_dir(path: Path) -> str | None:
     if _looks_like_parent_run_scope(parent_name):
         return parent_name
     return _stable_scope_from_path(resolved.parent)
-
 
 def _parent_run_scope(task_context_path: str | None = None) -> str | None:
     for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
@@ -313,7 +289,6 @@ def _parent_run_scope(task_context_path: str | None = None) -> str | None:
         if artifacts_dir is not None:
             return _parent_run_scope_from_artifacts_dir(artifacts_dir)
     return None
-
 
 def _resolve_artifacts_dir(
     raw_artifacts_dir: str,
@@ -333,7 +308,6 @@ def _resolve_artifacts_dir(
             return artifacts_dir
 
     return Path(raw or "artifacts")
-
 
 def _child_idempotency_key(
     *,
@@ -358,7 +332,6 @@ def _child_idempotency_key(
     if len(key) > IDEMPOTENCY_KEY_MAX_LENGTH:
         raise RuntimeError("generated child idempotency key exceeds storage limit")
     return key
-
 
 def _load_parent_runtime_selection(
     task_context_path: str | None = None,
@@ -420,7 +393,6 @@ def _load_parent_runtime_selection(
         )
     return None
 
-
 def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     inherited = _load_parent_runtime_selection(args.task_context_path)
     configured_default_mode = _normalize_runtime_mode(
@@ -460,7 +432,6 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
         effort=runtime_effort,
         provider_profile=runtime_provider_profile,
     )
-
 
 def _build_queue_request(
     repo: str,
@@ -533,7 +504,6 @@ def _build_queue_request(
 
     return request
 
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Submit pr-resolver tasks for every open PR in a repository."
@@ -604,7 +574,6 @@ def _parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
 def _read_worker_token() -> str | None:
     """Read the MoonMind worker token from env or token file."""
     token = str(os.getenv("MOONMIND_WORKER_TOKEN", "")).strip()
@@ -616,7 +585,6 @@ def _read_worker_token() -> str | None:
         if path.exists():
             return path.read_text(encoding="utf-8").strip() or None
     return None
-
 
 async def _submit_jobs_via_http(
     queue_requests: list[JobSubmission],
@@ -672,7 +640,6 @@ async def _submit_jobs_via_http(
                 )
     return created, errors
 
-
 async def _submit_jobs(
     queue_requests: list[JobSubmission],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -698,7 +665,6 @@ async def _submit_jobs(
         }
         for submission in queue_requests
     ]
-
 
 def _build_request_records(
     repo: str,
@@ -753,11 +719,9 @@ def _build_request_records(
 
     return queue_requests, skipped
 
-
 def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2))
-
 
 async def main() -> int:
     args = _parse_args()
@@ -806,7 +770,6 @@ async def main() -> int:
     if errors:
         return 1
     return 0
-
 
 if __name__ == "__main__":
     try:

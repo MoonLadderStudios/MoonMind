@@ -4,7 +4,7 @@
 
 ## Input
 
-Single-story runtime feature specification from `specs/186-merge-automation-waits/spec.md`, generated from Jira issue `MM-351` and the canonical preset brief in `docs/tmp/jira-orchestration-inputs/MM-351-moonspec-orchestration-input.md`.
+Single-story runtime feature specification from `specs/186-merge-automation-waits/spec.md`, generated from Jira issue `MM-351` and the canonical preset brief in `spec.md` (Input).
 
 ## Summary
 
@@ -36,7 +36,7 @@ Implement MM-351 by making `MoonMind.MergeAutomation` the canonical Temporal wor
 - IX Resilient by Default: PASS. Continue-As-New state preservation, duplicate resolver prevention, and deterministic blockers are required and tested.
 - X Continuous Improvement: PASS. Operator-visible blockers and summaries explain waiting and terminal outcomes.
 - XI Spec-Driven Development: PASS. Work follows `specs/186-merge-automation-waits/spec.md` and preserves MM-351 traceability.
-- XII Canonical Docs Separation: PASS. Runtime tracking stays under specs and docs/tmp; canonical docs only receive target-state naming alignment when touched.
+- XII Canonical Docs Separation: PASS. Runtime tracking stays under specs and local-only handoffs; canonical docs only receive target-state naming alignment when touched.
 - XIII Pre-Release Compatibility Policy: PASS. `MoonMind.MergeGate` is removed as a canonical internal contract instead of preserved as an alias.
 
 ## Project Structure

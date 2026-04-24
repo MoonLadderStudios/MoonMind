@@ -1,7 +1,6 @@
 import subprocess
 import sys
 
-
 def main():
     print("Stopping and removing Temporal-related services and volumes...")
 
@@ -16,7 +15,6 @@ def main():
     except subprocess.CalledProcessError as e:
         print(f"Error during teardown: {e.stderr}", file=sys.stderr)
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

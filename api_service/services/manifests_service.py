@@ -24,10 +24,8 @@ from moonmind.workflows.temporal import (
     start_manifest_child_runs,
 )
 
-
 class ManifestRegistryNotFoundError(RuntimeError):
     """Raised when a manifest registry entry does not exist."""
-
 
 @dataclass(slots=True)
 class ManifestRunSubmission:
@@ -41,7 +39,6 @@ class ManifestRunSubmission:
     workflow_type: str | None = None
     temporal_status: str | None = None
     manifest_artifact_ref: str | None = None
-
 
 class ManifestsService:
     """Orchestrates manifest registry CRUD and run submission."""
@@ -456,7 +453,6 @@ class ManifestsService:
         await self._session.commit()
         return record
 
-
 def _temporal_status(close_status: Any) -> str:
     if close_status is None:
         return "running"
@@ -466,7 +462,6 @@ def _temporal_status(close_status: Any) -> str:
     if normalized == "canceled":
         return "canceled"
     return "failed"
-
 
 __all__ = [
     "ManifestRegistryNotFoundError",

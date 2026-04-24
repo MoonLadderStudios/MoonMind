@@ -10,14 +10,12 @@ from moonmind.workflows.temporal.runtime.strategies.base import (
     ManagedRuntimeStrategy,
 )
 
-
 class TestABCCannotBeInstantiated:
     """DOC-REQ-001 / FR-001: ABC enforces abstract contract."""
 
     def test_abstract_class_raises(self) -> None:
         with pytest.raises(TypeError):
             ManagedRuntimeStrategy()  # type: ignore[abstract]
-
 
 class TestConcreteDefaults:
     """DOC-REQ-001 / FR-002, FR-003: concrete defaults are sensible."""

@@ -13,7 +13,6 @@ from api_service.main import startup_event
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @pytest.mark.asyncio
 async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"

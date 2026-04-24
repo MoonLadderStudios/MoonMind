@@ -7,7 +7,6 @@
 
 Additional constraints:
 
-
 Selected mode: runtime.
 Default to runtime mode and only use docs mode when explicitly requested.
 If the brief points at an implementation document, treat it as runtime source requirements.
@@ -17,7 +16,7 @@ Classify the input as a single-story feature request, broad technical or declara
 Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts."
 
 **Input Classification**: Single-story feature request.  
-**Canonical Jira Brief**: `docs/tmp/jira-orchestration-inputs/MM-372-moonspec-orchestration-input.md`
+**Canonical Jira Brief**: `spec.md` (Input)
 
 ## Original Jira Preset Brief
 

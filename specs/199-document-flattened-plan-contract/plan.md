@@ -17,7 +17,7 @@ Implement MM-386 by updating the canonical execution tool and plan contract so s
 **Target Platform**: MoonMind control plane, plan producers, and runtime plan executor contract
 **Project Type**: Runtime architecture contract documentation
 **Performance Goals**: No runtime performance impact; documentation must preserve a flat executor model without adding runtime preset expansion work
-**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `docs/tmp/` and `specs/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-386 in artifacts
+**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `local-only handoffs` and `specs/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-386 in artifacts
 **Scale/Scope**: One canonical documentation file plus MoonSpec artifacts for one independently testable story
 
 ## Constitution Check
@@ -33,7 +33,7 @@ Implement MM-386 by updating the canonical execution tool and plan contract so s
 - IX. Resilient by Default: PASS. Stored plans fail fast on unresolved include objects and avoid hidden runtime fallback behavior.
 - X. Continuous Improvement: PASS. Verification evidence will identify any remaining documentation or runtime-contract gaps.
 - XI. Spec-Driven Development: PASS. This one-story MoonSpec drives the change.
-- XII. Canonical Documentation Separation: PASS. Canonical docs describe desired state; migration or orchestration notes remain under `docs/tmp/` and `specs/`.
+- XII. Canonical Documentation Separation: PASS. Canonical docs describe desired state; migration or orchestration notes remain under `local-only handoffs` and `specs/`.
 - XIII. Pre-Release Compatibility Policy: PASS. No compatibility layer or semantic fallback is introduced.
 
 ## Project Structure
@@ -48,10 +48,10 @@ specs/199-document-flattened-plan-contract/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── flattened-plan-execution-contract.md
+│ └── flattened-plan-execution-contract.md
 ├── tasks.md
 └── checklists/
-    └── requirements.md
+ └── requirements.md
 ```
 
 ### Source Code (repository root)
@@ -59,11 +59,10 @@ specs/199-document-flattened-plan-contract/
 ```text
 docs/
 └── Tasks/
-    └── SkillAndPlanContracts.md
+ └── SkillAndPlanContracts.md
 
-docs/tmp/
 └── jira-orchestration-inputs/
-    └── MM-386-moonspec-orchestration-input.md
+ └── MM-386-moonspec-orchestration-input.md
 ```
 
 **Structure Decision**: Update `docs/Tasks/SkillAndPlanContracts.md` because MM-386 targets plan artifact shape, PlanDefinition production rules, validation behavior, DAG semantics, and execution invariants. Do not create replacement canonical docs or move volatile planning into `docs/`.

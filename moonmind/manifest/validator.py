@@ -20,7 +20,6 @@ from pydantic import ValidationError
 
 from moonmind.schemas.manifest_v0_models import ManifestV0
 
-
 # ---------------------------------------------------------------------------
 # Secret detection patterns (from DOC-REQ-007)
 # ---------------------------------------------------------------------------
@@ -35,7 +34,6 @@ _SECRET_PATTERNS = [
     re.compile(r"-----BEGIN\s+(RSA|EC|DSA|OPENSSH)\s+PRIVATE\s+KEY-----"),
 ]
 
-
 @dataclass
 class ValidationIssue:
     """A single validation finding."""
@@ -43,7 +41,6 @@ class ValidationIssue:
     severity: str  # ERROR, WARNING
     field: str
     message: str
-
 
 @dataclass
 class ValidationResult:
@@ -69,7 +66,6 @@ class ValidationResult:
             return f"✓ Manifest is valid{suffix}"
         errors = len(self.errors)
         return f"✗ Manifest has {errors} error{'s' if errors != 1 else ''}"
-
 
 def validate_manifest_file(path: str | Path) -> ValidationResult:
     """Validate a manifest YAML file at *path*.
@@ -97,7 +93,6 @@ def validate_manifest_file(path: str | Path) -> ValidationResult:
         )
 
     return validate_manifest_string(raw)
-
 
 def validate_manifest_string(content: str) -> ValidationResult:
     """Validate a manifest YAML string.
@@ -156,11 +151,9 @@ def validate_manifest_string(content: str) -> ValidationResult:
         issues=issues,
     )
 
-
 # ---------------------------------------------------------------------------
 # Internal checks
 # ---------------------------------------------------------------------------
-
 
 def _scan_secrets(
     obj: object, path: str, issues: List[ValidationIssue]
@@ -185,7 +178,6 @@ def _scan_secrets(
         for idx, val in enumerate(obj):
             _scan_secrets(val, f"{path}[{idx}]", issues)
 
-
 def _check_auth_presence(
     manifest: ManifestV0, issues: List[ValidationIssue]
 ) -> None:
@@ -205,7 +197,6 @@ def _check_auth_presence(
                     f"Ensure credentials are provided via ${{ENV}} references.",
                 )
             )
-
 
 def _check_security_policy(
     manifest: ManifestV0, issues: List[ValidationIssue]
@@ -252,7 +243,6 @@ def _check_security_policy(
                             )
                         )
 
-
 def _check_data_source_ids_unique(
     manifest: ManifestV0, issues: List[ValidationIssue]
 ) -> None:
@@ -270,7 +260,6 @@ def _check_data_source_ids_unique(
                 )
             )
 
-
 def _check_index_ids_unique(
     manifest: ManifestV0, issues: List[ValidationIssue]
 ) -> None:
@@ -287,7 +276,6 @@ def _check_index_ids_unique(
                     f"Duplicate index id '{idx_id}' (appears {count} times)",
                 )
             )
-
 
 def _check_retriever_ids_unique(
     manifest: ManifestV0, issues: List[ValidationIssue]

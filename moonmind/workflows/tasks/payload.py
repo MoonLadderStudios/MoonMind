@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-
 def _normalize_capabilities(values: list[Any] | None) -> list[str]:
     if not values:
         return []
@@ -18,7 +17,6 @@ def _normalize_capabilities(values: list[Any] | None) -> list[str]:
         seen.add(item)
         normalized.append(item)
     return normalized
-
 
 def _sanitize_template_application(entry: dict[str, Any]) -> dict[str, Any] | None:
     slug = str(entry.get("slug") or "").strip()
@@ -45,7 +43,6 @@ def _sanitize_template_application(entry: dict[str, Any]) -> dict[str, Any] | No
             str(item).strip() for item in step_ids if str(item).strip()
         ]
     return payload
-
 
 def compile_task_payload_templates(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize applied template metadata and merge derived capabilities."""
@@ -85,6 +82,5 @@ def compile_task_payload_templates(payload: dict[str, Any]) -> dict[str, Any]:
 
     compiled["task"] = task_payload
     return compiled
-
 
 __all__ = ["compile_task_payload_templates"]

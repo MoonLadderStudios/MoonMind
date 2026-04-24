@@ -31,7 +31,7 @@
 - [X] T010 Implement report bundle publication service method in `moonmind/workflows/temporal/artifacts.py` covering FR-001, FR-003, FR-004, FR-008, DESIGN-REQ-006, DESIGN-REQ-014, DESIGN-REQ-017, and DESIGN-REQ-018
 - [X] T011 Implement activity facade method for report bundle publication in `moonmind/workflows/temporal/artifacts.py` covering FR-001 and DESIGN-REQ-018
 - [X] T012 Run targeted unit tests using `./tools/test_unit.sh tests/unit/workflows/temporal/test_artifacts.py tests/unit/workflows/temporal/test_artifacts_activities.py tests/unit/workflows/temporal/test_activity_runtime.py`
-- [X] T013 Run traceability check for MM-461 and report bundle terms across specs, docs, runtime code, and tests using `rg -n "MM-461|report_bundle_v|ReportBundle|DESIGN-REQ-006|DESIGN-REQ-008|DESIGN-REQ-010|DESIGN-REQ-014|DESIGN-REQ-017|DESIGN-REQ-018" specs/227-report-bundle-workflow-publishing docs/tmp/jira-orchestration-inputs/MM-461-moonspec-orchestration-input.md moonmind/workflows/temporal tests/unit/workflows/temporal`
+- [X] T013 Run traceability check for MM-461 and report bundle terms across specs, docs, runtime code, and tests using `rg -n "MM-461|report_bundle_v|ReportBundle|DESIGN-REQ-006|DESIGN-REQ-008|DESIGN-REQ-010|DESIGN-REQ-014|DESIGN-REQ-017|DESIGN-REQ-018" specs/227-report-bundle-workflow-publishing moonmind/workflows/temporal tests/unit/workflows/temporal`
 
 ## Final Phase: Polish And Verification
 

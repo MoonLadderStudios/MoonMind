@@ -42,14 +42,12 @@ TOOL_FAILURE_CODES = frozenset(
 SKILL_FAILURE_CODES = TOOL_FAILURE_CODES  # backward-compat alias
 TEMPORAL_ARTIFACT_ID_PATTERN = re.compile(r"^art_[0-9A-HJKMNP-TV-Z]{26}$")
 
-
 class ContractValidationError(ValueError):
     """Raised when contract payloads fail validation."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
-
 
 def _ensure_positive_int(value: int, *, field_name: str) -> int:
     if value <= 0:
@@ -58,7 +56,6 @@ def _ensure_positive_int(value: int, *, field_name: str) -> int:
         )
     return value
 
-
 def _ensure_non_empty(value: str, *, field_name: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:
@@ -66,7 +63,6 @@ def _ensure_non_empty(value: str, *, field_name: str) -> str:
             "invalid_contract", f"{field_name} cannot be blank"
         )
     return normalized
-
 
 @dataclass(frozen=True, slots=True)
 class ArtifactRef:
@@ -124,7 +120,6 @@ class ArtifactRef:
             "metadata": dict(self.metadata),
         }
 
-
 @dataclass(frozen=True, slots=True)
 class ToolPolicyTimeouts:
     """Activity timeout policy defaults for one tool definition."""
@@ -153,7 +148,6 @@ class ToolPolicyTimeouts:
             "schedule_to_close_seconds": self.schedule_to_close_seconds,
         }
 
-
 @dataclass(frozen=True, slots=True)
 class ToolPolicyRetries:
     """Retry policy defaults for one tool definition."""
@@ -177,7 +171,6 @@ class ToolPolicyRetries:
             "non_retryable_error_codes": list(self.non_retryable_error_codes),
         }
 
-
 @dataclass(frozen=True, slots=True)
 class ToolPolicies:
     """Default execution policies for a tool definition."""
@@ -190,7 +183,6 @@ class ToolPolicies:
             "timeouts": self.timeouts.to_payload(),
             "retries": self.retries.to_payload(),
         }
-
 
 @dataclass(frozen=True, slots=True)
 class ToolExecutorBinding:
@@ -229,7 +221,6 @@ class ToolExecutorBinding:
         if self.explicit_binding_reason is not None:
             payload["binding_reason"] = self.explicit_binding_reason
         return payload
-
 
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
@@ -279,7 +270,6 @@ class ToolDefinition:
             "security": {"allowed_roles": list(self.allowed_roles)},
         }
 
-
 @dataclass(frozen=True, slots=True)
 class StepSkillSelectorExact:
     name: str
@@ -293,7 +283,6 @@ class StepSkillSelectorExact:
         if self.version is not None:
             payload["version"] = self.version
         return payload
-
 
 @dataclass(frozen=True, slots=True)
 class StepSkillSelectors:
@@ -321,7 +310,6 @@ class StepSkillSelectors:
         if self.materialization_mode is not None:
             payload["materializationMode"] = self.materialization_mode
         return payload
-
 
 @dataclass(frozen=True, slots=True)
 class StepSourceProvenance:
@@ -369,7 +357,6 @@ class StepSourceProvenance:
         if self.detached is not None:
             payload["detached"] = self.detached
         return payload
-
 
 @dataclass(frozen=True, slots=True)
 class Step:
@@ -435,7 +422,6 @@ class Step:
             payload["source"] = self.source.to_payload()
         return payload
 
-
 @dataclass(frozen=True, slots=True)
 class ToolFailure(Exception):
     """Normalized failure envelope for skill execution."""
@@ -460,7 +446,6 @@ class ToolFailure(Exception):
         if self.cause is not None:
             payload["cause"] = self.cause.to_payload()
         return payload
-
 
 @dataclass(frozen=True, slots=True)
 class ToolResult:
@@ -496,7 +481,6 @@ class ToolResult:
             ]
         return payload
 
-
 @dataclass(frozen=True, slots=True)
 class ActivityInvocationEnvelope:
     """Shared business envelope for one side-effecting activity request."""
@@ -530,7 +514,6 @@ class ActivityInvocationEnvelope:
             payload["idempotency_key"] = self.idempotency_key
         return payload
 
-
 @dataclass(frozen=True, slots=True)
 class CompactActivityResult:
     """Compact response envelope for activity outputs and summaries."""
@@ -561,7 +544,6 @@ class CompactActivityResult:
             payload["diagnostics_ref"] = self.diagnostics_ref
         return payload
 
-
 @dataclass(frozen=True, slots=True)
 class ActivityExecutionContext:
     """Runtime-derived Temporal metadata for one activity attempt."""
@@ -587,7 +569,6 @@ class ActivityExecutionContext:
             "attempt": self.attempt,
             "task_queue": self.task_queue,
         }
-
 
 @dataclass(frozen=True, slots=True)
 class ObservabilitySummary:
@@ -640,7 +621,6 @@ class ObservabilitySummary:
             payload["diagnostics_ref"] = self.diagnostics_ref
         return payload
 
-
 @dataclass(frozen=True, slots=True)
 class PlanRegistrySnapshot:
     """Pinned registry snapshot metadata referenced by a plan."""
@@ -674,7 +654,6 @@ class PlanRegistrySnapshot:
     def to_payload(self) -> dict[str, str]:
         return {"digest": self.digest, "artifact_ref": self.artifact_ref}
 
-
 @dataclass(frozen=True, slots=True)
 class PlanMetadata:
     """Human/context metadata for a plan artifact."""
@@ -698,7 +677,6 @@ class PlanMetadata:
             "created_at": self.created_at,
             "registry_snapshot": self.registry_snapshot.to_payload(),
         }
-
 
 @dataclass(frozen=True, slots=True)
 class ApprovalPolicyPolicy:
@@ -735,7 +713,6 @@ class ApprovalPolicyPolicy:
             "skip_tool_types": list(self.skip_tool_types),
         }
 
-
 @dataclass(frozen=True, slots=True)
 class PlanPolicy:
     """Execution policy for a plan."""
@@ -761,7 +738,6 @@ class PlanPolicy:
             payload["approval_policy"] = self.approval_policy.to_payload()
         return payload
 
-
 @dataclass(frozen=True, slots=True)
 class PlanEdge:
     """Directed dependency edge between plan nodes."""
@@ -775,7 +751,6 @@ class PlanEdge:
 
     def to_payload(self) -> dict[str, str]:
         return {"from": self.from_node, "to": self.to_node}
-
 
 @dataclass(frozen=True, slots=True)
 class PlanDefinition:
@@ -806,7 +781,6 @@ class PlanDefinition:
             "nodes": [node.to_payload() for node in self.nodes],
             "edges": [edge.to_payload() for edge in self.edges],
         }
-
 
 def _parse_step_source(payload: Mapping[str, Any]) -> StepSourceProvenance | None:
     source_raw = payload.get("source")
@@ -861,13 +835,11 @@ def _parse_step_source(payload: Mapping[str, Any]) -> StepSourceProvenance | Non
         detached=detached_raw if detached_raw is not None else None,
     )
 
-
 def _looks_like_unresolved_preset_include(payload: Mapping[str, Any]) -> bool:
     marker = str(payload.get("kind") or payload.get("type") or "").strip().lower()
     if marker in {"include", "preset_include", "preset-include"}:
         return True
     return "include" in payload and not any(key in payload for key in ("tool", "skill"))
-
 
 def parse_step(payload: Mapping[str, Any]) -> Step:
     """Parse one plan node payload into ``Step``."""
@@ -966,7 +938,6 @@ def parse_step(payload: Mapping[str, Any]) -> Step:
         source=_parse_step_source(payload),
     )
 
-
 def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
     """Parse untrusted plan payload into a validated ``PlanDefinition``."""
 
@@ -1058,7 +1029,6 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
         nodes=nodes,
         edges=tuple(parsed_edges),
     )
-
 
 def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
     """Parse and validate a registry tool definition payload."""
@@ -1171,7 +1141,6 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
         ),
         allowed_roles=allowed_roles,
     )
-
 
 # Backward-compatible aliases — existing consumers can keep importing Skill*
 SkillPolicyTimeouts = ToolPolicyTimeouts

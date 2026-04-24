@@ -16,7 +16,6 @@ from moonmind.workflows.automation import models
 
 _REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
-
 def _validate_repository_slug(value: str) -> str:
     """Ensure repository strings avoid traversal sequences like ``../``."""
 
@@ -31,7 +30,6 @@ def _validate_repository_slug(value: str) -> str:
             )
 
     return value
-
 
 class WorkflowTaskStateModel(BaseModel):
     """Schema for individual workflow task states."""
@@ -50,7 +48,6 @@ class WorkflowTaskStateModel(BaseModel):
     created_at: datetime | None = Field(None, alias="createdAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
 
-
 class WorkflowTaskSummaryModel(BaseModel):
     """Schema capturing the latest state per workflow task."""
 
@@ -62,7 +59,6 @@ class WorkflowTaskSummaryModel(BaseModel):
     started_at: datetime | None = Field(None, alias="startedAt")
     finished_at: datetime | None = Field(None, alias="finishedAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
-
 
 class WorkflowArtifactModel(BaseModel):
     """Schema for stored workflow artifacts."""
@@ -77,7 +73,6 @@ class WorkflowArtifactModel(BaseModel):
     digest: Optional[str] = Field(None, alias="digest")
     created_at: datetime | None = Field(None, alias="createdAt")
 
-
 class WorkflowCredentialAuditModel(BaseModel):
     """Schema describing credential validation results."""
 
@@ -87,7 +82,6 @@ class WorkflowCredentialAuditModel(BaseModel):
     github_status: models.GitHubCredentialStatus = Field(..., alias="githubStatus")
     checked_at: datetime | None = Field(None, alias="checkedAt")
     notes: Optional[str] = Field(None, alias="notes")
-
 
 class WorkflowRunModel(BaseModel):
     """Full representation of a workflow run exposed via the API."""
@@ -140,7 +134,6 @@ class WorkflowRunModel(BaseModel):
             return value
         return _validate_repository_slug(value)
 
-
 class CreateWorkflowRunRequest(BaseModel):
     """Request payload for triggering a workflow run."""
 
@@ -160,7 +153,6 @@ class CreateWorkflowRunRequest(BaseModel):
     def _validate_repository(cls, value: str) -> str:
         return _validate_repository_slug(value)
 
-
 class WorkflowRunCollectionResponse(BaseModel):
     """Envelope returned when listing workflow runs."""
 
@@ -169,7 +161,6 @@ class WorkflowRunCollectionResponse(BaseModel):
     items: list[WorkflowRunModel] = Field(default_factory=list, alias="items")
     next_cursor: Optional[str] = Field(None, alias="nextCursor")
 
-
 class WorkflowTaskStateListResponse(BaseModel):
     """Envelope returned when listing task states for a workflow run."""
 
@@ -177,7 +168,6 @@ class WorkflowTaskStateListResponse(BaseModel):
 
     run_id: UUID = Field(..., alias="runId")
     tasks: list[WorkflowTaskStateModel] = Field(default_factory=list, alias="tasks")
-
 
 class WorkflowArtifactListResponse(BaseModel):
     """Envelope returned when listing artifacts for a workflow run."""
@@ -188,7 +178,6 @@ class WorkflowArtifactListResponse(BaseModel):
     artifacts: list[WorkflowArtifactModel] = Field(
         default_factory=list, alias="artifacts"
     )
-
 
 class CodexShardHealthModel(BaseModel):
     """Schema describing the health of a Codex shard and its auth volume."""
@@ -220,14 +209,12 @@ class CodexShardHealthModel(BaseModel):
         None, alias="latestPreflightCheckedAt"
     )
 
-
 class CodexShardListResponse(BaseModel):
     """Envelope returned when listing Codex shard health."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     shards: list[CodexShardHealthModel] = Field(default_factory=list, alias="shards")
-
 
 class CodexPreflightRequest(BaseModel):
     """Request payload accepted by the Codex pre-flight endpoint."""
@@ -236,7 +223,6 @@ class CodexPreflightRequest(BaseModel):
 
     affinity_key: Optional[str] = Field(None, alias="affinityKey")
     force_refresh: bool = Field(False, alias="forceRefresh")
-
 
 class CodexPreflightResultModel(BaseModel):
     """Response returned from the Codex pre-flight endpoint."""
@@ -250,13 +236,11 @@ class CodexPreflightResultModel(BaseModel):
     checked_at: datetime | None = Field(None, alias="checkedAt")
     message: Optional[str] = Field(None, alias="message")
 
-
 class RetryWorkflowMode(str, enum.Enum):
     """Retry semantics supported by the workflow API."""
 
     RESUME_FAILED_TASK = "resume_failed_task"
     RESTART_FROM_DISCOVERY = "restart_from_discovery"
-
 
 class RetryWorkflowRunRequest(BaseModel):
     """Request payload for retrying a failed workflow run."""
@@ -265,7 +249,6 @@ class RetryWorkflowRunRequest(BaseModel):
 
     mode: RetryWorkflowMode = Field(RetryWorkflowMode.RESUME_FAILED_TASK, alias="mode")
     notes: Optional[str] = Field(None, alias="notes", max_length=1024)
-
 
 class AutomationPhaseState(BaseModel):
     """Schema describing a single workflow automation phase execution."""
@@ -287,7 +270,6 @@ class AutomationPhaseState(BaseModel):
     used_fallback: bool | None = None
     shadow_mode_requested: bool | None = None
 
-
 class AutomationArtifactSummary(BaseModel):
     """Summary information for an automation artifact."""
 
@@ -302,12 +284,10 @@ class AutomationArtifactSummary(BaseModel):
     expires_at: datetime | None = None
     source_phase: models.AutomationPhase | None = None
 
-
 class AutomationArtifactDetail(AutomationArtifactSummary):
     """Extended artifact detail including download metadata."""
 
     download_url: str | None = None
-
 
 class AutomationRunResponse(BaseModel):
     """Acknowledgement returned when a run is accepted."""
@@ -317,7 +297,6 @@ class AutomationRunResponse(BaseModel):
     run_id: UUID
     status: models.AutomationRunStatus
     accepted_at: datetime | None = None
-
 
 class AutomationRunDetail(BaseModel):
     """Detailed representation of a workflow automation run."""
@@ -333,7 +312,6 @@ class AutomationRunDetail(BaseModel):
     completed_at: datetime | None = None
     phases: list[AutomationPhaseState] = Field(default_factory=list)
     artifacts: list[AutomationArtifactSummary] = Field(default_factory=list)
-
 
 __all__ = [
     "WorkflowRunModel",

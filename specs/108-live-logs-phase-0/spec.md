@@ -3,48 +3,48 @@
 **Feature Branch**: `108-live-logs-phase-0`  
 **Created**: 2026-03-28  
 **Status**: Draft  
-**Input**: User description: "Fully implement Phase 0 from docs/tmp/009-LiveLogsPlan.md"
+**Input**: User description: "Fully implement Phase 0 from docs/ManagedAgents/LiveLogs.md"
 
 ## Source Document Requirements
 
 - **DOC-REQ-001**:  
-  - Source: `docs/tmp/009-LiveLogsPlan.md` (Phase 0 -> "Confirm the canonical implementation target is docs/ManagedAgents/LiveLogs.md.")  
+  - Source: `docs/ManagedAgents/LiveLogs.md` (Phase 0 -> "Confirm the canonical implementation target is docs/ManagedAgents/LiveLogs.md.")  
   - Summary: The documentation `docs/ManagedAgents/LiveLogs.md` is acknowledged as the primary architectural target.
   
 - **DOC-REQ-002**:  
-  - Source: `docs/tmp/009-LiveLogsPlan.md` (Phase 0 -> "Inventory current managed-run logging, transcript, tmate, web_ro, and terminal-embed code paths.")  
+  - Source: `docs/ManagedAgents/LiveLogs.md` (Phase 0 -> "Inventory current managed-run logging, transcript, tmate, web_ro, and terminal-embed code paths.")  
   - Summary: Identify all active code paths relying on legacy execution and observability relays (tmate, web-ro, transcripts).
   
 - **DOC-REQ-003**:  
-  - Source: `docs/tmp/009-LiveLogsPlan.md` (Phase 0 -> "Identify all UI surfaces that currently present "Live Output", embedded terminals, or session-viewer semantics.")  
+  - Source: `docs/ManagedAgents/LiveLogs.md` (Phase 0 -> "Identify all UI surfaces that currently present "Live Output", embedded terminals, or session-viewer semantics.")  
   - Summary: Inventory frontend surfaces tied to terminal-like run output embedding.
   
 - **DOC-REQ-004**:  
-  - Source: `docs/tmp/009-LiveLogsPlan.md` (Phase 0 -> "Identify current data models and DTOs that store log/session metadata for managed runs.")  
+  - Source: `docs/ManagedAgents/LiveLogs.md` (Phase 0 -> "Identify current data models and DTOs that store log/session metadata for managed runs.")  
   - Summary: Locate all data models responsible for mapping sessions and run logs.
   
 - **DOC-REQ-005**:  
-  - Source: `docs/tmp/009-LiveLogsPlan.md` (Phase 0 -> "Identify current artifact-writing paths for stdout, stderr, transcripts, and diagnostics.")  
+  - Source: `docs/ManagedAgents/LiveLogs.md` (Phase 0 -> "Identify current artifact-writing paths for stdout, stderr, transcripts, and diagnostics.")  
   - Summary: Identify areas that spool process output asynchronously for retention.
 
 - **DOC-REQ-006**:  
-  - Source: `docs/tmp/009-LiveLogsPlan.md` (Phase 0 -> "Decide where the new observability service layer will live in the backend.")  
+  - Source: `docs/ManagedAgents/LiveLogs.md` (Phase 0 -> "Decide where the new observability service layer will live in the backend.")  
   - Summary: Make a concrete placement decision for new MoonMind-owned backend log distribution logic.
 
 - **DOC-REQ-007**:  
-  - Source: `docs/tmp/009-LiveLogsPlan.md` (Phase 0 -> "Define feature flags for incremental rollout, including a logStreamingEnabled flag.")  
+  - Source: `docs/ManagedAgents/LiveLogs.md` (Phase 0 -> "Define feature flags for incremental rollout, including a logStreamingEnabled flag.")  
   - Summary: Ensure incremental progression is modeled via feature flags (`logStreamingEnabled`).
 
 - **DOC-REQ-008**:  
-  - Source: `docs/tmp/009-LiveLogsPlan.md` (Phase 0 -> "Define the migration boundary between legacy session-based observability and the new MoonMind-owned log model.")  
+  - Source: `docs/ManagedAgents/LiveLogs.md` (Phase 0 -> "Define the migration boundary between legacy session-based observability and the new MoonMind-owned log model.")  
   - Summary: Plan exactly where and how older runs downgrade dynamically.
 
 - **DOC-REQ-009**:  
-  - Source: `docs/tmp/009-LiveLogsPlan.md` (Phase 0 -> "Update any stale docs/specs that still describe tmate web_ro as the primary live-log path.")  
+  - Source: `docs/ManagedAgents/LiveLogs.md` (Phase 0 -> "Update any stale docs/specs that still describe tmate web_ro as the primary live-log path.")  
   - Summary: Scrub codebase specification docs of legacy assumptions.
 
 - **DOC-REQ-010**:  
-  - Source: `docs/tmp/009-LiveLogsPlan.md` (Phase 0 -> "Create implementation issues/tasks for each phase in this plan.")  
+  - Source: `docs/ManagedAgents/LiveLogs.md` (Phase 0 -> "Create implementation issues/tasks for each phase in this plan.")  
   - Summary: Ensure execution scope produces tasks representing downstream phases.
 
 ## User Scenarios & Testing *(mandatory)*

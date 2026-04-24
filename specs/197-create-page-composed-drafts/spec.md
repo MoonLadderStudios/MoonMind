@@ -10,7 +10,7 @@ Default to runtime mode and only use docs mode when explicitly requested.
 If the brief points at an implementation document, treat it as runtime source requirements.
 Source design path (optional): .
 
-Canonical Jira Brief: `docs/tmp/jira-orchestration-inputs/MM-384-moonspec-orchestration-input.md`
+Canonical Jira Brief: `spec.md` (Input)
 
 # MM-384 MoonSpec Orchestration Input
 

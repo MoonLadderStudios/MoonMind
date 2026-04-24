@@ -20,7 +20,6 @@ _PREFLIGHT_OUTPUT_ERROR_MARKERS = re.compile(
     re.IGNORECASE,
 )
 
-
 @dataclass(slots=True)
 class CodexPreflightResult:
     """Outcome of the Codex login status verification."""
@@ -32,7 +31,6 @@ class CodexPreflightResult:
     stdout: Optional[str] = None
     stderr: Optional[str] = None
 
-
 def _summarize_preflight_output(stdout: str, stderr: str) -> Optional[str]:
     """Return a one-line summary extracted from preflight output."""
 
@@ -41,7 +39,6 @@ def _summarize_preflight_output(stdout: str, stderr: str) -> Optional[str]:
         if stripped:
             return stripped[:200]
     return None
-
 
 def _run_codex_preflight_check(
     *, timeout: int = 60, volume_name: str | None = None
@@ -185,13 +182,11 @@ def _run_codex_preflight_check(
         stderr=stderr,
     )
 
-
 def run_codex_preflight_check(
     *, volume_name: str | None = None, timeout: int = 60
 ) -> CodexPreflightResult:
     """Public wrapper to execute the Codex login status check."""
 
     return _run_codex_preflight_check(timeout=timeout, volume_name=volume_name)
-
 
 __all__ = ["CodexPreflightResult", "run_codex_preflight_check"]

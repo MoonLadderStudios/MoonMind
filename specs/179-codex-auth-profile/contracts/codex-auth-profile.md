@@ -2,7 +2,7 @@
 
 ## Story Boundary
 
-Source story: `STORY-001` from `docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json`.
+Source story: `STORY-001` from `artifacts/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthterminal-md/stories.json`.
 
 ## Inputs
 

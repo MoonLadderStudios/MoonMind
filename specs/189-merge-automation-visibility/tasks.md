@@ -13,7 +13,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-354 input and source design traceability in `docs/tmp/jira-orchestration-inputs/MM-354-moonspec-orchestration-input.md` and `specs/189-merge-automation-visibility/spec.md`.
+- [X] T001 Confirm MM-354 input and source design traceability in `spec.md` (Input) and `specs/189-merge-automation-visibility/spec.md`.
 - [X] T002 Confirm existing workflow and UI files that own merge automation visibility: `moonmind/workflows/temporal/workflows/merge_automation.py`, `moonmind/workflows/temporal/workflows/run.py`, and `frontend/src/entrypoints/task-detail.tsx`.
 
 ## Phase 2: Foundational

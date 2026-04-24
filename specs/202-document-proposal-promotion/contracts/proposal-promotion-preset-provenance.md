@@ -19,5 +19,5 @@ This contract defines the observable Task Proposal System behavior required by M
 
 ```bash
 rg -n "preset-derived metadata|authoredPresets|live preset catalog|live re-expansion|refresh-latest|flattened-only|fabricate.*binding|preset provenance" docs/Tasks/TaskProposalSystem.md
-rg -n "MM-388|DESIGN-REQ-015|DESIGN-REQ-019|DESIGN-REQ-023|DESIGN-REQ-025|DESIGN-REQ-026" specs/202-document-proposal-promotion docs/tmp/jira-orchestration-inputs/MM-388-moonspec-orchestration-input.md
+rg -n "MM-388|DESIGN-REQ-015|DESIGN-REQ-019|DESIGN-REQ-023|DESIGN-REQ-025|DESIGN-REQ-026" specs/202-document-proposal-promotion
 ```

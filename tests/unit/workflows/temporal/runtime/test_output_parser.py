@@ -21,7 +21,6 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     CodexCliStrategy,
 )
 
-
 class TestPlainTextOutputParser:
     def test_parse_stream_chunk_returns_empty(self) -> None:
         parser = PlainTextOutputParser()
@@ -49,7 +48,6 @@ class TestPlainTextOutputParser:
         parser = PlainTextOutputParser()
         result = parser.parse("output", "just some debug info")
         assert result.error_messages == []
-
 
 class TestDefaultStrategyClassifyExit:
     def test_gemini_success(self) -> None:
@@ -83,7 +81,6 @@ class TestDefaultStrategyClassifyExit:
         assert status == "completed"
         assert failure is None
 
-
 class TestDefaultOutputParser:
     def test_gemini_returns_plain_text(self) -> None:
         s = GeminiCliStrategy()
@@ -96,7 +93,6 @@ class TestDefaultOutputParser:
     def test_codex_returns_codex_cli_output_parser(self) -> None:
         s = CodexCliStrategy()
         assert isinstance(s.create_output_parser(), CodexCliOutputParser)
-
 
 class TestCodexCliOutputParser:
     def test_parse_detects_managed_runtime_blocker_message(self) -> None:
@@ -162,7 +158,6 @@ class TestCodexCliOutputParser:
         with patch.object(PlainTextOutputParser, "parse", return_value=base):
             result = parser.parse("stdout", "stderr")
         assert result == base
-
 
 class TestGeminiCliOutputParser:
     def test_parse_stream_chunk_detects_capacity_rate_limit(self) -> None:

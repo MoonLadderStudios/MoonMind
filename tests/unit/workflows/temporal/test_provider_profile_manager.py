@@ -20,11 +20,9 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     ProfileSlotState,
 )
 
-
 # ---------------------------------------------------------------------------
 # ProfileSlotState tests
 # ---------------------------------------------------------------------------
-
 
 class TestProfileSlotState:
     def test_available_slots_enabled(self):
@@ -148,11 +146,9 @@ class TestProfileSlotState:
         assert d["current_leases"] == ["wf1"]
         assert d["cooldown_until"] == "2099-01-01T00:00:00+00:00"
 
-
 # ---------------------------------------------------------------------------
 # Workflow helper tests (no Temporal runtime needed)
 # ---------------------------------------------------------------------------
-
 
 class TestProviderProfileManagerHelpers:
     def _make_workflow(self) -> MoonMindProviderProfileManagerWorkflow:
@@ -1262,15 +1258,12 @@ class TestProviderProfileManagerHelpers:
             wf._clear_expired_cooldowns()
         assert wf._profiles["p1"].cooldown_until is None
 
-
 # ---------------------------------------------------------------------------
 # Workflow registration sanity
 # ---------------------------------------------------------------------------
 
-
 def test_workflow_name():
     assert WORKFLOW_NAME == "MoonMind.ProviderProfileManager"
-
 
 def test_verify_pending_requests_patch_id():
     assert (
@@ -1278,30 +1271,25 @@ def test_verify_pending_requests_patch_id():
         == "provider-profile-manager-verify-pending-requests-v1"
     )
 
-
 def test_registered_workflow_types():
     from moonmind.workflows.temporal.workers import REGISTERED_TEMPORAL_WORKFLOW_TYPES
 
     assert "MoonMind.ProviderProfileManager" in REGISTERED_TEMPORAL_WORKFLOW_TYPES
 
-
 # ---------------------------------------------------------------------------
 # DB model sanity
 # ---------------------------------------------------------------------------
-
 
 def test_temporal_workflow_type_enum():
     from api_service.db.models import TemporalWorkflowType
 
     assert TemporalWorkflowType.PROVIDER_PROFILE_MANAGER.value == "MoonMind.ProviderProfileManager"
 
-
 def test_provider_profile_credential_source_enum():
     from api_service.db.models import ProviderCredentialSource
 
     assert ProviderCredentialSource.OAUTH_VOLUME.value == "oauth_volume"
     assert ProviderCredentialSource.SECRET_REF.value == "secret_ref"
-
 
 def test_managed_agent_rate_limit_policy_enum():
     from api_service.db.models import ManagedAgentRateLimitPolicy
@@ -1310,11 +1298,9 @@ def test_managed_agent_rate_limit_policy_enum():
     assert ManagedAgentRateLimitPolicy.QUEUE.value == "queue"
     assert ManagedAgentRateLimitPolicy.FAIL_FAST.value == "fail_fast"
 
-
 # ---------------------------------------------------------------------------
 # Activity catalog entry
 # ---------------------------------------------------------------------------
-
 
 def test_provider_profile_list_activity_in_catalog():
     from moonmind.workflows.temporal.activity_catalog import (
@@ -1326,7 +1312,6 @@ def test_provider_profile_list_activity_in_catalog():
     assert route.task_queue == "mm.activity.artifacts"
     assert route.fleet == "artifacts"
 
-
 def test_provider_profile_sync_slot_leases_in_catalog():
     from moonmind.workflows.temporal.activity_catalog import (
         build_default_activity_catalog,
@@ -1336,7 +1321,6 @@ def test_provider_profile_sync_slot_leases_in_catalog():
     route = catalog.resolve_activity("provider_profile.sync_slot_leases")
     assert route.task_queue == "mm.activity.artifacts"
     assert route.fleet == "artifacts"
-
 
 def test_provider_profile_manager_state_activity_in_catalog():
     from moonmind.workflows.temporal.activity_catalog import (
@@ -1348,7 +1332,6 @@ def test_provider_profile_manager_state_activity_in_catalog():
     assert route.task_queue == "mm.activity.artifacts"
     assert route.fleet == "artifacts"
 
-
 def test_provider_profile_manager_state_runtime_binding():
     from moonmind.workflows.temporal.activity_runtime import _ACTIVITY_HANDLER_ATTRS
 
@@ -1357,11 +1340,9 @@ def test_provider_profile_manager_state_runtime_binding():
         "provider_profile_manager_state",
     )
 
-
 # ---------------------------------------------------------------------------
 # DB Lease Sync: workflow-side behavior tests
 # ---------------------------------------------------------------------------
-
 
 class TestDBLeaseSync:
     """Tests for DB lease sync logic in the ProviderProfileManager workflow."""
@@ -1500,11 +1481,9 @@ class TestDBLeaseSync:
         )
         assert DB_LEASE_PERSISTENCE_PATCH == "provider-profile-manager-db-lease-persistence-v1"
 
-
 # ---------------------------------------------------------------------------
 # Activity-side: provider_profile_sync_slot_leases
 # ---------------------------------------------------------------------------
-
 
 class TestProviderProfileSyncSlotLeasesActivity:
     """Tests for the sync_slot_leases activity logic (without real DB)."""
@@ -1563,19 +1542,16 @@ class TestProviderProfileSyncSlotLeasesActivity:
         assert '"granted_at"' in source
         assert "row.granted_at" in source
 
-
 def test_verify_lease_holders_exists():
     """Ensure the workflow exposes the expected API."""
     assert hasattr(MoonMindProviderProfileManagerWorkflow, "_verify_lease_holders")
     verify_lease_holders = getattr(MoonMindProviderProfileManagerWorkflow, "_verify_lease_holders")
     assert callable(verify_lease_holders)
 
-
 def test_provider_profile_manager_state_activity_exists():
     from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 
     assert hasattr(TemporalArtifactActivities, "provider_profile_manager_state")
-
 
 @pytest.mark.asyncio
 async def test_provider_profile_manager_state_returns_compact_running_snapshot(
@@ -1629,7 +1605,6 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         "requester_pending": True,
     }
     assert "state" not in result
-
 
 @pytest.mark.asyncio
 async def test_provider_profile_manager_state_checks_status_before_query(

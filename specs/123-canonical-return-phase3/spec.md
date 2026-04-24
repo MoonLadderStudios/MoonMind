@@ -3,7 +3,7 @@
 **Feature Branch**: `123-canonical-return-phase3`
 **Created**: 2026-04-02
 **Status**: Draft
-**Source**: `docs/tmp/010-CanonicalReturnPlan.md` Phase 3
+**Source**: `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md` Phase 3
 
 ## User Scenarios & Testing *(mandatory)*
 

@@ -53,7 +53,7 @@
 
 ### Implementation for User Story 3
 
-- [X] T009 [US3] Retire completed step-ledger rollout bullets from the relevant `docs/tmp/remaining-work/*.md` tracker files.
+- [X] T009 [US3] Retire completed step-ledger rollout bullets from the relevant `docs/Temporal/StepLedgerAndProgressModel.md*.md` tracker files.
 
 ---
 

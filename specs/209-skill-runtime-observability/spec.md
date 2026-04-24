@@ -7,7 +7,6 @@
 
 Additional constraints:
 
-
 Selected mode: runtime.
 Default to runtime mode and only use docs mode when explicitly requested.
 If the brief points at an implementation document, treat it as runtime source requirements.
@@ -16,7 +15,7 @@ Source design path (optional): .
 Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
 Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
 
-Canonical Jira brief: docs/tmp/jira-orchestration-inputs/MM-408-moonspec-orchestration-input.md
+Canonical Jira brief:
 
 # MM-408 MoonSpec Orchestration Input
 
@@ -49,7 +48,7 @@ Source Reference
 - Source Sections:
   - AgentSkillSystem §18-§23
   - SkillInjection §15, §18-§19
-  - docs/tmp/004-AgentSkillSystemPlan.md §2-§5
+  - docs/Tasks/SkillAndPlanContracts.md §2-§5
 - Coverage IDs:
   - DESIGN-REQ-010
   - DESIGN-REQ-018
@@ -93,7 +92,7 @@ Dependencies
 - Input type: single-story feature request.
 - Selected mode: runtime.
 - Resume decision: no existing `MM-408` Moon Spec feature directory was present, so orchestration starts at `moonspec-specify`.
-- Source handling: the historical `docs/Tools/SkillSystem.md` source reference is absent in this checkout; the current canonical source is `docs/Tasks/AgentSkillSystem.md`, with `docs/Tools/SkillInjection.md` and `docs/tmp/004-AgentSkillSystemPlan.md` providing the referenced implementation-plan context.
+- Source handling: the historical `docs/Tools/SkillSystem.md` source reference is absent in this checkout; the current canonical source is `docs/Tasks/AgentSkillSystem.md`, with `docs/Tools/SkillInjection.md` and `docs/Tasks/SkillAndPlanContracts.md` providing the referenced implementation-plan context.
 
 ## User Story - Inspect Skill Runtime Evidence
 
@@ -130,7 +129,7 @@ Dependencies
 
 - **DESIGN-REQ-010**: Source `docs/Tasks/AgentSkillSystem.md` sections 18 through 18.3. Operator-facing submit, detail, and debug surfaces SHOULD expose selected skill sets, source provenance, materialization mode, resolved snapshot ID, selected versions, canonical path summary, and artifact refs appropriate to the surface. Scope: in scope. Maps to FR-001, FR-002, FR-003, FR-004, and FR-005.
 - **DESIGN-REQ-018**: Source `docs/Tools/SkillInjection.md` sections 15 and 18. Active projection observability SHOULD record resolved snapshot ref, backing path, visible path, projected skill names and versions, read-only state, collision or projection failures, and the activation summary while preserving manifest or prompt-index artifact discipline. Scope: in scope. Maps to FR-002, FR-003, FR-004, FR-006, and FR-007.
-- **DESIGN-REQ-019**: Source `docs/Tasks/AgentSkillSystem.md` sections 19 through 19.4 and `docs/tmp/004-AgentSkillSystemPlan.md` sections 2 through 5. Proposal, schedule, rerun, retry, and replay semantics MUST preserve skill intent or the original resolved snapshot explicitly; reruns and continuations must not silently re-resolve latest skills. Scope: in scope. Maps to FR-008, FR-009, and FR-010.
+- **DESIGN-REQ-019**: Source `docs/Tasks/AgentSkillSystem.md` sections 19 through 19.4 and `docs/Tasks/SkillAndPlanContracts.md` sections 2 through 5. Proposal, schedule, rerun, retry, and replay semantics MUST preserve skill intent or the original resolved snapshot explicitly; reruns and continuations must not silently re-resolve latest skills. Scope: in scope. Maps to FR-008, FR-009, and FR-010.
 - **DESIGN-REQ-020**: Source `docs/Tools/SkillInjection.md` section 19. Changes to skill injection SHOULD include real adapter or activity boundary tests covering single-skill projection, multi-skill projection, read-only materialization, activation-summary injection, collision failure, exact-snapshot replay, and repo-skill input without in-place mutation. Scope: in scope. Maps to FR-011 and FR-012.
 
 ## Requirements *(mandatory)*

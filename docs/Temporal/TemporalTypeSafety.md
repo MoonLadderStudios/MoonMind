@@ -1,8 +1,8 @@
 # Temporal Type Safety
 
-**Implementation tracking:** [`docs/tmp/017-TemporalTypeSafety.md`](../tmp/017-TemporalTypeSafety.md)  
-**Status:** **Desired state / normative target**  
-**Last updated:** **2026-04-14**  
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
+**Status:** **Desired state / normative target** 
+**Last updated:** **2026-04-14** 
 **Scope:** Defines how MoonMind represents Temporal workflow, activity, signal, update, query, and Continue-As-New payloads so reliability comes from explicit contracts instead of ad hoc dictionaries.
 
 ---
@@ -327,4 +327,4 @@ The following modules are the expected homes for this policy:
 - `moonmind/workflows/temporal/workflows/agent_session.py`
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
 
-Implementation tracking for work that still lags this target state belongs in `docs/tmp/017-TemporalTypeSafety.md`, not in this document.
+Implementation tracking for work that still lags this target state belongs in `docs/Temporal/TemporalTypeSafety.md`, not in this document.

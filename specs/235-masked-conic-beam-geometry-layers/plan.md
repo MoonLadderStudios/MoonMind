@@ -1,6 +1,6 @@
 # Implementation Plan: Masked Conic Beam Geometry and Layers
 
-**Branch**: `235-masked-conic-beam-geometry-layers` | **Date**: 2026-04-22 | **Spec**: [spec.md](./spec.md)  
+**Branch**: `235-masked-conic-beam-geometry-layers` | **Date**: 2026-04-22 | **Spec**: [spec.md](./spec.md) 
 **Input**: Single-story feature specification from `specs/235-masked-conic-beam-geometry-layers/spec.md`
 
 ## Summary
@@ -35,15 +35,15 @@ Implement MM-466 by completing the MaskedConicBorderBeam geometry contract intro
 
 ## Technical Context
 
-**Language/Version**: TypeScript with React 19.2  
-**Primary Dependencies**: React, existing Mission Control CSS, Vitest, Testing Library, PostCSS for CSS inspection  
-**Storage**: N/A  
-**Unit Testing**: `npm run ui:test -- frontend/src/components/MaskedConicBorderBeam.test.tsx` and final `./tools/test_unit.sh`  
-**Integration Testing**: Component-level UI integration in Vitest by rendering the React surface around arbitrary child content; no service/database integration is required for this presentation-only runtime UI story  
-**Target Platform**: Mission Control web UI  
-**Project Type**: Frontend component/runtime UI  
-**Performance Goals**: Keep animation on composited rotation/angle-style CSS with bounded decorative layers and modest glow blur  
-**Constraints**: Border-only visibility, no content-area animation, no spinner/shimmer/completion treatment, no new package dependency  
+**Language/Version**: TypeScript with React 19.2 
+**Primary Dependencies**: React, existing Mission Control CSS, Vitest, Testing Library, PostCSS for CSS inspection 
+**Storage**: N/A 
+**Unit Testing**: `npm run ui:test -- frontend/src/components/MaskedConicBorderBeam.test.tsx` and final `./tools/test_unit.sh` 
+**Integration Testing**: Component-level UI integration in Vitest by rendering the React surface around arbitrary child content; no service/database integration is required for this presentation-only runtime UI story 
+**Target Platform**: Mission Control web UI 
+**Project Type**: Frontend component/runtime UI 
+**Performance Goals**: Keep animation on composited rotation/angle-style CSS with bounded decorative layers and modest glow blur 
+**Constraints**: Border-only visibility, no content-area animation, no spinner/shimmer/completion treatment, no new package dependency 
 **Scale/Scope**: One existing reusable component, one shared stylesheet, one focused test file, one verification report
 
 ## Constitution Check
@@ -59,7 +59,7 @@ Implement MM-466 by completing the MaskedConicBorderBeam geometry contract intro
 - IX. Resilient by Default: PASS - no workflow or persisted payload changes.
 - X. Facilitate Continuous Improvement: PASS - evidence captured in tests and verification.
 - XI. Spec-Driven Development: PASS - plan follows the MM-466 spec.
-- XII. Canonical Documentation Separation: PASS - temporary orchestration artifacts remain under `specs/` and `docs/tmp/`.
+- XII. Canonical Documentation Separation: PASS - temporary orchestration artifacts remain under `specs/` and `local-only handoffs`.
 - XIII. Pre-release Compatibility Policy: PASS - no compatibility aliases or hidden transforms.
 
 ## Project Structure
@@ -74,7 +74,7 @@ specs/235-masked-conic-beam-geometry-layers/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── masked-conic-beam-geometry.md
+│ └── masked-conic-beam-geometry.md
 ├── tasks.md
 └── verification.md
 ```

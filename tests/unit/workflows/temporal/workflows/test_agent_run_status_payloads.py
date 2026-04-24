@@ -5,7 +5,6 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     _request_reserves_slot_for_immediate_followup,
 )
 
-
 def test_coerce_external_status_payload_accepts_canonical_shape() -> None:
     workflow_instance = MoonMindAgentRun()
 
@@ -22,7 +21,6 @@ def test_coerce_external_status_payload_accepts_canonical_shape() -> None:
     assert status.run_id == "jules-task-001"
     assert status.agent_id == "jules"
     assert status.status == RunStatus.running
-
 
 def test_request_reserves_slot_for_immediate_followup_reads_moonmind_metadata() -> None:
     request = AgentExecutionRequest(
@@ -43,7 +41,6 @@ def test_request_reserves_slot_for_immediate_followup_reads_moonmind_metadata() 
 
     assert _request_reserves_slot_for_immediate_followup(request)
 
-
 def test_request_reserves_slot_for_immediate_followup_ignores_legacy_metadata() -> None:
     request = AgentExecutionRequest(
         agentKind="managed",
@@ -63,12 +60,10 @@ def test_request_reserves_slot_for_immediate_followup_ignores_legacy_metadata() 
 
     assert not _request_reserves_slot_for_immediate_followup(request)
 
-
 def test_managed_runtime_id_normalizes_aliases() -> None:
     assert MoonMindAgentRun._managed_runtime_id("Codex-CLI") == "codex_cli"
     assert MoonMindAgentRun._managed_runtime_id("claude") == "claude_code"
     assert MoonMindAgentRun._managed_runtime_id("CLAUDE_CODE") == "claude_code"
-
 
 def test_coerce_external_status_payload_maps_integration_shape() -> None:
     workflow_instance = MoonMindAgentRun()
@@ -93,7 +88,6 @@ def test_coerce_external_status_payload_maps_integration_shape() -> None:
     assert status.metadata.get("externalUrl") == "https://jules.google.com/session/jules-task-002"
     assert status.metadata.get("terminal") is False
 
-
 def test_coerce_external_status_payload_maps_terminal_success() -> None:
     workflow_instance = MoonMindAgentRun()
 
@@ -111,7 +105,6 @@ def test_coerce_external_status_payload_maps_terminal_success() -> None:
     assert status.run_id == "jules-task-003"
     assert status.status == RunStatus.completed
     assert status.metadata.get("terminal") is True
-
 
 def test_coerce_external_status_payload_handles_canonical_payload_with_provider_status() -> None:
     workflow_instance = MoonMindAgentRun()
@@ -136,7 +129,6 @@ def test_coerce_external_status_payload_handles_canonical_payload_with_provider_
     assert status.metadata.get("providerStatus") == "QUEUED"
     assert status.metadata.get("normalizedStatus") == "queued"
 
-
 def test_coerce_external_start_status_maps_unknown_to_awaiting_callback() -> None:
     workflow_instance = MoonMindAgentRun()
 
@@ -150,7 +142,6 @@ def test_coerce_external_start_status_maps_unknown_to_awaiting_callback() -> Non
 
     assert status == RunStatus.awaiting_callback
     assert normalized == "unknown"
-
 
 def test_coerce_external_start_status_maps_succeeded_to_completed() -> None:
     workflow_instance = MoonMindAgentRun()

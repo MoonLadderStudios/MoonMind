@@ -19,7 +19,6 @@ from tests.helpers.codex_session_runtime import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 def test_runtime_send_turn_recovers_task_complete_message_from_rollout_transcript(
     tmp_path: Path,
 ) -> None:
@@ -110,7 +109,6 @@ def test_runtime_send_turn_recovers_task_complete_message_from_rollout_transcrip
     assert handle.metadata["lastAssistantText"] == (
         "Recovered from durable task_complete event"
     )
-
 
 def test_runtime_launch_session_seeds_auth_volume_and_uses_per_run_codex_home(
     tmp_path: Path,

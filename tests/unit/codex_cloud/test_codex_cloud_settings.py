@@ -7,7 +7,6 @@ from moonmind.codex_cloud.settings import (
     is_codex_cloud_enabled,
 )
 
-
 class TestCodexCloudGate:
     def test_disabled_when_nothing_set(self):
         gate = build_codex_cloud_gate(env={})
@@ -61,7 +60,6 @@ class TestCodexCloudGate:
                 }
             )
             assert gate.enabled is True, f"Expected enabled for value={value!r}"
-
 
 class TestIsCodexCloudEnabled:
     def test_returns_false_for_empty_env(self):

@@ -2,7 +2,7 @@
 
 **Feature**: Preset Application and Reapply State  
 **Spec**: `/work/agent_jobs/mm:c1902fbb-1092-45ac-85e9-9373b56217d4/repo/specs/196-preset-application-reapply-state/spec.md`  
-**Original Request Source**: `spec.md` `Input` preserving Jira issue `MM-378` and `docs/tmp/jira-orchestration-inputs/MM-378-moonspec-orchestration-input.md`  
+**Original Request Source**: `spec.md` `Input` preserving Jira issue `MM-378` and `spec.md` (Input)  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH
 
@@ -51,7 +51,7 @@
 | DESIGN-REQ-022 | Objective resolution tests | VERIFIED | Preset objective text remains first objective source. |
 | DESIGN-REQ-025 | Objective attachment payload and detachment tests | VERIFIED | Objective attachments submit at task level; template-bound step attachment edits detach. |
 | Constitution XI | `spec.md`, `plan.md`, `tasks.md`, implementation tests | VERIFIED | Change followed one-story Moon Spec lifecycle. |
-| Constitution XII | `docs/tmp/jira-orchestration-inputs/MM-378-moonspec-orchestration-input.md`, `specs/196-preset-application-reapply-state/` | VERIFIED | Jira input and implementation evidence stay outside canonical desired-state docs. |
+| Constitution XII | `spec.md` (Input), `specs/196-preset-application-reapply-state/` | VERIFIED | Jira input and implementation evidence stay outside canonical desired-state docs. |
 
 ## Original Request Alignment
 

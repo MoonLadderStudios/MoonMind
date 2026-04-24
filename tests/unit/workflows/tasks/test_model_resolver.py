@@ -18,11 +18,9 @@ import pytest
 from moonmind.workflows.tasks.model_resolver import resolve_effective_model
 from moonmind.workflows.tasks.runtime_defaults import normalize_runtime_id
 
-
 # ---------------------------------------------------------------------------
 # normalize_runtime_id
 # ---------------------------------------------------------------------------
-
 
 class TestNormalizeRuntimeId:
     def test_codex_cli_passthrough(self):
@@ -54,11 +52,9 @@ class TestNormalizeRuntimeId:
         result = normalize_runtime_id(None)
         assert result  # should return *some* string, not explode
 
-
 # ---------------------------------------------------------------------------
 # resolve_effective_model: task_override
 # ---------------------------------------------------------------------------
-
 
 class TestResolveEffectiveModelTaskOverride:
     def test_explicit_model_wins_over_everything(self):
@@ -91,11 +87,9 @@ class TestResolveEffectiveModelTaskOverride:
         # Falls through to runtime default since profile is None
         assert source == "runtime_default"
 
-
 # ---------------------------------------------------------------------------
 # resolve_effective_model: provider_profile_default
 # ---------------------------------------------------------------------------
-
 
 class TestResolveEffectiveModelProfileDefault:
     def test_profile_default_overrides_runtime_default(self):
@@ -129,11 +123,9 @@ class TestResolveEffectiveModelProfileDefault:
         )
         assert source == "runtime_default"
 
-
 # ---------------------------------------------------------------------------
 # resolve_effective_model: runtime_default
 # ---------------------------------------------------------------------------
-
 
 class TestResolveEffectiveModelRuntimeDefault:
     @pytest.mark.parametrize(
@@ -175,11 +167,9 @@ class TestResolveEffectiveModelRuntimeDefault:
         assert model_alias == model_canonical
         assert source == "runtime_default"
 
-
 # ---------------------------------------------------------------------------
 # resolve_effective_model: none
 # ---------------------------------------------------------------------------
-
 
 class TestResolveEffectiveModelNone:
     def test_unknown_runtime_no_profile_returns_none(self):
@@ -200,11 +190,9 @@ class TestResolveEffectiveModelNone:
         assert model == "gpt-5.4"
         assert source == "runtime_default"
 
-
 # ---------------------------------------------------------------------------
 # Precedence ordering (all three levels)
 # ---------------------------------------------------------------------------
-
 
 class TestPrecedenceOrder:
     """Ensure the exact precedence: task > profile > runtime."""

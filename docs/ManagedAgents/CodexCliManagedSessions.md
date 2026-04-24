@@ -24,7 +24,7 @@ It freezes the smallest supported session-plane shape before broader implementat
 - no Claude/Gemini managed session plane
 - no generic runtime marketplace
 
-This document defines the target contract only. Rollout sequencing and implementation backlog belong in specs or `docs/tmp/`.
+This document defines the target contract only. Rollout sequencing and implementation backlog belong in specs or `local-only handoffs`.
 
 ## 2. Layering
 

@@ -27,7 +27,7 @@
 | FR-007 | `frontend/src/vite-config.test.ts` lines 34-50; `git diff --name-only -- api_service/static/task_dashboard/dist` produced no changed files | VERIFIED | Generated dist boundary is covered and no dist assets were modified. |
 | FR-008 | MM-430 test names in `mission-control.test.tsx` and `vite-config.test.ts` | VERIFIED | Automated verification covers semantic class, modifier, token, theme, Tailwind, and generated-boundary invariants. |
 | FR-009 | Full focused UI regression command passed for Mission Control entry, task create, task detail, task list, and Vite config tests | VERIFIED | Existing Mission Control behavior remains covered. |
-| FR-010 | `docs/tmp/jira-orchestration-inputs/MM-430-moonspec-orchestration-input.md`; `spec.md`; `tasks.md`; this verification report | VERIFIED | MM-430 and the trusted Jira preset brief are preserved. |
+| FR-010 | `spec.md` (Input); `spec.md`; `tasks.md`; this verification report | VERIFIED | MM-430 and the trusted Jira preset brief are preserved. |
 
 ## Acceptance Scenario Coverage
 
@@ -49,7 +49,7 @@
 | DESIGN-REQ-025 | `mission-control.test.tsx` lines 399-441; `vite-config.test.ts` lines 21-32 | VERIFIED | Token-first theming and source scanning are covered. |
 | DESIGN-REQ-026 | `vite-config.test.ts` lines 34-50; no generated dist changes | VERIFIED | Canonical source and generated artifact boundary is covered. |
 | Constitution XI | `spec.md`, `plan.md`, `tasks.md`, and this report | VERIFIED | Spec-driven workflow artifacts exist and trace to MM-430. |
-| Constitution XII | `docs/tmp/jira-orchestration-inputs/MM-430-moonspec-orchestration-input.md` and `specs/225-preserve-styling-invariants/` | VERIFIED | Jira orchestration input remains under `docs/tmp`; feature artifacts remain under `specs/`. |
+| Constitution XII | `spec.md` (Input) and `specs/225-preserve-styling-invariants/` | VERIFIED | Jira orchestration input remains under `local-only handoffs`; feature artifacts remain under `specs/`. |
 
 ## Original Request Alignment
 

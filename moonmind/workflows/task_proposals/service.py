@@ -54,18 +54,14 @@ _PROPOSAL_RUNTIME_MODE_ALIASES = {
     "claude_code": "claude",
 }
 
-
 class TaskProposalError(RuntimeError):
     """Base error for task proposal operations."""
-
 
 class TaskProposalValidationError(TaskProposalError):
     """Raised when proposal input values are invalid."""
 
-
 class TaskProposalStatusError(TaskProposalError):
     """Raised when proposal state does not permit the requested action."""
-
 
 class TaskProposalService:
     """Application service that validates proposal actions."""
@@ -120,8 +116,6 @@ class TaskProposalService:
             if token:
                 normalized.add(token)
         return normalized
-
-
 
     @staticmethod
     def _clean_str(value: object) -> str:

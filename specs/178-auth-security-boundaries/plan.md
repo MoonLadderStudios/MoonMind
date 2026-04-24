@@ -9,15 +9,15 @@ Enforce and verify OAuth credential security boundaries for MM-335 by tightening
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK boundary models, existing Docker workload launcher abstractions  
-**Storage**: Existing PostgreSQL/SQLite-compatible tables for provider profiles and OAuth sessions; no new persistent storage  
-**Unit Testing**: `pytest` via `./tools/test_unit.sh`  
-**Integration Testing**: Existing pytest integration tier via `./tools/test_integration.sh` for compose-backed checks when needed  
-**Target Platform**: Linux containers under Docker Compose and MoonMind managed-agent worker containers  
-**Project Type**: Web-service control plane plus workflow/runtime support libraries  
-**Performance Goals**: Redaction and authorization checks must be bounded, deterministic, and negligible compared with existing API and workload launch latency  
-**Constraints**: Do not expose raw credentials, raw auth-volume listings, token values, environment dumps, or private key blocks in persisted or browser-visible output; do not introduce compatibility aliases for internal contracts; do not add new credential-requiring workload profiles  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK boundary models, existing Docker workload launcher abstractions 
+**Storage**: Existing PostgreSQL/SQLite-compatible tables for provider profiles and OAuth sessions; no new persistent storage 
+**Unit Testing**: `pytest` via `./tools/test_unit.sh` 
+**Integration Testing**: Existing pytest integration tier via `./tools/test_integration.sh` for compose-backed checks when needed 
+**Target Platform**: Linux containers under Docker Compose and MoonMind managed-agent worker containers 
+**Project Type**: Web-service control plane plus workflow/runtime support libraries 
+**Performance Goals**: Redaction and authorization checks must be bounded, deterministic, and negligible compared with existing API and workload launch latency 
+**Constraints**: Do not expose raw credentials, raw auth-volume listings, token values, environment dumps, or private key blocks in persisted or browser-visible output; do not introduce compatibility aliases for internal contracts; do not add new credential-requiring workload profiles 
 **Scale/Scope**: One security-boundary story covering API surfaces, workload launch contracts, artifact publication, and verification evidence for MM-335
 
 ## Constitution Check
@@ -35,7 +35,7 @@ Enforce and verify OAuth credential security boundaries for MM-335 by tightening
 - **IX. Resilient by Default**: PASS. Fail-closed workload auth behavior and sanitized diagnostics improve recovery safety.
 - **X. Continuous Improvement**: PASS. Verification produces deterministic evidence and final artifacts.
 - **XI. Spec-Driven Development**: PASS. This plan follows the single-story spec.
-- **XII. Canonical Documentation Separation**: PASS. Implementation notes remain under `specs/` and `docs/tmp`; canonical docs are not rewritten.
+- **XII. Canonical Documentation Separation**: PASS. Implementation notes remain under `specs/` and `local-only handoffs`; canonical docs are not rewritten.
 - **XIII. Pre-Release Compatibility Policy**: PASS. No compatibility aliases or hidden fallbacks are introduced.
 
 ## Project Structure
@@ -50,9 +50,9 @@ specs/178-auth-security-boundaries/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── auth-security-boundaries.md
+│ └── auth-security-boundaries.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 
@@ -61,26 +61,26 @@ specs/178-auth-security-boundaries/
 ```text
 api_service/
 ├── api/
-│   └── routers/
-│       ├── oauth_sessions.py
-│       └── provider_profiles.py
+│ └── routers/
+│ ├── oauth_sessions.py
+│ └── provider_profiles.py
 └── api/schemas_oauth_sessions.py
 
 moonmind/
 ├── schemas/
-│   └── workload_models.py
+│ └── workload_models.py
 └── workloads/
-    └── docker_launcher.py
+ └── docker_launcher.py
 
 tests/
 ├── unit/
-│   ├── api_service/api/routers/test_oauth_sessions.py
-│   ├── api_service/api/routers/test_provider_profiles.py
-│   └── workloads/
-│       ├── test_docker_workload_launcher.py
-│       └── test_workload_contract.py
+│ ├── api_service/api/routers/test_oauth_sessions.py
+│ ├── api_service/api/routers/test_provider_profiles.py
+│ └── workloads/
+│ ├── test_docker_workload_launcher.py
+│ └── test_workload_contract.py
 └── integration/
-    └── services/temporal/workflows/
+ └── services/temporal/workflows/
 ```
 
 **Structure Decision**: Use existing API router tests for provider-profile and OAuth browser/control surfaces, existing workload model tests for fail-closed auth-volume validation, and Docker launcher unit tests for sanitized artifact/result publication. Add integration coverage only if a changed workflow/activity boundary is touched.

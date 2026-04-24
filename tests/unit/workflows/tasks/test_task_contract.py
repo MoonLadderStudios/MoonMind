@@ -10,7 +10,6 @@ from moonmind.workflows.tasks.task_contract import (
     TaskStepSpec,
 )
 
-
 def test_task_skills_accepts_valid_properties() -> None:
     """T001: Ensure task.skills structures successfully marshal."""
     raw_payload = {
@@ -38,7 +37,6 @@ def test_task_skills_accepts_valid_properties() -> None:
     assert spec.skills.include[1].version is None
     assert spec.skills.exclude == ["legacy"]
     assert spec.skills.materialization_mode == "hybrid"
-
 
 def test_task_skills_rejects_invalid_values() -> None:
     """T001: Assert structure validation handles edge cases for skills."""
@@ -86,7 +84,6 @@ def test_task_step_spec_with_step_skills() -> None:
     assert spec.skills.exclude == ["bad-skill"]
     assert spec.skills.materialization_mode == "none"
 
-
 def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> None:
     task_skills = TaskExecutionSpec.model_validate(
         {
@@ -130,10 +127,8 @@ def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> 
         "remove-me",
     ]
 
-
 def test_effective_task_step_skills_returns_none_for_empty_intent() -> None:
     assert build_effective_task_skill_selectors(None, None) is None
-
 
 def test_task_input_attachments_preserve_objective_and_step_targets() -> None:
     """MM-367: objective and step refs remain distinct canonical fields."""
@@ -186,7 +181,6 @@ def test_task_input_attachments_preserve_objective_and_step_targets() -> None:
             "sizeBytes": 20,
         }
     ]
-
 
 def test_task_input_attachments_accept_field_name_keys() -> None:
     """MM-375: pre-validation preserves populate_by_name attachment payloads."""
@@ -241,7 +235,6 @@ def test_task_input_attachments_accept_field_name_keys() -> None:
         }
     ]
 
-
 @pytest.mark.parametrize(
     "attachment",
     [
@@ -274,7 +267,6 @@ def test_task_input_attachments_reject_incomplete_or_embedded_data(
             }
         )
 
-
 def test_task_input_attachment_validation_error_carries_objective_diagnostic() -> None:
     """MM-375: validation failures expose target-aware diagnostic evidence."""
 
@@ -306,7 +298,6 @@ def test_task_input_attachment_validation_error_carries_objective_diagnostic() -
         "error": "inputAttachments entries must not include embedded image data",
     }
 
-
 def test_task_input_attachment_validation_diagnostic_accepts_field_names() -> None:
     """MM-375: field-name payloads still produce canonical diagnostic keys."""
 
@@ -337,7 +328,6 @@ def test_task_input_attachment_validation_diagnostic_accepts_field_names() -> No
         "sizeBytes": 10,
         "error": "inputAttachments entries must not include embedded image data",
     }
-
 
 def test_task_input_attachment_validation_error_carries_step_diagnostic() -> None:
     """MM-375: step validation failures identify the affected step target."""
@@ -376,7 +366,6 @@ def test_task_input_attachment_validation_error_carries_step_diagnostic() -> Non
         "sizeBytes": 10,
         "error": "inputAttachments entries must not include embedded image data",
     }
-
 
 def test_task_input_attachments_must_be_lists() -> None:
     """MM-367: canonical attachment fields are arrays."""

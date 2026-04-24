@@ -12,7 +12,6 @@ from moonmind.workflows.skills.workspace_links import (
     validate_shared_skill_links,
 )
 
-
 def test_ensure_shared_skill_links_points_both_adapters_to_same_path(tmp_path):
     run_root = tmp_path / "runs" / "run-1"
     skills_active = run_root / "skills_active"
@@ -32,7 +31,6 @@ def test_ensure_shared_skill_links_points_both_adapters_to_same_path(tmp_path):
     assert links.gemini_skills_path.resolve() == skills_active.resolve()
     validate_shared_skill_links(links)
 
-
 def test_ensure_shared_skill_links_rejects_existing_non_symlink(tmp_path):
     run_root = tmp_path / "runs" / "run-2"
     skills_active = run_root / "skills_active"
@@ -42,7 +40,6 @@ def test_ensure_shared_skill_links_rejects_existing_non_symlink(tmp_path):
 
     with pytest.raises(SkillWorkspaceError, match="non-symlink"):
         ensure_shared_skill_links(run_root=run_root, skills_active_path=skills_active)
-
 
 def test_ensure_shared_skill_links_can_treat_gemini_link_as_optional(tmp_path):
     run_root = tmp_path / "runs" / "run-optional-gemini"
@@ -63,7 +60,6 @@ def test_ensure_shared_skill_links_can_treat_gemini_link_as_optional(tmp_path):
     assert links.gemini_skills_error is not None
     assert "existing non-symlink path present" in links.gemini_skills_error
     validate_shared_skill_links(links, require_gemini_link=False)
-
 
 def test_validate_shared_skill_links_detects_target_drift(tmp_path):
     run_root = tmp_path / "runs" / "run-3"

@@ -39,15 +39,15 @@ Implement and verify MM-448 runtime launch behavior for Claude Code from the `cl
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 with Pydantic v2 models  
-**Primary Dependencies**: Existing managed runtime launcher, provider profile materializer, secret-ref parser/resolver, pytest async tests  
-**Storage**: Existing Managed Secret storage referenced by `db://` secret refs; no new persistent storage  
-**Unit Testing**: Focused pytest through `./tools/test_unit.sh tests/unit/workflows/adapters/test_materializer.py tests/unit/services/temporal/runtime/test_launcher.py`; final unit verification through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` when feasible  
-**Integration Testing**: Boundary-style unit tests cover the launcher/materializer contract without real Claude Code or external credentials; no compose-backed `integration_ci` test is required because no Temporal workflow payload shape or database schema changes are planned  
-**Target Platform**: MoonMind managed runtime launch on Linux containers  
-**Project Type**: Backend runtime orchestration boundary  
-**Performance Goals**: Secret-ref launch materialization adds only existing per-profile secret resolution work and no background polling  
-**Constraints**: Do not expose raw Anthropic token values in durable payloads, logs, diagnostics, artifacts, or failure summaries; do not introduce a new runtime selector; preserve existing provider-profile materialization behavior for non-Claude profiles  
+**Language/Version**: Python 3.12 with Pydantic v2 models 
+**Primary Dependencies**: Existing managed runtime launcher, provider profile materializer, secret-ref parser/resolver, pytest async tests 
+**Storage**: Existing Managed Secret storage referenced by `db://` secret refs; no new persistent storage 
+**Unit Testing**: Focused pytest through `./tools/test_unit.sh tests/unit/workflows/adapters/test_materializer.py tests/unit/services/temporal/runtime/test_launcher.py`; final unit verification through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` when feasible 
+**Integration Testing**: Boundary-style unit tests cover the launcher/materializer contract without real Claude Code or external credentials; no compose-backed `integration_ci` test is required because no Temporal workflow payload shape or database schema changes are planned 
+**Target Platform**: MoonMind managed runtime launch on Linux containers 
+**Project Type**: Backend runtime orchestration boundary 
+**Performance Goals**: Secret-ref launch materialization adds only existing per-profile secret resolution work and no background polling 
+**Constraints**: Do not expose raw Anthropic token values in durable payloads, logs, diagnostics, artifacts, or failure summaries; do not introduce a new runtime selector; preserve existing provider-profile materialization behavior for non-Claude profiles 
 **Scale/Scope**: One `claude_anthropic` profile launch path, materializer behavior, launcher boundary tests, and traceability artifacts
 
 ## Constitution Check
@@ -65,7 +65,7 @@ Implement and verify MM-448 runtime launch behavior for Claude Code from the `cl
 - IX. Resilient by Default: PASS. Missing or unreadable secret bindings fail before process start with secret-free output.
 - X. Continuous Improvement: PASS. Evidence is captured in MoonSpec artifacts and tests.
 - XI. Spec-Driven Development: PASS. This plan starts from the MM-448 single-story spec.
-- XII. Canonical Documentation Separation: PASS. Implementation notes remain under `specs/` and `docs/tmp`; canonical docs are not rewritten.
+- XII. Canonical Documentation Separation: PASS. Implementation notes remain under `specs/` and `local-only handoffs`; canonical docs are not rewritten.
 - XIII. Pre-Release Velocity: PASS. No compatibility alias or translation layer is introduced.
 
 ## Project Structure
@@ -80,9 +80,9 @@ specs/238-launch-claude-secret-ref/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── claude-secret-ref-launch.md
+│ └── claude-secret-ref-launch.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 
@@ -103,7 +103,6 @@ tests/unit/workflows/adapters/
 tests/unit/services/temporal/runtime/
 └── test_launcher.py
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-448-moonspec-orchestration-input.md
 ```
 

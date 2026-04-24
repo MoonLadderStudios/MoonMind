@@ -125,7 +125,7 @@ TDD implementation of Phase 3: canonicalize managed runtime activities to return
 - [ ] T10.1 — Run `./tools/test_unit.sh` — full suite must pass with zero failures
 - [ ] T10.2 — Verify no `dict[str, Any]` return annotation remains on the 4 target methods: `grep -n "-> dict\[str, Any\]\|-> None" moonmind/workflows/temporal/activity_runtime.py | grep "agent_runtime"`
 - [ ] T10.3 — Verify no provider-specific top-level fields leak from managed runtime activities: `grep -n "external_id\|tracking_ref\|provider_status" moonmind/workflows/temporal/activity_runtime.py`
-- [ ] T10.4 — Update `docs/tmp/010-CanonicalReturnPlan.md` Phase 3 task checkboxes to `[x]`
+- [ ] T10.4 — Update `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md` Phase 3 task checkboxes to `[x]`
 
 ---
 

@@ -10,7 +10,6 @@ import pytest
 import api_service.ui_assets as ui_assets_module
 from tests.unit.api.routers.test_task_dashboard import _client_with_mock_service
 
-
 def test_tasks_list_returns_503_when_manifest_entry_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -27,7 +26,6 @@ def test_tasks_list_returns_503_when_manifest_entry_missing(
     assert "shared Mission Control entrypoint" in response.text
     assert "mission-control" in response.text
     assert "tasks-list" in response.text
-
 
 def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -65,7 +63,6 @@ def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_missing(
 
     assert response.status_code == 200
     assert "/static/task_dashboard/dist/assets/mission-control.js" in response.text
-
 
 def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_stale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -14,14 +14,10 @@ from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-
 class SkillResolutionError(ValueError):
     """Raised when a run skill selection cannot be resolved."""
 
-
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-
-
 
 @dataclass(frozen=True, slots=True)
 class ResolvedSkill:
@@ -32,7 +28,6 @@ class ResolvedSkill:
     source_uri: str
     content_hash: str | None = None
     signature: str | None = None
-
 
 @dataclass(frozen=True, slots=True)
 class RunSkillSelection:
@@ -59,7 +54,6 @@ class RunSkillSelection:
             ],
         }
 
-
 def validate_skill_name(skill_name: str) -> str:
     """Validate and normalize a skill name for filesystem-safe use."""
 
@@ -75,7 +69,6 @@ def validate_skill_name(skill_name: str) -> str:
             f"Invalid skill name '{skill_name}': only letters, digits, underscores, and dashes are allowed"
         )
     return normalized
-
 
 def _normalize_skill_entry(raw: object) -> dict[str, str | None]:
     if isinstance(raw, str):
@@ -116,7 +109,6 @@ def _normalize_skill_entry(raw: object) -> dict[str, str | None]:
 
     raise SkillResolutionError(f"Unsupported skill entry type: {type(raw)!r}")
 
-
 def _normalize_skill_selection(raw: object) -> list[dict[str, str | None]]:
     if raw is None:
         return []
@@ -129,10 +121,8 @@ def _normalize_skill_selection(raw: object) -> list[dict[str, str | None]]:
         "Skill selection must be a sequence or comma-delimited string"
     )
 
-
 def _file_uri(path: Path) -> str:
     return path.resolve().as_uri()
-
 
 def _project_root() -> Path:
     """Resolve repository root for stable relative skill mirror paths."""
@@ -146,7 +136,6 @@ def _project_root() -> Path:
     if parent_count == 0:
         return Path.cwd()
     return current.parents[min(3, parent_count - 1)]
-
 
 def _resolve_base_repo_path() -> Path:
     """Resolve base path used for relative skill mirror roots."""
@@ -170,7 +159,6 @@ def _resolve_base_repo_path() -> Path:
         return cwd_relative
     return repo_relative
 
-
 def _resolve_mirror_root(raw_root: str | Path) -> Path:
     """Resolve configured mirror root to an absolute path."""
 
@@ -185,12 +173,10 @@ def _resolve_mirror_root(raw_root: str | Path) -> Path:
         return cwd_relative
     return repo_relative
 
-
 def resolve_skills_local_mirror_root() -> Path:
     """Resolve the configured local skills mirror root to an absolute path."""
 
     return _resolve_mirror_root(settings.workflow.skills_local_mirror_root)
-
 
 def resolve_skill_markdown_path(skill_name: str) -> Path | None:
     """Resolve a skill's markdown file across configured local and legacy roots."""
@@ -210,7 +196,6 @@ def resolve_skill_markdown_path(skill_name: str) -> Path | None:
         return None
     return skill_file
 
-
 def _iter_skill_mirror_roots(raw_root: str | Path) -> tuple[Path, ...]:
     """Yield effective skill roots, including nested legacy layout fallback."""
 
@@ -220,7 +205,6 @@ def _iter_skill_mirror_roots(raw_root: str | Path) -> tuple[Path, ...]:
     if nested not in ordered:
         ordered.append(nested)
     return tuple(ordered)
-
 
 def _resolve_local_source(skill_name: str) -> str | None:
     cfg = settings.workflow
@@ -235,7 +219,6 @@ def _resolve_local_source(skill_name: str) -> str | None:
             if candidate.is_dir():
                 return _file_uri(candidate)
     return None
-
 
 def _discover_local_skill_names() -> tuple[str, ...]:
     """Discover skill names from configured local and legacy mirrors."""
@@ -271,7 +254,6 @@ def _discover_local_skill_names() -> tuple[str, ...]:
                 discovered.append(skill_name)
 
     return tuple(discovered)
-
 
 def list_available_skill_names() -> tuple[str, ...]:
     """List currently resolvable skill names for dashboard/task selection UX."""
@@ -332,7 +314,6 @@ def list_available_skill_names() -> tuple[str, ...]:
 
     return tuple(discovered)
 
-
 def _resolve_source_uri(
     *,
     skill_name: str,
@@ -362,7 +343,6 @@ def _resolve_source_uri(
         f"No source URI resolved for skill '{skill_name}:{version}'. "
         "Provide skill_sources override or configure a local mirror root."
     )
-
 
 def resolve_run_skill_selection(
     *,

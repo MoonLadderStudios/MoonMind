@@ -6,7 +6,6 @@ from moonmind.workflows.skills.tool_plan_contracts import (
     ContractValidationError,
 )
 
-
 def test_step_skills_accepts_valid_properties() -> None:
     """T002: Ensure step.skills structures successfully marshal."""
     raw_payload = {
@@ -43,7 +42,6 @@ def test_step_skills_accepts_valid_properties() -> None:
     assert step.skills.include[1].version is None
     assert step.skills.exclude == ("legacy",)
     assert step.skills.materialization_mode == "hybrid"
-
 
 def test_step_skills_rejects_invalid_values() -> None:
     """T002: Assert structure validation handles edge cases for skills."""

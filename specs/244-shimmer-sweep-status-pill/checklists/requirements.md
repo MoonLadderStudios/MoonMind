@@ -36,5 +36,5 @@
 
 ## Notes
 
-- Specification created from the canonical Jira brief at `docs/tmp/jira-orchestration-inputs/MM-488-moonspec-orchestration-input.md`.
+- Specification created from the canonical Jira brief at `spec.md` (Input).
 - Resume inspection found no existing `MM-488` feature directory under `specs/`, so `spec.md` is the first incomplete stage.

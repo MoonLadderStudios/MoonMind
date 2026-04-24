@@ -7,10 +7,8 @@ import httpx
 from moonmind.rag.qdrant_client import RagQdrantClient
 from moonmind.rag.settings import RagRuntimeSettings
 
-
 class GuardrailError(RuntimeError):
     """Raised when a required guardrail fails."""
-
 
 def ensure_rag_ready(settings: RagRuntimeSettings) -> None:
     if not settings.rag_enabled:
@@ -36,7 +34,6 @@ def ensure_rag_ready(settings: RagRuntimeSettings) -> None:
         embedding_dimensions=settings.embedding_dimensions,
     )
     client.ensure_collection_ready()
-
 
 def _verify_gateway(url: str) -> None:
     try:

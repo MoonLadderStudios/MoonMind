@@ -2,7 +2,7 @@
 
 **Feature**: `237-reduced-motion-accessibility-performance`  
 **Spec**: `specs/237-reduced-motion-accessibility-performance/spec.md`  
-**Original Request Source**: `spec.md` Input and canonical Jira brief `docs/tmp/jira-orchestration-inputs/MM-468-moonspec-orchestration-input.md`  
+**Original Request Source**: `spec.md` Input and canonical Jira brief `spec.md` (Input)  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH
 

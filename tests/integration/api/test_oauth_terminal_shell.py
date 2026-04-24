@@ -17,7 +17,6 @@ from api_service.api.routers.task_dashboard import _resolve_user_dependency_over
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 class _BootPayloadParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -41,13 +40,11 @@ class _BootPayloadParser(HTMLParser):
         if tag == "script":
             self._capturing = False
 
-
 def _extract_boot_payload(response_text: str) -> dict[str, object]:
     parser = _BootPayloadParser()
     parser.feed(response_text)
     assert parser.payload_parts
     return json.loads("".join(parser.payload_parts))
-
 
 def _write_dashboard_test_manifest(root: Path) -> Path:
     dist_root = root / "dist"
@@ -78,7 +75,6 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return manifest_path
 
-
 @pytest_asyncio.fixture
 async def async_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncClient:
     monkeypatch.delenv("MOONMIND_UI_DEV_SERVER_URL", raising=False)
@@ -98,7 +94,6 @@ async def async_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         yield client
 
     app.dependency_overrides.clear()
-
 
 async def test_oauth_terminal_shell_route_renders_boot_payload(
     async_client: AsyncClient,

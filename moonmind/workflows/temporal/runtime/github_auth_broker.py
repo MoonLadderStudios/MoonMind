@@ -12,9 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 _BROKER_SOCKET_TIMEOUT_SECONDS = 5.0
-
 
 @dataclass(slots=True)
 class GitHubAuthBrokerHandle:
@@ -41,7 +39,6 @@ class GitHubAuthBrokerHandle:
         except OSError:
             # Socket removal is best-effort cleanup; shutdown should continue.
             pass
-
 
 class GitHubAuthBrokerManager:
     """Owns per-run GitHub auth brokers inside the worker process."""
@@ -125,7 +122,6 @@ class GitHubAuthBrokerManager:
             return
         await handle.close()
 
-
 async def wait_for_broker_socket(socket_path: str) -> None:
     """Poll until the broker socket exists and answers ping."""
     deadline = asyncio.get_running_loop().time() + _BROKER_SOCKET_TIMEOUT_SECONDS
@@ -144,7 +140,6 @@ async def wait_for_broker_socket(socket_path: str) -> None:
     raise RuntimeError(
         f"Timed out waiting for GitHub auth broker socket at {socket_path}"
     ) from last_error
-
 
 async def _async_request(socket_path: str, *, command: str) -> str:
     """Fetch one broker response using asyncio Unix sockets."""
@@ -169,7 +164,6 @@ async def _async_request(socket_path: str, *, command: str) -> str:
             await writer.wait_closed()
         except Exception:  # noqa: BLE001
             pass
-
 
 def request_github_token(socket_path: str, *, command: str = "github_token") -> str:
     """Fetch the GitHub token from the broker over a local Unix socket."""
@@ -197,7 +191,6 @@ def request_github_token(socket_path: str, *, command: str = "github_token") -> 
     finally:
         client.close()
 
-
 def _resolve_real_gh_path() -> str:
     """Resolve gh from the container PATH without returning this wrapper."""
 
@@ -213,7 +206,6 @@ def _resolve_real_gh_path() -> str:
         raise RuntimeError("Unable to locate real gh binary in managed session PATH")
     return resolved
 
-
 def run_gh_wrapper(*, socket_path: str, real_gh_path: str | None = None) -> int:
     """Exec the real gh binary with a token fetched from the local broker."""
     resolved_gh_path = str(real_gh_path or _resolve_real_gh_path())
@@ -223,7 +215,6 @@ def run_gh_wrapper(*, socket_path: str, real_gh_path: str | None = None) -> int:
     env["GITHUB_TOKEN"] = token
     os.execvpe(resolved_gh_path, [resolved_gh_path, *sys.argv[1:]], env)
     return 0
-
 
 def run_git_credential_helper(*, socket_path: str) -> int:
     """Respond to git credential-helper requests with brokered GitHub auth."""

@@ -13,9 +13,7 @@ from moonmind.schemas import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def test_claude_surface_handoff_boundary_preserves_execution_semantics() -> None:
     flow = build_claude_surface_handoff_fixture_flow(

@@ -13,7 +13,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Preserve canonical Jira brief for MM-397 in `docs/tmp/jira-orchestration-inputs/MM-397-moonspec-orchestration-input.md`.
+- [X] T001 Preserve canonical Jira brief for MM-397 in `spec.md` (Input).
 - [X] T002 Create Moon Spec artifacts for MM-397 in `specs/218-skill-zip-import/`.
 
 ## Phase 2: Foundational

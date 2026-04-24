@@ -1,6 +1,5 @@
 import pytest
 
-
 @pytest.fixture(autouse=True)
 def mock_temporal_client_adapter(monkeypatch):
     import uuid

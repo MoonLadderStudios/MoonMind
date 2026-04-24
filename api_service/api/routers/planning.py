@@ -14,12 +14,10 @@ router = APIRouter()
 TEMPLATES_DIR = "api_service/templates"
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-
 class JiraPlanRequest(BaseModel):
     plan_text: str = Field(..., description="Description of the work to plan")
     jira_project_key: str = Field(..., description="Jira project key")
     dry_run: bool = Field(True, description="If true, do not create issues")
-
 
 @router.post("/jira", response_model=List[StoryDraft])
 async def plan_jira_stories(request: JiraPlanRequest):
@@ -35,7 +33,6 @@ async def plan_jira_stories(request: JiraPlanRequest):
         logging.getLogger(__name__).exception("Jira planning failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
-
 @router.get("/jira/ui", response_class=HTMLResponse, name="jira_planner_ui")
 async def get_jira_planner_page(request: Request):
     """Render the Jira planning form."""
@@ -47,7 +44,6 @@ async def get_jira_planner_page(request: Request):
             "message": None,
         },
     )
-
 
 @router.post("/jira/ui", response_class=HTMLResponse, name="jira_planner_submit")
 async def handle_jira_planner_form(request: Request):

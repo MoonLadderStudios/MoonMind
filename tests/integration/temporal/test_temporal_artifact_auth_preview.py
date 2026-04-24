@@ -19,7 +19,6 @@ from moonmind.workflows.temporal.artifacts import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @asynccontextmanager
 async def _db(tmp_path: Path):
     url = f"sqlite+aiosqlite:///{tmp_path}/temporal_auth_preview_integration.db"
@@ -31,7 +30,6 @@ async def _db(tmp_path: Path):
         yield maker
     finally:
         await engine.dispose()
-
 
 async def test_preview_metadata_is_exposed_for_restricted_artifacts(
     tmp_path: Path,

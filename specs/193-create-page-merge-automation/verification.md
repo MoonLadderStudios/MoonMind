@@ -1,9 +1,9 @@
 # MoonSpec Verification Report
 
-**Feature**: Create Page Merge Automation  
-**Spec**: `/work/agent_jobs/mm:d9905d39-068e-452b-8189-8346ab02f56c/repo/specs/193-create-page-merge-automation/spec.md`  
-**Original Request Source**: `spec.md` `Input` preserving MM-365  
-**Verdict**: FULLY_IMPLEMENTED  
+**Feature**: Create Page Merge Automation 
+**Spec**: `/work/agent_jobs/mm:d9905d39-068e-452b-8189-8346ab02f56c/repo/specs/193-create-page-merge-automation/spec.md` 
+**Original Request Source**: `spec.md` `Input` preserving MM-365 
+**Verdict**: FULLY_IMPLEMENTED 
 **Confidence**: HIGH
 
 ## Test Results
@@ -49,7 +49,7 @@
 | Spec-driven development | `specs/193-create-page-merge-automation/spec.md`, `plan.md`, `tasks.md` | VERIFIED | One-story Moon Spec artifacts exist and drove implementation. |
 | Runtime behavior, not docs-only | `frontend/src/entrypoints/task-create.tsx`, `frontend/src/entrypoints/task-create.test.tsx` | VERIFIED | Production UI behavior and request shape changed. |
 | Test discipline | Test result table | VERIFIED | Red-first tests were added, then focused and full suites passed. |
-| Documentation separation | `docs/UI/CreatePage.md`, `docs/tmp/jira-orchestration-inputs/MM-365-moonspec-orchestration-input.md` | VERIFIED | Canonical docs hold desired state; Jira input remains under `docs/tmp`. |
+| Documentation separation | `docs/UI/CreatePage.md`, `spec.md` (Input) | VERIFIED | Canonical docs hold desired state; Jira input remains under `local-only handoffs`. |
 | Compatibility policy | `frontend/src/entrypoints/task-create.tsx:4081` | VERIFIED | Existing supported `mergeAutomation` field is passed through directly; no aliasing layer added. |
 
 ## Original Request Alignment

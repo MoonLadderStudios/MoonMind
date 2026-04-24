@@ -17,7 +17,7 @@ Implement MM-388 by updating the canonical Task Proposal System runtime contract
 **Target Platform**: Proposal generation, proposal detail/observability, and proposal promotion surfaces
 **Project Type**: Runtime task proposal architecture contract documentation
 **Performance Goals**: No runtime performance impact; promotion avoids live preset expansion by default
-**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `docs/tmp/` or `specs/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-388 in artifacts
+**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `local-only handoffs` or `specs/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-388 in artifacts
 **Scale/Scope**: One canonical documentation file plus MoonSpec artifacts for one independently testable story
 
 ## Constitution Check
@@ -48,11 +48,11 @@ specs/202-document-proposal-promotion/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── proposal-promotion-preset-provenance.md
+│ └── proposal-promotion-preset-provenance.md
 ├── tasks.md
 ├── verification.md
 └── checklists/
-    └── requirements.md
+ └── requirements.md
 ```
 
 ### Source Code (repository root)
@@ -60,11 +60,10 @@ specs/202-document-proposal-promotion/
 ```text
 docs/
 └── Tasks/
-    └── TaskProposalSystem.md
+ └── TaskProposalSystem.md
 
-docs/tmp/
 └── jira-orchestration-inputs/
-    └── MM-388-moonspec-orchestration-input.md
+ └── MM-388-moonspec-orchestration-input.md
 ```
 
 **Structure Decision**: Update `docs/Tasks/TaskProposalSystem.md` because MM-388 targets proposal payload, generator, promotion, and proposal detail semantics. Do not create replacement canonical docs or move volatile planning into `docs/`.
@@ -75,5 +74,5 @@ No constitution violations.
 
 ## Setup Notes
 
-- The input was classified as a single-story feature request from `docs/tmp/jira-orchestration-inputs/MM-388-moonspec-orchestration-input.md`.
+- The input was classified as a single-story feature request from `spec.md` (Input).
 - `.specify/feature.json` points to `specs/202-document-proposal-promotion`.

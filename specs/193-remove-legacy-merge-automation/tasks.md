@@ -5,7 +5,7 @@
 
 **Tests**: Unit tests and workflow-boundary tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
 
-**Source Traceability**: MM-364 Jira preset brief is preserved in `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-364-moonspec-orchestration-input.md`.
+**Source Traceability**: MM-364 Jira preset brief is preserved in `spec.md` and `spec.md` (Input).
 
 **Test Commands**:
 

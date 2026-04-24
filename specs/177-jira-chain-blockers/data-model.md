@@ -92,4 +92,4 @@ State transitions:
 - `none`: issues created/reused, no link requests, chain complete is not applicable.
 - `linear_blocker_chain`: issues created/reused, adjacent link requests attempted after issue mapping is available.
 - Partial failure: issues may be complete while one or more links fail; result is partial and chain complete is false.
-- Fallback: missing Jira target configuration or issue creation failure follows existing docs/tmp fallback behavior.
+- Fallback: missing Jira target configuration or issue creation failure follows existing local-only handoffs fallback behavior.

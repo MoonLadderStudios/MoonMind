@@ -24,7 +24,6 @@ _TASK_RESPONSE_DATA = {
     "url": "https://jules.example.com/tasks/task-001",
 }
 
-
 def _make_client(
     handler,
     *,
@@ -41,9 +40,7 @@ def _make_client(
         client=injected,
     )
 
-
 # --- success tests ---
-
 
 @pytest.mark.asyncio
 async def test_create_task_success():
@@ -59,7 +56,6 @@ async def test_create_task_success():
     assert result.task_id == "task-001"
     assert result.status == "pending"
     assert result.url == "https://jules.example.com/tasks/task-001"
-
 
 @pytest.mark.asyncio
 async def test_resolve_task_success():
@@ -82,7 +78,6 @@ async def test_resolve_task_success():
     assert result.task_id == "task-001"
     assert result.status == "completed"
 
-
 @pytest.mark.asyncio
 async def test_get_task_success():
     def handler(request: httpx.Request) -> httpx.Response:
@@ -93,7 +88,6 @@ async def test_get_task_success():
     client = _make_client(handler)
     result = await client.get_task(JulesGetTaskRequest(task_id="task-001"))
     assert result.task_id == "task-001"
-
 
 @pytest.mark.asyncio
 async def test_normalize_jules_status_maps_terminal_and_running_states():
@@ -115,7 +109,6 @@ async def test_normalize_jules_status_maps_terminal_and_running_states():
     assert normalize_jules_status("PAUSED") == "running"
     assert normalize_jules_status("FAILED") == "failed"
     assert normalize_jules_status("COMPLETED") == "completed"
-
 
 @pytest.mark.asyncio
 async def test_create_task_sends_correct_source_context_format():
@@ -143,8 +136,6 @@ async def test_create_task_sends_correct_source_context_format():
         "githubRepoContext": {"startingBranch": "develop"},
     }
     assert captured_body["prompt"] == "Check source context"
-
-
 
 @pytest.mark.asyncio
 async def test_start_integration_builds_provider_neutral_result():
@@ -181,7 +172,6 @@ async def test_start_integration_builds_provider_neutral_result():
     assert result.recommended_poll_seconds == 15
     assert result.idempotency_key == "idem-1"
 
-
 @pytest.mark.asyncio
 async def test_start_integration_marks_transport_timeout_as_ambiguous():
     def handler(request: httpx.Request) -> httpx.Response:
@@ -200,7 +190,6 @@ async def test_start_integration_marks_transport_timeout_as_ambiguous():
         )
 
     assert exc_info.value.ambiguous is True
-
 
 @pytest.mark.asyncio
 async def test_fetch_and_cancel_integration_return_normalized_results():
@@ -238,7 +227,6 @@ async def test_fetch_and_cancel_integration_return_normalized_results():
     assert canceled.accepted is True
     assert canceled.normalized_status == "canceled"
 
-
 @pytest.mark.asyncio
 async def test_cancel_integration_reports_unsupported_response():
     def handler(request: httpx.Request) -> httpx.Response:
@@ -250,9 +238,7 @@ async def test_cancel_integration_reports_unsupported_response():
     assert result.accepted is False
     assert result.unsupported is True
 
-
 # --- retry tests ---
-
 
 @pytest.mark.asyncio
 async def test_create_task_retries_on_503():
@@ -271,7 +257,6 @@ async def test_create_task_retries_on_503():
     )
     assert result.task_id == "task-001"
     assert call_count == 2
-
 
 @pytest.mark.asyncio
 async def test_create_task_retries_on_429():
@@ -295,7 +280,6 @@ async def test_create_task_retries_on_429():
     assert result.task_id == "task-001"
     assert call_count == 2
 
-
 @pytest.mark.asyncio
 async def test_create_task_fails_on_400():
     call_count = 0
@@ -313,9 +297,7 @@ async def test_create_task_fails_on_400():
     assert exc_info.value.status_code == 400
     assert call_count == 1
 
-
 # --- structured error tests ---
-
 
 @pytest.mark.asyncio
 async def test_error_has_structured_fields():
@@ -328,7 +310,6 @@ async def test_error_has_structured_fields():
     err = exc_info.value
     assert err.status_code == 422
     assert err.request_path == "/sessions"
-
 
 @pytest.mark.asyncio
 async def test_error_str_does_not_leak_secrets():
@@ -351,9 +332,7 @@ async def test_error_str_does_not_leak_secrets():
     assert api_key not in error_str
     assert "Bearer" not in error_str
 
-
 # --- cleanup tests ---
-
 
 @pytest.mark.asyncio
 async def test_aclose_closes_owned_client():
@@ -378,7 +357,6 @@ async def test_aclose_closes_owned_client():
     finally:
         httpx.AsyncClient.aclose = original_aclose  # type: ignore[assignment]
 
-
 @pytest.mark.asyncio
 async def test_aclose_skips_injected_client():
     """aclose() should not close an externally-injected client."""
@@ -396,7 +374,6 @@ async def test_aclose_skips_injected_client():
     # injected client should still be usable
     assert not injected.is_closed
     await injected.aclose()
-
 
 @pytest.mark.asyncio
 async def test_send_message_success():
@@ -419,7 +396,6 @@ async def test_send_message_success():
     )
     assert len(captured) == 1
 
-
 @pytest.mark.asyncio
 async def test_send_message_retries_on_503():
     """send_message() should retry on 503."""
@@ -440,9 +416,7 @@ async def test_send_message_retries_on_503():
     )
     assert call_count == 3
 
-
 # --- T010: Pydantic model tests ---
-
 
 async def test_jules_agent_message_model():
     """T010: JulesAgentMessage parses from alias and field name."""
@@ -453,7 +427,6 @@ async def test_jules_agent_message_model():
 
     msg2 = JulesAgentMessage(agent_message="test")
     assert msg2.agent_message == "test"
-
 
 async def test_jules_activity_model():
     """T010: JulesActivity parses with all fields."""
@@ -474,7 +447,6 @@ async def test_jules_activity_model():
     assert activity.agent_messaged.agent_message == "Which branch?"
     assert activity.create_time == "2026-03-21T10:00:00Z"
 
-
 async def test_jules_activity_model_no_message():
     """T010: JulesActivity with no agentMessaged field."""
     from moonmind.schemas.jules_models import JulesActivity
@@ -482,7 +454,6 @@ async def test_jules_activity_model_no_message():
     activity = JulesActivity.model_validate({"name": "act-2", "originator": "user"})
     assert activity.agent_messaged is None
     assert activity.originator == "user"
-
 
 async def test_jules_list_activities_result_model():
     """T010: JulesListActivitiesResult parses aliases."""
@@ -497,7 +468,6 @@ async def test_jules_list_activities_result_model():
     assert result.latest_agent_question == "Which branch?"
     assert result.activity_id == "abc123"
 
-
 async def test_jules_list_activities_result_model_no_question():
     """T010: JulesListActivitiesResult with no question."""
     from moonmind.schemas.jules_models import JulesListActivitiesResult
@@ -507,9 +477,7 @@ async def test_jules_list_activities_result_model_no_question():
     assert result.latest_agent_question is None
     assert result.activity_id is None
 
-
 # --- T018: list_activities transport tests ---
-
 
 @pytest.mark.asyncio
 async def test_list_activities_extracts_latest_agent_question():
@@ -546,7 +514,6 @@ async def test_list_activities_extracts_latest_agent_question():
     assert result.latest_agent_question == "Which branch?"
     assert result.activity_id == "act-new"
 
-
 @pytest.mark.asyncio
 async def test_list_activities_no_agent_questions():
     """T018: list_activities returns None when no agent questions exist."""
@@ -563,7 +530,6 @@ async def test_list_activities_no_agent_questions():
     assert result.latest_agent_question is None
     assert result.activity_id is None
 
-
 @pytest.mark.asyncio
 async def test_list_activities_empty_response():
     """T018: list_activities handles empty activities list."""
@@ -575,7 +541,6 @@ async def test_list_activities_empty_response():
     result = await client.list_activities("session-42")
     assert result.latest_agent_question is None
     assert result.activity_id is None
-
 
 @pytest.mark.asyncio
 async def test_list_activities_falls_back_to_description_and_extra_message_fields():
@@ -612,9 +577,7 @@ async def test_list_activities_falls_back_to_description_and_extra_message_field
     assert result.latest_agent_question == "Should I rename the heading as well?"
     assert result.activity_id == "act-nested"
 
-
 # --- native PR creation tests (delegation to GitHubService) ---
-
 
 @pytest.mark.asyncio
 async def test_create_pull_request_success():
@@ -650,7 +613,6 @@ async def test_create_pull_request_success():
 
     assert result.created is True
     assert result.url == "https://github.com/owner/repo/pull/1"
-
 
 @pytest.mark.asyncio
 async def test_create_pull_request_failure():

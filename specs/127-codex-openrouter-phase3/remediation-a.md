@@ -119,10 +119,10 @@
 
 ## docs
 
-### MEDIUM-01: No `docs/tmp/` migration tracker created for this feature
+### MEDIUM-01: No `local-only handoffs` migration tracker created for this feature
 - **Location**: Constitution Principle XII; spec Implementation Scope
-- **Problem**: The spec's "Implementation Scope" describes a migration path for `auth_mode` removal and schema alignment. Per Constitution Principle XII, migration/implementation tracking should live under `docs/tmp/`, not in the canonical spec. No `docs/tmp/` tracker exists yet for this feature.
-- **Remediation**: Create a migration tracker file at `docs/tmp/remaining-work/127-codex-openrouter-phase3.md` (or equivalent) to track in-flight implementation progress, removable when the feature ships.
+- **Problem**: The spec's "Implementation Scope" describes a migration path for `auth_mode` removal and schema alignment. Per Constitution Principle XII, migration/implementation tracking should live under `local-only handoffs`, not in the canonical spec. No `local-only handoffs` tracker exists yet for this feature.
+- **Remediation**: Create a migration tracker file at `specs/127-codex-openrouter-phase3/spec.md` (or equivalent) to track in-flight implementation progress, removable when the feature ships.
 - **Rationale**: Constitution Principle XII requires migration narratives to live in disposable scratch space, not canonical docs.
 - **Analysis ref**: Constitution alignment gap (not in speckit-analyze)
 

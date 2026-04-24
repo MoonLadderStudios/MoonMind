@@ -19,7 +19,7 @@
 
 ## Phase 1: Resume And Context
 
-- [X] T001 Confirm the canonical Jira brief is `docs/tmp/jira-orchestration-inputs/MM-495-moonspec-orchestration-input.md` and the active feature directory is `specs/231-sensitive-report-access-retention`.
+- [X] T001 Confirm the canonical Jira brief is `spec.md` (Input) and the active feature directory is `specs/231-sensitive-report-access-retention`.
 - [X] T002 Inspect existing artifact service behavior in `moonmind/workflows/temporal/artifacts.py` and `moonmind/workflows/temporal/report_artifacts.py` for authorization, metadata validation, retention, pin/unpin, and deletion boundaries.
 - [X] T003 Inspect existing evidence in `tests/unit/workflows/temporal/test_artifacts.py`, `tests/unit/workflows/temporal/test_artifact_authorization.py`, and `tests/integration/temporal/test_temporal_artifact_lifecycle.py`.
 
@@ -43,7 +43,7 @@ Integration evidence covers report deletion without cascade to observability art
 
 ## Phase 4: Validation
 
-- [X] T013 Run traceability check `rg -n "MM-495|DESIGN-REQ-011|DESIGN-REQ-017|DESIGN-REQ-018" specs/231-sensitive-report-access-retention docs/tmp/jira-orchestration-inputs/MM-495-moonspec-orchestration-input.md` and confirm the updated artifact set preserves the new Jira key and source design IDs.
+- [X] T013 Run traceability check `rg -n "MM-495|DESIGN-REQ-011|DESIGN-REQ-017|DESIGN-REQ-018" specs/231-sensitive-report-access-retention` and confirm the updated artifact set preserves the new Jira key and source design IDs.
 - [X] T014 Reuse existing focused unit and integration evidence because production code did not change during this alignment pass; record that decision in `verification.md`.
 
 ## Phase 5: Verify

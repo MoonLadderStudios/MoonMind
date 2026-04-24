@@ -19,9 +19,7 @@ from moonmind.schemas.temporal_activity_models import (
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
-
 pytestmark = [pytest.mark.asyncio]
-
 
 def _request(**overrides: Any) -> AgentExecutionRequest:
     payload = {
@@ -36,7 +34,6 @@ def _request(**overrides: Any) -> AgentExecutionRequest:
     }
     payload.update(overrides)
     return AgentExecutionRequest(**payload)
-
 
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     workflow_info = type(
@@ -63,7 +60,6 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         "now",
         lambda: datetime.now(timezone.utc),
     )
-
 
 async def test_agent_run_jules_starts_new_run_instead_of_continuation(
     monkeypatch: pytest.MonkeyPatch,
@@ -113,7 +109,6 @@ async def test_agent_run_jules_starts_new_run_instead_of_continuation(
     assert result.failure_class is None
     assert result.metadata["childWorkflowId"] == "wf-agent-run-1"
     assert result.metadata["childRunId"] == "run-1"
-
 
 async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     monkeypatch: pytest.MonkeyPatch,
@@ -170,7 +165,6 @@ async def test_agent_run_jules_branch_publish_failure_maps_to_non_success(
     assert result.failure_class == "execution_error"
     assert result.provider_error_code == "branch_publish_failed"
     assert result.metadata["publishOutcome"] == "publish_failed"
-
 
 async def test_agent_run_external_poll_and_fetch_use_typed_activity_inputs(
     monkeypatch: pytest.MonkeyPatch,
@@ -232,7 +226,6 @@ async def test_agent_run_external_poll_and_fetch_use_typed_activity_inputs(
     assert status_payload.run_id == "session-typed-1"
     assert isinstance(fetch_payload, ExternalAgentRunInput)
     assert fetch_payload.run_id == "session-typed-1"
-
 
 async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
     monkeypatch: pytest.MonkeyPatch,
@@ -334,7 +327,6 @@ async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
     assert fetch_payload.publish_mode == "pr"
     assert fetch_payload.commit_message == "Use producer commit text"
     assert fetch_payload.target_branch == "main"
-
 
 async def test_agent_run_managed_preserves_task_scoped_session_metadata(
     monkeypatch: pytest.MonkeyPatch,

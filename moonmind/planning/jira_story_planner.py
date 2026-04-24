@@ -13,10 +13,8 @@ from pydantic import BaseModel, Field
 from moonmind.config.settings import AppSettings
 from moonmind.factories.google_factory import get_google_model
 
-
 class JiraStoryPlannerError(Exception):
     """Raised for errors during LLM planning or JSON parsing."""
-
 
 class StoryDraft(BaseModel):
     summary: str = Field(..., description="Short summary of the story")
@@ -25,7 +23,6 @@ class StoryDraft(BaseModel):
     story_points: Optional[int] = Field(None, description="Story points estimate")
     labels: List[str] = Field(default_factory=list, description="Labels to apply")
     key: Optional[str] = Field(None, description="Created Jira issue key")
-
 
 class JiraStoryPlanner:
     """Convert a plan description into Jira issues.

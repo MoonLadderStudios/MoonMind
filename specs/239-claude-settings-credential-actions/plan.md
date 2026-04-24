@@ -31,15 +31,15 @@ Add distinct Claude Anthropic credential method actions to the existing Settings
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains present for backend endpoints already used by this slice  
-**Primary Dependencies**: React, TanStack Query, existing Settings entrypoint, existing OAuth Session API, existing provider-profile manual-auth commit API, Vitest, Testing Library  
-**Storage**: No new persistent storage; uses existing provider profile row metadata and Managed Secrets-backed manual-auth API for API-key enrollment  
-**Unit Testing**: `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx` for focused iteration; final unit verification through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
-**Integration Testing**: UI integration-style component tests in `ProviderProfilesManager.test.tsx` for row rendering, OAuth session request behavior, and API-key/manual-auth no-OAuth behavior; no compose-backed service integration is required for this frontend row-action slice  
-**Target Platform**: Mission Control browser UI served by FastAPI  
-**Project Type**: Web UI  
-**Performance Goals**: Provider profile rows continue to render without extra network calls for action classification  
-**Constraints**: Do not create a standalone Claude auth page; do not expose raw secrets; keep Codex OAuth behavior unchanged; API-key enrollment must not create OAuth sessions  
+**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains present for backend endpoints already used by this slice 
+**Primary Dependencies**: React, TanStack Query, existing Settings entrypoint, existing OAuth Session API, existing provider-profile manual-auth commit API, Vitest, Testing Library 
+**Storage**: No new persistent storage; uses existing provider profile row metadata and Managed Secrets-backed manual-auth API for API-key enrollment 
+**Unit Testing**: `npm run ui:test -- frontend/src/components/settings/ProviderProfilesManager.test.tsx` for focused iteration; final unit verification through `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` 
+**Integration Testing**: UI integration-style component tests in `ProviderProfilesManager.test.tsx` for row rendering, OAuth session request behavior, and API-key/manual-auth no-OAuth behavior; no compose-backed service integration is required for this frontend row-action slice 
+**Target Platform**: Mission Control browser UI served by FastAPI 
+**Project Type**: Web UI 
+**Performance Goals**: Provider profile rows continue to render without extra network calls for action classification 
+**Constraints**: Do not create a standalone Claude auth page; do not expose raw secrets; keep Codex OAuth behavior unchanged; API-key enrollment must not create OAuth sessions 
 **Scale/Scope**: One Settings provider profile component and focused UI tests
 
 ## Constitution Check
@@ -57,7 +57,7 @@ Add distinct Claude Anthropic credential method actions to the existing Settings
 - IX. Resilient by Default: PASS. Unsupported metadata fails closed by hiding misleading actions.
 - X. Continuous Improvement: PASS. Verification evidence is captured in MoonSpec artifacts and tests.
 - XI. Spec-Driven Development: PASS. Work proceeds from this single-story spec.
-- XII. Canonical Documentation Separation: PASS. Implementation notes remain under `specs/` and `docs/tmp/`.
+- XII. Canonical Documentation Separation: PASS. Implementation notes remain under `specs/` and `local-only handoffs`.
 - XIII. Pre-Release Velocity: PASS. No compatibility aliases are introduced; old labels are superseded in the same action model where needed.
 
 ## Project Structure
@@ -72,7 +72,7 @@ specs/239-claude-settings-credential-actions/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── provider-profile-credential-actions.md
+│ └── provider-profile-credential-actions.md
 └── tasks.md
 ```
 
@@ -83,7 +83,6 @@ frontend/src/components/settings/
 ├── ProviderProfilesManager.tsx
 └── ProviderProfilesManager.test.tsx
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-477-moonspec-orchestration-input.md
 ```
 

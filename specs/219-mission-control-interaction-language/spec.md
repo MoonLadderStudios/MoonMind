@@ -3,7 +3,7 @@
 **Feature Branch**: `run-jira-orchestrate-for-mm-427-align-mi-00e0a46d`  
 **Created**: 2026-04-21  
 **Status**: Implemented  
-**Input**: Trusted Jira preset brief for MM-427 from `docs/tmp/jira-orchestration-inputs/MM-427-moonspec-orchestration-input.md`. Summary: "Align Mission Control components with shared interaction language." Source design: `docs/UI/MissionControlDesignSystem.md`, sections 9 and 10.
+**Input**: Trusted Jira preset brief for MM-427 from `spec.md` (Input). Summary: "Align Mission Control components with shared interaction language." Source design: `docs/UI/MissionControlDesignSystem.md`, sections 9 and 10.
 
 ## Original Jira Preset Brief
 
@@ -86,7 +86,7 @@ Single-story runtime feature request. The brief contains one independently testa
 - "Shared interaction language" refers to the interaction and component-system rules in `docs/UI/MissionControlDesignSystem.md`, especially sections 9 and 10.
 - This story aligns shared CSS behavior and focused tests; it does not introduce a new React component library.
 - Existing Create page liquid glass and task-list composition work are foundations this story consumes rather than redesigns.
-- The trusted Jira preset brief for MM-427 is available in `docs/tmp/jira-orchestration-inputs/MM-427-moonspec-orchestration-input.md` and is the canonical source for this runtime story.
+- The trusted Jira preset brief for MM-427 is available in `spec.md` (Input) and is the canonical source for this runtime story.
 - MM-427 has a trusted Jira dependency note showing blocker MM-428 in Backlog at fetch time; this spec records that dependency context but does not alter the already completed runtime implementation evidence.
 
 ## Requirements *(mandatory)*

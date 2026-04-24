@@ -21,7 +21,7 @@
 - Validation rule check after implementation: PASS.
   `rg -n "absent provenance|invalid claimed preset provenance|unresolved preset include|nested preset semantics|never executable logic" docs/Tasks/SkillAndPlanContracts.md`
 - Source traceability check: PASS.
-  `rg -n "MM-386|DESIGN-REQ-001|DESIGN-REQ-019|DESIGN-REQ-020|DESIGN-REQ-021|DESIGN-REQ-025|DESIGN-REQ-026" specs/199-document-flattened-plan-contract docs/tmp/jira-orchestration-inputs/MM-386-moonspec-orchestration-input.md`
+  `rg -n "MM-386|DESIGN-REQ-001|DESIGN-REQ-019|DESIGN-REQ-020|DESIGN-REQ-021|DESIGN-REQ-025|DESIGN-REQ-026" specs/199-document-flattened-plan-contract`
 - Unit tests: PASS.
   `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
   Result: 3506 Python tests passed, 1 xpassed, 16 subtests passed, and 10 frontend Vitest files / 262 frontend tests passed.

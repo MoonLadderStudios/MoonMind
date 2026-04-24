@@ -13,7 +13,6 @@ from api_service.api.routers.retrieval_gateway import (
 )
 from moonmind.rag.context_pack import ContextItem, build_context_pack
 
-
 class StubService:
     def __init__(self) -> None:
         self.settings = SimpleNamespace(similarity_top_k=3)
@@ -29,13 +28,11 @@ class StubService:
             max_chars=1200,
         )
 
-
 def _build_app() -> FastAPI:
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_retrieval_service] = StubService
     return app
-
 
 def test_context_requires_authentication() -> None:
     app = _build_app()
@@ -44,7 +41,6 @@ def test_context_requires_authentication() -> None:
         response = client.post("/retrieval/context", json={"query": "q"})
 
     assert response.status_code == 401
-
 
 def test_context_rejects_out_of_scope_repo() -> None:
     """Worker-scoped requests should be rejected with 403 when repo is not permitted."""
@@ -61,9 +57,7 @@ def test_context_rejects_out_of_scope_repo() -> None:
 
     assert response.status_code == 401
 
-
 # ---- authorize_retrieval_request unit tests ----
-
 
 @pytest.mark.asyncio
 async def test_authorize_worker_token_rejected_after_queue_removal() -> None:
@@ -78,7 +72,6 @@ async def test_authorize_worker_token_rejected_after_queue_removal() -> None:
     assert excinfo.value.status_code == 401
     assert "temporarily unavailable" in excinfo.value.detail
 
-
 @pytest.mark.asyncio
 async def test_authorize_bearer_token_rejected_after_queue_removal() -> None:
     """Bearer tokens are also rejected (Phase 3.5 stub)."""
@@ -91,7 +84,6 @@ async def test_authorize_bearer_token_rejected_after_queue_removal() -> None:
 
     assert excinfo.value.status_code == 401
     assert "temporarily unavailable" in excinfo.value.detail
-
 
 @pytest.mark.asyncio
 async def test_authorize_with_valid_user() -> None:
@@ -106,7 +98,6 @@ async def test_authorize_with_valid_user() -> None:
     assert result.auth_source == "oidc"
     assert result.allowed_repositories == ()
     assert result.capabilities == ("rag",)
-
 
 @pytest.mark.asyncio
 async def test_authorize_unauthorized() -> None:

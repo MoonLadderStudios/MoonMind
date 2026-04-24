@@ -7,7 +7,7 @@
 
 ## Source Document Requirements
 
-Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/WorkflowArtifactSystemDesign.md`, `docs/tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md`, `docs/Tasks/TaskRunsApi.md`
+Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/WorkflowArtifactSystemDesign.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Tasks/TaskRunsApi.md`
 
 | ID | Source Section | Requirement Summary |
 | --- | --- | --- |

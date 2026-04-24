@@ -36,6 +36,6 @@
 
 ## Notes
 
-- Specification created from the canonical Jira brief at `docs/tmp/jira-orchestration-inputs/MM-489-moonspec-orchestration-input.md`.
+- Specification created from the canonical Jira brief at `spec.md` (Input).
 - Classification: single-story feature request in runtime mode using `docs/UI/EffectShimmerSweep.md` as runtime source requirements.
 - Resume inspection found no existing `MM-489` feature directory under `specs/`, so `spec.md` is the first incomplete stage.

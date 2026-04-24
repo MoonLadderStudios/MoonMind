@@ -138,12 +138,12 @@
 - [X] T045 [US3] Remove queue-era route, `editJobId`, and resubmit copy from primary detail-page task editing navigation in `frontend/src/entrypoints/task-detail.tsx`
 - [X] T046 [US3] Remove queue-era submit, redirect, and resubmit copy from shared edit/rerun form behavior in `frontend/src/entrypoints/task-create.tsx`
 - [X] T047 [US3] Remove or replace queue-era helper exports from primary Temporal task editing helpers in `frontend/src/lib/temporalTaskEditing.ts`
-- [X] T048 [US3] Inspect and update current Temporal-native route/copy guidance where needed in `specs/170-temporal-editing-hardening/quickstart.md`, `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and `docs/tmp/101-PlansOverview.md`
+- [X] T048 [US3] Inspect and update current Temporal-native route/copy guidance where needed in `specs/170-temporal-editing-hardening/quickstart.md`, `docs/Tasks/TaskEditingSystem.md`, `docs/UI/CreatePage.md`, and `docs/Tasks/TaskEditingSystem.md`
 
 ### Validation for User Story 3
 
 - [X] T049 [US3] Verify User Story 3 with `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/task-create.test.tsx`
-- [X] T050 [US3] Search primary runtime surfaces and current docs/internal references for queue-era references with `rg -n "(/tasks/queue/new|editJobId|queue resubmit|resubmit)" frontend/src api_service moonmind docs/Tasks/TaskEditingSystem.md docs/UI/CreatePage.md docs/tmp specs/170-temporal-editing-hardening/quickstart.md`
+- [X] T050 [US3] Search primary runtime surfaces and current docs/internal references for queue-era references with `rg -n "(/tasks/queue/new|editJobId|queue resubmit|resubmit)" frontend/src api_service moonmind docs/Tasks/TaskEditingSystem.md docs/UI/CreatePage.md local-only handoffs specs/170-temporal-editing-hardening/quickstart.md`
 
 **Checkpoint**: User Story 3 has removed queue-era primary-flow leakage from current runtime surfaces.
 

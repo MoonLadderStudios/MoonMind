@@ -10,7 +10,6 @@ MAX_TEMPORAL_METADATA_STRING_CHARS = 8192
 MAX_TEMPORAL_METADATA_BYTES = 16 * 1024
 MAX_TEMPORAL_METADATA_REF_CHARS = 1024
 
-
 def compact_temporal_ref_metadata(
     field_name: str,
     value: Any,
@@ -40,7 +39,6 @@ def compact_temporal_ref_metadata(
         f"{field_name}Sha256": digest,
         f"{field_name}LengthChars": len(normalized),
     }
-
 
 def validate_compact_temporal_mapping(
     value: Any,
@@ -75,7 +73,6 @@ def validate_compact_temporal_mapping(
             "store large payloads in artifacts and carry refs"
         )
     return dict(value)
-
 
 def _validate_json_value(value: Any, *, path: str) -> None:
     if isinstance(value, bytes):

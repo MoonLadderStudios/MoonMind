@@ -1,6 +1,6 @@
 # Implementation Plan: Apply Report Access and Lifecycle Policy
 
-**Branch**: `231-sensitive-report-access-retention` | **Date**: 2026-04-24 | **Spec**: [spec.md](spec.md)  
+**Branch**: `231-sensitive-report-access-retention` | **Date**: 2026-04-24 | **Spec**: [spec.md](spec.md) 
 **Input**: Single-story feature specification from `specs/231-sensitive-report-access-retention/spec.md`
 
 ## Summary
@@ -27,15 +27,15 @@ Resume the existing runtime story in `specs/231-sensitive-report-access-retentio
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: SQLAlchemy async ORM, Pydantic v2 models, existing Temporal artifact service and report artifact contract helpers  
-**Storage**: Existing temporal artifact tables and artifact store only; no new persistent storage  
-**Unit Testing**: `./tools/test_unit.sh`; focused evidence exists in `tests/unit/workflows/temporal/test_artifacts.py` and `tests/unit/workflows/temporal/test_artifact_authorization.py`  
-**Integration Testing**: `./tools/test_integration.sh`; focused evidence exists in `tests/integration/temporal/test_temporal_artifact_lifecycle.py`  
-**Target Platform**: MoonMind API/Temporal artifact service runtime  
-**Project Type**: Backend service/library  
-**Performance Goals**: No additional storage queries on artifact creation; unpin may inspect existing links for one artifact only  
-**Constraints**: Do not introduce a report-specific storage plane, authorization model, lifecycle model, or cascading deletion behavior  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: SQLAlchemy async ORM, Pydantic v2 models, existing Temporal artifact service and report artifact contract helpers 
+**Storage**: Existing temporal artifact tables and artifact store only; no new persistent storage 
+**Unit Testing**: `./tools/test_unit.sh`; focused evidence exists in `tests/unit/workflows/temporal/test_artifacts.py` and `tests/unit/workflows/temporal/test_artifact_authorization.py` 
+**Integration Testing**: `./tools/test_integration.sh`; focused evidence exists in `tests/integration/temporal/test_temporal_artifact_lifecycle.py` 
+**Target Platform**: MoonMind API/Temporal artifact service runtime 
+**Project Type**: Backend service/library 
+**Performance Goals**: No additional storage queries on artifact creation; unpin may inspect existing links for one artifact only 
+**Constraints**: Do not introduce a report-specific storage plane, authorization model, lifecycle model, or cascading deletion behavior 
 **Scale/Scope**: One runtime story scoped to Temporal artifact service behavior for report access and lifecycle policy
 
 ## Constitution Check
@@ -51,7 +51,7 @@ Resume the existing runtime story in `specs/231-sensitive-report-access-retentio
 - IX. Resilient by Default: PASS. Lifecycle operations remain idempotent and artifact-native.
 - X. Facilitate Continuous Improvement: PASS. Verification records traceable MM-495 evidence.
 - XI. Spec-Driven Development: PASS. Spec, plan, tasks, and verification remain aligned to the canonical Jira input.
-- XII. Canonical Documentation Separation: PASS. Volatile Jira orchestration input remains under `docs/tmp`.
+- XII. Canonical Documentation Separation: PASS. Volatile Jira orchestration input remains under `local-only handoffs`.
 - XIII. Pre-release Compatibility Policy: PASS. No compatibility aliases are introduced.
 
 ## Project Structure
@@ -66,7 +66,7 @@ specs/231-sensitive-report-access-retention/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── sensitive-report-access-retention.md
+│ └── sensitive-report-access-retention.md
 └── tasks.md
 ```
 

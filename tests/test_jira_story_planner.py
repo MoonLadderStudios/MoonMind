@@ -4,13 +4,11 @@ import pytest
 
 from moonmind.planning import JiraStoryPlanner, JiraStoryPlannerError, StoryDraft
 
-
 @pytest.fixture(autouse=True)
 def patch_env(monkeypatch):
     monkeypatch.setenv("ATLASSIAN_API_KEY", "key")
     monkeypatch.setenv("ATLASSIAN_USERNAME", "user")
     monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
-
 
 def test_plan_valid_flow(monkeypatch):
     planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ", dry_run=False)
@@ -26,7 +24,6 @@ def test_plan_valid_flow(monkeypatch):
     mock_llm.assert_called_once()
     mock_create.assert_called_once_with([draft])
 
-
 def test_plan_invalid_json(monkeypatch):
     planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
 
@@ -35,7 +32,6 @@ def test_plan_invalid_json(monkeypatch):
     ):
         with pytest.raises(JiraStoryPlannerError):
             planner.plan()
-
 
 def test_plan_auth_error(monkeypatch):
     planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ", dry_run=False)
@@ -50,7 +46,6 @@ def test_plan_auth_error(monkeypatch):
         with pytest.raises(JiraStoryPlannerError):
             planner.plan()
 
-
 def test_plan_duplicate_summaries(monkeypatch):
     planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ")
     draft1 = StoryDraft(summary="A", description="d1", issue_type="Task")
@@ -61,7 +56,6 @@ def test_plan_duplicate_summaries(monkeypatch):
             result = planner.plan()
 
     assert result == [draft1, draft2]
-
 
 def test_plan_dry_run(monkeypatch):
     planner = JiraStoryPlanner(plan_text="plan", jira_project_key="PROJ", dry_run=True)

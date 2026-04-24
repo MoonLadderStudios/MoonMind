@@ -85,7 +85,7 @@
 ### Story Validation
 
 - [X] T018 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/test_skill_resolution.py tests/unit/api/test_agent_skills_service.py tests/unit/services/test_skill_materialization.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py` to validate FR-001 through FR-012, SC-001 through SC-007, and DESIGN-REQ-001 through DESIGN-REQ-004.
-- [X] T019 Run `rg -n "MM-405|DESIGN-REQ-001|DESIGN-REQ-002|DESIGN-REQ-003|DESIGN-REQ-004" specs/206-agent-skill-catalog-source-policy docs/tmp/jira-orchestration-inputs/MM-405-moonspec-orchestration-input.md` to validate source traceability for FR-012 and SC-007.
+- [X] T019 Run `rg -n "MM-405|DESIGN-REQ-001|DESIGN-REQ-002|DESIGN-REQ-003|DESIGN-REQ-004" specs/206-agent-skill-catalog-source-policy` to validate source traceability for FR-012 and SC-007.
 
 **Checkpoint**: The story is fully functional, covered by focused tests and traceability checks, and testable independently.
 

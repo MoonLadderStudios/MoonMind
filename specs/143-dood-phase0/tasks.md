@@ -20,7 +20,7 @@
 **Purpose**: Establish the shared validation surface and remaining-work tracker before story-specific doc edits
 
 - [X] T002 [P] Add a failing documentation-contract test in `tests/unit/docs/test_dood_phase0_contract.py` covering glossary terms, tool-path wording, and tracker references.
-- [X] T003 Create the DooD remaining-work tracker in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md` and register it in `docs/tmp/remaining-work/README.md`.
+- [X] T003 Create the DooD remaining-work tracker in `docs/ManagedAgents/DockerOutOfDocker.md` and register it in `docs/ManagedAgents/DockerOutOfDocker.md`.
 
 **Checkpoint**: The automated contract guard exists and the rollout tracker path is in place.
 
@@ -64,7 +64,7 @@
 
 **Goal**: Leave a durable rollout tracker and green automated validation for the Phase 0 contract.
 
-**Independent Test**: Run the focused doc-contract test and the full unit suite, then confirm the tracker is listed in `docs/tmp/remaining-work/README.md`.
+**Independent Test**: Run the focused doc-contract test and the full unit suite, then confirm the tracker is listed in `docs/ManagedAgents/DockerOutOfDocker.md`.
 
 ### Tests for User Story 3
 

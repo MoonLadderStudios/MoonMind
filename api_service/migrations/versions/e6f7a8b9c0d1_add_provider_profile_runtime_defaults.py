@@ -12,15 +12,12 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.sql import column, table
 
-
 revision: str = "e6f7a8b9c0d1"
 down_revision: Union[str, None] = "d5c6f7a8b9c0"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-
 __all__ = ["revision", "down_revision", "upgrade", "downgrade"]
-
 
 profiles_table = table(
     "managed_agent_provider_profiles",
@@ -30,7 +27,6 @@ profiles_table = table(
     column("priority", sa.Integer),
     column("is_default", sa.Boolean),
 )
-
 
 def upgrade() -> None:
     op.add_column(
@@ -87,7 +83,6 @@ def upgrade() -> None:
         postgresql_where=sa.text("is_default = true"),
         sqlite_where=sa.text("is_default = 1"),
     )
-
 
 def downgrade() -> None:
     op.drop_index(

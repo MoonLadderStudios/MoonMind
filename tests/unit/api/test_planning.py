@@ -10,7 +10,6 @@ app = FastAPI()
 app.include_router(planning_router, prefix="/v1/planning")
 client = TestClient(app)
 
-
 def test_plan_jira_stories_success():
     draft = StoryDraft(summary="s", description="d", issue_type="Task")
     planner_instance = MagicMock()
@@ -29,7 +28,6 @@ def test_plan_jira_stories_success():
         plan_text="do work", jira_project_key="PROJ", dry_run=True
     )
     planner_instance.plan.assert_called_once()
-
 
 def test_plan_jira_stories_error():
     planner_instance = MagicMock()

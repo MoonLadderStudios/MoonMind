@@ -21,12 +21,10 @@ if not os.getenv("RUN_E2E_TESTS"):
 else:
     from playwright.sync_api import sync_playwright
 
-
 def _reserve_free_port(host="127.0.0.1"):
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
         sock.bind((host, 0))
         return sock.getsockname()[1]
-
 
 def _wait_for_tcp_host(host, port, timeout_seconds=3.0):
     deadline = time.time() + timeout_seconds
@@ -36,7 +34,6 @@ def _wait_for_tcp_host(host, port, timeout_seconds=3.0):
                 return
         time.sleep(0.1)
     pytest.fail(f"Server did not start in time on {host}:{port}")
-
 
 @pytest.fixture(scope="module")
 def server():
@@ -86,7 +83,6 @@ def server():
         thread.join()
         main_app.dependency_overrides = original_overrides
         in_memory_engine.dispose()
-
 
 def _route_handlers(
     page,
@@ -211,12 +207,10 @@ def _route_handlers(
     page.route(f"{base_url}/api/executions/*", _mock_detail)
     return calls, create_requests
 
-
 def _read_submit_label(page):
     return (
         page.locator("#queue-submit-form button[type='submit']").text_content() or ""
     ).strip()
-
 
 def _assert_inflight_label(page, expected_label):
     script = """
@@ -231,7 +225,6 @@ def _assert_inflight_label(page, expected_label):
         script,
         arg=expected_label,
     )
-
 
 def test_submit_create_flows_to_task_detail(server):
     base_url = server
@@ -287,7 +280,6 @@ def test_submit_create_flows_to_task_detail(server):
 
         browser.close()
 
-
 def test_submit_error_restores_label(server):
     base_url = server
     with sync_playwright() as p:
@@ -320,7 +312,6 @@ def test_submit_error_restores_label(server):
         assert page.url.endswith("/tasks/new")
         assert calls["create"] == 1
         browser.close()
-
 
 def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server):
     base_url = server
@@ -415,7 +406,6 @@ def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server
         assert ordered_calls[:3] == ["source", "detail", "artifacts"]
         browser.close()
 
-
 def test_temporal_detail_shows_edit_button_when_local_editing_enabled(server):
     base_url = server
     previous_enabled = settings.temporal_dashboard.temporal_task_editing_enabled
@@ -482,7 +472,6 @@ def test_temporal_detail_shows_edit_button_when_local_editing_enabled(server):
                 )
     finally:
         settings.temporal_dashboard.temporal_task_editing_enabled = previous_enabled
-
 
 def test_create_page_shows_provider_profiles_for_selected_runtime(server):
     base_url = server
@@ -568,7 +557,6 @@ def test_create_page_shows_provider_profiles_for_selected_runtime(server):
             "Claude Default (Default)",
         ]
         browser.close()
-
 
 def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
     base_url = server

@@ -7,7 +7,6 @@ from typing import Any
 
 import requests
 
-
 @dataclass(slots=True)
 class TaskTemplateClient:
     """Small HTTP client for template list/expand API usage in CLI flows."""
@@ -78,7 +77,6 @@ class TaskTemplateClient:
             raise RuntimeError("Unexpected template expand response payload.")
         return payload
 
-
 def merge_expanded_steps(
     *,
     existing_steps: list[dict[str, Any]],
@@ -96,6 +94,5 @@ def merge_expanded_steps(
     if normalized_mode == "replace":
         return incoming
     return [*base, *incoming]
-
 
 __all__ = ["TaskTemplateClient", "merge_expanded_steps"]

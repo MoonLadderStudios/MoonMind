@@ -40,7 +40,6 @@ from moonmind.workflows.temporal.service import (
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 
-
 @pytest.fixture
 def mock_client_adapter():
     adapter = MagicMock()
@@ -51,7 +50,6 @@ def mock_client_adapter():
     adapter.cancel_workflow = AsyncMock()
     adapter.terminate_workflow = AsyncMock()
     return adapter
-
 
 @asynccontextmanager
 async def temporal_db(tmp_path):
@@ -67,7 +65,6 @@ async def temporal_db(tmp_path):
             yield session
     finally:
         await engine.dispose()
-
 
 async def _create_temporal_artifact(
     session: AsyncSession,
@@ -89,7 +86,6 @@ async def _create_temporal_artifact(
         )
     )
     await session.commit()
-
 
 @pytest.mark.asyncio
 async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path):
@@ -129,7 +125,6 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
         assert source is not None
         assert source.run_id == record.run_id
 
-
 @pytest.mark.asyncio
 async def test_create_execution_returns_repair_pending_fallback_when_projection_sync_fails(
     tmp_path, monkeypatch
@@ -168,7 +163,6 @@ async def test_create_execution_returns_repair_pending_fallback_when_projection_
         assert source is not None
         assert projection is None
 
-
 @pytest.mark.asyncio
 async def test_create_execution_defaults_missing_owner_to_system(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -191,7 +185,6 @@ async def test_create_execution_defaults_missing_owner_to_system(tmp_path):
         assert record.search_attributes["mm_owner_type"] == "system"
         assert record.search_attributes["mm_owner_id"] == "system"
 
-
 @pytest.mark.asyncio
 async def test_create_execution_rejects_unsupported_workflow_type(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -211,7 +204,6 @@ async def test_create_execution_rejects_unsupported_workflow_type(tmp_path):
                 initial_parameters={},
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_missing_manifest_artifact_ref(tmp_path):
@@ -233,7 +225,6 @@ async def test_create_execution_rejects_missing_manifest_artifact_ref(tmp_path):
                 initial_parameters={},
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_pending_upload_temporal_input_artifact_ref(
@@ -263,7 +254,6 @@ async def test_create_execution_rejects_pending_upload_temporal_input_artifact_r
                 idempotency_key=None,
             )
 
-
 @pytest.mark.asyncio
 async def test_create_execution_rejects_unsupported_failure_policy(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -285,7 +275,6 @@ async def test_create_execution_rejects_unsupported_failure_policy(tmp_path):
                 idempotency_key=None,
             )
 
-
 @pytest.mark.asyncio
 async def test_create_execution_rejects_empty_failure_policy(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -306,7 +295,6 @@ async def test_create_execution_rejects_empty_failure_policy(tmp_path):
                 initial_parameters={},
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_more_than_10_dependencies(tmp_path):
@@ -331,7 +319,6 @@ async def test_create_execution_rejects_more_than_10_dependencies(tmp_path):
                 idempotency_key=None,
             )
 
-
 @pytest.mark.asyncio
 async def test_create_execution_rejects_missing_dependency(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -352,7 +339,6 @@ async def test_create_execution_rejects_missing_dependency(tmp_path):
                 initial_parameters={"task": {"dependsOn": ["mm:non-existent"]}},
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_dependency_run_id_identifier(
@@ -389,7 +375,6 @@ async def test_create_execution_rejects_dependency_run_id_identifier(
                 initial_parameters={"task": {"dependsOn": [existing.run_id]}},
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_non_run_dependency(tmp_path, mock_client_adapter):
@@ -428,7 +413,6 @@ async def test_create_execution_rejects_non_run_dependency(tmp_path, mock_client
                 idempotency_key=None,
             )
 
-
 @pytest.mark.asyncio
 async def test_create_execution_rejects_unauthorized_dependency(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
@@ -463,7 +447,6 @@ async def test_create_execution_rejects_unauthorized_dependency(tmp_path, mock_c
                 initial_parameters={"task": {"dependsOn": [foreign.workflow_id]}},
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_persists_dependency_edges_and_supports_lookups(
@@ -531,7 +514,6 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
         )
         assert snapshot[dep1.workflow_id].title == "Dependency 1"
         assert snapshot[dep2.workflow_id].workflow_type == "MoonMind.Run"
-
 
 @pytest.mark.asyncio
 async def test_create_execution_persists_remediation_link_and_supports_lookups(
@@ -622,7 +604,6 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
         prerequisites = await service.list_prerequisites(remediation.workflow_id)
         assert prerequisites == []
 
-
 @pytest.mark.asyncio
 async def test_record_remediation_approval_decision_appends_bounded_audit(
     tmp_path, mock_client_adapter
@@ -693,7 +674,6 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         assert f"{remediation.workflow_id}:approval" in audit[-1]["detail"]
         assert "ops@example.com" in audit[-1]["detail"]
 
-
 @pytest.mark.asyncio
 async def test_record_remediation_approval_decision_rejects_non_pending_target(
     tmp_path, mock_client_adapter
@@ -725,7 +705,6 @@ async def test_record_remediation_approval_decision_rejects_non_pending_target(
                 comment=None,
                 actor="ops@example.com",
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_persists_supplied_matching_remediation_run_id(
@@ -777,7 +756,6 @@ async def test_create_execution_persists_supplied_matching_remediation_run_id(
         assert link.mode == "snapshot_then_follow"
         assert link.authority_mode == "observe_only"
 
-
 @pytest.mark.asyncio
 async def test_create_execution_rejects_missing_remediation_target_workflow_id(
     tmp_path, mock_client_adapter
@@ -800,7 +778,6 @@ async def test_create_execution_rejects_missing_remediation_target_workflow_id(
                 initial_parameters={"task": {"remediation": {"target": {}}}},
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_remediation_run_id_identifier(
@@ -839,7 +816,6 @@ async def test_create_execution_rejects_remediation_run_id_identifier(
                 idempotency_key=None,
             )
 
-
 @pytest.mark.asyncio
 async def test_create_execution_rejects_missing_remediation_target(
     tmp_path, mock_client_adapter
@@ -868,7 +844,6 @@ async def test_create_execution_rejects_missing_remediation_target(
                 },
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_non_run_remediation_target(
@@ -910,7 +885,6 @@ async def test_create_execution_rejects_non_run_remediation_target(
                 },
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_mismatched_remediation_target_run_id(
@@ -956,7 +930,6 @@ async def test_create_execution_rejects_mismatched_remediation_target_run_id(
                 idempotency_key=None,
             )
 
-
 @pytest.mark.asyncio
 async def test_create_execution_rejects_unsupported_remediation_authority_mode(
     tmp_path, mock_client_adapter
@@ -999,7 +972,6 @@ async def test_create_execution_rejects_unsupported_remediation_authority_mode(
                 idempotency_key=None,
             )
 
-
 @pytest.mark.asyncio
 async def test_create_execution_rejects_incompatible_remediation_action_policy(
     tmp_path, mock_client_adapter
@@ -1041,7 +1013,6 @@ async def test_create_execution_rejects_incompatible_remediation_action_policy(
                 },
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_keeps_future_remediation_policy_inert(
@@ -1089,7 +1060,6 @@ async def test_create_execution_keeps_future_remediation_policy_inert(
         mock_client_adapter.start_workflow.assert_awaited_once()
         start_args = mock_client_adapter.start_workflow.await_args.kwargs["input_args"]
         assert "remediation" not in start_args["initial_parameters"]["task"]
-
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_nested_remediation_target(
@@ -1145,7 +1115,6 @@ async def test_create_execution_rejects_nested_remediation_target(
                 idempotency_key=None,
             )
 
-
 @pytest.mark.asyncio
 async def test_create_execution_rejects_malformed_remediation_task_run_ids(
     tmp_path, mock_client_adapter
@@ -1189,7 +1158,6 @@ async def test_create_execution_rejects_malformed_remediation_task_run_ids(
                 },
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_rejects_foreign_remediation_task_run_ids(
@@ -1243,7 +1211,6 @@ async def test_create_execution_rejects_foreign_remediation_task_run_ids(
                 },
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_create_execution_accepts_owned_remediation_task_run_ids(
@@ -1300,7 +1267,6 @@ async def test_create_execution_accepts_owned_remediation_task_run_ids(
         assert link is not None
         assert link.target_workflow_id == target.workflow_id
 
-
 @pytest.mark.asyncio
 async def test_create_execution_normalizes_depends_on_before_limit_and_persistence(
     tmp_path, mock_client_adapter
@@ -1347,7 +1313,6 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
         assert source is not None
         assert source.parameters["task"]["dependsOn"] == workflow_ids
 
-
 @pytest.mark.asyncio
 async def test_create_execution_removes_empty_normalized_depends_on_from_parameters(
     tmp_path, mock_client_adapter
@@ -1374,7 +1339,6 @@ async def test_create_execution_removes_empty_normalized_depends_on_from_paramet
         assert source is not None
         assert source.parameters == {}
 
-
 @pytest.mark.asyncio
 async def test_validate_dependencies_rejects_self_dependency(tmp_path):
     """FR-008: A workflow MUST NOT declare itself as a dependency (DOC-REQ-007)."""
@@ -1392,7 +1356,6 @@ async def test_validate_dependencies_rejects_self_dependency(tmp_path):
                 owner_id=str(uuid4()),
                 owner_type=TemporalExecutionOwnerType.USER,
             )
-
 
 @pytest.mark.asyncio
 async def test_mark_execution_succeeded_fans_out_dependency_resolution_signals(
@@ -1452,7 +1415,6 @@ async def test_mark_execution_succeeded_fans_out_dependency_resolution_signals(
         assert payload["terminalState"] == "completed"
         assert payload["closeStatus"] == "completed"
         assert payload["failureCategory"] is None
-
 
 @pytest.mark.asyncio
 async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
@@ -1534,7 +1496,6 @@ async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
         assert payload["prerequisiteWorkflowId"] == prerequisite.workflow_id
         assert payload["terminalState"] == "completed"
 
-
 @pytest.mark.asyncio
 async def test_dependency_status_snapshot_returns_stale_record_when_terminal_sync_fails(
     tmp_path, mock_client_adapter
@@ -1572,7 +1533,6 @@ async def test_dependency_status_snapshot_returns_stale_record_when_terminal_syn
         assert snapshot[prerequisite_workflow_id].state == "initializing"
         assert snapshot[prerequisite_workflow_id].close_status is None
         mock_client_adapter.signal_workflow.assert_not_awaited()
-
 
 @pytest.mark.asyncio
 async def test_mark_execution_failed_fanout_is_best_effort(tmp_path, mock_client_adapter):
@@ -1632,7 +1592,6 @@ async def test_mark_execution_failed_fanout_is_best_effort(tmp_path, mock_client
             call.args[0] for call in mock_client_adapter.signal_workflow.await_args_list
         }
         assert called_ids == {dependent_one.workflow_id, dependent_two.workflow_id}
-
 
 @pytest.mark.asyncio
 async def test_create_execution_returns_existing_record_after_idempotency_race(
@@ -1723,7 +1682,6 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
     finally:
         await engine.dispose()
 
-
 @pytest.mark.asyncio
 async def test_create_execution_scopes_idempotency_by_owner_type(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -1769,7 +1727,6 @@ async def test_create_execution_scopes_idempotency_by_owner_type(tmp_path):
         assert user_record.workflow_id != service_record.workflow_id
         assert service_retry.workflow_id == service_record.workflow_id
         assert service_retry.memo["title"] == "service owned"
-
 
 @pytest.mark.asyncio
 async def test_list_executions_syncs_page_in_single_projection_commit(
@@ -1823,7 +1780,6 @@ async def test_list_executions_syncs_page_in_single_projection_commit(
 
         assert len(result.items) == 2
         assert commit_calls == 1
-
 
 @pytest.mark.asyncio
 async def test_request_rerun_uses_continue_as_new_same_workflow_id(
@@ -1879,7 +1835,6 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
         assert "taskRunId" not in refreshed.memo
         assert "taskRunId" not in refreshed.parameters
         assert refreshed.search_attributes["mm_continue_as_new_cause"] == "manual_rerun"
-
 
 @pytest.mark.asyncio
 async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
@@ -1944,7 +1899,6 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         assert "task_run_id" not in rerun.parameters
         assert service._client_adapter.update_workflow.await_count == 0
 
-
 @pytest.mark.asyncio
 async def test_request_rerun_bounds_fresh_execution_idempotency_key(
     tmp_path, mock_client_adapter
@@ -2004,7 +1958,6 @@ async def test_request_rerun_bounds_fresh_execution_idempotency_key(
         assert len(rerun.create_idempotency_key) <= 128
         assert rerun.create_idempotency_key.startswith("rerun:")
 
-
 @pytest.mark.asyncio
 async def test_request_rerun_creates_fresh_execution_when_temporal_reports_completed(
     tmp_path, mock_client_adapter
@@ -2055,7 +2008,6 @@ async def test_request_rerun_creates_fresh_execution_when_temporal_reports_compl
         assert rerun.parameters["rerunSource"]["workflowId"] == source_workflow_id
         assert service._client_adapter.update_workflow.await_count == 1
 
-
 @pytest.mark.asyncio
 async def test_manifest_only_updates_rejected_for_non_manifest_workflow(
     tmp_path, mock_client_adapter
@@ -2092,7 +2044,6 @@ async def test_manifest_only_updates_rejected_for_non_manifest_workflow(
             )
 
         assert "only supported for MoonMind.ManifestIngest" in str(exc_info.value)
-
 
 @pytest.mark.asyncio
 async def test_request_rerun_clears_pause_flags_when_continuing_as_new(
@@ -2141,7 +2092,6 @@ async def test_request_rerun_clears_pause_flags_when_continuing_as_new(
         assert refreshed.paused is False
         assert refreshed.awaiting_external is False
 
-
 @pytest.mark.asyncio
 async def test_update_execution_rejects_unknown_update_name(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -2172,7 +2122,6 @@ async def test_update_execution_rejects_unknown_update_name(tmp_path):
                 title=None,
                 idempotency_key=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_update_execution_rejects_run_intervention_updates(
@@ -2211,7 +2160,6 @@ async def test_update_execution_rejects_run_intervention_updates(
                 workflow_id=created.workflow_id,
                 update_name="Cancel",
             )
-
 
 @pytest.mark.asyncio
 async def test_signal_pause_resume_and_external_event_transitions(
@@ -2266,7 +2214,6 @@ async def test_signal_pause_resume_and_external_event_transitions(
         assert "artifact://events/1" in (signaled.artifact_refs or [])
         assert signaled.state is MoonMindWorkflowState.EXECUTING
 
-
 @pytest.mark.asyncio
 async def test_signal_resume_forwards_payload_via_workflow_update(
     tmp_path, mock_client_adapter
@@ -2307,7 +2254,6 @@ async def test_signal_resume_forwards_payload_via_workflow_update(
             resumed.memo["intervention_audit"][-1]["detail"]
             == "Use the Provider Profiles label."
         )
-
 
 @pytest.mark.asyncio
 async def test_signal_send_message_records_intervention_audit_without_state_change(
@@ -2351,7 +2297,6 @@ async def test_signal_send_message_records_intervention_audit_without_state_chan
             refreshed.memo["intervention_audit"][-1]["detail"]
             == "Please use Provider Profiles."
         )
-
 
 @pytest.mark.asyncio
 async def test_signal_skip_dependency_wait_routes_update_and_records_audit(
@@ -2399,7 +2344,6 @@ async def test_signal_skip_dependency_wait_routes_update_and_records_audit(
         )
         assert refreshed.memo.get("waiting_reason") is None
 
-
 @pytest.mark.asyncio
 async def test_signal_send_message_rejects_noncanonical_payload(
     tmp_path, mock_client_adapter
@@ -2430,7 +2374,6 @@ async def test_signal_send_message_rejects_noncanonical_payload(
                 payload={"clarificationResponse": "Please use Provider Profiles."},
                 payload_artifact_ref=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_signal_bypass_dependencies_records_operator_audit(
@@ -2479,7 +2422,6 @@ async def test_signal_bypass_dependencies_records_operator_audit(
             == "No longer needs the upstream task."
         )
 
-
 @pytest.mark.asyncio
 async def test_signal_bypass_dependencies_outside_wait_does_not_mutate_projection(
     tmp_path, mock_client_adapter
@@ -2520,7 +2462,6 @@ async def test_signal_bypass_dependencies_outside_wait_does_not_mutate_projectio
             == "Dependency wait bypass ignored outside dependency wait."
         )
 
-
 @pytest.mark.asyncio
 async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -2548,7 +2489,6 @@ async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
                 payload=None,
                 payload_artifact_ref=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_cancel_marks_terminal_state_and_close_status(
@@ -2578,7 +2518,6 @@ async def test_cancel_marks_terminal_state_and_close_status(
 
         assert canceled.state is MoonMindWorkflowState.CANCELED
         assert canceled.close_status is TemporalExecutionCloseStatus.CANCELED
-
 
 @pytest.mark.asyncio
 async def test_cancel_execution_records_reject_audit_action(
@@ -2615,7 +2554,6 @@ async def test_cancel_execution_records_reject_audit_action(
         )
         assert canceled.closed_at is not None
         assert canceled.search_attributes["mm_state"] == "canceled"
-
 
 @pytest.mark.asyncio
 async def test_cancel_execution_accepts_projection_only_child_workflow(
@@ -2682,7 +2620,6 @@ async def test_cancel_execution_accepts_projection_only_child_workflow(
         assert canceled.search_attributes["mm_state"] == "canceled"
         mock_client_adapter.cancel_workflow.assert_called_once_with(workflow_id)
 
-
 @pytest.mark.asyncio
 async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
     tmp_path, mock_client_adapter
@@ -2733,7 +2670,6 @@ async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
             )
 
         mock_client_adapter.cancel_workflow.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_cancel_execution_best_effort_terminates_task_scoped_codex_session(
@@ -2792,7 +2728,6 @@ async def test_cancel_execution_best_effort_terminates_task_scoped_codex_session
             ],
             any_order=False,
         )
-
 
 @pytest.mark.asyncio
 async def test_cancel_execution_prefers_direct_session_record_load_for_codex_task_session(
@@ -2859,7 +2794,6 @@ async def test_cancel_execution_prefers_direct_session_record_load_for_codex_tas
             any_order=False,
         )
 
-
 @pytest.mark.asyncio
 async def test_cancel_execution_ignores_best_effort_session_terminate_failure(
     tmp_path, mock_client_adapter, monkeypatch
@@ -2909,7 +2843,6 @@ async def test_cancel_execution_ignores_best_effort_session_terminate_failure(
 
         mock_client_adapter.cancel_workflow.assert_called_once_with(created.workflow_id)
 
-
 @pytest.mark.asyncio
 async def test_forced_cancel_marks_failed_with_terminated_close_status(
     tmp_path, mock_client_adapter
@@ -2939,7 +2872,6 @@ async def test_forced_cancel_marks_failed_with_terminated_close_status(
         assert terminated.state is MoonMindWorkflowState.FAILED
         assert terminated.close_status is TemporalExecutionCloseStatus.TERMINATED
         assert terminated.memo["summary"] == "forced_termination: ops kill"
-
 
 @pytest.mark.asyncio
 async def test_request_rerun_can_override_inputs_and_parameters(
@@ -2981,7 +2913,6 @@ async def test_request_rerun_can_override_inputs_and_parameters(
         assert refreshed.parameters["force"] == "yes"
         assert "artifact://input/new" in refreshed.artifact_refs
         assert "artifact://plan/new" in refreshed.artifact_refs
-
 
 @pytest.mark.asyncio
 async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_new_cause(
@@ -3026,7 +2957,6 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
             "major_reconfiguration"
         )
 
-
 @pytest.mark.asyncio
 async def test_record_progress_triggers_continue_as_new_for_run_threshold(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -3066,7 +2996,6 @@ async def test_record_progress_triggers_continue_as_new_for_run_threshold(tmp_pa
             "lifecycle_threshold"
         )
 
-
 @pytest.mark.asyncio
 async def test_signal_external_event_requires_source_and_event_type(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -3091,7 +3020,6 @@ async def test_signal_external_event_requires_source_and_event_type(tmp_path):
                 payload={"source": "jules"},
                 payload_artifact_ref=None,
             )
-
 
 @pytest.mark.asyncio
 async def test_configure_integration_monitoring_persists_visibility_and_callback_key(
@@ -3139,7 +3067,6 @@ async def test_configure_integration_monitoring_persists_visibility_and_callback
         assert configured.integration_state["external_operation_id"] == "task-123"
         assert "artifact://events/start" in configured.artifact_refs
 
-
 @pytest.mark.asyncio
 async def test_configure_integration_monitoring_rejects_blank_external_operation_id(
     tmp_path,
@@ -3177,7 +3104,6 @@ async def test_configure_integration_monitoring_rejects_blank_external_operation
                 provider_summary={},
                 result_refs=[],
             )
-
 
 @pytest.mark.asyncio
 async def test_ingest_integration_callback_deduplicates_provider_event_ids(
@@ -3240,7 +3166,6 @@ async def test_ingest_integration_callback_deduplicates_provider_event_ids(
         assert second.integration_state["provider_event_ids_seen"] == ["evt-1"]
         assert "Ignored duplicate external event" in second.memo["summary"]
 
-
 @pytest.mark.asyncio
 async def test_wait_cycle_continue_as_new_preserves_active_integration_monitoring(
     tmp_path,
@@ -3298,7 +3223,6 @@ async def test_wait_cycle_continue_as_new_preserves_active_integration_monitorin
         assert updated.integration_state["external_operation_id"] == "task-continue"
         assert updated.integration_state["callback_correlation_key"] == "cb-continue"
 
-
 @pytest.mark.asyncio
 async def test_mark_execution_failed_rejects_unknown_error_category(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -3322,7 +3246,6 @@ async def test_mark_execution_failed_rejects_unknown_error_category(tmp_path):
                 error_category="unknown",
                 message="boom",
             )
-
 
 @pytest.mark.asyncio
 async def test_projection_sync_markers_round_trip_between_stale_and_fresh(tmp_path):
@@ -3355,7 +3278,6 @@ async def test_projection_sync_markers_round_trip_between_stale_and_fresh(tmp_pa
         assert refreshed.sync_state is TemporalExecutionProjectionSyncState.FRESH
         assert refreshed.sync_error is None
         assert refreshed.search_attributes["mm_owner_type"] == "user"
-
 
 @pytest.mark.asyncio
 async def test_update_execution_persists_repair_pending_when_projection_refresh_fails(
@@ -3415,7 +3337,6 @@ async def test_update_execution_persists_repair_pending_when_projection_refresh_
         assert projection.memo["title"] == "Before failure"
         assert source.memo["title"] == "After failure"
 
-
 @pytest.mark.asyncio
 async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -3473,7 +3394,6 @@ async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_pa
             TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
         )
 
-
 @pytest.mark.asyncio
 async def test_orphaned_projection_rows_with_canonical_source_repair_on_read_and_update(
     tmp_path, mock_client_adapter
@@ -3516,7 +3436,6 @@ async def test_orphaned_projection_rows_with_canonical_source_repair_on_read_and
 
         updated = await service.describe_execution(created.workflow_id)
         assert updated.memo["title"] == "Should apply"
-
 
 @pytest.mark.asyncio
 async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_path):
@@ -3572,7 +3491,6 @@ async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_pat
         with pytest.raises(TemporalExecutionNotFoundError):
             await service.describe_execution(ghost.workflow_id)
 
-
 @pytest.mark.asyncio
 async def test_mark_execution_succeeded_rejects_terminal_execution(
     tmp_path, mock_client_adapter
@@ -3605,7 +3523,6 @@ async def test_mark_execution_succeeded_rejects_terminal_execution(
         canceled = await service.describe_execution(created.workflow_id)
         assert canceled.state is MoonMindWorkflowState.CANCELED
         assert canceled.close_status is TemporalExecutionCloseStatus.CANCELED
-
 
 @pytest.mark.asyncio
 async def test_list_executions_filters_owner_and_paginates(tmp_path):
@@ -3689,7 +3606,6 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         )
         assert len(manifest_page.items) == 1
         assert manifest_page.items[0].entry == "manifest"
-
 
 @pytest.mark.asyncio
 async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
@@ -3786,7 +3702,6 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
             older.workflow_id,
         ]
 
-
 @pytest.mark.asyncio
 async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -3864,7 +3779,6 @@ async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp
         assert running.workflow_id in [item.workflow_id for item in listed.items[2:]]
         assert listed.items[0].started_at is None
 
-
 @pytest.mark.asyncio
 async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -3923,7 +3837,6 @@ async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
         assert result.count == 1
         assert len(result.items) == 1
         assert result.items[0].workflow_id == matching.workflow_id
-
 
 @pytest.mark.asyncio
 async def test_polling_backoff_resets_after_status_change_and_updates_visibility(
@@ -3992,7 +3905,6 @@ async def test_polling_backoff_resets_after_status_change_and_updates_visibility
         assert second_poll.integration_state["poll_interval_seconds"] == 5
         assert second_poll.search_attributes["mm_stage"] == "running"
 
-
 @pytest.mark.asyncio
 async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
     tmp_path, mock_client_adapter
@@ -4051,7 +3963,6 @@ async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
 
         assert late.integration_state["normalized_status"] == "completed"
         assert "Ignored late non-terminal external event" in late.memo["summary"]
-
 
 @pytest.mark.asyncio
 async def test_failed_poll_marks_integration_error_summary(tmp_path):

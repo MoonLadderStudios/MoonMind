@@ -28,7 +28,6 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.workflows.temporal.activity_runtime import PlanGenerateActivityResult
 from moonmind.workflows.temporal.artifacts import ArtifactRef
 
-
 @overload
 async def execute_typed_activity(
     activity: Literal["artifact.read"],
@@ -42,7 +41,6 @@ async def execute_typed_activity(
     cancellation_type: ActivityCancellationType | None = None,
 ) -> bytes:
     pass
-
 
 @overload
 async def execute_typed_activity(
@@ -58,7 +56,6 @@ async def execute_typed_activity(
 ) -> ArtifactRef:
     pass
 
-
 @overload
 async def execute_typed_activity(
     activity: Literal["plan.generate"],
@@ -72,7 +69,6 @@ async def execute_typed_activity(
     cancellation_type: ActivityCancellationType | None = None,
 ) -> PlanGenerateActivityResult:
     pass
-
 
 @overload
 async def execute_typed_activity(
@@ -89,7 +85,6 @@ async def execute_typed_activity(
 ) -> AgentRunHandle:
     pass
 
-
 @overload
 async def execute_typed_activity(
     activity: Literal["integration.jules.status", "integration.codex_cloud.status"],
@@ -104,7 +99,6 @@ async def execute_typed_activity(
     summary: str | Mapping[str, Any] | None = None,
 ) -> AgentRunStatus:
     pass
-
 
 @overload
 async def execute_typed_activity(
@@ -125,7 +119,6 @@ async def execute_typed_activity(
 ) -> AgentRunResult:
     pass
 
-
 @overload
 async def execute_typed_activity(
     activity: Literal["integration.jules.cancel", "integration.codex_cloud.cancel"],
@@ -140,7 +133,6 @@ async def execute_typed_activity(
     summary: str | Mapping[str, Any] | None = None,
 ) -> AgentRunStatus:
     pass
-
 
 @overload
 async def execute_typed_activity(
@@ -157,7 +149,6 @@ async def execute_typed_activity(
 ) -> AgentRunStatus:
     pass
 
-
 @overload
 async def execute_typed_activity(
     activity: Literal["agent_runtime.fetch_result"],
@@ -172,7 +163,6 @@ async def execute_typed_activity(
     summary: str | Mapping[str, Any] | None = None,
 ) -> AgentRunResult:
     pass
-
 
 @overload
 async def execute_typed_activity(
@@ -189,7 +179,6 @@ async def execute_typed_activity(
 ) -> AgentRunStatus:
     pass
 
-
 @overload
 async def execute_typed_activity(
     activity: str,
@@ -204,7 +193,6 @@ async def execute_typed_activity(
     summary: str | Mapping[str, Any] | None = None,
 ) -> Any:
     pass
-
 
 async def execute_typed_activity(
     activity: str,

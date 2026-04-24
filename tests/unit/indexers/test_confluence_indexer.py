@@ -9,7 +9,6 @@ from llama_index.readers.confluence import (  # For type hinting if needed, but 
 
 from moonmind.indexers.confluence_indexer import ConfluenceIndexer
 
-
 class TestConfluenceIndexer(unittest.TestCase):
     def setUp(self):
         self.mock_node_parser_instance = MagicMock()
@@ -228,7 +227,6 @@ class TestConfluenceIndexer(unittest.TestCase):
         self.assertEqual(result["total_nodes_indexed"], 0)
         self.assertEqual(result["index"], mock_index_instance)
         self.mock_storage_context.persist.assert_called_once()
-
 
 if __name__ == "__main__":
     unittest.main()

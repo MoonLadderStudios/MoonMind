@@ -10,14 +10,11 @@ from api_service.db.base import get_async_session  # Dependency for DB session
 from api_service.db.models import User as DBUser  # User model from DB
 from api_service.services.profile_service import ProfileService
 
-
 router = APIRouter()
-
 
 # Dependency to get ProfileService instance
 async def get_profile_service() -> ProfileService:
     return ProfileService()
-
 
 def _build_sanitized_response(profile) -> UserProfileReadSanitized:
     """Build a sanitized response with key-set boolean flags."""
@@ -28,7 +25,6 @@ def _build_sanitized_response(profile) -> UserProfileReadSanitized:
         openai_api_key_set=bool(getattr(profile, "openai_api_key", None)),
         anthropic_api_key_set=bool(getattr(profile, "anthropic_api_key", None)),
     )
-
 
 @router.get("/me", response_model=UserProfileReadSanitized)
 async def get_current_user_profile(
@@ -47,7 +43,6 @@ async def get_current_user_profile(
         db_session=db, user_id=user.id
     )
     return _build_sanitized_response(profile)
-
 
 @router.put("/me", response_model=UserProfileReadSanitized)
 async def update_current_user_profile(

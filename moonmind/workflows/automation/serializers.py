@@ -15,7 +15,6 @@ _TASK_ORDER: tuple[str, ...] = (
     "apply_and_publish",
 )
 
-
 class SerializedTaskState(TypedDict, total=False):
     """Structure returned to API consumers for a task state."""
 
@@ -31,7 +30,6 @@ class SerializedTaskState(TypedDict, total=False):
     createdAt: str | None
     updatedAt: str | None
 
-
 class SerializedTaskSummary(TypedDict, total=False):
     """Condensed representation of the latest task states."""
 
@@ -41,7 +39,6 @@ class SerializedTaskSummary(TypedDict, total=False):
     startedAt: str | None
     finishedAt: str | None
     updatedAt: str | None
-
 
 class SerializedArtifact(TypedDict):
     """Structure returned to API consumers for workflow artifacts."""
@@ -54,7 +51,6 @@ class SerializedArtifact(TypedDict):
     digest: str | None
     createdAt: str | None
 
-
 class SerializedCredentialAudit(TypedDict, total=False):
     """Structure returned to API consumers for credential audits."""
 
@@ -62,7 +58,6 @@ class SerializedCredentialAudit(TypedDict, total=False):
     githubStatus: str
     checkedAt: str | None
     notes: str | None
-
 
 class SerializedRun(TypedDict, total=False):
     """Structure returned to API consumers for workflow runs."""
@@ -96,14 +91,12 @@ class SerializedRun(TypedDict, total=False):
     artifacts: list[SerializedArtifact]
     credentialAudit: SerializedCredentialAudit | None
 
-
 def _serialize_datetime(value: datetime | None) -> str | None:
     if value is None:
         return None
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC).isoformat()
     return value.isoformat()
-
 
 def serialize_task_state(state: models.WorkflowTaskState) -> SerializedTaskState:
     """Convert a task state model into a serializable dictionary."""
@@ -122,14 +115,12 @@ def serialize_task_state(state: models.WorkflowTaskState) -> SerializedTaskState
         updatedAt=_serialize_datetime(state.updated_at),
     )
 
-
 def _task_state_latest_timestamp(
     state: models.WorkflowTaskState,
 ) -> datetime | None:
     """Return the most recent timestamp associated with a task state."""
 
     return state.updated_at or state.finished_at or state.started_at or state.created_at
-
 
 def _latest_task_states(
     states: Iterable[models.WorkflowTaskState],
@@ -164,7 +155,6 @@ def _latest_task_states(
         ),
     )
 
-
 def serialize_task_summary(
     states: Iterable[models.WorkflowTaskState],
 ) -> list[SerializedTaskSummary]:
@@ -183,7 +173,6 @@ def serialize_task_summary(
         for state in collapsed
     ]
 
-
 def serialize_artifact(artifact: models.WorkflowArtifact) -> SerializedArtifact:
     """Convert an artifact record into API response structure."""
 
@@ -197,7 +186,6 @@ def serialize_artifact(artifact: models.WorkflowArtifact) -> SerializedArtifact:
         createdAt=_serialize_datetime(artifact.created_at),
     )
 
-
 def serialize_task_collection(
     run_id: UUID, states: Iterable[models.WorkflowTaskState]
 ) -> dict[str, object]:
@@ -208,7 +196,6 @@ def serialize_task_collection(
         "tasks": [serialize_task_state(state) for state in states],
     }
 
-
 def serialize_artifact_collection(
     run_id: UUID, artifacts: Iterable[models.WorkflowArtifact]
 ) -> dict[str, object]:
@@ -218,7 +205,6 @@ def serialize_artifact_collection(
         "runId": str(run_id),
         "artifacts": [serialize_artifact(item) for item in artifacts],
     }
-
 
 def _serialize_credential_audit(
     audit: models.WorkflowCredentialAudit | None,
@@ -231,7 +217,6 @@ def _serialize_credential_audit(
         checkedAt=_serialize_datetime(audit.checked_at),
         notes=audit.notes,
     )
-
 
 def serialize_run(
     run: models.WorkflowRun,
@@ -294,7 +279,6 @@ def serialize_run(
         data["credentialAudit"] = _serialize_credential_audit(audit)
 
     return data
-
 
 __all__ = [
     "serialize_run",

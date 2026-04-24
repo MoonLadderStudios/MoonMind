@@ -1,6 +1,5 @@
 import os
 
-
 def find_files(search_directory: str, target_extension: str):
     if not target_extension.startswith("."):
         target_extension = "." + target_extension

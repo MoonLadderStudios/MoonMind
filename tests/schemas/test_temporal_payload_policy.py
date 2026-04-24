@@ -15,18 +15,15 @@ from moonmind.schemas.temporal_payload_policy import (
 )
 from moonmind.schemas.temporal_signal_contracts import ExternalEventSignal
 
-
 def test_agent_run_result_metadata_rejects_nested_raw_bytes() -> None:
     with pytest.raises(ValidationError, match="must not contain raw bytes"):
         AgentRunResult(metadata={"diagnostics": {"payload": b"binary"}})
-
 
 def test_agent_run_result_metadata_requires_artifact_ref_for_large_text() -> None:
     with pytest.raises(ValidationError, match="store large payloads in artifacts"):
         AgentRunResult(
             metadata={"transcript": "x" * (MAX_TEMPORAL_METADATA_STRING_CHARS + 1)}
         )
-
 
 def test_compact_temporal_ref_metadata_replaces_inline_content_with_diagnostics() -> None:
     metadata = compact_temporal_ref_metadata(
@@ -39,7 +36,6 @@ def test_compact_temporal_ref_metadata_replaces_inline_content_with_diagnostics(
     assert len(metadata["instructionRefSha256"]) == 64
     assert "instructionRef" not in metadata
     AgentRunResult(metadata=metadata)
-
 
 def test_managed_session_turn_response_metadata_allows_compact_artifact_refs() -> None:
     response = CodexManagedSessionTurnResponse(
@@ -64,7 +60,6 @@ def test_managed_session_turn_response_metadata_allows_compact_artifact_refs() -
         "checkpointRef": "art-checkpoint",
     }
 
-
 def test_integration_provider_summary_rejects_large_provider_body() -> None:
     with pytest.raises(ValidationError, match="store large payloads in artifacts"):
         IntegrationCallbackRequest(
@@ -74,7 +69,6 @@ def test_integration_provider_summary_rejects_large_provider_body() -> None:
             },
             payloadArtifactRef="art-provider-payload",
         )
-
 
 def test_external_event_provider_summary_accepts_compact_refs() -> None:
     signal = ExternalEventSignal(

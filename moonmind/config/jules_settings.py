@@ -9,9 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from moonmind.config.paths import ENV_FILE
 
-
 JULES_DEFAULT_API_URL = "https://jules.googleapis.com/v1alpha"
-
 
 class JulesSettings(BaseSettings):
     """Jules API settings."""

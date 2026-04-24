@@ -51,13 +51,10 @@ legacy_router = APIRouter(
     tags=["workflows"],
 )
 
-
 _AFFINITY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
-
 
 def _is_workflow_admin(user: User | None) -> bool:
     return bool(user and getattr(user, "is_superuser", False))
-
 
 def _run_owned_by_user(run: object, user: User | None) -> bool:
     user_id = getattr(user, "id", None)
@@ -66,7 +63,6 @@ def _run_owned_by_user(run: object, user: User | None) -> bool:
     created_by = getattr(run, "created_by", None)
     requested_by_user_id = getattr(run, "requested_by_user_id", None)
     return created_by == user_id or requested_by_user_id == user_id
-
 
 def _raise_workflow_not_found(run_id: UUID) -> None:
     raise HTTPException(
@@ -77,7 +73,6 @@ def _raise_workflow_not_found(run_id: UUID) -> None:
         },
     )
 
-
 def _assert_run_access(run: object | None, run_id: UUID, user: User | None) -> object:
     if run is None:
         _raise_workflow_not_found(run_id)
@@ -85,13 +80,11 @@ def _assert_run_access(run: object | None, run_id: UUID, user: User | None) -> o
         return run
     _raise_workflow_not_found(run_id)
 
-
 def _canonicalize_legacy_path(path: str) -> str:
     if path.startswith("/api/workflows"):
         suffix = path[len("/api/workflows") :]
         return f"/api/workflows{suffix}"
     return path
-
 
 async def _mark_legacy_route_usage(request: Request, response: Response) -> None:
     path = request.url.path
@@ -112,14 +105,12 @@ async def _mark_legacy_route_usage(request: Request, response: Response) -> None
         },
     )
 
-
 def _ensure_utc_timestamp(timestamp: datetime | None) -> datetime:
     if timestamp is None:
         return datetime.now(UTC)
     if timestamp.tzinfo is None or timestamp.tzinfo.utcoffset(timestamp) is None:
         return timestamp.replace(tzinfo=UTC)
     return timestamp.astimezone(UTC)
-
 
 def _normalize_affinity_key(raw: str | None) -> str | None:
     """Validate and normalize a user supplied affinity key."""
@@ -145,12 +136,10 @@ def _normalize_affinity_key(raw: str | None) -> str | None:
 
     return candidate
 
-
 async def _get_repository(
     session: AsyncSession = Depends(get_async_session),
 ) -> WorkflowRepository:
     return get_workflow_repository(session)
-
 
 def _serialize_run_model(
     run,
@@ -168,7 +157,6 @@ def _serialize_run_model(
         task_states=task_states,
     )
     return WorkflowRunModel.model_validate(serialized)
-
 
 @canonical_router.get("/codex/shards", response_model=CodexShardListResponse)
 @legacy_router.get(
@@ -204,7 +192,6 @@ async def list_codex_shards(
         for entry in shard_health
     ]
     return CodexShardListResponse(shards=shards)
-
 
 @canonical_router.post(
     "/runs/{run_id}/codex/preflight",
@@ -331,7 +318,6 @@ async def trigger_codex_preflight(
         message=preflight_message,
     )
 
-
 @canonical_router.get("/runs", response_model=WorkflowRunCollectionResponse)
 @legacy_router.get(
     "/runs",
@@ -416,7 +402,6 @@ async def list_workflow_runs(
         nextCursor=getattr(paginated_runs, "next_cursor", None),
     )
 
-
 @canonical_router.get("/runs/{run_id}", response_model=WorkflowRunModel)
 @legacy_router.get(
     "/runs/{run_id}",
@@ -446,7 +431,6 @@ async def get_workflow_run(
         include_artifacts=include_artifacts,
         include_credential_audit=include_credential_audit,
     )
-
 
 @canonical_router.get(
     "/runs/{run_id}/tasks", response_model=WorkflowTaskStateListResponse
@@ -480,7 +464,6 @@ async def list_workflow_run_tasks(
     payload = serialize_task_collection(run_id, states)
     return WorkflowTaskStateListResponse.model_validate(payload)
 
-
 @canonical_router.get(
     "/runs/{run_id}/artifacts", response_model=WorkflowArtifactListResponse
 )
@@ -502,7 +485,6 @@ async def list_workflow_run_artifacts(
     artifacts = await repo.list_artifacts(run_id)
     payload = serialize_artifact_collection(run_id, artifacts)
     return WorkflowArtifactListResponse.model_validate(payload)
-
 
 @canonical_router.post(
     "/runs/{run_id}/retry",
@@ -551,8 +533,6 @@ async def retry_workflow_run(
     run = refreshed or triggered.run
     return _serialize_run_model(run)
 
-
 router.include_router(canonical_router)
-
 
 __all__ = ["router"]

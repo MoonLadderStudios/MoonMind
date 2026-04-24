@@ -17,14 +17,12 @@ from moonmind.auth.resolvers import (
     RootSecretResolver,
 )
 
-
 @pytest.mark.asyncio
 async def test_env_resolver_success(monkeypatch):
     monkeypatch.setenv("DUMMY_ENV_VAR", "super-secret")
     ref = parse_secret_ref("env://DUMMY_ENV_VAR")
     resolver = EnvSecretResolver()
     assert await resolver.resolve(ref) == "super-secret"
-
 
 @pytest.mark.asyncio
 async def test_env_resolver_missing():
@@ -33,7 +31,6 @@ async def test_env_resolver_missing():
     with pytest.raises(SecretMissingError) as exc:
         await resolver.resolve(ref)
     assert "NOT_REAL_ENV_VAR" in str(exc.value)
-
 
 @pytest.mark.asyncio
 @patch("moonmind.auth.resolvers.db_resolver.SecretsService")
@@ -51,7 +48,6 @@ async def test_db_resolver_success(mock_session_maker, mock_secrets_service):
     resolver = DbEncryptedSecretResolver()
     assert await resolver.resolve(ref) == "db-secret"
 
-
 @pytest.mark.asyncio
 @patch("moonmind.auth.resolvers.db_resolver.SecretsService")
 @patch("moonmind.auth.resolvers.db_resolver.async_session_maker")
@@ -68,7 +64,6 @@ async def test_db_resolver_missing(mock_session_maker, mock_secrets_service):
     with pytest.raises(SecretMissingError):
         await resolver.resolve(ref)
 
-
 @pytest.mark.asyncio
 @patch("moonmind.auth.resolvers.db_resolver.SecretsService")
 @patch("moonmind.auth.resolvers.db_resolver.async_session_maker")
@@ -84,7 +79,6 @@ async def test_db_resolver_decryption_error(mock_session_maker, mock_secrets_ser
     resolver = DbEncryptedSecretResolver()
     with pytest.raises(SecretDecryptionError):
         await resolver.resolve(ref)
-
 
 @pytest.mark.asyncio
 @patch("moonmind.auth.resolvers.exec_resolver.asyncio.create_subprocess_exec")
@@ -103,7 +97,6 @@ async def test_exec_resolver_success(mock_create_subprocess_exec):
         stderr=asyncio.subprocess.PIPE
     )
 
-
 @pytest.mark.asyncio
 async def test_exec_resolver_not_allowed():
     ref = parse_secret_ref("exec://rm?-rf?/")
@@ -111,7 +104,6 @@ async def test_exec_resolver_not_allowed():
     with pytest.raises(SecretAccessDeniedError) as exc:
         await resolver.resolve(ref)
     assert "not in the exec allowlist" in str(exc.value)
-
 
 @pytest.mark.asyncio
 @patch("moonmind.auth.resolvers.exec_resolver.asyncio.create_subprocess_exec")
@@ -123,7 +115,6 @@ async def test_exec_resolver_not_found(mock_create_subprocess_exec):
     with pytest.raises(SecretMissingError) as exc:
         await resolver.resolve(ref)
     assert "Executable not found" in str(exc.value)
-
 
 @pytest.mark.asyncio
 @patch("moonmind.auth.resolvers.exec_resolver.asyncio.create_subprocess_exec")
@@ -138,7 +129,6 @@ async def test_exec_resolver_failure(mock_create_subprocess_exec):
     with pytest.raises(SecretMissingError) as exc:
         await resolver.resolve(ref)
     assert "failed with exit code 1" in str(exc.value)
-
 
 @pytest.mark.asyncio
 async def test_root_resolver_routing():

@@ -80,7 +80,6 @@ _LEGACY_METADATA_MAP: tuple[tuple[str, str], ...] = (
 )
 _MAX_SUMMARY_CHARS = 4096
 
-
 def validate_codex_oauth_profile_refs(
     *,
     runtime_id: str | None,
@@ -106,12 +105,10 @@ def validate_codex_oauth_profile_refs(
     if missing:
         raise ValueError("; ".join(missing))
 
-
 def is_terminal_agent_run_state(status: AgentRunState) -> bool:
     """Return whether one canonical run status is terminal."""
 
     return status in TERMINAL_AGENT_RUN_STATES
-
 
 def _contains_sensitive_key(
     value: Any,
@@ -161,7 +158,6 @@ class ProfileSelector(BaseModel):
     runtime_materialization_mode: str | None = Field(
         None, alias="runtimeMaterializationMode"
     )
-
 
 class AgentExecutionRequest(BaseModel):
     """Canonical request payload for true agent runtime execution."""
@@ -243,7 +239,6 @@ class AgentExecutionRequest(BaseModel):
             raise ValueError("workspaceSpec must not contain raw credential keys")
         return self
 
-
 class AgentRunHandle(BaseModel):
     """Run-handle payload returned by adapter start operations."""
 
@@ -269,7 +264,6 @@ class AgentRunHandle(BaseModel):
         if self.started_at.tzinfo is None:
             self.started_at = self.started_at.replace(tzinfo=UTC)
         return self
-
 
 class AgentRunStatus(BaseModel):
     """Current lifecycle status for one active or completed run."""
@@ -302,7 +296,6 @@ class AgentRunStatus(BaseModel):
         if self.observed_at.tzinfo is None:
             self.observed_at = self.observed_at.replace(tzinfo=UTC)
         return self
-
 
 class AgentRunResult(BaseModel):
     """Canonical result envelope for completed agent execution."""
@@ -340,7 +333,6 @@ class AgentRunResult(BaseModel):
                 f"summary must be <= {_MAX_SUMMARY_CHARS} characters to keep payloads compact"
             )
         return self
-
 
 class ManagedAgentProviderProfile(BaseModel):
     """Named managed-runtime provider profile contract.
@@ -460,9 +452,7 @@ class ManagedAgentProviderProfile(BaseModel):
 
         return self
 
-
 WorkspaceMode = Literal["tempdir", "shared", "none"]
-
 
 class RuntimeFileTemplate(BaseModel):
     """Path-aware file materialization contract for managed runtime launch."""
@@ -492,7 +482,6 @@ class RuntimeFileTemplate(BaseModel):
             )
         self.merge_strategy = normalized_merge
         return self
-
 
 class ManagedRuntimeProfile(BaseModel):
     """Runtime-specific execution parameters for managed agent launches."""
@@ -594,7 +583,6 @@ class ManagedRuntimeProfile(BaseModel):
             normalized_passthrough.append(normalized_key)
         self.passthrough_env_keys = normalized_passthrough
         return self
-
 
 class ManagedRunRecord(BaseModel):
     """Durable run tracking record for managed agent executions."""
@@ -701,7 +689,6 @@ ObservabilityEventKind = Literal[
     "reset_boundary_published",
 ]
 
-
 class RunObservabilityEvent(BaseModel):
     """Canonical MoonMind-owned observability event for live and historical logs."""
 
@@ -759,9 +746,7 @@ class RunObservabilityEvent(BaseModel):
         description="Optional structured metadata for the event row",
     )
 
-
 LiveLogChunk = RunObservabilityEvent
-
 
 class ProviderCapabilityDescriptor(BaseModel):
     """Declares what an external agent provider supports at runtime."""
@@ -799,7 +784,6 @@ class ProviderCapabilityDescriptor(BaseModel):
         alias="executionStyle",
         description="polling: start/status/fetch loop; streaming_gateway: single execute activity.",
     )
-
 
 def _apply_canonical_metadata(payload: dict[str, Any], metadata: dict[str, Any]) -> None:
     """Internal helper to map legacy provider fields into metadata."""
@@ -870,7 +854,6 @@ def build_canonical_result(payload: dict[str, Any]) -> AgentRunResult:
     data = {k: v for k, v in payload.items() if k in known_keys}
     data["metadata"] = metadata
     return AgentRunResult(**data)
-
 
 __all__ = [
     "AgentExecutionRequest",

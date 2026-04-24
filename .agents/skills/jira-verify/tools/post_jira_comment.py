@@ -12,7 +12,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-
 SECRET_PATTERNS = [
     re.compile(r"ghp_[A-Za-z0-9_*]+"),
     re.compile(r"github_pat_[A-Za-z0-9_*]+"),
@@ -23,7 +22,6 @@ SECRET_PATTERNS = [
     re.compile(r"(?i)\b(token|password)\s*="),
     re.compile(r"(?i)\bAuthorization\s*:"),
 ]
-
 
 def _base_url(explicit: str | None) -> str:
     value = (
@@ -38,14 +36,12 @@ def _base_url(explicit: str | None) -> str:
         )
     return value.rstrip("/")
 
-
 def _scan(body: str) -> None:
     for pattern in SECRET_PATTERNS:
         if pattern.search(body):
             raise SystemExit(
                 f"Refusing to post comment: body matches secret pattern {pattern.pattern!r}."
             )
-
 
 def _headers() -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
@@ -64,7 +60,6 @@ def _headers() -> dict[str, str]:
     if api_key:
         headers["X-API-Key"] = api_key
     return headers
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -117,7 +112,6 @@ def main() -> int:
 
     print(response_body)
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -3,7 +3,7 @@
 ## Story Classification
 
 Decision: Treat MM-501 as a single-story runtime verification-first feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-501-moonspec-orchestration-input.md`; `specs/250-unrestricted-container-and-docker-cli-contracts/spec.md`.
+Evidence: `spec.md` (Input); `specs/250-unrestricted-container-and-docker-cli-contracts/spec.md`.
 Rationale: The Jira preset brief defines one independently testable runtime outcome: MoonMind exposes and enforces distinct unrestricted container and Docker CLI contracts without weakening the normal profile-backed path.
 Alternatives considered: Broad design breakdown was rejected because the Jira brief already selects one bounded story.
 Test implications: Unit tests plus at least one hermetic integration boundary are required because the story touches request validation, tool registration, and dispatcher/runtime execution behavior.
@@ -59,7 +59,7 @@ Test implications: Focused unit verification plus final contract review; add tes
 ## FR-007 Traceability
 
 Decision: implemented_verified.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-501-moonspec-orchestration-input.md`; `specs/250-unrestricted-container-and-docker-cli-contracts/spec.md`; `plan.md`; `research.md`; `contracts/unrestricted-docker-workload-contract.md`; `quickstart.md`.
+Evidence: `spec.md` (Input); `specs/250-unrestricted-container-and-docker-cli-contracts/spec.md`; `plan.md`; `research.md`; `contracts/unrestricted-docker-workload-contract.md`; `quickstart.md`.
 Rationale: The feature-local MoonSpec artifacts preserve MM-501 and the original Jira preset brief for downstream tasks and verification.
 Alternatives considered: Preserve the Jira key only in the source brief. Rejected because the story explicitly requires downstream traceability.
 Test implications: Final traceability review only.

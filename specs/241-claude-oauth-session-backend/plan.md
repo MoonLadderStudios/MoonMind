@@ -35,15 +35,15 @@ Implement MM-478 by completing the Claude OAuth backend slice: `claude_code` pro
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, pytest  
-**Storage**: Existing SQLAlchemy/Alembic tables for provider profiles and OAuth sessions; no new persistent tables  
-**Unit Testing**: `./tools/test_unit.sh` with pytest targets  
-**Integration Testing**: Route-level async pytest fixtures and existing Temporal/OAuth unit boundary tests; full hermetic integration can run through `./tools/test_integration.sh` when Docker is available  
-**Target Platform**: Linux worker/API containers  
-**Project Type**: FastAPI control plane plus Temporal worker runtime services  
-**Performance Goals**: OAuth session creation remains a single DB transaction plus workflow start; runner startup argument construction remains deterministic and bounded  
-**Constraints**: No raw credential material in logs/artifacts/workflow payloads; preserve existing Codex OAuth behavior; no compatibility aliases for internal pre-release contracts  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, pytest 
+**Storage**: Existing SQLAlchemy/Alembic tables for provider profiles and OAuth sessions; no new persistent tables 
+**Unit Testing**: `./tools/test_unit.sh` with pytest targets 
+**Integration Testing**: Route-level async pytest fixtures and existing Temporal/OAuth unit boundary tests; full hermetic integration can run through `./tools/test_integration.sh` when Docker is available 
+**Target Platform**: Linux worker/API containers 
+**Project Type**: FastAPI control plane plus Temporal worker runtime services 
+**Performance Goals**: OAuth session creation remains a single DB transaction plus workflow start; runner startup argument construction remains deterministic and bounded 
+**Constraints**: No raw credential material in logs/artifacts/workflow payloads; preserve existing Codex OAuth behavior; no compatibility aliases for internal pre-release contracts 
 **Scale/Scope**: One provider profile (`claude_anthropic`), one runtime (`claude_code`), one OAuth session backend path
 
 ## Constitution Check
@@ -59,7 +59,7 @@ Implement MM-478 by completing the Claude OAuth backend slice: `claude_code` pro
 - IX. Resilient by Default: PASS. OAuth session workflow and status model remain the retry/resume boundary; no workflow payload shape change is required.
 - X. Continuous Improvement: PASS. Verification evidence is captured in artifacts.
 - XI. Spec-Driven Development: PASS. This plan follows the single-story spec and TDD task list.
-- XII. Canonical Docs vs Tmp: PASS. Jira orchestration input remains under `docs/tmp`; canonical docs are read-only source requirements.
+- XII. Canonical Docs vs Tmp: PASS. Jira orchestration input remains under `local-only handoffs`; canonical docs are read-only source requirements.
 - XIII. Pre-Release Velocity: PASS. No compatibility shims or aliases are added.
 
 ## Project Structure
@@ -73,7 +73,7 @@ specs/241-claude-oauth-session-backend/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── claude-oauth-session-backend.md
+│ └── claude-oauth-session-backend.md
 └── tasks.md
 ```
 
@@ -87,8 +87,8 @@ api_service/
 moonmind/workflows/temporal/
 ├── activities/oauth_session_activities.py
 └── runtime/
-    ├── providers/registry.py
-    └── terminal_bridge.py
+ ├── providers/registry.py
+ └── terminal_bridge.py
 
 tests/
 ├── unit/auth/test_oauth_provider_registry.py

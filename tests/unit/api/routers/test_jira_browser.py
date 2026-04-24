@@ -31,7 +31,6 @@ pytestmark = [pytest.mark.asyncio]
 
 CURRENT_USER_DEP = get_current_user()
 
-
 class _FakeJiraBrowserService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
@@ -165,7 +164,6 @@ class _FakeJiraBrowserService:
             "image/png",
         )
 
-
 @pytest.fixture
 def router_app() -> tuple[FastAPI, _FakeJiraBrowserService]:
     app = FastAPI()
@@ -174,7 +172,6 @@ def router_app() -> tuple[FastAPI, _FakeJiraBrowserService]:
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=None)
     app.dependency_overrides[jira_browser_router._get_service] = lambda: service
     return app, service
-
 
 async def test_verify_connection_endpoint(
     router_app: tuple[FastAPI, _FakeJiraBrowserService],
@@ -191,7 +188,6 @@ async def test_verify_connection_endpoint(
     assert response.json() == {"ok": True, "accountId": "acct-1"}
     assert service.calls == [("verify_connection", "ENG")]
 
-
 async def test_projects_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowserService]) -> None:
     app, _service = router_app
 
@@ -203,7 +199,6 @@ async def test_projects_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowserServ
 
     assert response.status_code == 200
     assert response.json()["items"] == [{"projectKey": "ENG", "name": "Engineering"}]
-
 
 async def test_project_boards_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowserService]) -> None:
     app, service = router_app
@@ -218,7 +213,6 @@ async def test_project_boards_endpoint(router_app: tuple[FastAPI, _FakeJiraBrows
     assert response.json()["projectKey"] == "ENG"
     assert response.json()["items"][0]["id"] == "42"
     assert service.calls == [("list_boards", "ENG")]
-
 
 async def test_board_columns_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowserService]) -> None:
     app, service = router_app
@@ -235,7 +229,6 @@ async def test_board_columns_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowse
         ("list_columns", {"board_id": "42", "project_key": "ENG"})
     ]
 
-
 async def test_board_issues_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowserService]) -> None:
     app, service = router_app
 
@@ -250,7 +243,6 @@ async def test_board_issues_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowser
     assert service.calls == [
         ("list_issues", {"board_id": "42", "q": "browser", "project_key": "ENG"})
     ]
-
 
 async def test_issue_detail_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowserService]) -> None:
     app, service = router_app
@@ -270,7 +262,6 @@ async def test_issue_detail_endpoint(router_app: tuple[FastAPI, _FakeJiraBrowser
             {"issue_key": "ENG-1", "board_id": "42", "project_key": "ENG"},
         )
     ]
-
 
 async def test_issue_attachment_download_endpoint(
     router_app: tuple[FastAPI, _FakeJiraBrowserService],
@@ -294,7 +285,6 @@ async def test_issue_attachment_download_endpoint(
         )
     ]
 
-
 async def test_issue_attachment_download_preserves_quoted_filename(
     router_app: tuple[FastAPI, _FakeJiraBrowserService],
 ) -> None:
@@ -312,7 +302,6 @@ async def test_issue_attachment_download_preserves_quoted_filename(
         response.headers["content-disposition"]
         == "attachment; filename*=UTF-8''my%20%22file%22.png"
     )
-
 
 async def test_router_maps_jira_errors_to_safe_details(
     router_app: tuple[FastAPI, _FakeJiraBrowserService],
@@ -340,7 +329,6 @@ async def test_router_maps_jira_errors_to_safe_details(
         "action": "jira_browser.list_boards",
     }
 
-
 async def test_router_sanitizes_secret_like_error_messages(
     router_app: tuple[FastAPI, _FakeJiraBrowserService],
 ) -> None:
@@ -364,7 +352,6 @@ async def test_router_sanitizes_secret_like_error_messages(
     assert detail["source"] == "jira_browser"
     assert detail["action"] == "jira_browser.get_issue"
     assert "secret-value" not in str(detail)
-
 
 async def test_router_sanitizes_bearer_token_error_messages(
     router_app: tuple[FastAPI, _FakeJiraBrowserService],
@@ -393,7 +380,6 @@ async def test_router_sanitizes_bearer_token_error_messages(
     }
     assert "abc123-secret" not in str(detail)
 
-
 async def test_router_sanitizes_colon_separated_bearer_token_error_messages(
     router_app: tuple[FastAPI, _FakeJiraBrowserService],
 ) -> None:
@@ -421,7 +407,6 @@ async def test_router_sanitizes_colon_separated_bearer_token_error_messages(
     }
     assert "abc123-secret" not in str(detail)
 
-
 async def test_router_sanitizes_trace_like_error_messages(
     router_app: tuple[FastAPI, _FakeJiraBrowserService],
 ) -> None:
@@ -448,7 +433,6 @@ async def test_router_sanitizes_trace_like_error_messages(
         "action": "jira_browser.list_projects",
     }
     assert "Traceback" not in str(detail)
-
 
 async def test_router_maps_unexpected_errors_to_structured_jira_browser_error(
     router_app: tuple[FastAPI, _FakeJiraBrowserService],

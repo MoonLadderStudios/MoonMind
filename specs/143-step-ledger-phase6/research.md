@@ -17,5 +17,5 @@
 
 ## Decision 3: Retire completed tmp rollout bullets rather than rewriting canonical docs
 
-- **Decision**: Remove the step-ledger rollout bullets from the relevant `docs/tmp/remaining-work` files once Phase 6 tests pass.
+- **Decision**: Remove the step-ledger rollout bullets from the relevant `docs/Temporal/StepLedgerAndProgressModel.md` files once Phase 6 tests pass.
 - **Rationale**: Constitution Principle XII says completed migration/backlog notes should be removed rather than left behind after the work is done.

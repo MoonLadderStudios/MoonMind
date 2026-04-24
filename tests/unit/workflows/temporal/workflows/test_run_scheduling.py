@@ -180,7 +180,6 @@ async def test_run_workflow_invalid_scheduled_for(mock_run_environment):
             
             assert "Invalid scheduled_for format" in str(excinfo.value.cause)
 
-
 @pytest.mark.asyncio
 async def test_run_workflow_waits_on_dependencies_before_planning(
     mock_run_environment,
@@ -247,7 +246,6 @@ async def test_run_workflow_waits_on_dependencies_before_planning(
     )
     assert dependency_indexes
     assert max(dependency_indexes) < planning_index
-
 
 @pytest.mark.asyncio
 async def test_run_workflow_dependency_pause_gate_blocks_planning_until_resume(
@@ -338,7 +336,6 @@ async def test_run_workflow_dependency_pause_gate_blocks_planning_until_resume(
     assert result["status"] == "success"
     assert reconcile_call_count >= 2
 
-
 @pytest.mark.asyncio
 async def test_run_workflow_dependency_cancel_interrupts_wait(
     mock_run_environment,
@@ -392,7 +389,6 @@ async def test_run_workflow_dependency_cancel_interrupts_wait(
 
     assert result["status"] == "canceled"
 
-
 @pytest.mark.asyncio
 async def test_run_workflow_dependency_gate_unpatched_skips_wait(
     mock_run_environment,
@@ -427,7 +423,6 @@ async def test_run_workflow_dependency_gate_unpatched_skips_wait(
     # Workflow completed without waiting on dependencies, proving the
     # dependency gate was correctly skipped when the patch was absent.
     assert result["status"] == "success"
-
 
 @pytest.mark.asyncio
 async def test_run_workflow_handles_failed_dependency_with_degraded_outcome(

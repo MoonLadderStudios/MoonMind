@@ -23,10 +23,8 @@ from moonmind.workflows.temporal.remediation_context import (
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
 
-
 class RemediationEvidenceToolError(RuntimeError):
     """Raised when a remediation evidence tool request is invalid."""
-
 
 @dataclass(frozen=True, slots=True)
 class RemediationLogReadResult:
@@ -37,7 +35,6 @@ class RemediationLogReadResult:
     lines: tuple[str, ...]
     next_cursor: str | None = None
 
-
 @dataclass(frozen=True, slots=True)
 class RemediationLiveFollowEvent:
     """One live-follow event visible to a remediation task."""
@@ -47,7 +44,6 @@ class RemediationLiveFollowEvent:
     text: str
     timestamp: str | None = None
 
-
 @dataclass(frozen=True, slots=True)
 class RemediationLiveFollowResult:
     """Live-follow batch plus the cursor the caller should persist."""
@@ -55,7 +51,6 @@ class RemediationLiveFollowResult:
     task_run_id: str
     events: tuple[RemediationLiveFollowEvent, ...]
     resume_cursor: dict[str, Any] | None
-
 
 @dataclass(frozen=True, slots=True)
 class RemediationTargetHealthSnapshot:
@@ -70,7 +65,6 @@ class RemediationTargetHealthSnapshot:
     summary: str | None
     target_run_changed: bool
 
-
 @dataclass(frozen=True, slots=True)
 class RemediationActionRequestPreparation:
     """Side-effect-free pre-action read of current target health."""
@@ -79,7 +73,6 @@ class RemediationActionRequestPreparation:
     action_kind: str
     target: RemediationTargetHealthSnapshot
     context_target: dict[str, Any]
-
 
 class RemediationLogReader(Protocol):
     """Read bounded historical logs for a target task run."""
@@ -94,7 +87,6 @@ class RemediationLogReader(Protocol):
     ) -> RemediationLogReadResult:
         raise NotImplementedError
 
-
 class RemediationLiveFollower(Protocol):
     """Follow live target output for a target task run."""
 
@@ -105,7 +97,6 @@ class RemediationLiveFollower(Protocol):
         from_sequence: int | None = None,
     ) -> RemediationLiveFollowResult:
         raise NotImplementedError
-
 
 class RemediationActionExecutor(Protocol):
     """Execute one authorized remediation action through an owning subsystem."""
@@ -118,7 +109,6 @@ class RemediationActionExecutor(Protocol):
         target_health: RemediationTargetHealthSnapshot,
     ) -> Mapping[str, Any]:
         raise NotImplementedError
-
 
 class _UnavailableLogReader:
     async def read_logs(
@@ -133,7 +123,6 @@ class _UnavailableLogReader:
             "remediation.read_target_logs is not configured in this runtime."
         )
 
-
 class _UnavailableLiveFollower:
     async def follow_logs(
         self,
@@ -144,7 +133,6 @@ class _UnavailableLiveFollower:
         raise RemediationEvidenceToolError(
             "remediation.follow_target_logs is not configured in this runtime."
         )
-
 
 class _UnavailableActionExecutor:
     async def execute_action(
@@ -157,7 +145,6 @@ class _UnavailableActionExecutor:
         raise RemediationEvidenceToolError(
             "remediation.execute_action is not configured in this runtime."
         )
-
 
 class RemediationEvidenceToolService:
     """Typed evidence access surface for one remediation execution."""
@@ -597,7 +584,6 @@ class RemediationEvidenceToolService:
                 "guardResult.lock.holderWorkflowId does not match the action context."
             )
 
-
 def _collect_context_artifact_ids(context: Mapping[str, Any]) -> set[str]:
     evidence = context.get("evidence")
     evidence_mapping = evidence if isinstance(evidence, Mapping) else {}
@@ -616,7 +602,6 @@ def _collect_context_artifact_ids(context: Mapping[str, Any]) -> set[str]:
 
     collect(evidence_mapping)
     return artifact_ids
-
 
 def _collect_context_task_run_ids(context: Mapping[str, Any]) -> set[str]:
     evidence = context.get("evidence")
@@ -642,12 +627,10 @@ def _collect_context_task_run_ids(context: Mapping[str, Any]) -> set[str]:
                     output.add(task_run_id)
     return output
 
-
 def _artifact_id_from_ref(value: str | Mapping[str, Any] | Any) -> str | None:
     if isinstance(value, Mapping):
         return _string_or_none(value.get("artifact_id") or value.get("artifactId"))
     return _string_or_none(value)
-
 
 def _bounded_tail_lines(context: Mapping[str, Any], requested: int | None) -> int | None:
     max_tail_lines = 2000
@@ -685,7 +668,6 @@ def _bounded_tail_lines(context: Mapping[str, Any], requested: int | None) -> in
             requested = max_tail_lines
     return max(0, min(int(requested), effective_limit))
 
-
 def _normalize_log_stream(value: Any) -> RemediationLogStream:
     normalized = _required_string(value, "stream")
     if normalized not in {"stdout", "stderr", "merged", "diagnostics"}:
@@ -693,7 +675,6 @@ def _normalize_log_stream(value: Any) -> RemediationLogStream:
             "stream must be one of stdout, stderr, merged, or diagnostics."
         )
     return normalized  # type: ignore[return-value]
-
 
 def _normalize_sequence(value: int | None, *, default_cursor: Any) -> int | None:
     if value is not None:
@@ -706,13 +687,11 @@ def _normalize_sequence(value: int | None, *, default_cursor: Any) -> int | None
         return max(0, parsed)
     return None
 
-
 def _required_string(value: Any, field_name: str) -> str:
     normalized = _string_or_none(value)
     if not normalized:
         raise RemediationEvidenceToolError(f"{field_name} is required.")
     return normalized
-
 
 def _string_or_none(value: Any) -> str | None:
     if value is None:
@@ -720,19 +699,16 @@ def _string_or_none(value: Any) -> str | None:
     normalized = str(value).strip()
     return normalized or None
 
-
 def _safe_sequence(value: Any) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return list(value)
     return []
-
 
 def _enum_value(value: Any) -> str | None:
     if value is None:
         return None
     enum_value = getattr(value, "value", value)
     return _string_or_none(enum_value)
-
 
 __all__ = [
     "RemediationActionExecutor",

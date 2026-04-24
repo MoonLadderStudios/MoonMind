@@ -30,7 +30,6 @@ from pydantic import (
 
 from .temporal_artifact_models import ArtifactRefModel
 
-
 def _decode_b64(v: str | bytes | list[int]) -> bytes:
     """Safely decode base64 strings, raw bytes, or legacy list[int] to bytes.
 
@@ -65,11 +64,9 @@ def _decode_b64(v: str | bytes | list[int]) -> bytes:
             return v.encode("utf-8")
     raise ValueError(f"Expected base64 string, bytes, or list[int]; got {type(v)}")
 
-
 def _encode_b64(b: bytes) -> str:
     """Encode bytes to base64 string for safe JSON serialization."""
     return base64.b64encode(b).decode("ascii")
-
 
 # A specialized type for binary fields at the Temporal activity boundary.
 # It guarantees that Pydantic will serialize the bytes to a base64 string,
@@ -79,7 +76,6 @@ Base64Bytes = Annotated[
     PlainValidator(_decode_b64),
     PlainSerializer(_encode_b64, return_type=str),
 ]
-
 
 class ArtifactReadInput(BaseModel):
     """Input parameters for the artifact.read activity."""
@@ -92,7 +88,6 @@ class ArtifactReadInput(BaseModel):
     )
     principal: str = Field(..., description="The principal requesting the read.")
 
-
 class ArtifactReadOutput(BaseModel):
     """Output payload from the artifact.read activity."""
 
@@ -102,7 +97,6 @@ class ArtifactReadOutput(BaseModel):
         ...,
         description="The binary payload returned as base64 on the wire.",
     )
-
 
 class ArtifactWriteCompleteInput(BaseModel):
     """Input parameters for the artifact.write_complete activity."""
@@ -119,7 +113,6 @@ class ArtifactWriteCompleteInput(BaseModel):
         default=None,
         description="The optional MIME type of the content.",
     )
-
 
 class PlanGenerateInput(BaseModel):
     """Input parameters for the plan.generate activity."""
@@ -150,7 +143,6 @@ class PlanGenerateInput(BaseModel):
         description="Optional idempotency key.",
     )
 
-
 class PlanGenerateOutput(BaseModel):
     """Output payload from the plan.generate activity."""
 
@@ -161,14 +153,12 @@ class PlanGenerateOutput(BaseModel):
         description="The artifact reference to the generated plan.",
     )
 
-
 class DependencyStatusSnapshotInput(BaseModel):
     """Input parameters for execution.dependency_status_snapshot."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     workflow_ids: list[str] = Field(default_factory=list, alias="workflowIds")
-
 
 class ExternalAgentRunInput(BaseModel):
     """Public input for external provider run status/fetch/cancel activities."""
@@ -188,7 +178,6 @@ class ExternalAgentRunInput(BaseModel):
         if not self.run_id:
             raise ValueError("runId must be nonblank")
         return self
-
 
 class AgentRuntimeStatusInput(BaseModel):
     """Public input for agent_runtime.status."""
@@ -215,7 +204,6 @@ class AgentRuntimeStatusInput(BaseModel):
         if not self.run_id:
             raise ValueError("runId must be nonblank")
         return self
-
 
 class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
     """Public input for agent_runtime.fetch_result."""
@@ -254,7 +242,6 @@ class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
                 normalized = value.strip()
                 setattr(self, field_name, normalized or None)
         return self
-
 
 class AgentRuntimeCancelInput(BaseModel):
     """Public input for agent_runtime.cancel."""

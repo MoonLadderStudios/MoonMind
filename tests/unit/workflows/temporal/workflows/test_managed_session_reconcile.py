@@ -11,7 +11,6 @@ from moonmind.workflows.temporal.workflows.managed_session_reconcile import (
     MoonMindManagedSessionReconcileWorkflow,
 )
 
-
 @pytest.mark.asyncio
 async def test_managed_session_reconcile_updates_terminal_visibility(
     monkeypatch: pytest.MonkeyPatch,

@@ -1,7 +1,7 @@
 # Implementation Plan: Remediation Mission Control Surfaces
 
 **Branch**: `224-remediation-mission-control` | **Date**: 2026-04-22 | **Spec**: `specs/224-remediation-mission-control/spec.md`
-**Input**: Single-story Jira Orchestrate request for MM-457 from `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
+**Input**: Single-story Jira Orchestrate request for MM-457 from `spec.md` (Input).
 
 ## Summary
 

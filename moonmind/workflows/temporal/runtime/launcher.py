@@ -36,7 +36,6 @@ logger = logging.getLogger(__name__)
 
 _LIVE_LOG_SPOOL_FILENAME = "live_streams.spool"
 
-
 class ManagedRuntimeLauncher:
     """Spawns managed agent subprocesses and records them in the run store."""
 

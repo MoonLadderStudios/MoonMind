@@ -9,7 +9,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 SECRET_PATTERNS = [
     re.compile(r"ghp_[A-Za-z0-9_*]+"),
     re.compile(r"github_pat_[A-Za-z0-9_*]+"),
@@ -20,7 +19,6 @@ SECRET_PATTERNS = [
     re.compile(r"(?i)\b(token|password)\s*="),
     re.compile(r"(?i)\bAuthorization\s*:"),
 ]
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -62,7 +60,6 @@ def main() -> int:
     if completed.stderr:
         print(completed.stderr, end="", file=sys.stderr)
     return completed.returncode
-
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -97,7 +97,7 @@ For deployment-safety review, validate the cutover playbook and replay gates tog
 SPECIFY_FEATURE=165-agent-session-deployment-safety \
   ./tools/validate_agent_session_deployment_safety.py --base-ref origin/main
 rg -n "SteerTurn|Continue-As-New|CancelSession|TerminateSession|Search Attribute|replay-safe rollout|replay" \
-  docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md \
+  docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md \
   specs/165-agent-session-deployment-safety/contracts/agent-session-deployment-safety.md \
   specs/165-agent-session-deployment-safety/tasks.md
 MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --python-only \

@@ -18,7 +18,7 @@
 
 **Purpose**: Confirm the runtime scope and the concrete files that own the dependency gate.
 
-- [X] T001 Audit `moonmind/workflows/temporal/workflows/run.py`, `tests/unit/workflows/temporal/workflows/test_run_scheduling.py`, and `tests/unit/workflows/temporal/workflows/test_run_signals_updates.py` against `specs/123-task-dep-phase2/spec.md` and `docs/tmp/011-TaskDependenciesPlan.md`
+- [X] T001 Audit `moonmind/workflows/temporal/workflows/run.py`, `tests/unit/workflows/temporal/workflows/test_run_scheduling.py`, and `tests/unit/workflows/temporal/workflows/test_run_signals_updates.py` against `specs/123-task-dep-phase2/spec.md` and `docs/Tasks/TaskDependencies.md`
 
 ---
 
@@ -105,7 +105,7 @@
 
 **Purpose**: Close the phase tracker and run the full regression gate.
 
-- [X] T013 Update `docs/tmp/011-TaskDependenciesPlan.md` to mark Phase 2 items complete and leave later phases open
+- [X] T013 Update `docs/Tasks/TaskDependencies.md` to mark Phase 2 items complete and leave later phases open
 - [X] T014 Run `./tools/test_unit.sh` for full regression coverage and confirm no unrelated run workflow regressions remain (FR-010, FR-011)
 
 ---

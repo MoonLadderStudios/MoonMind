@@ -28,12 +28,10 @@ _ATLASSIAN_ENV_KEYS = (
     "JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
 )
 
-
 @pytest.fixture(autouse=True)
 def _clear_atlassian_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in _ATLASSIAN_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
-
 
 def test_atlassian_nested_jira_flags_and_timeout_controls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ATLASSIAN_CONFLUENCE_ENABLED", "true")
@@ -54,7 +52,6 @@ def test_atlassian_nested_jira_flags_and_timeout_controls(monkeypatch: pytest.Mo
     assert settings.jira.jira_read_timeout_seconds == 12.0
     assert settings.jira.jira_retry_attempts == 5
 
-
 def test_atlassian_settings_normalize_allowed_projects_actions_and_site_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -71,7 +68,6 @@ def test_atlassian_settings_normalize_allowed_projects_actions_and_site_url(
     assert settings.jira.jira_allowed_projects == "ENG,OPS"
     assert settings.atlassian_site_url == "https://example.atlassian.net"
 
-
 def test_atlassian_settings_reject_invalid_allowed_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -82,7 +78,6 @@ def test_atlassian_settings_reject_invalid_allowed_action(
 
     with pytest.raises(ValidationError):
         AtlassianSettings(_env_file=None)
-
 
 def test_jira_create_page_defaults_are_normalized(
     monkeypatch: pytest.MonkeyPatch,
@@ -95,7 +90,6 @@ def test_jira_create_page_defaults_are_normalized(
     assert settings.jira_create_page_default_project_key == "ENG"
     assert settings.jira_create_page_default_board_id == "42"
 
-
 def test_jira_create_page_default_project_rejects_invalid_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -103,7 +97,6 @@ def test_jira_create_page_default_project_rejects_invalid_key(
 
     with pytest.raises(ValidationError):
         FeatureFlagsSettings(_env_file=None)
-
 
 def test_env_template_documents_jira_create_page_rollout_settings() -> None:
     env_template = Path(".env-template").read_text(encoding="utf-8")

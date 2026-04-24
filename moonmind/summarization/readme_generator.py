@@ -17,7 +17,6 @@ except Exception as exc:  # pragma: no cover - optional dep may be missing
 
 logger = logging.getLogger(__name__)
 
-
 class ReadmeAiGenerator:
     """
     A wrapper class to programmatically invoke the readme-ai library

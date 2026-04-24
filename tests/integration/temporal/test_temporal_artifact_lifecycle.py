@@ -20,7 +20,6 @@ from moonmind.workflows.temporal.artifacts import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @asynccontextmanager
 async def _db(tmp_path: Path):
     url = f"sqlite+aiosqlite:///{tmp_path}/temporal_lifecycle_integration.db"
@@ -32,7 +31,6 @@ async def _db(tmp_path: Path):
         yield maker
     finally:
         await engine.dispose()
-
 
 async def test_lifecycle_soft_then_hard_delete(tmp_path: Path) -> None:
     async with _db(tmp_path) as maker:
@@ -67,7 +65,6 @@ async def test_lifecycle_soft_then_hard_delete(tmp_path: Path) -> None:
             )
             refreshed = await service._repository.get_artifact(artifact.artifact_id)
             assert refreshed.hard_deleted_at is not None
-
 
 async def test_report_delete_does_not_cascade_to_observability_artifacts(
     tmp_path: Path,

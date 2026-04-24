@@ -42,7 +42,6 @@ from moonmind.workflows.temporal import (
 router = APIRouter(prefix="/api/manifests", tags=["manifests"])
 logger = logging.getLogger(__name__)
 
-
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> ManifestsService:
@@ -63,7 +62,6 @@ async def _get_service(
         artifact_service=artifact_service,
     )
 
-
 def _serialize_summary(record) -> ManifestSummaryModel:
     return ManifestSummaryModel(
         name=record.name,
@@ -75,7 +73,6 @@ def _serialize_summary(record) -> ManifestSummaryModel:
         last_run_status=getattr(record, "last_run_status", None),
         state_updated_at=getattr(record, "state_updated_at", None),
     )
-
 
 def _serialize_detail(record) -> ManifestDetailModel:
     state_model = ManifestStateModel(
@@ -121,7 +118,6 @@ def _serialize_detail(record) -> ManifestDetailModel:
         state=state_model,
     )
 
-
 @router.get("", response_model=ManifestListResponse)
 async def list_manifests(
     *,
@@ -134,7 +130,6 @@ async def list_manifests(
     return ManifestListResponse(
         items=[_serialize_summary(record) for record in records]
     )
-
 
 @router.get("/{name}", response_model=ManifestDetailModel)
 async def get_manifest(
@@ -153,7 +148,6 @@ async def get_manifest(
         )
     return _serialize_detail(record)
 
-
 @router.put("/{name}", response_model=ManifestDetailModel)
 async def upsert_manifest(
     name: str,
@@ -171,7 +165,6 @@ async def upsert_manifest(
             detail={"code": "invalid_manifest", "message": message},
         ) from exc
     return _serialize_detail(record)
-
 
 @router.post(
     "/{name}/runs",
@@ -264,7 +257,6 @@ async def create_manifest_run(
         execution=execution,
     )
 
-
 def _temporal_status_for_manifest_status(
     status_value: str | None,
     *,
@@ -280,7 +272,6 @@ def _temporal_status_for_manifest_status(
     if finished_at is not None:
         return "failed"
     return "running"
-
 
 @router.post("/{name}/state", response_model=ManifestDetailModel)
 async def update_manifest_state(

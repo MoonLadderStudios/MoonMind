@@ -43,5 +43,5 @@ Before completion, run:
 Verify MM-375 and DESIGN-REQ-019 are preserved:
 
 ```bash
-rg -n "MM-375|DESIGN-REQ-019" specs/203-expose-image-diagnostics docs/tmp/jira-orchestration-inputs/MM-375-moonspec-orchestration-input.md
+rg -n "MM-375|DESIGN-REQ-019" specs/203-expose-image-diagnostics
 ```

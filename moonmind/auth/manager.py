@@ -5,7 +5,6 @@ from api_service.db.models import User
 from .env_provider import EnvAuthProvider
 from .profile_provider import ProfileAuthProvider
 
-
 class AuthProviderManager:
     def __init__(
         self, profile_provider: ProfileAuthProvider, env_provider: EnvAuthProvider

@@ -21,7 +21,6 @@ _GEMINI_ENV_PASSTHROUGH_KEYS: frozenset[str] = frozenset({
     "GEMINI_CLI_HOME",
 })
 
-
 class GeminiCliStrategy(ManagedRuntimeStrategy):
     """Strategy for launching ``gemini`` CLI runs."""
 

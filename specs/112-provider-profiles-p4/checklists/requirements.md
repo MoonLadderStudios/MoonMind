@@ -31,4 +31,4 @@
 
 ## Notes
 
-- This spec directly aligns with the `docs/tmp/005-ProviderProfilesPlan.md` technical plan but avoids low-level language definitions.
+- This spec directly aligns with the `docs/Tasks/SkillAndPlanContracts.md` technical plan but avoids low-level language definitions.

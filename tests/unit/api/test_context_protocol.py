@@ -11,7 +11,6 @@ from qdrant_client.http.models import (  # For mocking, if needed for detailed g
 from api_service import main as api_service_main
 from api_service.main import app
 
-
 @pytest.fixture(autouse=True)
 def _fast_context_protocol_app(monkeypatch) -> None:
     """Keep startup path fast by disabling networked startup prerequisites."""
@@ -25,7 +24,6 @@ def _fast_context_protocol_app(monkeypatch) -> None:
     monkeypatch.setattr(
         api_service_main, "_initialize_vector_store", _skip_vector_store
     )
-
 
 @pytest.fixture
 def client():
@@ -56,7 +54,6 @@ def client():
         with TestClient(app) as c:
             yield c
 
-
 @pytest.fixture(autouse=True)  # Apply to all tests in this module
 def mock_qdrant_client_autouse():
     with patch("moonmind.factories.vector_store_factory.QdrantClient") as mock_qdrant:
@@ -76,7 +73,6 @@ def mock_qdrant_client_autouse():
         mock_qdrant.return_value = mock_client_instance
         yield mock_qdrant
 
-
 @pytest.fixture
 def mock_google_model():
     # Patch where get_google_model is looked up by the context_protocol router
@@ -95,7 +91,6 @@ def mock_google_model():
 
         mock.return_value = model_mock
         yield mock
-
 
 def test_context_protocol_endpoint(mock_google_model, client):  # Added client fixture
     """Test the context protocol endpoint with a mocked Google model."""
@@ -133,7 +128,6 @@ def test_context_protocol_endpoint(mock_google_model, client):  # Added client f
     assert "prompt_tokens" in data["metadata"]["usage"]
     assert "completion_tokens" in data["metadata"]["usage"]
     assert "total_tokens" in data["metadata"]["usage"]
-
 
 def test_context_protocol_invalid_role(client):  # Added client fixture
     """Test the context protocol endpoint with an invalid role."""

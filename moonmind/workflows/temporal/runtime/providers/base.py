@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-
 class OAuthProviderSpec(TypedDict):
     """Per-runtime OAuth session contract.
 

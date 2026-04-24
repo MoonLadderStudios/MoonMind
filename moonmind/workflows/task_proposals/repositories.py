@@ -10,10 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.workflows.task_proposals import models
 
-
 class TaskProposalNotFoundError(RuntimeError):
     """Raised when a proposal cannot be found for the requested id."""
-
 
 class TaskProposalRepository:
     """Repository wrapper for creating and retrieving task proposals."""
@@ -184,7 +182,6 @@ class TaskProposalRepository:
     async def refresh(self, entity: models.TaskProposal) -> models.TaskProposal:
         await self._session.refresh(entity)
         return entity
-
 
 __all__ = [
     "TaskProposalRepository",

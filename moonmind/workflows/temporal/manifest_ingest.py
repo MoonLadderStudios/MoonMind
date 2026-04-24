@@ -53,10 +53,8 @@ MANIFEST_UPDATE_NAMES: set[str] = {
 }
 _MUTABLE_NODE_STATES = {"pending", "ready", "running"}
 
-
 class ManifestIngestValidationError(ValueError):
     """Raised when manifest-specific update or query input is invalid."""
-
 
 def ensure_manifest_execution(record: TemporalExecutionRecord) -> None:
     """Fail closed unless the provided record is a manifest ingest execution."""
@@ -65,7 +63,6 @@ def ensure_manifest_execution(record: TemporalExecutionRecord) -> None:
         raise ManifestIngestValidationError(
             "Manifest-specific operations require workflowType MoonMind.ManifestIngest"
         )
-
 
 def initialize_manifest_projection(record: TemporalExecutionRecord) -> None:
     """Ensure the execution record carries bounded manifest projection metadata."""
@@ -99,7 +96,6 @@ def initialize_manifest_projection(record: TemporalExecutionRecord) -> None:
     record.parameters = parameters
     record.memo = memo
 
-
 def build_manifest_status_snapshot(
     record: TemporalExecutionRecord,
 ) -> ManifestStatusSnapshotModel:
@@ -131,7 +127,6 @@ def build_manifest_status_snapshot(
         checkpointArtifactRef=_artifact_ref(memo, "checkpoint_artifact_ref"),
         updatedAt=record.updated_at,
     )
-
 
 def list_manifest_nodes(
     record: TemporalExecutionRecord,
@@ -168,7 +163,6 @@ def list_manifest_nodes(
         nextCursor=next_cursor,
         count=len(filtered),
     )
-
 
 def apply_manifest_update(
     record: TemporalExecutionRecord,
@@ -309,7 +303,6 @@ def apply_manifest_update(
         f"Unsupported manifest update name: {update_name}"
     )
 
-
 def compile_manifest_plan(
     *,
     manifest_ref: str,
@@ -406,7 +399,6 @@ def compile_manifest_plan(
         options=dict(normalized["manifest"].get("options") or {}),
     )
 
-
 def plan_nodes_to_runtime_nodes(
     plan: (
         CompiledManifestPlanModel | Sequence[ManifestPlanNodeModel | Mapping[str, Any]]
@@ -438,7 +430,6 @@ def plan_nodes_to_runtime_nodes(
         for node in plan_nodes
     ]
 
-
 def build_manifest_run_index(
     *,
     workflow_id: str,
@@ -466,7 +457,6 @@ def build_manifest_run_index(
         items=items,
     )
 
-
 def build_manifest_summary(
     *,
     workflow_id: str,
@@ -492,7 +482,6 @@ def build_manifest_summary(
         failedNodeIds=failed_node_ids,
     )
 
-
 def _persist_node_items(
     record: TemporalExecutionRecord,
     nodes: Sequence[ManifestNodeModel],
@@ -510,7 +499,6 @@ def _persist_node_items(
     record.parameters = parameters
     record.memo = memo
 
-
 def _counts_from_record(
     parameters: Mapping[str, Any],
     memo: Mapping[str, Any],
@@ -523,7 +511,6 @@ def _counts_from_record(
         except Exception:
             pass
     return manifest_node_counts_from_nodes(list(nodes))
-
 
 def _node_items(
     parameters: Mapping[str, Any],
@@ -547,7 +534,6 @@ def _node_items(
             continue
     return items
 
-
 def _execution_policy_from_parameters(
     parameters: Mapping[str, Any],
 ) -> ManifestExecutionPolicyModel:
@@ -567,7 +553,6 @@ def _execution_policy_from_parameters(
         data["concurrencyDefaulted"] = True
     return ManifestExecutionPolicyModel.model_validate(data)
 
-
 def _requested_by_from_record(
     record: TemporalExecutionRecord,
     parameters: Mapping[str, Any],
@@ -580,7 +565,6 @@ def _requested_by_from_record(
         id=record.owner_id or "system",
     )
 
-
 def _manifest_lifecycle_state(record: TemporalExecutionRecord) -> str:
     state = record.state.value
     if state == MoonMindWorkflowState.AWAITING_EXTERNAL.value:
@@ -588,7 +572,6 @@ def _manifest_lifecycle_state(record: TemporalExecutionRecord) -> str:
     if state == MoonMindWorkflowState.PLANNING.value:
         return MoonMindWorkflowState.INITIALIZING.value
     return state
-
 
 def _default_phase(record: TemporalExecutionRecord) -> str:
     state = _manifest_lifecycle_state(record)
@@ -606,7 +589,6 @@ def _default_phase(record: TemporalExecutionRecord) -> str:
         return "terminal"
     return "executing"
 
-
 def _artifact_ref(memo: Mapping[str, Any], key: str) -> str | None:
     snake = memo.get(key)
     if isinstance(snake, str) and snake.strip():
@@ -622,7 +604,6 @@ def _artifact_ref(memo: Mapping[str, Any], key: str) -> str | None:
         return camel.strip()
     return None
 
-
 def _decode_cursor(cursor: str | None) -> int:
     if cursor is None:
         return 0
@@ -636,18 +617,15 @@ def _decode_cursor(cursor: str | None) -> int:
     except (ValueError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
         raise ManifestIngestValidationError("Invalid cursor") from exc
 
-
 def _encode_cursor(offset: int) -> str:
     payload = {"offset": offset}
     return base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
-
 
 def _stable_node_id(payload: Mapping[str, Any]) -> str:
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     return f"node-{digest[:12]}"
-
 
 def _coerce_runtime_nodes(
     nodes: Sequence[ManifestNodeModel | Mapping[str, Any]],
@@ -660,7 +638,6 @@ def _coerce_runtime_nodes(
         )
         for node in nodes
     ]
-
 
 def _workflow_owner_id(info: Any) -> str | None:
     search_attributes = getattr(info, "search_attributes", None)
@@ -680,7 +657,6 @@ def _workflow_owner_id(info: Any) -> str | None:
 
     normalized = str(raw_value or "").strip()
     return normalized or None
-
 
 def _resolve_workflow_requested_by(
     parameters: Mapping[str, Any],
@@ -710,12 +686,10 @@ def _resolve_workflow_requested_by(
 
     return provided or expected
 
-
 def _requested_by_principal(requested_by: RequestedByModel) -> str:
     if requested_by.type == "user":
         return requested_by.id
     return "system"
-
 
 def _runtime_manifest_nodes(
     compiled_nodes: Sequence[Mapping[str, Any]],
@@ -741,7 +715,6 @@ def _runtime_manifest_nodes(
         payload["sourceId"] = raw.get("sourceId")
         payloads.append(payload)
     return payloads
-
 
 def _apply_manifest_node_update(
     existing_nodes: Mapping[str, dict[str, Any]],
@@ -780,7 +753,6 @@ def _apply_manifest_node_update(
         replaced_nodes[node_id] = dict(node)
     return replaced_nodes
 
-
 import asyncio
 from datetime import timedelta
 
@@ -788,7 +760,6 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     pass
-
 
 @workflow.defn(name="MoonMind.ManifestIngest")
 class ManifestIngestWorkflow:

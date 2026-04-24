@@ -15,9 +15,7 @@ from moonmind.schemas.managed_session_models import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def test_claude_context_boundary_indexes_context_and_compaction_epochs() -> None:
     startup_segments = [

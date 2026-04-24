@@ -213,7 +213,6 @@ _PRESIGNED_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-
 @dataclass(frozen=True, slots=True)
 class RemediationPermissionSet:
     """Compact caller permissions for remediation action decisions."""
@@ -224,7 +223,6 @@ class RemediationPermissionSet:
     can_approve_high_risk: bool = False
     can_inspect_audit: bool = False
 
-
 @dataclass(frozen=True, slots=True)
 class RemediationSecurityProfile:
     """Named elevated execution identity used for privileged remediation."""
@@ -233,7 +231,6 @@ class RemediationSecurityProfile:
     execution_principal: str
     allowed_action_kinds: Sequence[str] = field(default_factory=tuple)
     enabled: bool = True
-
 
 @dataclass(frozen=True, slots=True)
 class RemediationActionAuthorityResult:
@@ -301,7 +298,6 @@ class RemediationActionAuthorityResult:
             "audit": dict(self.audit),
         }
 
-
 @dataclass(frozen=True, slots=True)
 class RemediationMutationGuardPolicy:
     """Policy inputs for side-effecting remediation mutation guards."""
@@ -316,7 +312,6 @@ class RemediationMutationGuardPolicy:
     allow_self_target: bool = False
     max_self_healing_depth: int = 1
     target_change_policy: Literal["no_op", "rediagnose", "escalate"] = "escalate"
-
 
 @dataclass(frozen=True, slots=True)
 class RemediationMutationLockDecision:
@@ -345,7 +340,6 @@ class RemediationMutationLockDecision:
             "expiresAt": _datetime_to_json(self.expires_at),
         }
 
-
 @dataclass(frozen=True, slots=True)
 class RemediationActionLedgerDecision:
     status: str
@@ -360,7 +354,6 @@ class RemediationActionLedgerDecision:
             "unsafeReuse": self.unsafe_reuse,
             "requestShapeHash": self.request_shape_hash,
         }
-
 
 @dataclass(frozen=True, slots=True)
 class RemediationActionBudgetDecision:
@@ -381,7 +374,6 @@ class RemediationActionBudgetDecision:
             "cooldownSeconds": self.cooldown_seconds,
         }
 
-
 @dataclass(frozen=True, slots=True)
 class RemediationNestedDecision:
     status: str
@@ -396,7 +388,6 @@ class RemediationNestedDecision:
             "allowSelfTarget": self.allow_self_target,
             "maxSelfHealingDepth": self.max_self_healing_depth,
         }
-
 
 @dataclass(frozen=True, slots=True)
 class RemediationTargetFreshnessDecision:
@@ -418,7 +409,6 @@ class RemediationTargetFreshnessDecision:
             "sessionIdentity": _redact_text(self.session_identity),
             "targetRunChanged": self.target_run_changed,
         }
-
 
 @dataclass(frozen=True, slots=True)
 class RemediationMutationGuardResult:
@@ -454,7 +444,6 @@ class RemediationMutationGuardResult:
             "redactedParameters": dict(self.redacted_parameters),
         }
 
-
 @dataclass(slots=True)
 class _ActiveMutationLock:
     lock_id: str
@@ -468,14 +457,12 @@ class _ActiveMutationLock:
     expires_at: datetime
     released: bool = False
 
-
 @dataclass(frozen=True, slots=True)
 class _LedgerEntry:
     request_shape_hash: str
     recorded_at: datetime
     result: RemediationMutationGuardResult
     durable: bool = False
-
 
 class RemediationActionAuthorityService:
     """Evaluate remediation action requests against authority boundaries."""
@@ -887,7 +874,6 @@ class RemediationActionAuthorityService:
             redacted_parameters=redacted_parameters,
             audit=audit,
         )
-
 
 class RemediationMutationGuardService:
     """Evaluate mutation guard preconditions before side-effecting actions."""
@@ -1596,7 +1582,6 @@ class RemediationMutationGuardService:
             )
             self._last_attempt_by_shape.pop(oldest_shape_key, None)
 
-
 def _security_profile_error(
     *,
     security_profile: RemediationSecurityProfile | None,
@@ -1612,7 +1597,6 @@ def _security_profile_error(
     if action_kind not in set(security_profile.allowed_action_kinds):
         return "security_profile_action_not_allowed"
     return None
-
 
 def _normalize_guard_policy(
     policy: RemediationMutationGuardPolicy | None,
@@ -1635,18 +1619,15 @@ def _normalize_guard_policy(
         else "escalate",
     )
 
-
 def _normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
 
-
 def _datetime_to_json(value: datetime | None) -> str | None:
     if value is None:
         return None
     return _normalize_datetime(value).isoformat().replace("+00:00", "Z")
-
 
 def _datetime_from_json(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
@@ -1659,7 +1640,6 @@ def _datetime_from_json(value: Any) -> datetime | None:
     except ValueError:
         return None
     return _normalize_datetime(parsed)
-
 
 def _request_shape_hash(
     *,
@@ -1677,11 +1657,9 @@ def _request_shape_hash(
     encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-
 def _stable_lock_id(*parts: str) -> str:
     encoded = "|".join(str(part) for part in parts)
     return "rlock_" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
-
 
 def _lock_decision(
     lock: _ActiveMutationLock,
@@ -1700,7 +1678,6 @@ def _lock_decision(
         expires_at=lock.expires_at,
     )
 
-
 def _active_lock_payload(lock: _ActiveMutationLock) -> dict[str, Any]:
     return {
         "lockId": lock.lock_id,
@@ -1714,7 +1691,6 @@ def _active_lock_payload(lock: _ActiveMutationLock) -> dict[str, Any]:
         "expiresAt": _datetime_to_json(lock.expires_at),
         "released": bool(lock.released),
     }
-
 
 def _active_lock_from_payload(payload: Any) -> _ActiveMutationLock | None:
     if not isinstance(payload, Mapping):
@@ -1743,7 +1719,6 @@ def _active_lock_from_payload(payload: Any) -> _ActiveMutationLock | None:
         released=bool(payload.get("released")),
     )
 
-
 def _duplicate_guard_result(
     result: RemediationMutationGuardResult,
 ) -> RemediationMutationGuardResult:
@@ -1767,7 +1742,6 @@ def _duplicate_guard_result(
         target_freshness=result.target_freshness,
         redacted_parameters=result.redacted_parameters,
     )
-
 
 def _guard_result_from_payload(
     payload: Mapping[str, Any],
@@ -1853,18 +1827,15 @@ def _guard_result_from_payload(
         redacted_parameters=redacted if isinstance(redacted, Mapping) else {},
     )
 
-
 def _string_or_none(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
-
 
 def _int_or_zero(value: Any) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
         return 0
-
 
 def _nested_decision(
     *,
@@ -1891,7 +1862,6 @@ def _nested_decision(
         allow_self_target=policy.allow_self_target,
         max_self_healing_depth=policy.max_self_healing_depth,
     )
-
 
 def _freshness_decision(
     *,
@@ -1970,7 +1940,6 @@ def _freshness_decision(
         target_run_changed=target_run_changed,
     )
 
-
 def _freshness_value(
     target_freshness: Mapping[str, Any] | Any,
     *names: str,
@@ -1982,13 +1951,11 @@ def _freshness_value(
             return getattr(target_freshness, name)
     return None
 
-
 def _redact_payload(value: Mapping[str, Any]) -> Mapping[str, Any]:
     redacted = redact_sensitive_payload(value)
     if isinstance(redacted, Mapping):
         return _scrub_paths(redacted)
     return {}
-
 
 def _scrub_paths(value: Any) -> Any:
     if isinstance(value, str):
@@ -2001,7 +1968,6 @@ def _scrub_paths(value: Any) -> Any:
         return tuple(_scrub_paths(item) for item in value)
     return value
 
-
 def _redact_text(value: str | None) -> str:
     redacted = redact_sensitive_text(value)
     if redacted is None:
@@ -2010,20 +1976,17 @@ def _redact_text(value: str | None) -> str:
     redacted = _ABSOLUTE_PATH_PATTERN.sub("[REDACTED_PATH]", redacted)
     return redacted
 
-
 def _target_type(action_kind: str) -> str | None:
     action_info = _ACTION_CATALOG.get(action_kind)
     if action_info is None:
         return None
     return str(action_info.get("target_type") or "")
 
-
 def _verification_hint(action_kind: str) -> str | None:
     action_info = _ACTION_CATALOG.get(action_kind)
     if action_info is None:
         return None
     return str(action_info.get("verification_hint") or "")
-
 
 def _result_status(decision: RemediationActionDecision, reason: str) -> str:
     if reason == "dry_run":
@@ -2041,7 +2004,6 @@ def _result_status(decision: RemediationActionDecision, reason: str) -> str:
     if decision in {"denied", "dry_run_only"}:
         return "rejected"
     return "failed"
-
 
 __all__ = [
     "RemediationActionAuthorityResult",

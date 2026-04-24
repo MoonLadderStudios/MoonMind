@@ -18,11 +18,9 @@ from moonmind.schemas.manifest_v0_models import ManifestV0
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
 # Pipeline result types
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class SourceResult:
@@ -32,7 +30,6 @@ class SourceResult:
     source_type: str
     doc_count: int = 0
     error: Optional[str] = None
-
 
 @dataclass
 class PipelineResult:
@@ -61,11 +58,9 @@ class PipelineResult:
             ],
         }
 
-
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
-
 
 class ManifestPipeline:
     """Execute a manifest v0 pipeline.

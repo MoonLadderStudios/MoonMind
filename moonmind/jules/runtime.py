@@ -12,7 +12,6 @@ JULES_RUNTIME_DISABLED_MESSAGE = "targetRuntime=jules requires JULES_API_KEY con
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
-
 @dataclass(frozen=True, slots=True)
 class RuntimeGateState:
     """Represents whether Jules runtime is enabled plus diagnostics context."""
@@ -20,7 +19,6 @@ class RuntimeGateState:
     enabled: bool
     missing: tuple[str, ...]
     error_message: str
-
 
 @dataclass(frozen=True, slots=True)
 class JulesProviderProfile:
@@ -35,10 +33,8 @@ class JulesProviderProfile:
     callback_rate_limit_per_window: int
     callback_rate_limit_window_seconds: int
 
-
 def _clean_value(value: object | None) -> str:
     return str(value or "").strip()
-
 
 def _resolve_enabled_flag(
     *, enabled: bool | None = None, env: Mapping[str, Any] | None = None
@@ -61,7 +57,6 @@ def _resolve_enabled_flag(
     if lowered in _FALSE_VALUES:
         return False
     return None
-
 
 def build_runtime_gate_state(
     *,
@@ -107,7 +102,6 @@ def build_runtime_gate_state(
         error_message=error_message,
     )
 
-
 def is_jules_runtime_enabled(
     *,
     enabled: bool | None = None,
@@ -123,7 +117,6 @@ def is_jules_runtime_enabled(
         api_key=api_key,
         env=env,
     ).enabled
-
 
 def build_jules_provider_profile(
     *,
@@ -149,7 +142,6 @@ def build_jules_provider_profile(
             1, int(callback_rate_limit_window_seconds)
         ),
     )
-
 
 __all__ = [
     "JULES_RUNTIME_DISABLED_MESSAGE",

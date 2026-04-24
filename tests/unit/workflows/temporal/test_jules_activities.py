@@ -15,7 +15,6 @@ from moonmind.schemas.agent_runtime_models import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 def _exec_request() -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="external",
@@ -28,7 +27,6 @@ def _exec_request() -> AgentExecutionRequest:
             "description": "Integration test task",
         },
     )
-
 
 def _mock_handle() -> AgentRunHandle:
     from datetime import UTC, datetime
@@ -45,7 +43,6 @@ def _mock_handle() -> AgentRunHandle:
         },
     )
 
-
 def _mock_status(*, run_id: str = "task-001") -> AgentRunStatus:
     return AgentRunStatus(
         runId=run_id,
@@ -58,14 +55,12 @@ def _mock_status(*, run_id: str = "task-001") -> AgentRunStatus:
         },
     )
 
-
 def _mock_result(*, run_id: str = "task-001") -> AgentRunResult:
     return AgentRunResult(
         outputRefs=[],
         summary=f"Jules task {run_id} ended with provider status 'completed'.",
         failureClass=None,
     )
-
 
 def _mock_cancel_status(*, run_id: str = "task-001") -> AgentRunStatus:
     return AgentRunStatus(
@@ -80,7 +75,6 @@ def _mock_cancel_status(*, run_id: str = "task-001") -> AgentRunStatus:
         },
     )
 
-
 class _FakeAdapter:
     """Lightweight adapter fake for testing activity wrappers."""
 
@@ -90,7 +84,6 @@ class _FakeAdapter:
         self.fetch_result = AsyncMock(return_value=_mock_result())
         self.cancel = AsyncMock(return_value=_mock_cancel_status())
         self.send_message = AsyncMock(return_value=_mock_status())
-
 
 @pytest.fixture
 def _patch_build_adapter():
@@ -102,7 +95,6 @@ def _patch_build_adapter():
     ):
         yield fake
 
-
 async def test_jules_start_activity_calls_adapter(_patch_build_adapter):
     from moonmind.workflows.temporal.activities.jules_activities import (
         jules_start_activity,
@@ -113,7 +105,6 @@ async def test_jules_start_activity_calls_adapter(_patch_build_adapter):
     assert result.status == "queued"
     _patch_build_adapter.start.assert_awaited_once()
 
-
 async def test_jules_status_activity_calls_adapter(_patch_build_adapter):
     from moonmind.workflows.temporal.activities.jules_activities import (
         jules_status_activity,
@@ -122,7 +113,6 @@ async def test_jules_status_activity_calls_adapter(_patch_build_adapter):
     result = await jules_status_activity("task-001")
     assert result.run_id == "task-001"
     _patch_build_adapter.status.assert_awaited_once_with("task-001")
-
 
 async def test_jules_fetch_result_activity_calls_adapter(_patch_build_adapter):
     from moonmind.workflows.temporal.activities.jules_activities import (
@@ -133,7 +123,6 @@ async def test_jules_fetch_result_activity_calls_adapter(_patch_build_adapter):
     assert result.summary is not None
     _patch_build_adapter.fetch_result.assert_awaited_once_with("task-001")
 
-
 async def test_jules_cancel_activity_calls_adapter(_patch_build_adapter):
     from moonmind.workflows.temporal.activities.jules_activities import (
         jules_cancel_activity,
@@ -142,7 +131,6 @@ async def test_jules_cancel_activity_calls_adapter(_patch_build_adapter):
     result = await jules_cancel_activity("task-001")
     assert result.metadata.get("cancelAccepted") is True
     _patch_build_adapter.cancel.assert_awaited_once_with("task-001")
-
 
 async def test_build_adapter_raises_when_disabled():
     """Verify _build_adapter raises RuntimeError when Jules is explicitly disabled."""
@@ -156,7 +144,6 @@ async def test_build_adapter_raises_when_disabled():
         with pytest.raises(RuntimeError, match="JULES_ENABLED"):
             _build_adapter()
 
-
 async def test_build_adapter_raises_when_no_api_key():
     """Verify _build_adapter raises RuntimeError when API key is missing."""
     from moonmind.workflows.temporal.activities.jules_activities import _build_adapter
@@ -168,7 +155,6 @@ async def test_build_adapter_raises_when_no_api_key():
     ):
         with pytest.raises(RuntimeError, match="JULES_API_KEY"):
             _build_adapter()
-
 
 async def test_jules_send_message_activity_calls_adapter(_patch_build_adapter):
     from moonmind.workflows.temporal.activities.jules_activities import (
@@ -184,7 +170,6 @@ async def test_jules_send_message_activity_calls_adapter(_patch_build_adapter):
         run_id="session-42",
         prompt="Continue with step 2.",
     )
-
 
 async def test_repo_merge_pr_activity_updates_base_before_merge():
     from moonmind.workflows.temporal.activities.jules_activities import (
@@ -231,7 +216,6 @@ async def test_repo_merge_pr_activity_updates_base_before_merge():
     assert result["merged"] is True
     assert result["mergeSha"] == "abc123"
 
-
 async def test_repo_merge_pr_activity_returns_non_success_when_base_update_fails():
     from moonmind.workflows.temporal.activities.jules_activities import (
         repo_merge_pr_activity,
@@ -257,9 +241,7 @@ async def test_repo_merge_pr_activity_returns_non_success_when_base_update_fails
     assert result["merged"] is False
     assert "Base branch update failed" in result["summary"]
 
-
 # --- T019: integration.jules.list_activities tests ---
-
 
 @pytest.fixture
 def _patch_build_client():
@@ -271,7 +253,6 @@ def _patch_build_client():
         return_value=mock_client,
     ):
         yield mock_client
-
 
 async def test_jules_list_activities_calls_client(_patch_build_client):
     """T019: list_activities activity wraps JulesClient.list_activities."""
@@ -295,7 +276,6 @@ async def test_jules_list_activities_calls_client(_patch_build_client):
     assert result["activityId"] == "act-42"
     _patch_build_client.list_activities.assert_awaited_once_with("ses-1")
 
-
 async def test_jules_list_activities_no_question(_patch_build_client):
     """T019: list_activities returns None fields when no question found."""
     from moonmind.schemas.jules_models import JulesListActivitiesResult
@@ -311,9 +291,7 @@ async def test_jules_list_activities_no_question(_patch_build_client):
     assert result["latestAgentQuestion"] is None
     assert result["activityId"] is None
 
-
 # --- T020: integration.jules.answer_question tests ---
-
 
 async def test_jules_answer_question_sends_answer(_patch_build_client):
     """T020: answer_question orchestrates prompt → LLM → sendMessage."""
@@ -338,7 +316,6 @@ async def test_jules_answer_question_sends_answer(_patch_build_client):
     assert result["answer"] == "Use the main branch."
     _patch_build_client.send_message.assert_awaited_once()
 
-
 async def test_jules_answer_question_missing_session_id(_patch_build_client):
     """T020: answer_question returns error for missing session_id."""
     from moonmind.workflows.temporal.activities.jules_activities import (
@@ -352,7 +329,6 @@ async def test_jules_answer_question_missing_session_id(_patch_build_client):
     assert result["answered"] is False
     assert "Missing" in result["error"]
 
-
 async def test_jules_answer_question_missing_question(_patch_build_client):
     """T020: answer_question returns error for missing question."""
     from moonmind.workflows.temporal.activities.jules_activities import (
@@ -365,9 +341,7 @@ async def test_jules_answer_question_missing_question(_patch_build_client):
     })
     assert result["answered"] is False
 
-
 # --- T020 supplement: get_auto_answer_config tests ---
-
 
 async def test_jules_get_auto_answer_config_defaults():
     """T020: get_auto_answer_config returns defaults."""
@@ -382,7 +356,6 @@ async def test_jules_get_auto_answer_config_defaults():
     assert result["runtime"] == "llm"
     assert result["timeout_seconds"] == 300
 
-
 async def test_jules_get_auto_answer_config_disabled():
     """T020: get_auto_answer_config respects JULES_AUTO_ANSWER_ENABLED=false."""
     from moonmind.workflows.temporal.activities.jules_activities import (
@@ -392,7 +365,6 @@ async def test_jules_get_auto_answer_config_disabled():
     with patch.dict("os.environ", {"JULES_AUTO_ANSWER_ENABLED": "false"}, clear=False):
         result = await jules_get_auto_answer_config_activity()
     assert result["enabled"] is False
-
 
 async def test_jules_get_auto_answer_config_custom_max():
     """T020: get_auto_answer_config reads JULES_MAX_AUTO_ANSWERS."""
@@ -404,7 +376,6 @@ async def test_jules_get_auto_answer_config_custom_max():
         result = await jules_get_auto_answer_config_activity()
     assert result["max_answers"] == 5
 
-
 async def test_jules_get_auto_answer_config_invalid_max_raises():
     """get_auto_answer_config raises ValueError for non-integer JULES_MAX_AUTO_ANSWERS."""
     from moonmind.workflows.temporal.activities.jules_activities import (
@@ -414,7 +385,6 @@ async def test_jules_get_auto_answer_config_invalid_max_raises():
     with patch.dict("os.environ", {"JULES_MAX_AUTO_ANSWERS": "abc"}, clear=False):
         with pytest.raises(ValueError, match="JULES_MAX_AUTO_ANSWERS must be an integer"):
             await jules_get_auto_answer_config_activity()
-
 
 async def test_jules_get_auto_answer_config_invalid_timeout_raises():
     """get_auto_answer_config raises ValueError for non-integer JULES_AUTO_ANSWER_TIMEOUT_SECONDS."""
@@ -426,12 +396,10 @@ async def test_jules_get_auto_answer_config_invalid_timeout_raises():
         with pytest.raises(ValueError, match="JULES_AUTO_ANSWER_TIMEOUT_SECONDS must be an integer"):
             await jules_get_auto_answer_config_activity()
 
-
 async def test_repo_create_pr_activity_validates_payload():
     from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
     with pytest.raises(ValueError, match="Invalid payload"):
         await repo_create_pr_activity({})
-
 
 async def test_repo_create_pr_activity_delegates():
     from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity

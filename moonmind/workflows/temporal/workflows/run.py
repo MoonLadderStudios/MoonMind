@@ -75,7 +75,6 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
 )
 
-
 class DependencyFailureError(ValueError):
     """Structured dependency gate failure."""
 
@@ -95,7 +94,6 @@ _TERMINAL_LAST_ERROR_UNSET = object()
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 _PR_OPTIONAL_AGENT_SKILLS = frozenset({"jira-issue-creator", "jira-pr-verify", "jira-verify"})
 
-
 class RunWorkflowInput(TypedDict, total=False):
     """Input payload for the MoonMind.Run workflow."""
 
@@ -106,18 +104,15 @@ class RunWorkflowInput(TypedDict, total=False):
     plan_artifact_ref: Optional[str]
     scheduled_for: Optional[str]
 
-
 class _RunWorkflowOutputBase(TypedDict):
     status: str
     message: Optional[str]
-
 
 class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
     proposals_generated: int
     proposals_submitted: int
     mergeAutomationDisposition: str
     headSha: str
-
 
 WORKFLOW_NAME = "MoonMind.Run"
 STATE_SCHEDULED = "scheduled"
@@ -184,18 +179,15 @@ _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
 
-
 def _normalize_agent_runtime_id(agent_id: str) -> str:
     """Normalize runtime identifiers for managed/external dispatch decisions."""
 
     return str(agent_id).strip().lower().replace("-", "_")
 
-
 def _legacy_manager_workflow_id(runtime_id: str) -> str:
     # Preserve legacy workflow IDs for in-flight histories. New executions use
     # provider-profile-manager IDs once the replay patch is active.
     return f"auth-profile-manager:{runtime_id}"
-
 
 @workflow.defn(name="MoonMind.Run")
 class MoonMindRunWorkflow:

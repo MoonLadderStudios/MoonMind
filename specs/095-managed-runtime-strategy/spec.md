@@ -3,8 +3,8 @@
 **Feature Branch**: `095-managed-runtime-strategy`
 **Created**: 2026-03-21
 **Status**: Draft
-**Input**: User description: "Implement Phase 1 from docs/tmp/SharedManagedAgentAbstractions.md — Foundation: ABC + Registry + Gemini Strategy"
-**Source Contract**: `docs/tmp/SharedManagedAgentAbstractions.md`
+**Input**: User description: "Implement Phase 1 from spec.md (Input) — Foundation: ABC + Registry + Gemini Strategy"
+**Source Contract**: `spec.md (Input)`
 
 ## Source Document Requirements
 

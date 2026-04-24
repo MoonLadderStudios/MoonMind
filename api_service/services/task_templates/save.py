@@ -33,15 +33,12 @@ _ALLOWED_STEP_KEYS = frozenset(
 )
 logger = logging.getLogger(__name__)
 
-
 def _contains_secret(value: str) -> bool:
     return any(pattern.search(value) is not None for pattern in _SECRET_PATTERNS)
-
 
 def _slug_from_title(title: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", title.strip().lower()).strip("-")
     return slug or "template"
-
 
 class TaskTemplateSaveService:
     """Persist user-authored templates sourced from existing task steps."""

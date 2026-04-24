@@ -45,8 +45,6 @@ async def test_artifact_read_legacy_dict_validation_path(activities, mock_servic
     assert payload == b"test payload"
     mock_service.read.assert_called_once_with(artifact_id="test-ref", principal="test-principal")
 
-
-
 @pytest.mark.asyncio
 async def test_artifact_write_complete_pydantic_model(activities, mock_service, patch_build_artifact_ref):
     request = ArtifactWriteCompleteInput(
@@ -94,7 +92,6 @@ async def test_artifact_write_complete_payload_roundtrip_legacy_list_ints(activi
         payload=b"test payload",
         content_type="text/plain"
     )
-
 
 @pytest.mark.asyncio
 async def test_artifact_publish_report_bundle_delegates_to_service(

@@ -213,12 +213,13 @@ MoonMind MUST keep long-lived documentation readable as **what the system is for
 
 Non-negotiable rules:
 
-- Documentation under `docs/` **outside** `docs/tmp/` MUST focus on **declarative, desired-state** descriptions: architecture, contracts, operator-visible behavior, and target semantics (including Temporal-native orchestration where that is the product direction).
-- **Migration narratives, phased implementation plans, rollout sequencing, and implementation backlogs** MUST be recorded under **`docs/tmp/`** (for example `docs/tmp/remaining-work/` trackers linked from the canonical source doc, and indexes such as `docs/tmp/PlansOverview.md`), not embedded as the primary framing of canonical docs.
-- When a migration or implementation effort completes, **remove or archive** the corresponding `docs/tmp` material rather than leaving obsolete plan sections in canonical files.
-- Canonical docs that still have open migration work MUST **point** to the tmp tracker (or equivalent) instead of duplicating volatile checklists inline.
+- Documentation under `docs/` MUST focus on **declarative, desired-state** descriptions: architecture, contracts, operator-visible behavior, and target semantics (including Temporal-native orchestration where that is the product direction).
+- **Migration narratives, phased implementation plans, rollout sequencing, and implementation backlogs** MUST be recorded in **MoonSpec feature artifacts** under `specs/<feature>/` (for example `plan.md`, `tasks.md`, `research.md`, and contracts) or in **local-only / gitignored handoff paths** (for example `artifacts/` for ephemeral tool outputs), not embedded as the primary framing of canonical docs.
+- Canonical docs MUST NOT link to or require disposable migration-only trees under `docs/`; time-bound work belongs in `specs/<feature>/`, `artifacts/`, or other explicitly local handoffs.
+- When a migration or implementation effort completes, **delete or archive** the corresponding scratch material rather than leaving obsolete plan sections in canonical files.
+- Canonical docs that still have open migration work SHOULD **point** to the relevant `specs/<feature>/` artifacts (or equivalent) instead of duplicating volatile checklists inline.
 
-Rationale: Canonical docs stay stable references for operators and implementers; time-bound work belongs in disposable scratch space that can be deleted when done.
+Rationale: Canonical docs stay stable references for operators and implementers; time-bound work belongs in feature specs or disposable local artifacts.
 
 ### XIII. Pre-Release Velocity: Delete, Don't Deprecate
 

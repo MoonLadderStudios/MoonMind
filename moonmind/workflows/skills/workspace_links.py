@@ -6,10 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-
 class SkillWorkspaceError(RuntimeError):
     """Raised when workspace adapter links cannot be created or validated."""
-
 
 @dataclass(frozen=True, slots=True)
 class SkillWorkspaceLinks:
@@ -33,7 +31,6 @@ class SkillWorkspaceLinks:
                 payload["geminiSkillsError"] = self.gemini_skills_error
         return payload
 
-
 def _replace_link(path: Path, *, target: Path) -> None:
     if path.exists() or path.is_symlink():
         if path.is_symlink():
@@ -49,7 +46,6 @@ def _replace_link(path: Path, *, target: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     relative_target = Path(os.path.relpath(target, path.parent))
     path.symlink_to(relative_target)
-
 
 def ensure_shared_skill_links(
     *,
@@ -87,7 +83,6 @@ def ensure_shared_skill_links(
     )
     validate_shared_skill_links(links, require_gemini_link=require_gemini_link)
     return links
-
 
 def validate_shared_skill_links(
     links: SkillWorkspaceLinks,

@@ -43,7 +43,7 @@ Test implications: Add tests that document source path and dist path boundaries,
 ## FR-008 / FR-010
 
 Decision: Preserve traceability in artifacts and add MM-430-specific test names.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-430-moonspec-orchestration-input.md` and `specs/225-preserve-styling-invariants/spec.md` preserve MM-430 and source IDs.
+Evidence: `spec.md` (Input) and `specs/225-preserve-styling-invariants/spec.md` preserve MM-430 and source IDs.
 Rationale: MoonSpec verification and PR review need clear issue-key evidence.
 Alternatives considered: Rely on adjacent MM-429 tests; rejected because MM-430 is a distinct story with different invariants.
 Test implications: Add tests whose names or assertions reference MM-430 invariant coverage and preserve traceability in tasks and verification.

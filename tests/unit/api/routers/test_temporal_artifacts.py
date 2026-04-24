@@ -19,7 +19,6 @@ from api_service.auth_providers import get_current_user
 from api_service.db import models as db_models
 from moonmind.workflows.temporal.artifacts import TemporalArtifactValidationError
 
-
 def _build_artifact() -> SimpleNamespace:
     now = datetime.now(UTC)
     return SimpleNamespace(
@@ -39,7 +38,6 @@ def _build_artifact() -> SimpleNamespace:
         metadata_json={"source": "test"},
     )
 
-
 def _build_link(artifact_id: str) -> SimpleNamespace:
     _ = artifact_id
     return SimpleNamespace(
@@ -53,7 +51,6 @@ def _build_link(artifact_id: str) -> SimpleNamespace:
         created_by_worker="worker-1",
     )
 
-
 def _build_upload(artifact_id: str) -> SimpleNamespace:
     return SimpleNamespace(
         mode="single_put",
@@ -63,7 +60,6 @@ def _build_upload(artifact_id: str) -> SimpleNamespace:
         max_size_bytes=10 * 1024 * 1024,
         required_headers={},
     )
-
 
 def _build_read_policy(artifact: SimpleNamespace) -> SimpleNamespace:
     artifact_ref = SimpleNamespace(
@@ -79,7 +75,6 @@ def _build_read_policy(artifact: SimpleNamespace) -> SimpleNamespace:
         preview_artifact_ref=None,
         default_read_ref=artifact_ref,
     )
-
 
 def _override_user_dependencies(app: FastAPI) -> None:
     mock_user = SimpleNamespace(
@@ -97,7 +92,6 @@ def _override_user_dependencies(app: FastAPI) -> None:
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
 
-
 def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
     app.include_router(router)
@@ -108,7 +102,6 @@ def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     with TestClient(app) as test_client:
         yield test_client, mock_service
     app.dependency_overrides.clear()
-
 
 def test_create_artifact_returns_upload_descriptor() -> None:
     """Create endpoint should return ArtifactRef + upload details."""
@@ -138,7 +131,6 @@ def test_create_artifact_returns_upload_descriptor() -> None:
             body["upload"]["upload_url"]
             == f"http://testserver/api/artifacts/{artifact.artifact_id}/content"
         )
-
 
 def test_create_artifact_returns_attachment_upload_started_diagnostic() -> None:
     """MM-375: create response exposes target-aware upload-start diagnostics."""
@@ -174,7 +166,6 @@ def test_create_artifact_returns_attachment_upload_started_diagnostic() -> None:
             "sizeBytes": 42,
         }
 
-
 def test_upload_content_returns_attachment_upload_completed_diagnostic() -> None:
     """MM-375: upload completion response exposes target-aware diagnostics."""
 
@@ -208,7 +199,6 @@ def test_upload_content_returns_attachment_upload_completed_diagnostic() -> None
             "sizeBytes": 42,
         }
 
-
 def test_upload_content_maps_validation_to_413() -> None:
     """Upload endpoint should map max-byte validation errors to HTTP 413."""
 
@@ -225,7 +215,6 @@ def test_upload_content_maps_validation_to_413() -> None:
 
         assert response.status_code == 413
         assert response.json()["detail"]["code"] == "artifact_too_large"
-
 
 def test_presign_upload_part_returns_descriptor() -> None:
     """Multipart presign endpoint should surface URL, headers, and part number."""
@@ -248,7 +237,6 @@ def test_presign_upload_part_returns_descriptor() -> None:
         body = response.json()
         assert body["part_number"] == 3
         assert "partNumber=3" in body["url"]
-
 
 def test_get_metadata_include_download() -> None:
     """Metadata endpoint should include download hints when requested."""
@@ -279,7 +267,6 @@ def test_get_metadata_include_download() -> None:
         assert body["download_url"].endswith(
             f"/api/artifacts/{artifact.artifact_id}/download"
         )
-
 
 def test_get_metadata_exposes_preview_and_raw_access_policy_fields() -> None:
     """Metadata endpoint should surface preview/default-read policy fields."""
@@ -321,7 +308,6 @@ def test_get_metadata_exposes_preview_and_raw_access_policy_fields() -> None:
         assert body["raw_access_allowed"] is False
         assert body["preview_artifact_ref"]["artifact_id"] == preview_ref.artifact_id
         assert body["default_read_ref"]["artifact_id"] == artifact.artifact_id
-
 
 def test_list_execution_artifacts_returns_collection() -> None:
     """Execution listing endpoint should return serialized artifact metadata."""

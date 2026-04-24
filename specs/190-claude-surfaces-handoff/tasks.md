@@ -23,7 +23,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-348 input and active artifacts in docs/tmp/jira-orchestration-inputs/MM-348-moonspec-orchestration-input.md and specs/190-claude-surfaces-handoff/spec.md (MM-348)
+- [X] T001 Confirm MM-348 input and active artifacts in and specs/190-claude-surfaces-handoff/spec.md (MM-348)
 - [X] T002 Confirm existing Claude session schema boundary in moonmind/schemas/managed_session_models.py and moonmind/schemas/__init__.py (FR-001 through FR-019)
 - [X] T003 Confirm focused unit and integration commands from specs/190-claude-surfaces-handoff/quickstart.md (SC-001 through SC-007)
 

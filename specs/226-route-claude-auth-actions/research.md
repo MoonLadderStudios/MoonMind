@@ -51,7 +51,7 @@ Test implications: Add a UI assertion for a metadata-backed Claude readiness lab
 ## SC-* / Traceability
 
 Decision: preserve MM-445 and source mappings through all artifacts and final verification.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-445-moonspec-orchestration-input.md` and `spec.md` include MM-445, DESIGN-REQ-001, DESIGN-REQ-003, and DESIGN-REQ-007.
+Evidence: `spec.md` (Input) and `spec.md` include MM-445, DESIGN-REQ-001, DESIGN-REQ-003, and DESIGN-REQ-007.
 Rationale: Final verification and PR metadata need stable Jira/source references.
 Alternatives considered: None.
 Test implications: Final `/moonspec-verify` should confirm traceability.

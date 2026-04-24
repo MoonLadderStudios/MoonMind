@@ -11,12 +11,10 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-
 revision: str = "c9d0e1f2a3b4"
 down_revision: Union[str, None] = "f8a9b0c1d2e3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
-
 
 __all__ = [
     "revision",
@@ -26,7 +24,6 @@ __all__ = [
     "upgrade",
     "downgrade",
 ]
-
 
 def upgrade() -> None:
     op.create_table(
@@ -74,7 +71,6 @@ def upgrade() -> None:
         ["target_workflow_id"],
         unique=False,
     )
-
 
 def downgrade() -> None:
     op.drop_index(

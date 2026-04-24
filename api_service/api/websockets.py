@@ -32,7 +32,6 @@ async def get_current_user_ws(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     return user
 
-
 def _session_is_expired(session: ManagedAgentOAuthSession) -> bool:
     if not session.expires_at:
         return False
@@ -40,7 +39,6 @@ def _session_is_expired(session: ManagedAgentOAuthSession) -> bool:
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     return expires_at <= datetime.now(timezone.utc)
-
 
 def _terminal_close_reason(session: ManagedAgentOAuthSession) -> str | None:
     if session.status not in _ATTACHABLE_STATUSES:
@@ -50,7 +48,6 @@ def _terminal_close_reason(session: ManagedAgentOAuthSession) -> str | None:
     if not session.container_name:
         return "Session terminal is not ready"
     return None
-
 
 def _provider_bootstrap_command(runtime_id: str) -> list[str]:
     from moonmind.workflows.temporal.runtime.providers.registry import get_provider
@@ -63,11 +60,9 @@ def _provider_bootstrap_command(runtime_id: str) -> list[str]:
         raise ValueError(f"OAuth runtime {runtime_id} has no bootstrap command")
     return list(command)
 
-
 def _command_for_docker_exec(runtime_id: str) -> str:
     command = _provider_bootstrap_command(runtime_id)
     return " ".join(shlex.quote(part) for part in command)
-
 
 def _json_frame_from_text(text: str) -> dict[str, Any] | None:
     try:
@@ -78,7 +73,6 @@ def _json_frame_from_text(text: str) -> dict[str, Any] | None:
         return None
     return frame
 
-
 def _resize_dimensions(frame: dict[str, Any]) -> tuple[int, int] | None:
     try:
         cols = int(frame.get("cols", 80))
@@ -86,7 +80,6 @@ def _resize_dimensions(frame: dict[str, Any]) -> tuple[int, int] | None:
     except (TypeError, ValueError):
         return None
     return cols, rows
-
 
 async def _mark_terminal_connection(
     db: AsyncSession,

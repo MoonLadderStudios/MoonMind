@@ -133,18 +133,18 @@ The names below are the normative documentation names for the shared model. Impl
 
 ```text
 ManagedAgentSpec
-  id
-  runtime
-  desiredState
-  workspace
-  providerProfileRef
-  agentProfileRef
-  contextRefs
-  resolvedSkillSetRef
-  sessionPolicy
-  permissions
-  observability
-  metadata
+ id
+ runtime
+ desiredState
+ workspace
+ providerProfileRef
+ agentProfileRef
+ contextRefs
+ resolvedSkillSetRef
+ sessionPolicy
+ permissions
+ observability
+ metadata
 ```
 
 Field requirements:
@@ -182,11 +182,11 @@ The plane should delete, archive, or detach runtime-native state according to po
 
 ```text
 ManagedSessionRef
-  runtime
-  planeId
-  sessionId
-  sessionEpoch
-  nativeRef
+ runtime
+ planeId
+ sessionId
+ sessionEpoch
+ nativeRef
 ```
 
 Rules:
@@ -202,14 +202,14 @@ Rules:
 
 ```text
 ManagedSessionBinding
-  managedAgentId
-  sessionRef
-  bindingMode
-  compatibilityFingerprint
-  createdAt
-  updatedAt
-  expiresAt
-  retentionPolicy
+ managedAgentId
+ sessionRef
+ bindingMode
+ compatibilityFingerprint
+ createdAt
+ updatedAt
+ expiresAt
+ retentionPolicy
 ```
 
 `bindingMode` is one of:
@@ -226,16 +226,16 @@ The `compatibilityFingerprint` is the plane-computed value used to detect whethe
 
 ```text
 ManagedSessionObservation
-  sessionRef
-  phase
-  readiness
-  conditions
-  lastActivityAt
-  activeTurnRef
-  pendingApproval
-  continuityRefs
-  terminalReason
-  runtimeDetails
+ sessionRef
+ phase
+ readiness
+ conditions
+ lastActivityAt
+ activeTurnRef
+ pendingApproval
+ continuityRefs
+ terminalReason
+ runtimeDetails
 ```
 
 Shared phases:
@@ -260,11 +260,11 @@ Conditions provide stable cross-runtime status details.
 
 ```text
 ManagedSessionCondition
-  type
-  status
-  reason
-  message
-  lastTransitionAt
+ type
+ status
+ reason
+ message
+ lastTransitionAt
 ```
 
 Recommended shared condition types:
@@ -288,18 +288,18 @@ Capabilities describe runtime differences without changing the top-level abstrac
 
 ```text
 ManagedSessionPlaneCapabilities
-  supportsResume
-  supportsAdoptExisting
-  supportsInterrupt
-  supportsSteer
-  supportsReset
-  supportsStructuredEvents
-  supportsApprovalCallbacks
-  supportsWorkspaceOverride
-  supportsFork
-  supportsSubagents
-  supportsEphemeralSessions
-  supportsLiveFollow
+ supportsResume
+ supportsAdoptExisting
+ supportsInterrupt
+ supportsSteer
+ supportsReset
+ supportsStructuredEvents
+ supportsApprovalCallbacks
+ supportsWorkspaceOverride
+ supportsFork
+ supportsSubagents
+ supportsEphemeralSessions
+ supportsLiveFollow
 ```
 
 Capability flags are descriptive contract data. They must not create silent fallback behavior. If a caller requests an unsupported operation, the plane should fail fast with a normalized error and observation update.
@@ -312,19 +312,19 @@ A managed session plane exposes the runtime-owned reconciliation and control sur
 
 ```text
 ManagedSessionPlane
-  runtimeKind
-  capabilities
+ runtimeKind
+ capabilities
 
-  reconcile(spec) -> ManagedSessionBinding + ManagedSessionObservation
-  get(sessionRef) -> ManagedSessionObservation
-  watch(sessionRef) -> stream<ManagedSessionEvent>
-  sendInput(sessionRef, input) -> ManagedSessionObservation
-  steer(sessionRef, input) -> ManagedSessionObservation
-  interrupt(sessionRef, control) -> ManagedSessionObservation
-  resolveApproval(sessionRef, approval) -> ManagedSessionObservation
-  reset(sessionRef, control) -> ManagedSessionBinding + ManagedSessionObservation
-  suspend(spec or sessionRef) -> ManagedSessionObservation
-  delete(spec or sessionRef) -> ManagedSessionObservation
+ reconcile(spec) -> ManagedSessionBinding + ManagedSessionObservation
+ get(sessionRef) -> ManagedSessionObservation
+ watch(sessionRef) -> stream<ManagedSessionEvent>
+ sendInput(sessionRef, input) -> ManagedSessionObservation
+ steer(sessionRef, input) -> ManagedSessionObservation
+ interrupt(sessionRef, control) -> ManagedSessionObservation
+ resolveApproval(sessionRef, approval) -> ManagedSessionObservation
+ reset(sessionRef, control) -> ManagedSessionBinding + ManagedSessionObservation
+ suspend(spec or sessionRef) -> ManagedSessionObservation
+ delete(spec or sessionRef) -> ManagedSessionObservation
 ```
 
 Exact method names can vary, but the shared boundary must remain reconciliation and observation based. Shared callers should not depend on raw process control operations.
@@ -409,14 +409,14 @@ Input sent to a session should be artifact-first.
 
 ```text
 ManagedSessionInput
-  turnId
-  instructions
-  instructionRef
-  contextRefs
-  attachmentRefs
-  resolvedSkillSetRef
-  permissions
-  metadata
+ turnId
+ instructions
+ instructionRef
+ contextRefs
+ attachmentRefs
+ resolvedSkillSetRef
+ permissions
+ metadata
 ```
 
 Rules:
@@ -447,17 +447,17 @@ Planes translate runtime-native streams into normalized events.
 
 ```text
 ManagedSessionEvent
-  eventId
-  sessionRef
-  sequence
-  timestamp
-  type
-  severity
-  turnRef
-  payload
-  payloadRef
-  redactionState
-  runtimeDetails
+ eventId
+ sessionRef
+ sequence
+ timestamp
+ type
+ severity
+ turnRef
+ payload
+ payloadRef
+ redactionState
+ runtimeDetails
 ```
 
 Rules:
@@ -600,4 +600,4 @@ Use the managed-agent docs as follows:
 - [`CodexCliManagedSessions.md`](./CodexCliManagedSessions.md) defines Codex-specific session details.
 - [`LiveLogs.md`](./LiveLogs.md) defines session-aware observability.
 
-Canonical docs should stay focused on target architecture and contracts. Migration notes, rollout sequencing, and incomplete implementation checklists belong under `docs/tmp/`.
+Canonical docs should stay focused on target architecture and contracts. Migration notes, rollout sequencing, and incomplete implementation checklists belong under `local-only handoffs`.

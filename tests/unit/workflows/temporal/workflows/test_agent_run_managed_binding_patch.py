@@ -4,7 +4,6 @@ import inspect
 
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
-
 def test_managed_launch_binding_uses_temporal_patch_guard() -> None:
     source = inspect.getsource(MoonMindAgentRun.run)
 

@@ -8,7 +8,6 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID, uuid4
 
-
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
     JSON,
@@ -43,16 +42,13 @@ from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
 )
 
-
 class Base(DeclarativeBase):
     pass
-
 
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     """Return enum members as stored DB labels, not Python enum names."""
 
     return [member.value for member in enum_cls]
-
 
 # Note: fastapi-users[sqlalchemy] uses GUID/UUID by default for id.
 # If you need an Integer ID, you would use SQLAlchemyBaseUserTable[int]
@@ -77,7 +73,6 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     user_profile = relationship(
         "UserProfile", back_populates="user", uselist=False
     )  # Added relationship to UserProfile
-
 
 class UserProfile(Base):
     __tablename__ = "user_profile"
@@ -106,18 +101,14 @@ class UserProfile(Base):
 
     user = relationship("User", back_populates="user_profile")
 
-
 def _json_variant() -> JSON:
     return JSON().with_variant(JSONB(astext_type=Text()), "postgresql")
-
 
 def mutable_json_list() -> JSON:
     return MutableList.as_mutable(_json_variant())
 
-
 def mutable_json_dict() -> JSON:
     return MutableDict.as_mutable(_json_variant())
-
 
 class ManifestRecord(Base):
     __tablename__ = "manifest"
@@ -150,19 +141,16 @@ class ManifestRecord(Base):
     state_json = Column(mutable_json_dict(), nullable=True)
     state_updated_at = Column(DateTime(timezone=True), nullable=True)
 
-
 class RecurringTaskScheduleType(str, enum.Enum):
     """Supported recurring definition schedule kinds."""
 
     CRON = "cron"
-
 
 class RecurringTaskScopeType(str, enum.Enum):
     """Scope ownership for recurring definitions."""
 
     PERSONAL = "personal"
     GLOBAL = "global"
-
 
 class RecurringTaskRunOutcome(str, enum.Enum):
     """Dispatch result state for one recurring run decision."""
@@ -172,13 +160,11 @@ class RecurringTaskRunOutcome(str, enum.Enum):
     SKIPPED = "skipped"
     DISPATCH_ERROR = "dispatch_error"
 
-
 class RecurringTaskRunTrigger(str, enum.Enum):
     """How one recurring run row was created."""
 
     SCHEDULE = "schedule"
     MANUAL = "manual"
-
 
 class RecurringTaskDefinition(Base):
     """Persistent recurring schedule definition."""
@@ -271,7 +257,6 @@ class RecurringTaskDefinition(Base):
         cascade="all, delete-orphan",
     )
 
-
 class RecurringTaskRun(Base):
     """Persistent recurring run dispatch decision row."""
 
@@ -355,7 +340,6 @@ class RecurringTaskRun(Base):
         back_populates="runs",
     )
 
-
 __all__ = [
     "Base",
     "User",
@@ -404,7 +388,6 @@ __all__ = [
     "SkillSetEntry",
 ]
 
-
 class SecretStatus(str, enum.Enum):
     """Lifecycle state for a MoonMind managed secret."""
 
@@ -413,7 +396,6 @@ class SecretStatus(str, enum.Enum):
     ROTATED = "rotated"
     DELETED = "deleted"
     INVALID = "invalid"
-
 
 class ManagedSecret(Base):
     """Encrypted durable storage for SecretRefs."""
@@ -453,7 +435,6 @@ class ManagedSecret(Base):
         onupdate=func.now(),
     )
 
-
 class ApproverRoleListType(TypeDecorator):
     """Persist approver roles as a PostgreSQL ARRAY or JSON elsewhere."""
 
@@ -475,13 +456,11 @@ class ApproverRoleListType(TypeDecorator):
             return []
         return list(value)
 
-
 class TaskTemplateScopeType(str, enum.Enum):
     """Scope owner for task step template visibility."""
 
     GLOBAL = "global"
     PERSONAL = "personal"
-
 
 class TaskTemplateReleaseStatus(str, enum.Enum):
     """Release lifecycle for task step template versions."""
@@ -489,7 +468,6 @@ class TaskTemplateReleaseStatus(str, enum.Enum):
     DRAFT = "draft"
     ACTIVE = "active"
     INACTIVE = "inactive"
-
 
 class TaskStepTemplate(Base):
     """Top-level catalog entry for reusable task step templates."""
@@ -563,7 +541,6 @@ class TaskStepTemplate(Base):
         cascade="all, delete-orphan",
     )
 
-
 class TaskStepTemplateVersion(Base):
     """Immutable release of a template blueprint."""
 
@@ -631,7 +608,6 @@ class TaskStepTemplateVersion(Base):
         cascade="all, delete-orphan",
     )
 
-
 class TaskStepTemplateFavorite(Base):
     """User favorites for quick preset access."""
 
@@ -655,7 +631,6 @@ class TaskStepTemplateFavorite(Base):
     template: Mapped[TaskStepTemplate] = relationship(
         "TaskStepTemplate", back_populates="favorites"
     )
-
 
 class TaskStepTemplateRecent(Base):
     """Tracks most recent template applications per user."""
@@ -687,7 +662,6 @@ class TaskStepTemplateRecent(Base):
         "TaskStepTemplateVersion", back_populates="recents"
     )
 
-
 class WorkflowRunStatus(str, enum.Enum):
     """Lifecycle states tracked for Spec workflow runs."""
 
@@ -699,7 +673,6 @@ class WorkflowRunStatus(str, enum.Enum):
     CANCELLED = "cancelled"
     RETRYING = "retrying"
 
-
 class WorkflowRunPhase(str, enum.Enum):
     """High-level phase executed by the Spec workflow chain."""
 
@@ -709,7 +682,6 @@ class WorkflowRunPhase(str, enum.Enum):
     PUBLISH = "publish"
     COMPLETE = "complete"
 
-
 class WorkflowTaskStatus(str, enum.Enum):
     """Execution state tracked for each workflow task."""
 
@@ -718,7 +690,6 @@ class WorkflowTaskStatus(str, enum.Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"
-
 
 class WorkflowTaskName(str, enum.Enum):
     """Supported workflow task identifiers for the chain."""
@@ -730,7 +701,6 @@ class WorkflowTaskName(str, enum.Enum):
     FINALIZE = "finalize"
     RETRY_HOOK = "retry-hook"
 
-
 class CodexPreflightStatus(str, enum.Enum):
     """Codex login verification result stored on a run."""
 
@@ -739,7 +709,6 @@ class CodexPreflightStatus(str, enum.Enum):
     FAILED = "failed"
     SKIPPED = "skipped"
 
-
 class CodexCredentialStatus(str, enum.Enum):
     """Result of Codex credential validation."""
 
@@ -747,14 +716,12 @@ class CodexCredentialStatus(str, enum.Enum):
     INVALID = "invalid"
     EXPIRES_SOON = "expires_soon"
 
-
 class GitHubCredentialStatus(str, enum.Enum):
     """Result of GitHub credential validation."""
 
     VALID = "valid"
     INVALID = "invalid"
     SCOPE_MISSING = "scope_missing"
-
 
 class WorkflowArtifactType(str, enum.Enum):
     """Artifacts captured while the Spec workflow executes."""
@@ -767,7 +734,6 @@ class WorkflowArtifactType(str, enum.Enum):
     PR_PAYLOAD = "pr_payload"
     RETRY_CONTEXT = "retry_context"
 
-
 from moonmind.core.artifacts import (
     TemporalArtifactStorageBackend,
     TemporalArtifactEncryption,
@@ -777,14 +743,12 @@ from moonmind.core.artifacts import (
     TemporalArtifactUploadMode,
 )
 
-
 class TemporalWorkflowType(str, enum.Enum):
     """Supported root workflow type catalog entries."""
 
     RUN = "MoonMind.Run"
     MANIFEST_INGEST = "MoonMind.ManifestIngest"
     PROVIDER_PROFILE_MANAGER = "MoonMind.ProviderProfileManager"
-
 
 class MoonMindWorkflowState(str, enum.Enum):
     """Domain lifecycle states exposed for dashboard filtering."""
@@ -802,7 +766,6 @@ class MoonMindWorkflowState(str, enum.Enum):
     FAILED = "failed"
     CANCELED = "canceled"
 
-
 class TemporalExecutionCloseStatus(str, enum.Enum):
     """Terminal Temporal close statuses tracked for invariant checks."""
 
@@ -813,14 +776,12 @@ class TemporalExecutionCloseStatus(str, enum.Enum):
     TIMED_OUT = "timed_out"
     CONTINUED_AS_NEW = "continued_as_new"
 
-
 class TemporalExecutionOwnerType(str, enum.Enum):
     """Owner class mirrored into the execution projection and Visibility model."""
 
     USER = "user"
     SYSTEM = "system"
     SERVICE = "service"
-
 
 class TemporalExecutionProjectionSyncState(str, enum.Enum):
     """Freshness marker for the execution projection row."""
@@ -830,14 +791,12 @@ class TemporalExecutionProjectionSyncState(str, enum.Enum):
     REPAIR_PENDING = "repair_pending"
     ORPHANED = "orphaned"
 
-
 class TemporalExecutionProjectionSourceMode(str, enum.Enum):
     """How authoritative the current projection row is meant to be."""
 
     PROJECTION_ONLY = "projection_only"
     MIXED = "mixed"
     TEMPORAL_AUTHORITATIVE = "temporal_authoritative"
-
 
 class TemporalExecutionCanonicalRecord(Base):
     """Authoritative execution state mirrored from the Temporal control plane."""
@@ -976,7 +935,6 @@ class TemporalExecutionCanonicalRecord(Base):
         DateTime(timezone=True), nullable=True
     )
 
-
 class TemporalExecutionDependency(Base):
     """Durable direct dependency edge between top-level executions."""
 
@@ -1006,7 +964,6 @@ class TemporalExecutionDependency(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-
 
 class TemporalExecutionRemediationLink(Base):
     """Durable directed relationship from a remediation run to its target."""
@@ -1065,7 +1022,6 @@ class TemporalExecutionRemediationLink(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-
 
 class TemporalExecutionRecord(Base):
     """Temporal execution projection used for lifecycle APIs and filtering."""
@@ -1251,7 +1207,6 @@ class TemporalExecutionRecord(Base):
                 break
         return candidate
 
-
 class TemporalIntegrationCorrelationRecord(Base):
     """Durable lookup record for resolving integration callbacks to workflows."""
 
@@ -1303,7 +1258,6 @@ class TemporalIntegrationCorrelationRecord(Base):
         onupdate=func.now(),
     )
 
-
 class TaskSourceMapping(Base):
     """Persisted global task index for canonical source resolution."""
 
@@ -1335,7 +1289,6 @@ class TaskSourceMapping(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-
 
 class WorkflowCredentialAudit(Base):
     """Credential verification metadata recorded for each workflow run."""
@@ -1400,7 +1353,6 @@ class WorkflowCredentialAudit(Base):
         back_populates="credential_audit",
         foreign_keys=[workflow_run_id],
     )
-
 
 class TemporalArtifact(Base):
     """Metadata index row for one Temporal artifact blob."""
@@ -1545,7 +1497,6 @@ class TemporalArtifact(Base):
         order_by="TemporalArtifactPin.pinned_at",
     )
 
-
 class TemporalArtifactLink(Base):
     """Execution linkage row giving an artifact semantic meaning."""
 
@@ -1592,7 +1543,6 @@ class TemporalArtifactLink(Base):
         back_populates="links",
     )
 
-
 class TemporalArtifactPin(Base):
     """Optional explicit pin row for artifacts exempt from lifecycle cleanup."""
 
@@ -1619,7 +1569,6 @@ class TemporalArtifactPin(Base):
         "TemporalArtifact",
         back_populates="pins",
     )
-
 
 class WorkflowRun(Base):
     """Top-level record per Spec workflow execution."""
@@ -1756,7 +1705,6 @@ class WorkflowRun(Base):
         foreign_keys=lambda: [WorkflowRun.codex_queue],
     )
 
-
 class WorkflowArtifact(Base):
     """Artifact metadata captured for a workflow run."""
 
@@ -1795,7 +1743,6 @@ class WorkflowArtifact(Base):
     workflow_run: Mapped[WorkflowRun] = relationship(
         "WorkflowRun", back_populates="artifacts"
     )
-
 
 class WorkflowTaskState(Base):
     """Per-task execution status persisted for monitoring."""
@@ -1869,12 +1816,10 @@ class WorkflowTaskState(Base):
         back_populates="task_states",
     )
 
-
 class ProviderCredentialSource(str, enum.Enum):
     OAUTH_VOLUME = "oauth_volume"
     SECRET_REF = "secret_ref"
     NONE = "none"
-
 
 class RuntimeMaterializationMode(str, enum.Enum):
     OAUTH_HOME = "oauth_home"
@@ -1883,14 +1828,12 @@ class RuntimeMaterializationMode(str, enum.Enum):
     CONFIG_BUNDLE = "config_bundle"
     COMPOSITE = "composite"
 
-
 class ManagedAgentRateLimitPolicy(str, enum.Enum):
     """Rate limit handling policy for a managed agent auth profile."""
 
     BACKOFF = "backoff"
     QUEUE = "queue"
     FAIL_FAST = "fail_fast"
-
 
 class ManagedAgentProviderProfile(Base):
     """Named provider configuration and execution policy for a managed agent runtime."""
@@ -1996,7 +1939,6 @@ class ManagedAgentProviderProfile(Base):
         onupdate=func.now(),
     )
 
-
 class OAuthSessionStatus(str, enum.Enum):
     """Lifecycle status for a managed agent OAuth session."""
 
@@ -2010,7 +1952,6 @@ class OAuthSessionStatus(str, enum.Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
-
 
 class ManagedAgentOAuthSession(Base):
     """OAuth session for managed agents (browser runner transport removed)."""
@@ -2079,10 +2020,8 @@ class ManagedAgentOAuthSession(Base):
         onupdate=func.now(),
     )
 
-
 class AgentJobLiveSessionProvider(str, enum.Enum):
     NONE = "none"
-
 
 class AgentJobLiveSessionStatus(str, enum.Enum):
     DISABLED = "disabled"
@@ -2091,7 +2030,6 @@ class AgentJobLiveSessionStatus(str, enum.Enum):
     REVOKED = "revoked"
     ENDED = "ended"
     ERROR = "error"
-
 
 class TaskRunLiveSession(Base):
     """Legacy terminal-relay metadata kept only for historical compatibility.
@@ -2160,7 +2098,6 @@ class TaskRunLiveSession(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-
 class ProviderProfileSlotLease(Base):
     """Persisted slot lease state for ProviderProfileManager crash recovery.
 
@@ -2184,7 +2121,6 @@ class ProviderProfileSlotLease(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-
 class AgentSkillSourceKind(str, enum.Enum):
     """Source provenance for a resolved skill."""
 
@@ -2193,13 +2129,11 @@ class AgentSkillSourceKind(str, enum.Enum):
     REPO = "repo"
     LOCAL = "local"
 
-
 class AgentSkillFormat(str, enum.Enum):
     """Supported payload formatting inside a given skill version."""
 
     MARKDOWN = "markdown"
     BUNDLE = "bundle"
-
 
 class AgentSkillDefinition(Base):
     """Core definition for a reusable agent skill block/bundle."""
@@ -2235,7 +2169,6 @@ class AgentSkillDefinition(Base):
     def latest_version(self) -> str | None:
         """Return the version string of the most recently created version."""
         return self.versions[-1].version_string if self.versions else None
-
 
 class AgentSkillVersion(Base):
     """Immutable version release pointing to blob contents in artifact storage."""
@@ -2274,7 +2207,6 @@ class AgentSkillVersion(Base):
         "AgentSkillDefinition", back_populates="versions"
     )
 
-
 class SkillSet(Base):
     """A collection of selected skills for task context grouping."""
 
@@ -2302,7 +2234,6 @@ class SkillSet(Base):
         back_populates="skill_set",
         cascade="all, delete-orphan",
     )
-
 
 class SkillSetEntry(Base):
     """Membership rule explicitly including an agent skill block within a SkillSet."""
@@ -2337,7 +2268,6 @@ class SkillSetEntry(Base):
         """Return the slug of the associated skill."""
         return self.skill.slug
 
-
 def _register_workflow_model_dependencies() -> None:
     """Import workflow ORM models so string relationships can resolve."""
 
@@ -2345,6 +2275,5 @@ def _register_workflow_model_dependencies() -> None:
         return
 
     import_module("moonmind.workflows.automation.models")
-
 
 _register_workflow_model_dependencies()

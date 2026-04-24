@@ -20,7 +20,7 @@ This research phase audited the existing implementation of the Phase 1 submit co
 
 ### Decision: Update plan tracking doc
 
-- **What was chosen**: Update `docs/tmp/011-TaskDependenciesPlan.md` to mark Phase 1 as complete.
+- **What was chosen**: Update `docs/Tasks/TaskDependencies.md` to mark Phase 1 as complete.
 - **Rationale**: Drives implementation sequencing for Phases 2–5.
 
 ## Audit Results

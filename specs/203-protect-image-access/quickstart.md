@@ -3,7 +3,7 @@
 ## Source Traceability
 
 ```bash
-rg -n "MM-374|DESIGN-REQ-016|DESIGN-REQ-017|DESIGN-REQ-020" specs/203-protect-image-access docs/tmp/jira-orchestration-inputs/MM-374-moonspec-orchestration-input.md
+rg -n "MM-374|DESIGN-REQ-016|DESIGN-REQ-017|DESIGN-REQ-020" specs/203-protect-image-access
 ```
 
 ## Focused Unit Validation

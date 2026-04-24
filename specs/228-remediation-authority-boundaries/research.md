@@ -3,7 +3,7 @@
 ## Classification
 
 Decision: Treat MM-453 as a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-453-moonspec-orchestration-input.md` contains one user story, one source design, one bounded acceptance set, and runtime-mode constraints.
+Evidence: `spec.md` (Input) contains one user story, one source design, one bounded acceptance set, and runtime-mode constraints.
 Rationale: The story can be independently validated by creating remediation action authority decisions and checking allowed, gated, audited, rejected, and redacted outcomes.
 Alternatives considered: Broad technical design was rejected because the Jira brief already selected one story from `docs/Tasks/TaskRemediation.md`; existing feature directory was rejected because no `specs/*` artifact referenced MM-453.
 Test implications: Unit and service-boundary integration-style tests are required.

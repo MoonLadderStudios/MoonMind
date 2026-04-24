@@ -2,7 +2,7 @@
 
 ## Context
 
-This research phase analyzed `docs/Tasks/TaskDependencies.md` against the Phase 0 alignment requirements from `docs/tmp/011-TaskDependenciesPlan.md`.
+This research phase analyzed `docs/Tasks/TaskDependencies.md` against the Phase 0 alignment requirements from `docs/Tasks/TaskDependencies.md`.
 
 ## Findings
 
@@ -14,7 +14,7 @@ This research phase analyzed `docs/Tasks/TaskDependencies.md` against the Phase 
 
 ### Decision: Update plan tracking doc
 
-- **What was chosen**: Update `docs/tmp/011-TaskDependenciesPlan.md` to mark Phase 0 as complete.
+- **What was chosen**: Update `docs/Tasks/TaskDependencies.md` to mark Phase 0 as complete.
 - **Rationale**: The plan doc drives implementation sequencing. Marking Phase 0 complete is the only deliverable remaining for this phase.
 - **Alternatives considered**: Leave plan doc unchanged — rejected because it would create confusion about implementation status for Phase 1 onward.
 
@@ -31,4 +31,4 @@ This research phase analyzed `docs/Tasks/TaskDependencies.md` against the Phase 
 | v1 scope: MoonMind.Run only | ✅ §2.1 |
 | v1 scope: no edit support | ✅ §2.1 |
 | v1 scope: no cross-type deps | ✅ §2.1 |
-| Desired-state structure (not migration diary) | ✅ — migration backlog points to docs/tmp/ |
+| Desired-state structure (not migration diary) | ✅ — migration backlog points to |

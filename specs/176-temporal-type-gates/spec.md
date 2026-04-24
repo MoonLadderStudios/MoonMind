@@ -35,7 +35,7 @@ Coverage IDs
 Story Metadata
 - Story ID: STORY-005
 - Short name: temporal-type-gates
-- Breakdown JSON: docs/tmp/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json
+- Breakdown JSON: artifacts/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json
 
 Acceptance Criteria
 - Compatibility-sensitive workflow, message, activity, or Continue-As-New changes include replay/in-flight regression coverage or explicit versioned cutover notes.
@@ -105,7 +105,7 @@ Without enforcement, the target-state models can drift back to raw dicts, unsafe
 ## Assumptions
 
 - The active story is Jira issue MM-331 from the TOOL board, mapped to STORY-005 and short name `temporal-type-gates`.
-- The existing breakdown handoff in `docs/tmp/story-breakdowns/breakdown-docs-temporal-temporaltypesafety-md-in-9e0bd9a2/stories.json` is the available source for the referenced MM-316 breakdown.
+- The existing breakdown handoff in `artifacts/story-breakdowns/breakdown-docs-temporal-temporaltypesafety-md-in-9e0bd9a2/stories.json` is the available source for the referenced MM-316 breakdown.
 - Existing specs for STORY-002, STORY-003, and STORY-004 may satisfy some dependencies, while no matching STORY-001 spec was found during targeted inspection.
 - The review gates may combine automated checks and documented reviewer evidence, as long as the observable outcome is deterministic pass or fail with actionable reasons.
 

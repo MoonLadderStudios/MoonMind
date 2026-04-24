@@ -12,14 +12,12 @@ TERMINAL_STEP_STATUSES = {"succeeded", "failed", "skipped", "canceled"}
 READY_DEPENDENCY_STATUSES = {"succeeded", "skipped"}
 _UNSET = object()
 
-
 def default_step_refs() -> dict[str, Any]:
     return {
         "childWorkflowId": None,
         "childRunId": None,
         "taskRunId": None,
     }
-
 
 def default_step_artifacts() -> dict[str, Any]:
     return {
@@ -32,10 +30,8 @@ def default_step_artifacts() -> dict[str, Any]:
         "providerSnapshot": None,
     }
 
-
 def default_step_workload() -> dict[str, Any] | None:
     return None
-
 
 def build_initial_step_rows(
     *,
@@ -84,7 +80,6 @@ def build_initial_step_rows(
         )
     return rows
 
-
 def build_step_ledger_snapshot(
     *,
     workflow_id: str,
@@ -97,7 +92,6 @@ def build_step_ledger_snapshot(
         "runScope": "latest",
         "steps": deepcopy(rows),
     }
-
 
 def build_progress_summary(
     rows: list[dict[str, Any]],
@@ -133,7 +127,6 @@ def build_progress_summary(
     counts["currentStepTitle"] = current_step_title
     counts["updatedAt"] = updated_at.isoformat()
     return counts
-
 
 def update_step_row(
     rows: list[dict[str, Any]],
@@ -197,7 +190,6 @@ def update_step_row(
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
 
-
 def upsert_step_check(
     rows: list[dict[str, Any]],
     logical_step_id: str,
@@ -230,7 +222,6 @@ def upsert_step_check(
         row["checks"] = checks
         return check_payload
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
-
 
 def refresh_ready_steps(rows: list[dict[str, Any]], *, updated_at: datetime) -> None:
     statuses = {

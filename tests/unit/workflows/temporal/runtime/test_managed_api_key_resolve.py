@@ -16,17 +16,14 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
 
 pytestmark = pytest.mark.asyncio
 
-
 async def test_resolve_from_worker_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MY_TEST_SECRET_KEY", "abc123")
     out = await resolve_managed_api_key_reference("MY_TEST_SECRET_KEY")
     assert out == "abc123"
 
-
 async def test_resolve_empty_raises() -> None:
     with pytest.raises(ValueError, match="empty"):
         await resolve_managed_api_key_reference("  ")
-
 
 async def test_resolve_rejects_structured_secret_ref_values() -> None:
     with pytest.raises(
@@ -35,12 +32,10 @@ async def test_resolve_rejects_structured_secret_ref_values() -> None:
     ):
         await resolve_managed_api_key_reference({"ref": "env://MY_TEST_SECRET_KEY"})
 
-
 async def test_resolve_unknown_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NOT_SET_XYZ", raising=False)
     with pytest.raises(ValueError, match="Unable to resolve"):
         await resolve_managed_api_key_reference("NOT_SET_XYZ")
-
 
 class _FakeAsyncSessionCtx:
     def __init__(self, session: object) -> None:
@@ -52,14 +47,12 @@ class _FakeAsyncSessionCtx:
     async def __aexit__(self, *_args: object) -> bool:
         return False
 
-
 class _FakeScalarResult:
     def __init__(self, secret: object | None) -> None:
         self._secret = secret
 
     def scalar_one_or_none(self) -> object | None:
         return self._secret
-
 
 class _FakeLookupSession:
     def __init__(
@@ -81,7 +74,6 @@ class _FakeLookupSession:
         secret = None if value is None else SimpleNamespace(ciphertext=value)
         return _FakeScalarResult(secret)
 
-
 class _FakeSessionMaker:
     def __init__(self, session: _FakeLookupSession) -> None:
         self._session = session
@@ -90,7 +82,6 @@ class _FakeSessionMaker:
     def __call__(self) -> _FakeAsyncSessionCtx:
         self.calls += 1
         return _FakeAsyncSessionCtx(self._session)
-
 
 async def test_resolve_managed_github_token_from_store_first_slug(
     monkeypatch: pytest.MonkeyPatch,
@@ -104,7 +95,6 @@ async def test_resolve_managed_github_token_from_store_first_slug(
     assert session_maker.calls == 1
     assert session.seen_slugs == ["GITHUB_TOKEN"]
 
-
 async def test_resolve_managed_github_token_from_store_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -115,7 +105,6 @@ async def test_resolve_managed_github_token_from_store_empty(
     assert await resolve_managed_github_token_from_store() is None
     assert session_maker.calls == 1
     assert session.seen_slugs == ["GITHUB_TOKEN", "GITHUB_PAT"]
-
 
 async def test_resolve_managed_github_token_from_store_stops_after_lookup_failure(
     monkeypatch: pytest.MonkeyPatch,
@@ -129,7 +118,6 @@ async def test_resolve_managed_github_token_from_store_stops_after_lookup_failur
 
     assert session_maker.calls == 1
     assert session.seen_slugs == ["GITHUB_TOKEN"]
-
 
 async def test_resolve_github_token_for_launch_prefers_existing_environment_token(
     monkeypatch: pytest.MonkeyPatch,
@@ -149,7 +137,6 @@ async def test_resolve_github_token_for_launch_prefers_existing_environment_toke
     out = await resolve_github_token_for_launch({"GITHUB_TOKEN": "ghp-inline-token"})
 
     assert out == "ghp-inline-token"
-
 
 async def test_shape_launch_github_auth_environment_uses_ambient_token_before_store(
     monkeypatch: pytest.MonkeyPatch,
@@ -175,7 +162,6 @@ async def test_shape_launch_github_auth_environment_uses_ambient_token_before_st
     assert shaped["GITHUB_TOKEN"] == "ghp-ambient-token"
     assert shaped["GIT_TERMINAL_PROMPT"] == "0"
 
-
 async def test_resolve_github_token_for_launch_propagates_cancellation_from_secret_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -193,7 +179,6 @@ async def test_resolve_github_token_for_launch_propagates_cancellation_from_secr
 
     with pytest.raises(asyncio.CancelledError):
         await resolve_github_token_for_launch({})
-
 
 async def test_resolve_github_token_for_launch_propagates_cancellation_from_store(
     monkeypatch: pytest.MonkeyPatch,

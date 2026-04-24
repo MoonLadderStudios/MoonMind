@@ -11,7 +11,6 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from moonmind.workflows.temporal.type_safety_gates import build_self_check_findings
 
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Validate deterministic Temporal type-safety review gates."
@@ -39,7 +38,6 @@ def main(argv: list[str] | None = None) -> int:
                 f"{finding.message}"
             )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

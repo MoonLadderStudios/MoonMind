@@ -37,15 +37,15 @@ Implement MM-480 by completing the Claude OAuth finalization boundary. The exist
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, pytest  
-**Storage**: Existing OAuth session and managed provider profile tables; no new persistent tables  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh <pytest targets>`  
-**Integration Testing**: Route-level async pytest fixtures; hermetic integration through `./tools/test_integration.sh` if API or artifact lifecycle behavior changes  
-**Target Platform**: Linux API and worker containers  
-**Project Type**: FastAPI control plane plus Temporal-backed runtime services  
-**Performance Goals**: Verification remains a bounded Docker volume check with a 30 second timeout; finalization remains a single route-level transaction path plus manager sync  
-**Constraints**: No raw credential contents, tokens, environment dumps, raw auth-volume listings, or secret-bearing paths in browser-visible responses, artifacts, logs, workflow payloads, or provider profile rows; preserve existing Codex/Gemini OAuth verification behavior  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK, pytest 
+**Storage**: Existing OAuth session and managed provider profile tables; no new persistent tables 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh <pytest targets>` 
+**Integration Testing**: Route-level async pytest fixtures; hermetic integration through `./tools/test_integration.sh` if API or artifact lifecycle behavior changes 
+**Target Platform**: Linux API and worker containers 
+**Project Type**: FastAPI control plane plus Temporal-backed runtime services 
+**Performance Goals**: Verification remains a bounded Docker volume check with a 30 second timeout; finalization remains a single route-level transaction path plus manager sync 
+**Constraints**: No raw credential contents, tokens, environment dumps, raw auth-volume listings, or secret-bearing paths in browser-visible responses, artifacts, logs, workflow payloads, or provider profile rows; preserve existing Codex/Gemini OAuth verification behavior 
 **Scale/Scope**: One runtime (`claude_code`), one provider profile (`claude_anthropic`), one OAuth finalization path
 
 ## Constitution Check
@@ -61,7 +61,7 @@ Implement MM-480 by completing the Claude OAuth finalization boundary. The exist
 - IX. Resilient by Default: PASS. Failed verification fails closed and skips profile mutation.
 - X. Continuous Improvement: PASS. Verification evidence will be captured in tests and final report.
 - XI. Spec-Driven Development: PASS. This plan follows a single-story spec.
-- XII. Canonical Docs vs Tmp: PASS. Canonical docs are source requirements; Jira brief remains under `docs/tmp`.
+- XII. Canonical Docs vs Tmp: PASS. Canonical docs are source requirements; Jira brief remains under `local-only handoffs`.
 - XIII. Pre-Release Velocity: PASS. No compatibility aliases or hidden fallback semantics are introduced.
 
 ## Project Structure
@@ -76,7 +76,7 @@ specs/243-claude-oauth-verification/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── claude-oauth-verification.md
+│ └── claude-oauth-verification.md
 └── tasks.md
 ```
 

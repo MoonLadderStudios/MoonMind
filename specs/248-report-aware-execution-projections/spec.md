@@ -7,7 +7,6 @@
 
 Additional constraints:
 
-
 Selected mode: runtime.
 Default to runtime mode and only use docs mode when explicitly requested.
 If the brief points at an implementation document, treat it as runtime source requirements.
@@ -16,7 +15,7 @@ Source design path (optional): .
 Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
 Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts."
 
-Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-496-moonspec-orchestration-input.md`.
+Original brief reference: `spec.md` (Input).
 Classification: single-story runtime feature request.
 Resume decision: existing report-related feature directories in `specs/` map to different Jira stories (`MM-492`, `MM-493`, `MM-494`), so no active Moon Spec feature directory matched MM-496 and `Specify` is the first incomplete stage.
 Breakdown decision: `moonspec-breakdown` was not run because the MM-496 Jira preset brief already defines one independently testable runtime story and does not require processing multiple specs.

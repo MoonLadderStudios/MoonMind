@@ -94,7 +94,6 @@ _TASK_TEMPLATE_SEED_DIR = (
 )
 _LEGACY_TASK_TEMPLATE_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
 
-
 def _initialize_embedding_model(app_state, app_settings):
     """Initializes the embedding model and records its dimensionality on app_state."""
     logger.info("Initializing embedding model...")
@@ -153,7 +152,6 @@ def _initialize_embedding_model(app_state, app_settings):
     app_state.embed_dimensions = final_dims
     logger.info("Embedding model initialized with dimensions: %s", final_dims)
 
-
 def _initialize_vector_store(app_state, app_settings):
     """Initializes and sets the vector store on app_state."""
     logger.info("Initializing vector store...")
@@ -166,7 +164,6 @@ def _initialize_vector_store(app_state, app_settings):
         logger.error(f"Failed to build vector store: {e}. This is a critical error.")
         raise
 
-
 def _initialize_contexts(app_state, app_settings):
     """Initializes and sets storage and service contexts on app_state."""
     logger.info("Initializing storage and service contexts...")
@@ -177,7 +174,6 @@ def _initialize_contexts(app_state, app_settings):
         app_settings, app_state.embed_model
     )  # settings is used as service_context
     logger.info("Storage and service contexts initialized successfully.")
-
 
 async def _sync_env_managed_secrets() -> int:
     """Seed or refresh managed secrets from environment values."""
@@ -280,7 +276,6 @@ async def _sync_env_managed_secrets() -> int:
         )
         return 0
 
-
 async def _initialize_oidc_provider(app: FastAPI):
     """Initializes the OIDC provider by fetching discovery documents if needed."""
     provider = settings.oidc.AUTH_PROVIDER
@@ -320,7 +315,6 @@ async def _initialize_oidc_provider(app: FastAPI):
             logger.error(f"Error processing Google OIDC discovery document: {e}")
             raise RuntimeError(f"Error processing Google OIDC discovery document: {e}")
 
-
 def _load_or_create_vector_index(app_state):
     """Loads an existing vector index or creates a new one if loading fails."""
     logger.info("Attempting to load VectorStoreIndex from storage_context...")
@@ -353,7 +347,6 @@ def _load_or_create_vector_index(app_state):
             raise RuntimeError(
                 "Failed to initialize critical components (storage_context or service_context) for VectorStoreIndex."
             )
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -395,12 +388,10 @@ if not os.path.exists(STATIC_DIR):
     os.makedirs(STATIC_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-
 # Healthz router
 health_router = APIRouter()
 
 _api_start_time = time.monotonic()
-
 
 @health_router.get("/healthz")
 async def health_check():
@@ -416,12 +407,10 @@ async def health_check():
             content={"status": "degraded", "db": "unreachable", "uptime_seconds": uptime},
         )
 
-
 @app.get("/", include_in_schema=False)
 async def docs_redirect() -> RedirectResponse:
     """Redirect root path to Swagger UI."""
     return RedirectResponse(url=app.docs_url)
-
 
 app.include_router(health_router, tags=["health"])
 
@@ -499,7 +488,6 @@ if settings.oidc.AUTH_PROVIDER != "keycloak":
 else:
     logger.info("AUTH_PROVIDER is 'keycloak'. Skipping fastapi-users auth routers.")
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -508,7 +496,6 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
-
 
 @app.middleware("http")
 async def add_debug_headers(request: Request, call_next):
@@ -519,7 +506,6 @@ async def add_debug_headers(request: Request, call_next):
     )
     return response
 
-
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
     request_id = str(uuid4())
@@ -527,10 +513,8 @@ async def add_request_id(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     return response
 
-
 _CODEX_OPENROUTER_QWEN36_PLUS_MODEL = "qwen/qwen3.6-plus"
 _LEGACY_CODEX_OPENROUTER_QWEN36_PLUS_FREE_MODEL = "qwen/qwen3.6-plus:free"
-
 
 def _codex_openrouter_qwen36_plus_file_templates(
     model: str,
@@ -564,7 +548,6 @@ def _codex_openrouter_qwen36_plus_file_templates(
         }
     ]
 
-
 def _legacy_codex_openrouter_qwen36_plus_file_templates() -> list[dict[str, object]]:
     return [
         {
@@ -593,7 +576,6 @@ def _legacy_codex_openrouter_qwen36_plus_file_templates() -> list[dict[str, obje
         }
     ]
 
-
 def _should_reconcile_openrouter_codex_file_templates(
     profile_id: str,
     current_file_templates,
@@ -612,7 +594,6 @@ def _should_reconcile_openrouter_codex_file_templates(
         deprecated_seed_templates,
         _legacy_codex_openrouter_qwen36_plus_file_templates(),
     )
-
 
 async def _auto_seed_provider_profiles() -> list[str]:
     """Seed well-known provider profiles that are missing from the DB.
@@ -946,7 +927,6 @@ async def _auto_seed_provider_profiles() -> list[str]:
 
     return seeded
 
-
 async def ensure_provider_profile_managers_started():
     """Ensure ProviderProfileManager workflows are running for all distinct runtime families."""
     from api_service.db.base import get_async_session_context
@@ -1001,7 +981,6 @@ async def ensure_provider_profile_managers_started():
                 logger.error(f"Failed to sync ProviderProfileManager for {runtime_id}: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"Error ensuring ProviderProfileManager workflows: {e}", exc_info=True)
-
 
 async def startup_event():
     """Defines the application's startup events."""
@@ -1109,13 +1088,11 @@ async def startup_event():
     await ensure_provider_profile_managers_started()
     logger.info("Application startup events completed.")
 
-
 def teardown_providers():
     """
     Optional: If your providers need explicit cleanup, do it here.
     """
     pass
-
 
 async def _sync_task_template_seed_catalog() -> None:
     """Ensure YAML-backed default task presets exist in the catalog."""

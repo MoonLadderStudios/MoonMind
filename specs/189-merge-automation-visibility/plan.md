@@ -9,15 +9,15 @@ Implement MM-354 by projecting merge automation state into the parent run summar
 
 ## Technical Context
 
-**Language/Version**: Python 3.12, TypeScript/React  
-**Primary Dependencies**: Temporal Python SDK, Pydantic v2, FastAPI schemas, existing artifact activities, React/Vitest  
-**Storage**: Existing Temporal artifact storage only; no new persistent database tables  
-**Unit Testing**: pytest via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`, Vitest via `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx`  
-**Integration Testing**: Existing hermetic integration runner `./tools/test_integration.sh`; no new compose service required  
-**Target Platform**: Linux server/container runtime and Mission Control browser UI  
-**Project Type**: Temporal workflow plus web UI  
-**Performance Goals**: Keep workflow payloads compact and artifact writes bounded to one summary, one snapshot per gate evaluation, and one resolver artifact per attempt  
-**Constraints**: Do not embed large provider payloads or secrets in workflow history; preserve parent-owned merge automation semantics; keep UI scoped to PR publishing  
+**Language/Version**: Python 3.12, TypeScript/React 
+**Primary Dependencies**: Temporal Python SDK, Pydantic v2, FastAPI schemas, existing artifact activities, React/Vitest 
+**Storage**: Existing Temporal artifact storage only; no new persistent database tables 
+**Unit Testing**: pytest via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`, Vitest via `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx` 
+**Integration Testing**: Existing hermetic integration runner `./tools/test_integration.sh`; no new compose service required 
+**Target Platform**: Linux server/container runtime and Mission Control browser UI 
+**Project Type**: Temporal workflow plus web UI 
+**Performance Goals**: Keep workflow payloads compact and artifact writes bounded to one summary, one snapshot per gate evaluation, and one resolver artifact per attempt 
+**Constraints**: Do not embed large provider payloads or secrets in workflow history; preserve parent-owned merge automation semantics; keep UI scoped to PR publishing 
 **Scale/Scope**: One merge automation child workflow per PR-publishing parent run
 
 ## Constitution Check
@@ -33,7 +33,7 @@ Implement MM-354 by projecting merge automation state into the parent run summar
 - IX. Resilient by Default: PASS. Artifact write failures must not falsely change terminal outcomes.
 - X. Continuous Improvement: PASS. Verification evidence will be recorded in `verification.md`.
 - XI. Spec-Driven Development: PASS. Runtime changes follow this one-story spec.
-- XII. Canonical Documentation Separation: PASS. Migration artifact lives under `specs/` and `docs/tmp`.
+- XII. Canonical Documentation Separation: PASS. Migration artifact lives under `specs/` and `local-only handoffs`.
 - XIII. Pre-Release Compatibility Policy: PASS. No compatibility aliases are introduced; optional payload additions preserve current invocation shape.
 
 ## Project Structure
@@ -48,7 +48,7 @@ specs/189-merge-automation-visibility/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── merge-automation-visibility.md
+│ └── merge-automation-visibility.md
 ├── tasks.md
 └── verification.md
 ```
@@ -59,8 +59,8 @@ specs/189-merge-automation-visibility/
 moonmind/
 ├── schemas/temporal_models.py
 └── workflows/temporal/workflows/
-    ├── merge_automation.py
-    └── run.py
+ ├── merge_automation.py
+ └── run.py
 
 frontend/src/entrypoints/
 ├── task-detail.tsx

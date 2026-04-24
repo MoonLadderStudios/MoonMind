@@ -27,7 +27,6 @@ from moonmind.workflows.temporal import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 def _tests_root() -> Path:
     path = Path(__file__).resolve()
     try:
@@ -36,11 +35,9 @@ def _tests_root() -> Path:
         raise RuntimeError("tests directory not found") from exc
     return Path(*path.parts[: idx + 1])
 
-
 FIXTURE_ROOT = _tests_root() / "fixtures" / "manifests" / "phase0"
 REGISTRY_MANIFEST = (FIXTURE_ROOT / "registry.yaml").read_text()
 REGISTRY_MANIFEST_OBJ = yaml.safe_load(REGISTRY_MANIFEST)
-
 
 def _manifest_with_name(name: str) -> str:
     """Return a copy of the fixture manifest with an updated metadata name."""
@@ -48,7 +45,6 @@ def _manifest_with_name(name: str) -> str:
     manifest = deepcopy(REGISTRY_MANIFEST_OBJ)
     manifest["metadata"]["name"] = name
     return yaml.safe_dump(manifest, sort_keys=False)
-
 
 @asynccontextmanager
 async def manifest_db(tmp_path: Path):
@@ -67,7 +63,6 @@ async def manifest_db(tmp_path: Path):
         yield async_session_maker
     finally:
         await engine.dispose()
-
 
 async def test_upsert_manifest_persists_normalized_hash_and_version(
     tmp_path: Path,
@@ -175,7 +170,6 @@ async def test_submit_manifest_run_starts_temporal_execution_with_artifact_ref(
             assert record.last_run_manifest_ref == submitted.manifest_artifact_ref
             assert record.last_run_status == "executing"
 
-
 async def test_submit_manifest_run_reuses_idempotent_execution_without_side_effects(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -239,7 +233,6 @@ async def test_submit_manifest_run_reuses_idempotent_execution_without_side_effe
             execution = await execution_service.describe_execution(first.workflow_id)
             assert execution.manifest_ref == first.manifest_artifact_ref
 
-
 async def test_update_manifest_state_persists_checkpoint_and_run_metadata(
     tmp_path: Path,
 ) -> None:
@@ -264,7 +257,6 @@ async def test_update_manifest_state_persists_checkpoint_and_run_metadata(
             assert updated.last_run_job_id == last_job_id
             assert updated.last_run_status == "completed"
             assert updated.state_updated_at is not None
-
 
 async def test_list_manifests_returns_ordered_and_limited_results(
     tmp_path: Path,
@@ -294,7 +286,6 @@ async def test_list_manifests_returns_ordered_and_limited_results(
             # Test limit
             limited_results = await service.list_manifests(limit=2)
             assert [r.name for r in limited_results] == ["apple", "mango"]
-
 
 async def test_list_manifests_filters_by_search_pattern(
     tmp_path: Path,
@@ -326,7 +317,6 @@ async def test_list_manifests_filters_by_search_pattern(
             # Test no matches
             empty_results = await service.list_manifests(search="frontend")
             assert empty_results == []
-
 
 async def test_require_manifest_raises_not_found_for_missing_entry(
     tmp_path: Path,

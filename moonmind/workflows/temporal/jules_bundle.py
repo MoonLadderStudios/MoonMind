@@ -7,7 +7,6 @@ from typing import Any
 
 JULES_AGENT_IDS = frozenset({"jules", "jules_api"})
 
-
 @dataclass(frozen=True)
 class JulesBundleSpec:
     bundle_id: str
@@ -15,7 +14,6 @@ class JulesBundleSpec:
     representative_node: dict[str, Any]
     compiled_brief: str
     manifest: dict[str, Any]
-
 
 def _runtime_agent_id(node: dict[str, Any]) -> str:
     tool = node.get("tool") or {}
@@ -29,13 +27,11 @@ def _runtime_agent_id(node: dict[str, Any]) -> str:
         or ""
     ).strip().lower()
 
-
 def is_jules_agent_runtime_node(node: dict[str, Any]) -> bool:
     tool = node.get("tool") or {}
     if str(tool.get("type") or "").strip().lower() != "agent_runtime":
         return False
     return _runtime_agent_id(node) in JULES_AGENT_IDS
-
 
 def eligible_for_bundle(
     first_node: dict[str, Any],
@@ -52,7 +48,6 @@ def eligible_for_bundle(
         if (first_inputs.get(key) or "") != (next_inputs.get(key) or ""):
             return False
     return True
-
 
 def group_consecutive_jules_nodes(
     ordered_nodes: list[dict[str, Any]],
@@ -78,7 +73,6 @@ def group_consecutive_jules_nodes(
     if current:
         groups.append(current)
     return groups
-
 
 def build_bundle_spec(
     nodes: list[dict[str, Any]],
@@ -193,7 +187,6 @@ def build_bundle_spec(
         compiled_brief=compiled_brief,
         manifest=manifest,
     )
-
 
 __all__ = [
     "JULES_AGENT_IDS",

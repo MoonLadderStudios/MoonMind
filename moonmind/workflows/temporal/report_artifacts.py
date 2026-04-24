@@ -9,7 +9,6 @@ from typing import Any
 
 from moonmind.workflows.temporal.artifacts import TemporalArtifactValidationError
 
-
 REPORT_ARTIFACT_LINK_TYPES = frozenset(
     {
         "report.primary",
@@ -110,7 +109,6 @@ _SECRET_VALUE_PATTERN = re.compile(
     r"authorization\s*:|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
 )
 
-
 @dataclass(frozen=True, slots=True)
 class ReportWorkflowMapping:
     """Executable rollout example for one report-producing workflow family."""
@@ -120,7 +118,6 @@ class ReportWorkflowMapping:
     report_link_types: tuple[str, ...]
     observability_link_types: tuple[str, ...]
     recommended_metadata_keys: tuple[str, ...]
-
 
 REPORT_WORKFLOW_MAPPINGS: dict[str, ReportWorkflowMapping] = {
     "unit_test": ReportWorkflowMapping(
@@ -198,12 +195,10 @@ REPORT_WORKFLOW_MAPPINGS: dict[str, ReportWorkflowMapping] = {
     ),
 }
 
-
 def is_report_artifact_link_type(link_type: str | None) -> bool:
     """Return whether the link type is one of the supported report classes."""
 
     return str(link_type or "").strip() in REPORT_ARTIFACT_LINK_TYPES
-
 
 def validate_report_artifact_contract(
     *,
@@ -230,7 +225,6 @@ def validate_report_artifact_contract(
         allow_internal_metadata=allow_internal_metadata,
     )
 
-
 def get_report_workflow_mapping(workflow_family: str) -> ReportWorkflowMapping:
     """Return the executable MM-464 rollout mapping for a workflow family."""
 
@@ -241,7 +235,6 @@ def get_report_workflow_mapping(workflow_family: str) -> ReportWorkflowMapping:
         raise TemporalArtifactValidationError(
             f"unsupported report workflow family '{workflow_family}'"
         ) from exc
-
 
 def classify_report_rollout_artifacts(
     link_types: Sequence[str],
@@ -270,7 +263,6 @@ def classify_report_rollout_artifacts(
         "report_link_types": report_links,
         "generic_output_link_types": generic_links,
     }
-
 
 def validate_report_workflow_artifact_classes(
     workflow_family: str,
@@ -326,7 +318,6 @@ def validate_report_workflow_artifact_classes(
             f"{', '.join(unexpected_observability)}"
         )
 
-
 def build_report_bundle_result(
     *,
     primary_report_ref: Mapping[str, Any] | None = None,
@@ -360,7 +351,6 @@ def build_report_bundle_result(
         result["counts"] = dict(counts)
     validate_report_bundle_result(result)
     return result
-
 
 def build_report_projection_summary(
     bundle: Mapping[str, Any],
@@ -407,7 +397,6 @@ def build_report_projection_summary(
         _validate_report_bundle_value(value, path=key, depth=0)
     return projection
 
-
 def validate_report_bundle_result(bundle: Mapping[str, Any]) -> None:
     """Fail fast when workflow-facing report bundle data is not compact."""
 
@@ -438,7 +427,6 @@ def validate_report_bundle_result(bundle: Mapping[str, Any]) -> None:
     for index, ref in enumerate(evidence_refs):
         _validate_compact_artifact_ref(ref, path=f"evidence_refs[{index}]")
 
-
 def _validate_report_metadata(
     metadata: Mapping[str, Any],
     *,
@@ -460,7 +448,6 @@ def _validate_report_metadata(
                 f"unsupported report metadata key '{normalized_key}'"
             )
         _validate_report_metadata_value(value, path=normalized_key, depth=0)
-
 
 def _validate_report_metadata_value(value: Any, *, path: str, depth: int) -> None:
     if depth > _MAX_REPORT_METADATA_DEPTH:
@@ -512,7 +499,6 @@ def _validate_report_metadata_value(value: Any, *, path: str, depth: int) -> Non
         f"unsupported report metadata value at '{path}'"
     )
 
-
 def _compact_artifact_ref(ref: Mapping[str, Any]) -> dict[str, Any]:
     artifact_id = str(ref.get("artifact_id") or ref.get("artifactId") or "").strip()
     if not artifact_id:
@@ -526,12 +512,10 @@ def _compact_artifact_ref(ref: Mapping[str, Any]) -> dict[str, Any]:
         raise TemporalArtifactValidationError("artifact_ref_v must be 1")
     return {"artifact_ref_v": 1, "artifact_id": artifact_id}
 
-
 def _validate_compact_artifact_ref(value: Any, *, path: str) -> None:
     if not isinstance(value, Mapping):
         raise TemporalArtifactValidationError(f"{path} must be an artifact ref")
     _compact_artifact_ref(value)
-
 
 def _validate_report_bundle_value(value: Any, *, path: str, depth: int) -> None:
     if depth > _MAX_REPORT_METADATA_DEPTH:

@@ -10,9 +10,7 @@ from moonmind.schemas import ClaudePolicySource, resolve_claude_policy_envelope
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def _source(
     source_kind: str,
@@ -27,7 +25,6 @@ def _source(
         fetchState=fetch_state,
         riskyControls=risky_controls,
     )
-
 
 def test_claude_policy_boundary_covers_mm343_fixture_scenarios() -> None:
     scenarios = [
@@ -135,7 +132,6 @@ def test_claude_policy_boundary_covers_mm343_fixture_scenarios() -> None:
         assert "policy_envelope_id" not in wire
         assert wire["adminVisibility"]["managedSourceKind"] == managed_source
         assert wire["userVisibility"]["status"] in {"managed", "unmanaged"}
-
 
 def test_claude_policy_boundary_fail_closed_and_non_interactive_blocked_states() -> None:
     envelope, handshake, events = resolve_claude_policy_envelope(

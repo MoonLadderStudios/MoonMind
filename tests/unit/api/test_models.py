@@ -16,7 +16,6 @@ app = FastAPI()
 app.include_router(models_router, prefix="/v1/models")
 client = TestClient(app)
 
-
 # Fixture for a sample list of models as would be returned by model_cache.get_all_models()
 @pytest.fixture
 def mock_cached_models_data():
@@ -68,7 +67,6 @@ def mock_cached_models_data():
         },
     ]
 
-
 @patch("api_service.api.routers.models.model_cache.get_all_models_for_user")
 def test_get_models_success_with_cache(mock_get_all_models, mock_cached_models_data):
     """
@@ -86,7 +84,6 @@ def test_get_models_success_with_cache(mock_get_all_models, mock_cached_models_d
     assert len(json_response["data"]) == len(mock_cached_models_data)
     mock_get_all_models.assert_called_once()
 
-
 @patch("api_service.api.routers.models.model_cache.get_all_models_for_user")
 def test_get_models_empty_from_cache(mock_get_all_models):
     """
@@ -102,7 +99,6 @@ def test_get_models_empty_from_cache(mock_get_all_models):
     assert "data" in json_response
     assert len(json_response["data"]) == 0
     mock_get_all_models.assert_called_once()
-
 
 @patch("api_service.api.routers.models.model_cache.get_all_models_for_user")
 def test_get_models_cache_exception(mock_get_all_models):
@@ -123,7 +119,6 @@ def test_get_models_cache_exception(mock_get_all_models):
     # assert error_message in json_response["detail"] # Check if original error is propagated in message
     mock_get_all_models.assert_called_once()
 
-
 # Health check tests (ensure they are still working)
 def test_health_check_main_app():  # Renamed to distinguish if app has own /health
     # This test assumes /health is at the root of the TestClient's app.
@@ -137,13 +132,11 @@ def test_health_check_main_app():  # Renamed to distinguish if app has own /heal
     # Let's assume the app itself does not have a /health and we only test the router's.
     pass
 
-
 def test_router_health_check():
     # This tests the health check defined within the models_router
     response = client.get("/v1/models/health")  # Updated path
     assert response.status_code == 200
     assert response.json() == {"status": "healthy"}
-
 
 # Notes on previous tests:
 # The tests like test_get_models_google_only, test_get_models_openai_only,

@@ -16,7 +16,6 @@ from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsA
 
 pytestmark = [pytest.mark.asyncio]
 
-
 async def test_resolve_skills_activity_returns_expected_payload():
     activities = AgentSkillsActivities()
     env = ActivityEnvironment()
@@ -40,7 +39,6 @@ async def test_resolve_skills_activity_returns_expected_payload():
     assert len(result.skills) == 1
     assert result.skills[0].skill_name == "read_file"
     assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
-
 
 async def test_resolve_skills_activity_passes_repo_and_local_policy():
     activities = AgentSkillsActivities()
@@ -96,7 +94,6 @@ async def test_build_prompt_index_activity_returns_bundle():
     
     assert "Snapshot: snap-temp" in result
 
-
 async def test_materialize_activity_returns_materialization():
     import tempfile
     
@@ -121,7 +118,6 @@ async def test_materialize_activity_returns_materialization():
         assert result.runtime_id == "test_runtime"
         assert result.materialization_mode == RuntimeMaterializationMode.WORKSPACE_MOUNTED
         assert len(result.workspace_paths) == 1
-
 
 async def test_materialize_activity_returns_canonical_agents_skills_metadata(
     tmp_path,

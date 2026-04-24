@@ -30,11 +30,9 @@ from moonmind.manifest.validator import validate_manifest_string
 from moonmind.manifest.pipeline import ManifestPipeline
 from moonmind.schemas.manifest_v0_models import DataSourceConfig, ManifestV0
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
 
 MINIMAL_MANIFEST = textwrap.dedent("""\
     version: "v0"
@@ -61,7 +59,6 @@ MINIMAL_MANIFEST = textwrap.dedent("""\
         indices: ["idx1"]
 """)
 
-
 @pytest.fixture(autouse=True)
 def _clean_registry():
     """Re-register built-in adapters for each test."""
@@ -70,11 +67,9 @@ def _clean_registry():
     yield
     _reset_registry()
 
-
 # ---------------------------------------------------------------------------
 # T018: Adapter contract tests — verify plan/fetch/state interface
 # ---------------------------------------------------------------------------
-
 
 class TestAdapterContracts:
     """Verify each adapter satisfies the ReaderAdapter protocol."""
@@ -182,11 +177,9 @@ class TestAdapterContracts:
         state = adapter.state()
         assert state["branch"] == "dev"
 
-
 # ---------------------------------------------------------------------------
 # T025: Extensibility test — register custom adapter
 # ---------------------------------------------------------------------------
-
 
 class CustomTestAdapter:
     """A mock custom adapter to verify extensibility."""
@@ -202,7 +195,6 @@ class CustomTestAdapter:
 
     def state(self) -> Dict[str, Any]:
         return {"custom_cursor": "v1"}
-
 
 class TestExtensibility:
     def test_register_custom_adapter(self):
@@ -273,11 +265,9 @@ class TestExtensibility:
         assert result.total_docs == 1
         assert result.sources[0].doc_count == 1
 
-
 # ---------------------------------------------------------------------------
 # T026: PII redaction enforcement
 # ---------------------------------------------------------------------------
-
 
 class TestPiiRedaction:
     def test_pii_redaction_flag_accepted(self):
@@ -337,11 +327,9 @@ class TestPiiRedaction:
         assert result.valid
         assert result.manifest.security is None
 
-
 # ---------------------------------------------------------------------------
 # Pipeline integration with local adapter
 # ---------------------------------------------------------------------------
-
 
 class TestPipelineLocalAdapter:
     def test_plan_with_local_files(self, tmp_path):

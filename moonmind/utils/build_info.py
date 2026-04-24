@@ -7,7 +7,6 @@ from pathlib import Path
 
 DEFAULT_BUILD_ID_PATH = Path("/app/.moonmind-build-id")
 
-
 def resolve_moonmind_build_id() -> str | None:
     """Return the operator-visible MoonMind build id.
 

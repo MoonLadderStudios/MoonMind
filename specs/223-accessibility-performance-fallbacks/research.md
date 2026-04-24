@@ -59,7 +59,7 @@ Test implications: Targeted UI tests, then final unit wrapper if feasible.
 ## FR-010 / FR-011
 
 Decision: Add MM-429-specific test names and preserve traceability in all artifacts. This is now implemented and verified.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-429-moonspec-orchestration-input.md`, `spec.md`, `tasks.md`, and `verification.md` preserve the trusted Jira brief. MM-429-specific tests exist in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/task-create.test.tsx`, and `frontend/src/lib/liquidGL/useLiquidGL.test.tsx`.
+Evidence: `spec.md` (Input), `spec.md`, `tasks.md`, and `verification.md` preserve the trusted Jira brief. MM-429-specific tests exist in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/task-create.test.tsx`, and `frontend/src/lib/liquidGL/useLiquidGL.test.tsx`.
 Rationale: Jira Orchestrate and MoonSpec verification need artifact-level and test-level evidence for the issue key and source design IDs.
 Alternatives considered: Relying on adjacent MM-427/MM-428 tests only; rejected because MM-429 is a distinct story with reduced-motion/fallback/performance acceptance criteria.
 Test implications: Add focused test cases and final verification evidence.

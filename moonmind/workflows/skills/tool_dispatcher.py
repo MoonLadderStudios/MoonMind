@@ -23,14 +23,12 @@ SkillHandler = Callable[
     [Mapping[str, Any], Mapping[str, Any] | None], ToolResult | Awaitable[ToolResult]
 ]
 
-
 class ToolDispatchError(RuntimeError):
     """Raised when a tool invocation cannot be dispatched."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
-
 
 @dataclass(slots=True)
 class ToolActivityDispatcher:
@@ -118,7 +116,6 @@ class ToolActivityDispatcher:
             )
         return result
 
-
 async def execute_tool_activity(
     *,
     invocation_payload: Mapping[str, Any],
@@ -191,7 +188,6 @@ async def execute_tool_activity(
             retryable=True,
         ) from exc
 
-
 def plan_validate_activity(
     *,
     plan_artifact_ref: str,
@@ -238,7 +234,6 @@ def plan_validate_activity(
     )
 
     return {"validated_plan_ref": validated_artifact.artifact_ref}
-
 
 __all__ = [
     "ToolActivityDispatcher",

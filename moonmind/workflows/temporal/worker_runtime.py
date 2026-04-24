@@ -26,7 +26,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
-
 import temporalio.activity
 import temporalio.workflow
 from opentelemetry import trace as otel_trace
@@ -142,12 +141,10 @@ _OPENTELEMETRY_LOG_FORMAT = (
     "turn_id=%(managed_session_turn_id)s] %(message)s"
 )
 
-
 def _task_template_seed_dir() -> Path:
     import api_service
 
     return Path(api_service.__file__).resolve().parent / "data" / "task_step_templates"
-
 
 def _template_slug_from_task(task_payload: Mapping[str, Any]) -> str:
     template_payload = _coerce_mapping(
@@ -159,7 +156,6 @@ def _template_slug_from_task(task_payload: Mapping[str, Any]) -> str:
         or template_payload.get("id")
         or ""
     ).strip()
-
 
 async def _expand_task_template_for_child_run(
     *,
@@ -247,7 +243,6 @@ async def _expand_task_template_for_child_run(
     parameters["stepCount"] = len(expanded_steps)
     return parameters
 
-
 def _build_jira_orchestrate_execution_creator():
     async def _create_execution(**kwargs):
         async with get_async_session_context() as session:
@@ -276,16 +271,13 @@ _CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
 # to plan instructions.
 _TOOLS_WITH_AUTO_PR_CREATION = frozenset({"jules", "jules_api"})
 
-
 def _coerce_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     return {}
 
-
 def _coerce_non_empty_text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
-
 
 def _slugify_branch_prefix(value: Any, *, max_length: int = 40) -> str:
     candidate = _coerce_non_empty_text(value)
@@ -293,7 +285,6 @@ def _slugify_branch_prefix(value: Any, *, max_length: int = 40) -> str:
         return ""
     cleaned = re.sub(r"[^a-z0-9]+", "-", candidate.lower()).strip("-")
     return cleaned[:max_length].strip("-")
-
 
 def _derive_pr_branch_prefix(
     task_payload: Mapping[str, Any],
@@ -322,7 +313,6 @@ def _derive_pr_branch_prefix(
     if selected_skill_name.strip().lower() not in {"", "auto"}:
         return _slugify_branch_prefix(selected_skill_name)
     return ""
-
 
 def _derive_pr_resolver_title(
     task_payload: Mapping[str, Any],
@@ -355,13 +345,11 @@ def _derive_pr_resolver_title(
         or ""
     ).strip()
 
-
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
         return str(settings.workflow.default_task_runtime or "gemini_cli").strip().lower()
     return normalized
-
 
 _JIRA_AGENT_SKILLS = frozenset({"jira-issue-creator", "jira-pr-verify", "jira-verify"})
 _JIRA_STORY_OUTPUT_TOOLS = frozenset(
@@ -369,15 +357,12 @@ _JIRA_STORY_OUTPUT_TOOLS = frozenset(
 )
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
 
-
 def _requires_branch_publish_for_story_output(value: Any) -> bool:
     return str(value or "").strip().lower() not in {"branch", "pr"}
-
 
 def _slug_for_story_breakdown(value: Any) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return slug[:48] or "story-breakdown"
-
 
 def _story_breakdown_paths(*, title: str, existing: Mapping[str, Any]) -> dict[str, str]:
     json_path = str(
@@ -394,7 +379,7 @@ def _story_breakdown_paths(*, title: str, existing: Mapping[str, Any]) -> dict[s
     ).strip()
     if not json_path:
         story_slug = _slug_for_story_breakdown(title)
-        folder = f"docs/tmp/story-breakdowns/{story_slug}-{str(uuid.uuid4())[:8]}"
+        folder = f"artifacts/story-breakdowns/{story_slug}-{str(uuid.uuid4())[:8]}"
         json_path = f"{folder}/stories.json"
     if not markdown_path:
         markdown_path = (
@@ -407,23 +392,19 @@ def _story_breakdown_paths(*, title: str, existing: Mapping[str, Any]) -> dict[s
         "storyBreakdownMarkdownPath": markdown_path,
     }
 
-
 def _selected_step_tool_name(step_entry: Mapping[str, Any]) -> str:
     step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
         step_entry.get("skill")
     )
     return str(step_tool.get("name") or step_tool.get("id") or "").strip()
 
-
 def _selected_step_tool_type(tool_name: str) -> str:
     if tool_name.lower() in _JIRA_STORY_OUTPUT_TOOLS:
         return "skill"
     return "agent_runtime"
 
-
 def _jira_agent_skill_selected(tool_name: str) -> bool:
     return tool_name.lower() in _JIRA_AGENT_SKILLS
-
 
 def _task_uses_only_jira_agent_skill(
     *, selected_skill_name: str, raw_steps: Any
@@ -440,7 +421,6 @@ def _task_uses_only_jira_agent_skill(
         )
     return _jira_agent_skill_selected(selected_skill_name)
 
-
 def _append_agent_skill_instructions(instructions: str, *, selected_skill: str) -> str:
     selected = selected_skill.strip()
     if not _jira_agent_skill_selected(selected):
@@ -450,13 +430,11 @@ def _append_agent_skill_instructions(instructions: str, *, selected_skill: str) 
         return instructions
     return f"Use {marker}.\n\n{instructions.strip()}"
 
-
 def _plan_node_selected_skill(node: Mapping[str, Any]) -> str:
     inputs = node.get("inputs")
     if not isinstance(inputs, Mapping):
         return ""
     return str(inputs.get("selectedSkill") or "").strip()
-
 
 def _append_story_breakdown_instructions(
     instructions: str,
@@ -476,7 +454,6 @@ def _append_story_breakdown_instructions(
         + "- Do not create directories under `specs/`; that happens only during specify.\n"
         + f"- The requested story output mode is `{story_output_mode or 'docs_tmp'}`."
     )
-
 
 def _build_runtime_planner():
     """Build a plan generator that produces ``agent_runtime`` plan nodes.
@@ -1027,14 +1004,12 @@ def _build_runtime_planner():
 
     return _runtime_planner
 
-
 def _csv_env_tuple(value: str | None) -> tuple[str, ...]:
     if value is None:
         return ()
     return tuple(
         dict.fromkeys(part.strip() for part in value.split(",") if part.strip())
     )
-
 
 def _positive_int_env(name: str) -> int | None:
     import os
@@ -1046,7 +1021,6 @@ def _positive_int_env(name: str) -> int | None:
     if value < 1:
         raise RuntimeError(f"{name} must be a positive integer")
     return value
-
 
 def _build_agent_runtime_deps() -> tuple[
     ManagedRunStore,
@@ -1179,7 +1153,6 @@ def _build_agent_runtime_deps() -> tuple[
         workload_launcher,
     )
 
-
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
     """Build activity handlers for the configured non-workflow fleet.
 
@@ -1304,14 +1277,12 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         await resources.aclose()
         raise
 
-
 def _worker_concurrency_kwargs(topology) -> dict[str, int]:
     if topology.concurrency_limit is None:
         return {}
     if topology.fleet == WORKFLOW_FLEET:
         return {"max_concurrent_workflow_tasks": topology.concurrency_limit}
     return {"max_concurrent_activities": topology.concurrency_limit}
-
 
 def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
     """Apply Codex managed-runtime defaults for fleets that launch CLI tasks."""
@@ -1338,7 +1309,6 @@ def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
         normalized,
         result.path,
     )
-
 
 async def main_async() -> None:
     """Run the Temporal worker."""
@@ -1448,7 +1418,6 @@ async def main_async() -> None:
             healthcheck_server.close()
             await healthcheck_server.wait_closed()
 
-
 class OpenTelemetryLoggingFilter(logging.Filter):
     """Injects OpenTelemetry and Temporal trace context into standard logging."""
     def filter(self, record: logging.LogRecord) -> bool:
@@ -1507,7 +1476,6 @@ class OpenTelemetryLoggingFilter(logging.Filter):
 
         return True
 
-
 def _configure_worker_logging(*, enable_opentelemetry: bool) -> None:
     if not enable_opentelemetry:
         logging.basicConfig(level=logging.INFO)
@@ -1522,7 +1490,6 @@ def _configure_worker_logging(*, enable_opentelemetry: bool) -> None:
             for existing_filter in handler.filters
         ):
             handler.addFilter(OpenTelemetryLoggingFilter())
-
 
 if __name__ == "__main__":
     import os

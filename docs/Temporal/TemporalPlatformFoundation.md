@@ -1,6 +1,6 @@
 # Temporal Platform Foundation
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-TemporalPlatformFoundation.md`](../tmp/remaining-work/Temporal-TemporalPlatformFoundation.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 **Project:** MoonMind
 **Doc type:** System architecture / platform foundation
@@ -179,15 +179,15 @@ Use a small stable set of queues:
 
 * Workflow tasks:
 
-  * `mm.workflow`
+ * `mm.workflow`
 
 * Activity tasks (capability-based):
 
-  * `mm.activity.llm`
-  * `mm.activity.sandbox`
-  * `mm.activity.integrations`
-  * `mm.activity.artifacts`
-  * `mm.activity.agent_runtime`
+ * `mm.activity.llm`
+ * `mm.activity.sandbox`
+ * `mm.activity.integrations`
+ * `mm.activity.artifacts`
+ * `mm.activity.agent_runtime`
 
 `mm.activity.agent_runtime` is canonical, not optional. It is the queue for the `agent_runtime` worker fleet that handles managed runtime execution activities.
 
@@ -218,9 +218,9 @@ workflow and activity task queues listed in this document directly.
 
 * Worker startup must not depend on a Temporal deployment current-version step.
 * Replay-sensitive workflow changes must use replay-safe patch gates, replay
-  tests, or an explicit cutover plan.
+ tests, or an explicit cutover plan.
 * Activity signature changes require a new activity name or a controlled
-  cutover that preserves in-flight worker-bound invocation shapes.
+ cutover that preserves in-flight worker-bound invocation shapes.
 
 ---
 
@@ -306,15 +306,15 @@ The legacy DB-polling `moonmind-scheduler` has been removed. Temporal Schedules 
 * Server metrics scraped and graphed (Temporal service health, matching backlog, history pressure).
 * Worker metrics and logs correlated by:
 
-  * Workflow ID
-  * Run ID
-  * Workflow Type
-  * Task Queue
+ * Workflow ID
+ * Run ID
+ * Workflow Type
+ * Task Queue
 * Cluster alerting covers:
 
-  * worker "no pollers" conditions,
-  * activity retry storms,
-  * visibility query failures.
+ * worker "no pollers" conditions,
+ * activity retry storms,
+ * visibility query failures.
 
 ---
 
@@ -329,9 +329,9 @@ The legacy DB-polling `moonmind-scheduler` has been removed. Temporal Schedules 
 
 * Maintain explicit versions for:
 
-  * Temporal server
-  * temporal CLI/admin tools
-  * SQL visibility schemas (Postgres)
+ * Temporal server
+ * temporal CLI/admin tools
+ * SQL visibility schemas (Postgres)
 
 ---
 
@@ -342,10 +342,10 @@ The Temporal Platform Foundation is "done" when:
 1. A self-hosted Temporal cluster exists with private connectivity.
 2. Postgres persistence + **Postgres SQL visibility** configured and validated:
 
-   * list/filter works with custom Search Attributes (advanced visibility).
+ * list/filter works with custom Search Attributes (advanced visibility).
 3. Namespace retention management is explicit and automated:
 
-   * namespaces are managed with a default 90-day policy, operator overrides, a storage-cap fallback (`TEMPORAL_RETENTION_MAX_STORAGE_GB`, default `100`), and idempotent retention automation.
+ * namespaces are managed with a default 90-day policy, operator overrides, a storage-cap fallback (`TEMPORAL_RETENTION_MAX_STORAGE_GB`, default `100`), and idempotent retention automation.
 4. Worker fleets deployed (workflow + activity fleets including `agent_runtime`) with clear task queue routing.
 5. Worker fleets are polling their configured workflow and activity task queues directly.
 6. Shard count decision recorded and signed off; if 1 shard is chosen, the migration implications are acknowledged.

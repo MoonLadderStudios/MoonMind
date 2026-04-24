@@ -23,7 +23,6 @@ from moonmind.schemas.workload_models import (
     parse_workload_request,
 )
 
-
 class WorkloadPolicyError(ValueError):
     """Raised when workload profile or request policy validation fails."""
 
@@ -37,7 +36,6 @@ class WorkloadPolicyError(ValueError):
         super().__init__(message)
         self.reason = reason
         self.details = dict(details or {})
-
 
 class RunnerProfileRegistry:
     """Deployment-owned registry of curated workload runner profiles."""
@@ -304,7 +302,6 @@ class RunnerProfileRegistry:
                     details={"resource": "shmSize", "profileId": profile.id},
                 )
 
-
 def _load_registry_payload(path: Path, raw_text: str) -> Any:
     suffix = path.suffix.lower()
     if suffix == ".json":
@@ -325,7 +322,6 @@ def _load_registry_payload(path: Path, raw_text: str) -> Any:
         "runner profile registry must use a .json, .yaml, or .yml file extension"
     )
 
-
 def _normalize_registry_allowlist(values: Iterable[str]) -> tuple[str, ...]:
     normalized: list[str] = []
     for value in values:
@@ -336,7 +332,6 @@ def _normalize_registry_allowlist(values: Iterable[str]) -> tuple[str, ...]:
             normalized.append(registry)
     return tuple(normalized)
 
-
 def _image_registry(image: str) -> str:
     if "/" not in image:
         return "docker.io"
@@ -346,7 +341,6 @@ def _image_registry(image: str) -> str:
     if first_segment in {"index.docker.io", "registry-1.docker.io"}:
         return "docker.io"
     return first_segment
-
 
 def _extract_profiles(payload: Any) -> list[RunnerProfile]:
     if isinstance(payload, Mapping):

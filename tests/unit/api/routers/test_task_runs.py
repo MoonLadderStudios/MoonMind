@@ -24,11 +24,9 @@ from api_service.db.models import User
 from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 
-
 @pytest.fixture
 def test_user() -> User:
     return User(id=uuid4(), email="test@example.com", is_superuser=True)
-
 
 @pytest.fixture
 def test_worker_auth() -> _WorkerRequestAuth:
@@ -39,7 +37,6 @@ def test_worker_auth() -> _WorkerRequestAuth:
         allowed_job_types=(),
         capabilities=(),
     )
-
 
 @pytest.fixture
 def client(test_user: User, test_worker_auth: _WorkerRequestAuth) -> Iterator[tuple[TestClient, AsyncMock]]:
@@ -56,17 +53,13 @@ def client(test_user: User, test_worker_auth: _WorkerRequestAuth) -> Iterator[tu
 
     app.dependency_overrides.clear()
 
-
 # Legacy web_ro session unit tests removed in Phase 6.
-
 
 def _encoded_task_run_path_id(task_run_id: str) -> str:
     return quote(task_run_id, safe="")
 
-
 def _task_run_api_path(task_run_id: str) -> str:
     return f"/api/task-runs/{_encoded_task_run_path_id(task_run_id)}"
-
 
 @pytest.mark.parametrize(
     "suffix",
@@ -94,7 +87,6 @@ def test_task_run_observability_endpoints_reject_invalid_task_run_id(
     assert response.json()["detail"] == "Invalid task run id"
     load_record.assert_called_once_with("invalid-run-id")
 
-
 # ---------------------------------------------------------------------------
 # Observability summary
 # ---------------------------------------------------------------------------
@@ -107,7 +99,6 @@ def test_get_observability_summary_returns_404_when_missing(
         response = test_client.get(f"/api/task-runs/{uuid4()}/observability-summary")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
-
 
 def test_get_observability_summary_emits_latency_metric_for_404(
     client: tuple[TestClient, AsyncMock],
@@ -122,7 +113,6 @@ def test_get_observability_summary_emits_latency_metric_for_404(
     assert response.status_code == 404
     assert metrics.observe.call_args.args[0] == "livelogs.summary.latency"
     assert metrics.observe.call_args.kwargs["tags"] == {"stream": "livelogs"}
-
 
 def test_get_observability_summary_returns_200(
     client: tuple[TestClient, AsyncMock],
@@ -142,7 +132,6 @@ def test_get_observability_summary_returns_200(
     body = response.json()["summary"]
     assert body["runId"] == str(run_id)
     assert body["status"] == "running"
-
 
 def test_get_observability_summary_accepts_moonmind_task_run_id(
     client: tuple[TestClient, AsyncMock],
@@ -166,7 +155,6 @@ def test_get_observability_summary_accepts_moonmind_task_run_id(
     assert response.status_code == 200
     load_record.assert_called_once_with(task_run_id)
     assert response.json()["summary"]["runId"] == task_run_id
-
 
 def test_get_observability_summary_returns_session_backed_artifact_refs(
     client: tuple[TestClient, AsyncMock],
@@ -199,7 +187,6 @@ def test_get_observability_summary_returns_session_backed_artifact_refs(
     assert body["supportsLiveStreaming"] is False
     assert body["liveStreamStatus"] == "ended"
 
-
 def test_get_observability_summary_includes_live_stream_fields_for_active_run(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -216,7 +203,6 @@ def test_get_observability_summary_includes_live_stream_fields_for_active_run(
     body = response.json()["summary"]
     assert body["supportsLiveStreaming"] is True
     assert body["liveStreamStatus"] == "available"
-
 
 def test_get_observability_summary_includes_session_snapshot(
     client: tuple[TestClient, AsyncMock],
@@ -241,7 +227,6 @@ def test_get_observability_summary_includes_session_snapshot(
     assert snapshot["sessionEpoch"] == 2
     assert snapshot["threadId"] == "thread-2"
 
-
 def test_get_observability_summary_emits_latency_metric(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -260,7 +245,6 @@ def test_get_observability_summary_emits_latency_metric(
     assert response.status_code == 200
     assert metrics.observe.call_args.args[0] == "livelogs.summary.latency"
     assert metrics.observe.call_args.kwargs["tags"] == {"stream": "livelogs"}
-
 
 def test_get_observability_summary_ignores_metrics_emitter_failures(
     client: tuple[TestClient, AsyncMock],
@@ -281,7 +265,6 @@ def test_get_observability_summary_ignores_metrics_emitter_failures(
 
     assert response.status_code == 200
     assert response.json()["summary"]["runId"] == str(run_id)
-
 
 def test_get_observability_summary_uses_record_snapshot_when_session_record_missing(
     client: tuple[TestClient, AsyncMock],
@@ -320,7 +303,6 @@ def test_get_observability_summary_uses_record_snapshot_when_session_record_miss
     assert body["sessionSnapshot"]["sessionId"] == "sess-1"
     assert body["sessionSnapshot"]["sessionEpoch"] == 3
     assert body["sessionSnapshot"]["threadId"] == "thread-3"
-
 
 def test_get_observability_summary_preserves_active_record_snapshot_and_events_ref(
     client: tuple[TestClient, AsyncMock],
@@ -365,7 +347,6 @@ def test_get_observability_summary_preserves_active_record_snapshot_and_events_r
         "threadId": "thread-active",
         "activeTurnId": "turn-active",
     }
-
 
 def test_get_observability_summary_prefers_fresh_session_record(
     client: tuple[TestClient, AsyncMock],
@@ -417,7 +398,6 @@ def test_get_observability_summary_prefers_fresh_session_record(
     assert body["sessionStatus"] == "busy"
     assert body["sessionSnapshot"]["activeTurnId"] == "turn-fresh"
 
-
 def test_get_observability_summary_live_stream_ended_for_terminal_run(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -436,7 +416,6 @@ def test_get_observability_summary_live_stream_ended_for_terminal_run(
         assert body["supportsLiveStreaming"] is False, f"expected False for status={terminal_status}"
         assert body["liveStreamStatus"] == "ended", f"expected ended for status={terminal_status}"
 
-
 def test_get_observability_summary_live_stream_unavailable_when_not_capable(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -453,7 +432,6 @@ def test_get_observability_summary_live_stream_unavailable_when_not_capable(
     body = response.json()["summary"]
     assert body["supportsLiveStreaming"] is False
     assert body["liveStreamStatus"] == "unavailable"
-
 
 def test_get_observability_summary_allows_owner_access() -> None:
     owner_id = uuid4()
@@ -486,7 +464,6 @@ def test_get_observability_summary_allows_owner_access() -> None:
 
     assert response.status_code == 200
     assert response.json()["summary"]["supportsLiveStreaming"] is True
-
 
 def test_observability_summary_allows_parent_workflow_owner() -> None:
     owner_id = uuid4()
@@ -539,7 +516,6 @@ def test_observability_summary_allows_parent_workflow_owner() -> None:
         task_run_id,
     ]
 
-
 def test_observability_summary_child_owner_blocks_parent_fallback() -> None:
     owner_id = uuid4()
     child_owner_id = uuid4()
@@ -590,7 +566,6 @@ def test_observability_summary_child_owner_blocks_parent_fallback() -> None:
         child_workflow_id,
     ]
 
-
 def test_get_observability_summary_forbids_cross_owner_access() -> None:
     owner_id = uuid4()
     other_id = uuid4()
@@ -623,7 +598,6 @@ def test_get_observability_summary_forbids_cross_owner_access() -> None:
 
     assert response.status_code == 403
 
-
 # ---------------------------------------------------------------------------
 # Log artifact retrieval (stdout / stderr)
 # ---------------------------------------------------------------------------
@@ -635,7 +609,6 @@ def test_stream_task_run_log_returns_400_for_invalid_stream(
     response = test_client.get(f"/api/task-runs/{uuid4()}/logs/invalid_stream")
     assert response.status_code == 400
 
-
 def test_stream_task_run_log_returns_404_when_record_missing(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -643,7 +616,6 @@ def test_stream_task_run_log_returns_404_when_record_missing(
     with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=None):
         response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
     assert response.status_code == 404
-
 
 def test_stream_task_run_log_returns_404_when_artifact_ref_missing(
     client: tuple[TestClient, AsyncMock],
@@ -658,7 +630,6 @@ def test_stream_task_run_log_returns_404_when_artifact_ref_missing(
     assert response.status_code == 404
     assert "artifact not found" in response.json()["detail"].lower()
 
-
 def test_stream_task_run_log_returns_404_when_file_missing(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -672,7 +643,6 @@ def test_stream_task_run_log_returns_404_when_file_missing(
 
     assert response.status_code == 404
     assert "does not exist" in response.json()["detail"].lower()
-
 
 def test_stream_task_run_log_returns_file_response(
     client: tuple[TestClient, AsyncMock],
@@ -693,7 +663,6 @@ def test_stream_task_run_log_returns_file_response(
     assert mock_file_response.call_args[1]["media_type"] == "text/plain"
     assert response.status_code == 200
     assert response.content == b"mock_log_data"
-
 
 @pytest.mark.parametrize(
     (
@@ -757,7 +726,6 @@ def test_file_backed_task_run_endpoints_accept_moonmind_task_run_id(
     assert mock_file_response.call_args[1]["media_type"] == media_type
     assert response.content == response_content
 
-
 @pytest.mark.parametrize(
     ("env_root_name", "artifact_root_name"),
     [
@@ -789,7 +757,6 @@ def test_stream_task_run_log_uses_supported_artifact_root_layouts(
 
     assert response.status_code == 200
     assert response.text == expected_content
-
 
 # ---------------------------------------------------------------------------
 # Merged-tail (artifact-backed and synthesized)
@@ -833,7 +800,6 @@ def test_stream_task_run_log_merged_synthesized_from_spool(
     assert body.index("--- stderr ---") > body.index("hello from stdout")
     assert body.index("warning from stderr") > body.index("--- stderr ---")
     assert body.index("goodbye from stdout") > body.index("warning from stderr")
-
 
 def test_stream_task_run_log_merged_prefers_event_journal_before_prebuilt_artifact(
     client: tuple[TestClient, AsyncMock],
@@ -910,7 +876,6 @@ def test_stream_task_run_log_merged_prefers_event_journal_before_prebuilt_artifa
     assert body.index("turn accepted") < body.index("Session started.")
     assert "--- session (session_started) ---" in body
 
-
 def test_stream_task_run_log_merged_falls_back_to_spool_when_event_journal_empty(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
@@ -958,7 +923,6 @@ def test_stream_task_run_log_merged_falls_back_to_spool_when_event_journal_empty
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "spool"
     assert "spool still renders" in response.text
-
 
 def test_stream_task_run_log_merged_skips_malformed_active_rows(
     client: tuple[TestClient, AsyncMock],
@@ -1009,7 +973,6 @@ def test_stream_task_run_log_merged_skips_malformed_active_rows(
     assert response.headers["x-merged-order-source"] == "journal"
     assert "bad" not in response.text
     assert "valid warning" in response.text
-
 
 def test_stream_task_run_log_merged_reads_event_journal_once_and_sorts_by_sequence(
     client: tuple[TestClient, AsyncMock],
@@ -1065,7 +1028,6 @@ def test_stream_task_run_log_merged_reads_event_journal_once_and_sorts_by_sequen
     assert calls == 1
     assert response.text.index("first by sequence") < response.text.index("second by sequence")
 
-
 def test_stream_task_run_log_merged_falls_back_when_spool_metadata_missing(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
@@ -1093,7 +1055,6 @@ def test_stream_task_run_log_merged_falls_back_when_spool_metadata_missing(
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "artifact-fallback"
     assert "[merged-order unavailable: spool metadata missing]" in response.text
-
 
 def test_stream_task_run_log_merged_fallback_includes_system_annotations(
     client: tuple[TestClient, AsyncMock],
@@ -1148,7 +1109,6 @@ def test_stream_task_run_log_merged_fallback_includes_system_annotations(
         "[merged-order unavailable: spool metadata missing]"
     )
 
-
 def test_stream_task_run_log_merged_falls_back_to_legacy_log_artifact(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
@@ -1180,7 +1140,6 @@ def test_stream_task_run_log_merged_falls_back_to_legacy_log_artifact(
     assert response.headers["x-merged-order-source"] == "legacy-log-artifact"
     assert response.text == "legacy combined output\nwarning\n"
 
-
 def test_stream_task_run_log_merged_returns_404_when_both_artifacts_absent(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -1197,7 +1156,6 @@ def test_stream_task_run_log_merged_returns_404_when_both_artifacts_absent(
 
     assert response.status_code == 404
     assert "no stdout/stderr or legacy log artifacts" in response.json()["detail"].lower()
-
 
 def test_stream_task_run_log_merged_uses_spool_when_stdout_stderr_refs_are_absent(
     client: tuple[TestClient, AsyncMock],
@@ -1231,7 +1189,6 @@ def test_stream_task_run_log_merged_uses_spool_when_stdout_stderr_refs_are_absen
     assert response.status_code == 200
     assert response.headers["x-merged-order-source"] == "spool"
     assert "active run output" in response.text
-
 
 def test_stream_task_run_log_merged_filters_stale_spool_entries_from_previous_runs(
     client: tuple[TestClient, AsyncMock],
@@ -1292,7 +1249,6 @@ def test_stream_task_run_log_merged_filters_stale_spool_entries_from_previous_ru
     assert "current claude warning" in response.text
     assert "current claude completion" in response.text
 
-
 def test_stream_task_run_log_merged_uses_prebuilt_artifact_when_available(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -1314,7 +1270,6 @@ def test_stream_task_run_log_merged_uses_prebuilt_artifact_when_available(
     # Pre-built artifacts should NOT have the synthesized header
     assert "x-merged-synthesized" not in response.headers
 
-
 # ---------------------------------------------------------------------------
 # Diagnostics
 # ---------------------------------------------------------------------------
@@ -1328,7 +1283,6 @@ def test_get_task_run_diagnostics_returns_404_when_record_missing(
         response = test_client.get(f"/api/task-runs/{uuid4()}/diagnostics")
     assert response.status_code == 404
     assert "artifact not found" in response.json()["detail"].lower()
-
 
 def test_get_task_run_diagnostics_returns_404_when_diagnostics_ref_missing(
     client: tuple[TestClient, AsyncMock],
@@ -1344,7 +1298,6 @@ def test_get_task_run_diagnostics_returns_404_when_diagnostics_ref_missing(
     assert response.status_code == 404
     assert "artifact not found" in response.json()["detail"].lower()
 
-
 def test_get_task_run_diagnostics_returns_404_when_file_missing(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -1358,7 +1311,6 @@ def test_get_task_run_diagnostics_returns_404_when_file_missing(
 
     assert response.status_code == 404
     assert "does not exist" in response.json()["detail"].lower()
-
 
 def test_get_task_run_diagnostics_returns_file_response(
     client: tuple[TestClient, AsyncMock],
@@ -1379,7 +1331,6 @@ def test_get_task_run_diagnostics_returns_file_response(
     assert mock_file_response.call_args[1]["media_type"] == "application/json"
     assert response.status_code == 200
     assert response.content == b'{"mock":"diag"}'
-
 
 @pytest.mark.parametrize(
     ("env_root_name", "artifact_root_name"),
@@ -1418,7 +1369,6 @@ def test_get_task_run_diagnostics_uses_supported_artifact_root_layouts(
 # ---------------------------------------------------------------------------
 
 # Tests removed due to an AnyIO test transport deadlock with fake streaming generators
-
 
 def test_get_task_run_observability_events_reads_structured_spool_history(
     client: tuple[TestClient, AsyncMock],
@@ -1474,7 +1424,6 @@ def test_get_task_run_observability_events_reads_structured_spool_history(
     assert body["events"][1]["threadId"] == "thread-2"
     assert "session_id" not in body["events"][1]
 
-
 def test_get_task_run_observability_events_accepts_moonmind_task_run_id(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -1503,7 +1452,6 @@ def test_get_task_run_observability_events_accepts_moonmind_task_run_id(
     assert response.status_code == 200
     load_record.assert_called_once_with(task_run_id)
     assert response.json()["events"] == []
-
 
 def test_get_task_run_observability_events_filters_spool_fallback_rows(
     client: tuple[TestClient, AsyncMock],
@@ -1564,7 +1512,6 @@ def test_get_task_run_observability_events_filters_spool_fallback_rows(
     assert [event["sequence"] for event in body["events"]] == [2]
     assert body["events"][0]["stream"] == "session"
     assert body["events"][0]["kind"] == "session_reset_boundary"
-
 
 def test_get_task_run_observability_events_prefers_persisted_event_artifact(
     client: tuple[TestClient, AsyncMock],
@@ -1641,7 +1588,6 @@ def test_get_task_run_observability_events_prefers_persisted_event_artifact(
     assert body["events"][1]["sessionId"] == "sess-1"
     assert body["events"][1]["sessionEpoch"] == 2
     assert "run_id" not in body["events"][0]
-
 
 def test_get_task_run_observability_events_applies_since_stream_and_kind_filters(
     client: tuple[TestClient, AsyncMock],
@@ -1729,7 +1675,6 @@ def test_get_task_run_observability_events_applies_since_stream_and_kind_filters
     }
     assert all(event["stream"] == "session" for event in body["events"])
 
-
 def test_get_task_run_observability_events_applies_session_epoch_and_thread_filters(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
@@ -1806,7 +1751,6 @@ def test_get_task_run_observability_events_applies_session_epoch_and_thread_filt
     assert body["events"][0]["sessionEpoch"] == 2
     assert body["events"][0]["threadId"] == "thread-2"
 
-
 def test_get_task_run_observability_events_rejects_invalid_session_epoch_filter(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -1817,7 +1761,6 @@ def test_get_task_run_observability_events_rejects_invalid_session_epoch_filter(
 
     assert response.status_code == 422
     load_record.assert_not_called()
-
 
 def test_get_task_run_observability_events_rejects_blank_thread_id_filter(
     client: tuple[TestClient, AsyncMock],
@@ -1830,7 +1773,6 @@ def test_get_task_run_observability_events_rejects_blank_thread_id_filter(
     assert response.status_code == 422
     assert response.json()["detail"] == "threadId must not contain blank values"
     load_record.assert_not_called()
-
 
 def test_observability_event_session_epoch_filter_coerces_string_rows() -> None:
     events = [
@@ -1857,7 +1799,6 @@ def test_observability_event_session_epoch_filter_coerces_string_rows() -> None:
     )
 
     assert [event["sequence"] for event in filtered] == [1]
-
 
 def test_get_task_run_observability_events_limits_to_oldest_matching_rows_after_since(
     client: tuple[TestClient, AsyncMock],
@@ -1906,7 +1847,6 @@ def test_get_task_run_observability_events_limits_to_oldest_matching_rows_after_
     assert body["truncated"] is True
     assert [event["sequence"] for event in body["events"]] == [6, 7]
 
-
 def test_get_task_run_observability_events_keeps_artifact_fallback_rows_when_since_is_present(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
@@ -1939,7 +1879,6 @@ def test_get_task_run_observability_events_keeps_artifact_fallback_rows_when_sin
     assert [event["kind"] for event in body["events"]] == ["stdout_chunk"]
     assert body["events"][0]["sequence"] == 0
     assert body["events"][0]["text"] == "artifact stdout\n"
-
 
 def test_get_task_run_observability_events_uses_record_snapshot_when_session_record_missing(
     client: tuple[TestClient, AsyncMock],
@@ -1996,7 +1935,6 @@ def test_get_task_run_observability_events_uses_record_snapshot_when_session_rec
     assert body["sessionSnapshot"]["threadId"] == "thread-3"
     assert body["sessionSnapshot"]["activeTurnId"] == "turn-9"
 
-
 def test_get_task_run_observability_events_emits_history_metrics_for_journal(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
@@ -2046,7 +1984,6 @@ def test_get_task_run_observability_events_emits_history_metrics_for_journal(
         for call in metrics.increment.call_args_list
     )
 
-
 def test_get_task_run_observability_events_emits_error_metric_on_history_failure(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -2071,7 +2008,6 @@ def test_get_task_run_observability_events_emits_error_metric_on_history_failure
         for call in metrics.increment.call_args_list
     )
 
-
 def test_get_task_run_observability_events_emits_error_metric_when_session_record_load_fails(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -2095,7 +2031,6 @@ def test_get_task_run_observability_events_emits_error_metric_when_session_recor
         and call.kwargs["tags"] == {"stream": "livelogs"}
         for call in metrics.increment.call_args_list
     )
-
 
 def test_get_task_run_observability_events_ignores_metrics_emitter_failures(
     client: tuple[TestClient, AsyncMock],
@@ -2139,7 +2074,6 @@ def test_get_task_run_observability_events_ignores_metrics_emitter_failures(
     assert response.status_code == 200
     assert [event["sequence"] for event in response.json()["events"]] == [5]
 
-
 def test_stream_task_run_live_logs_serializes_canonical_event_aliases(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -2174,7 +2108,6 @@ def test_stream_task_run_live_logs_serializes_canonical_event_aliases(
     assert '"activeTurnId":"turn-3"' in response.text
     assert '"session_id"' not in response.text
 
-
 def test_stream_task_run_live_logs_rejects_non_live_capable_active_run(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -2190,7 +2123,6 @@ def test_stream_task_run_live_logs_rejects_non_live_capable_active_run(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Live streaming is not supported for this run."
-
 
 def test_stream_task_run_live_logs_accepts_moonmind_task_run_id(
     client: tuple[TestClient, AsyncMock],
@@ -2212,7 +2144,6 @@ def test_stream_task_run_live_logs_accepts_moonmind_task_run_id(
     load_record.assert_called_once_with(task_run_id)
     assert response.json()["detail"] == "Live streaming is not supported for this run."
 
-
 def test_stream_task_run_live_logs_returns_gone_for_terminal_run(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -2228,7 +2159,6 @@ def test_stream_task_run_live_logs_returns_gone_for_terminal_run(
 
     assert response.status_code == 410
     assert response.json()["detail"] == "Run is no longer active. Use artifact retrieval APIs."
-
 
 def test_stream_task_run_live_logs_ignores_metrics_emitter_failures(
     client: tuple[TestClient, AsyncMock],
@@ -2260,7 +2190,6 @@ def test_stream_task_run_live_logs_ignores_metrics_emitter_failures(
 
     assert response.status_code == 200
     assert '"text":"hello\\n"' in response.text
-
 
 def test_get_task_run_observability_events_allows_owner_access() -> None:
     owner_id = uuid4()
@@ -2310,7 +2239,6 @@ def test_get_task_run_observability_events_allows_owner_access() -> None:
         for call in metrics.increment.call_args_list
     )
 
-
 def test_get_task_run_observability_events_forbids_cross_owner_access_without_success_metrics() -> None:
     owner_id = uuid4()
     other_id = uuid4()
@@ -2350,7 +2278,6 @@ def test_get_task_run_observability_events_forbids_cross_owner_access_without_su
     assert metrics.observe.call_count == 0
     assert metrics.increment.call_count == 0
 
-
 def test_load_task_run_session_record_uses_targeted_standard_paths(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2386,7 +2313,6 @@ def test_load_task_run_session_record_uses_targeted_standard_paths(
     assert record is not None
     assert record.session_id == "sess:wf-task-1:codex_cli-2"
 
-
 def test_iter_diagnostics_observability_events_dedupes_system_annotations(tmp_path) -> None:
     diagnostics_path = tmp_path / "diagnostics.json"
     diagnostics_path.write_text(
@@ -2418,7 +2344,6 @@ def test_iter_diagnostics_observability_events_dedupes_system_annotations(tmp_pa
     assert len(events) == 1
     assert events[0]["kind"] == "system_annotation"
 
-
 def test_event_sort_key_uses_timestamp_before_sequence() -> None:
     later_sequenced = {
         "sequence": 1,
@@ -2441,7 +2366,6 @@ def test_event_sort_key_uses_timestamp_before_sequence() -> None:
     )
 
     assert ordered[0]["text"] == "earlier"
-
 
 def test_iter_historical_artifact_events_chunks_large_logs_and_keeps_tail(
     tmp_path,
@@ -2475,7 +2399,6 @@ def test_iter_historical_artifact_events_chunks_large_logs_and_keeps_tail(
     assert events[0]["offset"] > 0
     assert events[0]["text"] == "B" * 65536
     assert events[1]["text"] == "C" * 65536
-
 
 def test_iter_historical_artifact_events_preserves_specific_session_artifact_refs(
     tmp_path,
@@ -2537,7 +2460,6 @@ def test_iter_historical_artifact_events_preserves_specific_session_artifact_ref
     assert events_by_kind["session_reset_boundary"]["metadata"]["controlEventRef"] == "art_control"
     assert events_by_kind["session_reset_boundary"]["metadata"]["resetBoundaryRef"] == "art_reset"
 
-
 def test_iter_historical_artifact_events_omits_missing_reset_boundary_ref(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2580,7 +2502,6 @@ def test_iter_historical_artifact_events_omits_missing_reset_boundary_ref(
     assert events_by_kind["session_cleared"]["metadata"]["controlEventRef"] == "art_control"
     assert "resetBoundaryRef" not in events_by_kind["session_cleared"]["metadata"]
 
-
 def test_iter_historical_artifact_events_omits_missing_control_event_ref(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2620,7 +2541,6 @@ def test_iter_historical_artifact_events_omits_missing_control_event_ref(
     assert events_by_kind["session_reset_boundary"]["metadata"]["resetBoundaryRef"] == "art_reset"
     assert "controlEventRef" not in events_by_kind["session_reset_boundary"]["metadata"]
 
-
 def _build_session_record() -> CodexManagedSessionRecord:
     now = datetime.now(UTC)
     return CodexManagedSessionRecord(
@@ -2646,7 +2566,6 @@ def _build_session_record() -> CodexManagedSessionRecord:
         startedAt=now,
         updatedAt=now,
     )
-
 
 def _build_artifact(artifact_id: str, link_type: str, *, label: str) -> tuple[SimpleNamespace, list[SimpleNamespace], bool, SimpleNamespace]:
     now = datetime.now(UTC)
@@ -2691,7 +2610,6 @@ def _build_artifact(artifact_id: str, link_type: str, *, label: str) -> tuple[Si
         ),
     )
     return artifact, links, False, read_policy
-
 
 def test_get_task_run_artifact_session_projection_returns_grouped_projection(
     client: tuple[TestClient, AsyncMock],
@@ -2744,7 +2662,6 @@ def test_get_task_run_artifact_session_projection_returns_grouped_projection(
         "art_reset",
     ]
 
-
 def test_get_task_run_artifact_session_projection_reads_durable_state_only(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -2774,7 +2691,6 @@ def test_get_task_run_artifact_session_projection_reads_durable_state_only(
     assert response.status_code == 200
     assert response.json()["session_epoch"] == 2
 
-
 def test_get_task_run_artifact_session_projection_returns_404_when_missing(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -2787,7 +2703,6 @@ def test_get_task_run_artifact_session_projection_returns_404_when_missing(
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "session_projection_not_found"
-
 
 def test_get_task_run_artifact_session_projection_returns_404_for_invalid_session_id(
     client: tuple[TestClient, AsyncMock],
@@ -2803,7 +2718,6 @@ def test_get_task_run_artifact_session_projection_returns_404_for_invalid_sessio
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "session_projection_not_found"
 
-
 def test_get_task_run_artifact_session_projection_returns_404_for_task_mismatch(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -2817,7 +2731,6 @@ def test_get_task_run_artifact_session_projection_returns_404_for_task_mismatch(
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "session_projection_not_found"
-
 
 def test_get_task_run_artifact_session_projection_allows_owner_access() -> None:
     owner_id = uuid4()
@@ -2862,7 +2775,6 @@ def test_get_task_run_artifact_session_projection_allows_owner_access() -> None:
 
     assert response.status_code == 200
 
-
 def test_get_task_run_artifact_session_projection_forbids_cross_owner_access() -> None:
     owner_id = uuid4()
     other_id = uuid4()
@@ -2894,7 +2806,6 @@ def test_get_task_run_artifact_session_projection_forbids_cross_owner_access() -
         response.json()["detail"]
         == "You do not have permission to access this task run or its session projection."
     )
-
 
 def test_post_task_run_artifact_session_control_routes_send_follow_up_and_returns_projection(
     client: tuple[TestClient, AsyncMock],
@@ -2945,7 +2856,6 @@ def test_post_task_run_artifact_session_control_routes_send_follow_up_and_return
     assert body["projection"]["session_epoch"] == 2
     assert body["projection"]["latest_summary_ref"]["artifact_id"] == "art_summary"
     assert body["projection"]["latest_checkpoint_ref"]["artifact_id"] == "art_checkpoint"
-
 
 def test_post_task_run_artifact_session_control_routes_clear_session_and_returns_projection(
     client: tuple[TestClient, AsyncMock],
@@ -3001,7 +2911,6 @@ def test_post_task_run_artifact_session_control_routes_clear_session_and_returns
     assert body["projection"]["session_epoch"] == 3
     assert body["projection"]["latest_control_event_ref"]["artifact_id"] == "art_control"
     assert body["projection"]["latest_reset_boundary_ref"]["artifact_id"] == "art_reset"
-
 
 def test_post_task_run_artifact_session_control_rejects_blank_follow_up_message(
     client: tuple[TestClient, AsyncMock],

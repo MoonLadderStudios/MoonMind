@@ -35,15 +35,15 @@ Implement MM-479 by verifying the Claude OAuth browser terminal ceremony. Repo i
 
 ## Technical Context
 
-**Language/Version**: Python 3.12; TypeScript/React for Mission Control UI  
-**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, React, xterm.js, Vitest, pytest  
-**Storage**: Existing OAuth session row metadata only; no new persistent tables  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh <pytest targets>`  
-**Integration Testing**: Existing route-level async pytest fixtures and Vitest Mission Control component harness  
-**Target Platform**: Linux API/worker containers and browser Mission Control UI  
-**Project Type**: FastAPI control plane plus React Mission Control frontend and Temporal-backed runtime services  
-**Performance Goals**: OAuth terminal polling remains 1 second; attach validation remains a single session lookup/update  
-**Constraints**: Do not persist pasted token/code content; attach tokens must remain short-lived and single-use; OAuth terminal must not become a generic task terminal; preserve Codex OAuth behavior  
+**Language/Version**: Python 3.12; TypeScript/React for Mission Control UI 
+**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, React, xterm.js, Vitest, pytest 
+**Storage**: Existing OAuth session row metadata only; no new persistent tables 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh <pytest targets>` 
+**Integration Testing**: Existing route-level async pytest fixtures and Vitest Mission Control component harness 
+**Target Platform**: Linux API/worker containers and browser Mission Control UI 
+**Project Type**: FastAPI control plane plus React Mission Control frontend and Temporal-backed runtime services 
+**Performance Goals**: OAuth terminal polling remains 1 second; attach validation remains a single session lookup/update 
+**Constraints**: Do not persist pasted token/code content; attach tokens must remain short-lived and single-use; OAuth terminal must not become a generic task terminal; preserve Codex OAuth behavior 
 **Scale/Scope**: One Claude OAuth browser-terminal ceremony for `runtime_id = claude_code`
 
 ## Constitution Check
@@ -59,7 +59,7 @@ Implement MM-479 by verifying the Claude OAuth browser terminal ceremony. Repo i
 - IX. Resilient by Default: PASS. Maintains explicit session states and fail-closed attach validation.
 - X. Continuous Improvement: PASS. Verification evidence is captured in tests and artifacts.
 - XI. Spec-Driven Development: PASS. This plan follows a single-story spec and TDD task list.
-- XII. Canonical Docs vs Tmp: PASS. Jira orchestration input stays under `docs/tmp`; canonical source docs are read-only requirements.
+- XII. Canonical Docs vs Tmp: PASS. Jira orchestration input stays under `local-only handoffs`; canonical source docs are read-only requirements.
 - XIII. Pre-Release Velocity: PASS. No compatibility aliases or hidden fallback semantics are introduced.
 
 ## Project Structure
@@ -74,7 +74,7 @@ specs/242-claude-browser-terminal-signin/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── claude-browser-terminal-signin.md
+│ └── claude-browser-terminal-signin.md
 ├── tasks.md
 └── verification.md
 ```

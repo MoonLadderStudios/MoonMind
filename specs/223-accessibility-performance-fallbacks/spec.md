@@ -3,7 +3,7 @@
 **Feature Branch**: `223-accessibility-performance-fallbacks`
 **Created**: 2026-04-22
 **Status**: Implemented
-**Input**: Trusted Jira preset brief for MM-429 from `docs/tmp/jira-orchestration-inputs/MM-429-moonspec-orchestration-input.md`. Summary: "Enforce accessibility, performance, and graceful degradation." Source design: `docs/UI/MissionControlDesignSystem.md`, sections 8.5, 9.4, and 12.
+**Input**: Trusted Jira preset brief for MM-429 from `spec.md` (Input). Summary: "Enforce accessibility, performance, and graceful degradation." Source design: `docs/UI/MissionControlDesignSystem.md`, sections 8.5, 9.4, and 12.
 
 ## Original Jira Preset Brief
 

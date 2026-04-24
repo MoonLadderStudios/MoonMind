@@ -47,7 +47,7 @@ MoonMind maintainers need a temporary implementation tracker plus an automated t
 
 **Acceptance Scenarios**:
 
-1. **Given** the canonical DooD doc points to unfinished implementation work, **When** maintainers inspect `docs/tmp/remaining-work/`, **Then** a Phase 0 tracker exists for the DooD rollout and is referenced from the canonical doc.
+1. **Given** the canonical DooD doc points to unfinished implementation work, **When** maintainers inspect `docs/ManagedAgents/DockerOutOfDocker.md`, **Then** a Phase 0 tracker exists for the DooD rollout and is referenced from the canonical doc.
 2. **Given** future edits could reintroduce ambiguous language, **When** the new automated validation runs, **Then** it fails if the required cross-reference or execution-boundary wording disappears from the canonical docs.
 
 ### Edge Cases
@@ -66,7 +66,7 @@ MoonMind maintainers need a temporary implementation tracker plus an automated t
 - **FR-004**: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` MUST state that Docker-backed workload launches are ordinary executable tools and MUST NOT be treated as new `MoonMind.AgentRun` instances unless the launched runtime is itself a true managed agent runtime.
 - **FR-005**: The canonical documentation set MUST state that the initial DooD implementation scope for Phases 1 through 4 is one-shot workload containers and that bounded helper containers remain a later phase.
 - **FR-006**: The canonical documentation set MUST state that `tool.type = "skill"` is the initial execution primitive for Docker-backed workload launches and MUST preserve `tool.type = "agent_runtime"` for true long-lived agent runtimes only.
-- **FR-007**: `docs/tmp/remaining-work/` MUST contain a DooD implementation tracker linked from the canonical DooD doc and summarizing the remaining phased rollout work after Phase 0.
+- **FR-007**: `docs/ManagedAgents/DockerOutOfDocker.md` MUST contain a DooD implementation tracker linked from the canonical DooD doc and summarizing the remaining phased rollout work after Phase 0.
 - **FR-008**: The Phase 0 implementation MUST include automated validation that fails when the required DooD/session-plane/execution-model wording or remaining-work tracker reference is missing.
 
 ### Key Entities *(include if feature involves data)*
@@ -75,7 +75,7 @@ MoonMind maintainers need a temporary implementation tracker plus an automated t
 - **Workload Container**: The separate specialized non-agent container launched through the control plane to perform a bounded workload.
 - **Runner Profile**: The curated MoonMind-owned workload-container definition that constrains image, mounts, environment, resources, and policy.
 - **Session-Assisted Workload**: A managed-session step that requests a specialized workload through the control plane without inheriting unrestricted Docker authority.
-- **DooD Remaining-Work Tracker**: The temporary backlog file in `docs/tmp/remaining-work/` that records unfinished rollout phases linked from the canonical DooD doc.
+- **DooD Remaining-Work Tracker**: The temporary backlog file in `docs/ManagedAgents/DockerOutOfDocker.md` that records unfinished rollout phases linked from the canonical DooD doc.
 
 ## Success Criteria *(mandatory)*
 
@@ -83,5 +83,5 @@ MoonMind maintainers need a temporary implementation tracker plus an automated t
 
 - **SC-001**: The canonical DooD, session-plane, and execution-model docs can be read together without contradicting each other on container identity, glossary, or execution primitive.
 - **SC-002**: The canonical docs explicitly preserve `tool.type = "skill"` for the initial Docker-backed workload path and reserve `tool.type = "agent_runtime"` for true managed runtimes.
-- **SC-003**: A DooD implementation tracker exists under `docs/tmp/remaining-work/` and is linked from the canonical DooD doc.
+- **SC-003**: A DooD implementation tracker exists under `docs/ManagedAgents/DockerOutOfDocker.md` and is linked from the canonical DooD doc.
 - **SC-004**: Automated unit validation for the Phase 0 documentation contract passes through `./tools/test_unit.sh` using a targeted DooD Phase 0 test file.

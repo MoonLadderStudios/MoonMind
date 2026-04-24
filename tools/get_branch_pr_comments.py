@@ -15,10 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 def eprint(message: str) -> None:
     print(message, file=sys.stderr)
-
 
 def run_json_command(command: list[str], failure_hint: str) -> Any:
     try:
@@ -35,7 +33,6 @@ def run_json_command(command: list[str], failure_hint: str) -> Any:
             f"Command returned invalid JSON: {' '.join(command)}"
         ) from exc
 
-
 def detect_current_branch() -> str | None:
     try:
         branch = subprocess.check_output(
@@ -49,7 +46,6 @@ def detect_current_branch() -> str | None:
     if not branch or branch == "HEAD":
         return None
     return branch
-
 
 def resolve_pr_metadata(selector: str | None) -> dict[str, Any]:
     command = ["gh", "pr", "view"]
@@ -67,7 +63,6 @@ def resolve_pr_metadata(selector: str | None) -> dict[str, Any]:
         raise RuntimeError("Pull request metadata did not include a PR number.")
 
     return payload
-
 
 def fetch_comments(
     pr_number: int,
@@ -95,7 +90,6 @@ def fetch_comments(
         raise RuntimeError("Unexpected payload while loading PR comments.")
 
     return payload
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -183,7 +177,6 @@ def main() -> int:
         print(json_output)
 
     return 0
-
 
 if __name__ == "__main__":
     try:

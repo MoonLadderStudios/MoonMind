@@ -12,11 +12,9 @@ from typing import Any, Dict, Iterator, Optional, Protocol, Tuple, Type, runtime
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
 # Plan result returned by ReaderAdapter.plan()
 # ---------------------------------------------------------------------------
-
 
 class PlanResult:
     """Estimated scope of a reader fetch.
@@ -45,11 +43,9 @@ class PlanResult:
             f"bytes={self.estimated_size_bytes})"
         )
 
-
 # ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------
-
 
 @runtime_checkable
 class ReaderAdapter(Protocol):
@@ -74,13 +70,11 @@ class ReaderAdapter(Protocol):
         """Return a cursor for incremental re-index (e.g., commit SHA)."""
         ...
 
-
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 _ADAPTER_REGISTRY: Dict[str, Type[ReaderAdapter]] = {}
-
 
 def register_adapter(type_name: str, cls: Type[ReaderAdapter]) -> None:
     """Register a :class:`ReaderAdapter` for a manifest ``dataSources[].type``."""
@@ -92,7 +86,6 @@ def register_adapter(type_name: str, cls: Type[ReaderAdapter]) -> None:
             cls.__name__,
         )
     _ADAPTER_REGISTRY[type_name] = cls
-
 
 def get_adapter(type_name: str) -> Type[ReaderAdapter]:
     """Look up a registered adapter by its manifest type string.
@@ -109,11 +102,9 @@ def get_adapter(type_name: str) -> Type[ReaderAdapter]:
             f"Available: {', '.join(available)}"
         ) from None
 
-
 def registered_types() -> list[str]:
     """Return sorted list of registered adapter type names."""
     return sorted(_ADAPTER_REGISTRY.keys())
-
 
 def _reset_registry() -> None:
     """Clear the registry (for testing only)."""

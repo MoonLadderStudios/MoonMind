@@ -16,7 +16,6 @@ from moonmind.workflows.temporal.runtime.self_heal import (
 )
 from moonmind.utils.logging import SecretRedactor
 
-
 def test_self_heal_config_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Config should fall back to documented defaults when env vars are absent."""
 
@@ -37,7 +36,6 @@ def test_self_heal_config_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> 
     assert config.step_no_progress_limit == 2
     assert config.job_self_heal_max_resets == 1
 
-
 def test_self_heal_config_from_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     """Env vars should override defaults with integer parsing."""
 
@@ -55,7 +53,6 @@ def test_self_heal_config_from_env_overrides(monkeypatch: pytest.MonkeyPatch) ->
     assert config.step_no_progress_limit == 5
     assert config.job_self_heal_max_resets == 3
 
-
 def test_build_failure_signature_scrubs_secrets() -> None:
     """Failure signatures should redact secret-like content."""
 
@@ -71,7 +68,6 @@ def test_build_failure_signature_scrubs_secrets() -> None:
     assert signature is not None
     assert "[redacted]" in signature.value
     assert "token=token" not in signature.value
-
 
 def test_step_attempt_state_detects_no_progress() -> None:
     """No-progress should increment only when signature+diff repeat."""
@@ -98,7 +94,6 @@ def test_step_attempt_state_detects_no_progress() -> None:
     assert state.consecutive_no_progress == 0
     assert state.last_failure_signature is None
 
-
 def test_self_heal_controller_enforces_attempt_budget() -> None:
     """Controller should raise when attempts exceed configured budget."""
 
@@ -119,7 +114,6 @@ def test_self_heal_controller_enforces_attempt_budget() -> None:
     with pytest.raises(AttemptBudgetExceeded):
         controller.new_attempt()
 
-
 class _PreparedWorkspace:
     def __init__(self, root: Path) -> None:
         self.repo_dir = root / "repo"
@@ -127,7 +121,6 @@ class _PreparedWorkspace:
         self.execute_log_path = root / "execute.log"
         self.starting_branch = "main"
         self.new_branch: str | None = None
-
 
 @pytest.mark.asyncio
 async def test_hard_reset_builder_clone_uses_option_separator(tmp_path: Path) -> None:

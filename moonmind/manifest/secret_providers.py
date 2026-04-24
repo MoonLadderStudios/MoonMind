@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from typing import Mapping, Optional, Protocol
 
-
 class SecretProvider(Protocol):
     """Protocol for synchronous secret providers."""
 
     def get_secret(self, key: str) -> Optional[str]: ...
-
 
 class EnvSecretProvider:
     def __init__(self, env: Mapping[str, str]):
@@ -16,14 +14,12 @@ class EnvSecretProvider:
     def get_secret(self, key: str) -> Optional[str]:
         return self.env.get(key)
 
-
 class ProfileSecretProvider:
     def __init__(self, profile: Mapping[str, str]):
         self.profile = profile
 
     def get_secret(self, key: str) -> Optional[str]:
         return self.profile.get(key)
-
 
 class SecretProviderManager:
     def __init__(

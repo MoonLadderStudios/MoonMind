@@ -20,11 +20,9 @@ from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 class _StubArtifactStorage:
     """Minimal file-based artifact storage for tests."""
@@ -44,7 +42,6 @@ class _StubArtifactStorage:
     def resolve_storage_path(self, ref: str) -> Path:
         return self._root / ref
 
-
 def _make_supervisor(
     tmp_path: Path,
 ) -> tuple[ManagedRunSupervisor, ManagedRunStore, _StubArtifactStorage]:
@@ -57,7 +54,6 @@ def _make_supervisor(
     streamer = RuntimeLogStreamer(storage)
     supervisor = ManagedRunSupervisor(store, streamer)
     return supervisor, store, storage
-
 
 def _save_record(store: ManagedRunStore, run_id: str) -> ManagedRunRecord:
     workspace_path = store.store_root.parent / "workspace" / run_id
@@ -74,11 +70,9 @@ def _save_record(store: ManagedRunStore, run_id: str) -> ManagedRunRecord:
     store.save(record)
     return record
 
-
 # ---------------------------------------------------------------------------
 # Test 1 — heartbeat_and_wait_with_timeout returns (exit_code, False) on normal exit
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_heartbeat_and_wait_with_timeout_normal_exit(tmp_path: Path):
@@ -96,11 +90,9 @@ async def test_heartbeat_and_wait_with_timeout_normal_exit(tmp_path: Path):
     assert exit_code == 0
     assert timed_out is False
 
-
 # ---------------------------------------------------------------------------
 # Test 2 — heartbeat_and_wait_with_timeout returns (None, True) on timeout
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_heartbeat_and_wait_with_timeout_timed_out(tmp_path: Path):
@@ -127,7 +119,6 @@ async def test_heartbeat_and_wait_with_timeout_timed_out(tmp_path: Path):
             # Process already terminated; nothing to clean up.
             pass
 
-
 # ---------------------------------------------------------------------------
 # Test 3 — supervise() captures stdout concurrently (does not deadlock)
 #
@@ -136,7 +127,6 @@ async def test_heartbeat_and_wait_with_timeout_timed_out(tmp_path: Path):
 # read.  For large output this causes the OS pipe buffer to fill up, blocking
 # the write-end of the pipe inside the subprocess — a deadlock.
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_supervise_captures_large_stdout_without_deadlock(tmp_path: Path):
@@ -170,11 +160,9 @@ async def test_supervise_captures_large_stdout_without_deadlock(tmp_path: Path):
     # Should have captured all 256K+ bytes (256000 'x' chars + newline)
     assert len(content) >= 256000
 
-
 # ---------------------------------------------------------------------------
 # Test 4 — supervise() captures stdout for a normal short-lived process
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_supervise_captures_stdout_normal_process(tmp_path: Path):
@@ -206,11 +194,9 @@ async def test_supervise_captures_stdout_normal_process(tmp_path: Path):
     payload = journal.read_text(encoding="utf-8")
     assert '"stream":"stdout"' in payload
 
-
 # ---------------------------------------------------------------------------
 # Test 5 — supervise() with None stdout/stderr
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_supervise_with_none_stdout_does_not_crash(tmp_path: Path):
@@ -240,11 +226,9 @@ async def test_supervise_with_none_stdout_does_not_crash(tmp_path: Path):
     diag_artifact = storage.resolve_storage_path(f"{run_id}/diagnostics.json")
     assert diag_artifact.exists()
 
-
 # ---------------------------------------------------------------------------
 # Test 6 — supervise() reads exit code from file when provided
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_supervise_exit_code_from_file_overrides_process_rc(tmp_path: Path):
@@ -274,11 +258,9 @@ async def test_supervise_exit_code_from_file_overrides_process_rc(tmp_path: Path
     assert result.exit_code == 42
     assert result.status == "failed"
 
-
 # ---------------------------------------------------------------------------
 # Test 7 — supervise() with non-zero exit code classifies as failed
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_supervise_nonzero_exit_classified_as_failed(tmp_path: Path):
@@ -302,7 +284,6 @@ async def test_supervise_nonzero_exit_classified_as_failed(tmp_path: Path):
 
     assert result.status == "failed"
     assert result.exit_code == 1
-
 
 @pytest.mark.asyncio
 async def test_supervise_terminates_gemini_on_live_rate_limit(tmp_path: Path):
@@ -344,7 +325,6 @@ async def test_supervise_terminates_gemini_on_live_rate_limit(tmp_path: Path):
     )
     assert diagnostics["parsed_output"]["rate_limited"] is True
 
-
 # ---------------------------------------------------------------------------
 # Test 8 — streaming starts during process execution, not after
 #
@@ -354,7 +334,6 @@ async def test_supervise_terminates_gemini_on_live_rate_limit(tmp_path: Path):
 # But the key is that the gather() starts BOTH tasks before either completes —
 # verifiable by patching stream_and_parse to assert it's called before process.wait.
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_streaming_starts_concurrently_with_heartbeat(tmp_path: Path):

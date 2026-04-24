@@ -15,9 +15,7 @@ from moonmind.schemas.managed_session_models import (
     resolve_claude_policy_envelope,
 )
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def _source(
     source_kind: str,
@@ -37,7 +35,6 @@ def _source(
         version=version,
     )
 
-
 def _resolve(
     *sources: ClaudePolicySource,
     interactive: bool = False,
@@ -53,7 +50,6 @@ def _resolve(
         fail_closed_on_refresh_failure=fail_closed_on_refresh_failure,
         occurred_at=NOW,
     )
-
 
 def test_server_managed_non_empty_settings_win_over_endpoint_managed() -> None:
     envelope, handshake, events = _resolve(
@@ -80,7 +76,6 @@ def test_server_managed_non_empty_settings_win_over_endpoint_managed() -> None:
         "policy.compiled",
         "policy.version.changed",
     )
-
 
 def test_endpoint_managed_applies_when_server_managed_empty_or_unsupported() -> None:
     envelope, handshake, _events = _resolve(
@@ -116,7 +111,6 @@ def test_endpoint_managed_applies_when_server_managed_empty_or_unsupported() -> 
     assert envelope.managed_source_kind == "endpoint_managed"
     assert envelope.permissions.mode == "default"
 
-
 def test_lower_scope_sources_are_observability_only() -> None:
     envelope, _handshake, _events = _resolve(
         _source(
@@ -144,7 +138,6 @@ def test_lower_scope_sources_are_observability_only() -> None:
         "user",
     ]
 
-
 def test_fail_closed_refresh_failure_blocks_startup_without_permissive_envelope() -> None:
     envelope, handshake, events = _resolve(
         _source(
@@ -163,7 +156,6 @@ def test_fail_closed_refresh_failure_blocks_startup_without_permissive_envelope(
         "policy.fetch.started",
         "policy.fetch.failed",
     )
-
 
 def test_lower_scope_fail_closed_source_cannot_block_managed_policy() -> None:
     envelope, handshake, events = _resolve(
@@ -194,7 +186,6 @@ def test_lower_scope_fail_closed_source_cannot_block_managed_policy() -> None:
         "policy.version.changed",
     )
 
-
 def test_endpoint_fail_closed_does_not_override_non_empty_server_policy() -> None:
     envelope, handshake, _events = _resolve(
         _source(
@@ -216,7 +207,6 @@ def test_endpoint_fail_closed_does_not_override_non_empty_server_policy() -> Non
     assert envelope.permissions.mode == "plan"
     assert handshake.state == "ready"
 
-
 def test_endpoint_fail_closed_blocks_when_server_policy_is_empty() -> None:
     envelope, handshake, events = _resolve(
         _source("server_managed", settings={}, version="server-empty"),
@@ -236,7 +226,6 @@ def test_endpoint_fail_closed_blocks_when_server_policy_is_empty() -> None:
         "sourceKind": "endpoint_managed",
     }
 
-
 def test_fetch_failed_without_fail_closed_preserves_fetch_state() -> None:
     envelope, handshake, _events = _resolve(
         _source(
@@ -250,7 +239,6 @@ def test_fetch_failed_without_fail_closed_preserves_fetch_state() -> None:
     assert envelope is not None
     assert envelope.policy_fetch_state == "fetch_failed"
     assert handshake.state == "ready"
-
 
 def test_interactive_risky_managed_controls_require_security_dialog() -> None:
     envelope, handshake, events = _resolve(
@@ -267,7 +255,6 @@ def test_interactive_risky_managed_controls_require_security_dialog() -> None:
     assert handshake.state == "security_dialog_required"
     assert any(event.event_type == "policy.dialog.required" for event in events)
 
-
 def test_non_interactive_risky_managed_controls_are_blocked() -> None:
     envelope, handshake, _events = _resolve(
         _source(
@@ -282,7 +269,6 @@ def test_non_interactive_risky_managed_controls_are_blocked() -> None:
     assert envelope.security_dialog_required is True
     assert handshake.state == "blocked"
     assert "non-interactive" in (handshake.reason or "")
-
 
 def test_bootstrap_preferences_are_templates_not_managed_defaults() -> None:
     envelope, _handshake, _events = _resolve(
@@ -302,7 +288,6 @@ def test_bootstrap_preferences_are_templates_not_managed_defaults() -> None:
     assert envelope.bootstrap_templates[0].name == "default-output-style"
     assert "managedDefaults" not in envelope.effective_settings
 
-
 def test_envelope_records_provider_trust_visibility_and_version_metadata() -> None:
     envelope, _handshake, _events = _resolve(
         _source("server_managed", settings={"permissions": {"mode": "default"}})
@@ -315,7 +300,6 @@ def test_envelope_records_provider_trust_visibility_and_version_metadata() -> No
     assert envelope.version == 1
     assert envelope.admin_visibility["policyTrustLevel"] == "server_managed_best_effort"
     assert envelope.user_visibility == {"status": "managed"}
-
 
 def test_policy_payloads_reject_unsupported_values() -> None:
     with pytest.raises(ValidationError):

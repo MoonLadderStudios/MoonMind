@@ -1,6 +1,6 @@
 ---
 name: moonspec-breakdown
-description: Extract coverage-checked, independently testable Moon Spec user stories from a technical or declarative design and write breakdown output under docs/tmp. Use when the user asks to run or reproduce `/speckit.breakdown`, split a broad design into one-story candidates, preserve source coverage, or build a coverage matrix before `/speckit.specify`.
+description: Extract coverage-checked, independently testable Moon Spec user stories from a technical or declarative design and write breakdown output under artifacts/story-breakdowns (gitignored). Use when the user asks to run or reproduce `/speckit.breakdown`, split a broad design into one-story candidates, preserve source coverage, or build a coverage matrix before `/speckit.specify`.
 ---
 
 # MoonSpec Breakdown
@@ -154,9 +154,9 @@ PASS - every major design point is owned by at least one story.
 
 ## Write Breakdown Output
 
-After the coverage gate passes, write story candidates under `docs/tmp/story-breakdowns/`.
+After the coverage gate passes, write story candidates under `artifacts/story-breakdowns/` (repository gitignore; not versioned).
 
-Use the explicit `storyBreakdownPath` and `storyBreakdownMarkdownPath` values from the prompt when present. If they are not present, create a timestamped folder under `docs/tmp/story-breakdowns/<short-name>-<YYYYMMDD-HHMMSS>/` and write:
+Use the explicit `storyBreakdownPath` and `storyBreakdownMarkdownPath` values from the prompt when present. If they are not present, create a timestamped folder under `artifacts/story-breakdowns/<short-name>-<YYYYMMDD-HHMMSS>/` and write:
 
 - `stories.json`: machine-readable breakdown output for Jira issue creation or later specify.
 - `stories.md`: human-readable summary.

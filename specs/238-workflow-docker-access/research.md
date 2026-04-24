@@ -51,7 +51,7 @@ Test implications: Final diff/verification confirms no script changes.
 ## FR-011 / SC-006
 
 Decision: Implemented verified; MM-476 is preserved in source input, active spec artifacts, and verification evidence.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-476-moonspec-orchestration-input.md`, `specs/238-workflow-docker-access/spec.md`, `plan.md`, `tasks.md`, and verification checks include MM-476.
+Evidence: `spec.md` (Input), `specs/238-workflow-docker-access/spec.md`, `plan.md`, `tasks.md`, and verification checks include MM-476.
 Rationale: Downstream PR and verification traceability depends on stable Jira issue references.
 Alternatives considered: None.
 Test implications: Final verification and `rg` traceability check.

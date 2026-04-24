@@ -35,7 +35,6 @@ if TYPE_CHECKING:
         QueueClientError,
     )
 
-
 __all__ = [
     "ArtifactUpload",
     "CliVerificationError",
@@ -86,13 +85,11 @@ _EXPORT_MAP = {
     "QueueClientError": "moonmind.agents.codex_worker.worker",
 }
 
-
 def __getattr__(name: str):  # pragma: no cover - trivial lazy-import dispatch
     if name in _EXPORT_MAP:
         module = import_module(_EXPORT_MAP[name])
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 
 def __dir__() -> list[str]:
     return sorted(__all__)

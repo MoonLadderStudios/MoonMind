@@ -36,7 +36,7 @@ This story implements managed-session launch mount validation and reserved envir
 - IX Resilient by Default: PASS. Invalid states fail fast and long-running workflow boundaries remain explicit.
 - X Continuous Improvement: PASS. Verification evidence and remaining blockers are captured in MoonSpec artifacts.
 - XI Spec-Driven Development: PASS. Each story has isolated spec, plan, design artifacts, and future tasks.
-- XII Canonical Docs Separation: PASS. Migration/work tracking remains in specs and docs/tmp, not canonical docs.
+- XII Canonical Docs Separation: PASS. Migration/work tracking remains in specs and local-only handoffs, not canonical docs.
 - XIII Pre-Release Compatibility: PASS. Unsupported internal contract values fail fast; no compatibility aliases are planned.
 
 ## Project Structure

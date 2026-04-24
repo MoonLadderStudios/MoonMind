@@ -17,7 +17,6 @@ from moonmind.schemas.temporal_signal_contracts import (
     SyncProfilesSignal,
 )
 
-
 def test_external_event_signal_valid():
     data = {
         "source": "github",
@@ -52,7 +51,6 @@ def test_external_event_signal_valid():
     assert dump["externalUrl"] == "https://github.com/pr"
     assert dump["providerSummary"] == {"foo": "bar"}
 
-
 def test_external_event_signal_minimal():
     data = {
         "source": "github",
@@ -65,14 +63,12 @@ def test_external_event_signal_minimal():
     assert model.provider_event_id is None
     assert model.provider_summary == {}
 
-
 def test_reschedule_signal_valid():
     data = {
         "scheduledFor": "2023-10-27T10:00:00Z"
     }
     model = RescheduleSignal.model_validate(data)
     assert model.scheduled_for == datetime(2023, 10, 27, 10, 0, 0, tzinfo=timezone.utc)
-
 
 def test_request_slot_signal_valid():
     data = {
@@ -81,14 +77,12 @@ def test_request_slot_signal_valid():
     model = RequestSlotSignal.model_validate(data)
     assert model.requester_workflow_id == "wf-123"
 
-
 def test_release_slot_signal_valid():
     data = {
         "requesterWorkflowId": "wf-123"
     }
     model = ReleaseSlotSignal.model_validate(data)
     assert model.requester_workflow_id == "wf-123"
-
 
 def test_report_cooldown_signal_valid():
     data = {
@@ -101,7 +95,6 @@ def test_report_cooldown_signal_valid():
     assert model.profile_id == "prof-1"
     assert model.cooldown_seconds == 60
 
-
 def test_report_cooldown_signal_invalid_negative_cooldown():
     data = {
         "requesterWorkflowId": "wf-123",
@@ -111,11 +104,9 @@ def test_report_cooldown_signal_invalid_negative_cooldown():
     with pytest.raises(ValidationError):
         ReportCooldownSignal.model_validate(data)
 
-
 def test_sync_profiles_signal_valid():
     model = SyncProfilesSignal.model_validate({})
     assert isinstance(model, SyncProfilesSignal)
-
 
 def test_slot_assigned_signal_valid():
     data = {
@@ -125,7 +116,6 @@ def test_slot_assigned_signal_valid():
     model = SlotAssignedSignal.model_validate(data)
     assert model.profile_id == "prof-1"
     assert model.assignment_id == "ass-123"
-
 
 def test_child_state_changed_signal_valid():
     data = {
@@ -145,14 +135,12 @@ def test_child_state_changed_signal_valid():
     model2 = ChildStateChangedSignal.model_validate(data_with_ref)
     assert model2.result_artifact_ref == "ref-789"
 
-
 def test_profile_assigned_signal_valid():
     data = {
         "profileId": "prof-1"
     }
     model = ProfileAssignedSignal.model_validate(data)
     assert model.profile_id == "prof-1"
-
 
 def test_completion_signal_valid():
     data = {
@@ -162,11 +150,9 @@ def test_completion_signal_valid():
     assert model.status == "failed"
     assert model.result_artifact_ref is None
 
-
 def test_finalize_session_signal_valid():
     model = FinalizeSessionSignal.model_validate({})
     assert isinstance(model, FinalizeSessionSignal)
-
 
 def test_cancel_session_signal_valid():
     model = CancelSessionSignal.model_validate({})

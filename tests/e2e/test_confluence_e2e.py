@@ -38,7 +38,6 @@ skip_if_missing_env_vars = pytest.mark.skipif(
     reason="Required Confluence environment variables are not set in .env",
 )
 
-
 @pytest.fixture(scope="module")
 def e2e_setup():
     # CONFLUENCE_URL, CONFLUENCE_USERNAME, ATLASSIAN_API_KEY, TEST_CONFLUENCE_SPACE_KEY,
@@ -66,7 +65,6 @@ def e2e_setup():
     # Teardown: close the qdrant client
     qdrant_client.close()
     # print("Qdrant client closed.") # Optional: for debugging during test runs
-
 
 @skip_if_missing_env_vars
 def test_load_and_query_confluence_documents(e2e_setup):

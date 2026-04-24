@@ -28,7 +28,6 @@ from moonmind.schemas.agent_runtime_models import (
     ProviderCapabilityDescriptor,
 )
 
-
 def _extract_parameters_metadata(
     parameters: Mapping[str, Any] | None,
 ) -> tuple[str, str, dict[str, Any]]:
@@ -45,7 +44,6 @@ def _extract_parameters_metadata(
     else:
         raise ValueError("parameters.metadata must be an object")
     return title, description, metadata_payload
-
 
 class BaseExternalAgentAdapter(abc.ABC):
     """Universal base for external-agent provider adapters.
@@ -297,7 +295,6 @@ class BaseExternalAgentAdapter(abc.ABC):
                 "externalUrl": external_url,
             },
         )
-
 
 __all__ = [
     "BaseExternalAgentAdapter",

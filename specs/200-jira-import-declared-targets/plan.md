@@ -1,6 +1,6 @@
 # Implementation Plan: Jira Import Into Declared Targets
 
-**Branch**: `mm-381-a453f798` | **Date**: 2026-04-17 | **Spec**: [spec.md](./spec.md)  
+**Branch**: `mm-381-a453f798` | **Date**: 2026-04-17 | **Spec**: [spec.md](./spec.md) 
 **Input**: Single-story feature specification from `specs/200-jira-import-declared-targets/spec.md`
 
 ## Summary
@@ -9,15 +9,15 @@ Implement MM-381 by tightening the Create page Jira browser around declared impo
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains relevant for final repository tests but is not expected to change for this story  
-**Primary Dependencies**: React, Vite/Vitest, Testing Library, existing FastAPI Jira browser and artifact APIs  
-**Storage**: Existing browser draft state, artifact metadata, and execution task snapshots only; no new persistent storage  
-**Unit Testing**: Vitest through `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and final `./tools/test_unit.sh`  
-**Integration Testing**: Existing Create page browser-to-API test harness in `frontend/src/entrypoints/task-create.test.tsx`; no Docker-backed integration is planned for this UI story  
-**Target Platform**: Mission Control browser UI served by FastAPI  
-**Project Type**: Web application UI backed by existing API contracts  
-**Performance Goals**: Jira target switching and local draft updates remain immediate for ordinary drafts and issue details  
-**Constraints**: Browser code must use MoonMind-owned Jira endpoints only; imported images must remain target-bound structured attachment candidates; Jira import must not create tasks or bypass create/edit/rerun validation  
+**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains relevant for final repository tests but is not expected to change for this story 
+**Primary Dependencies**: React, Vite/Vitest, Testing Library, existing FastAPI Jira browser and artifact APIs 
+**Storage**: Existing browser draft state, artifact metadata, and execution task snapshots only; no new persistent storage 
+**Unit Testing**: Vitest through `npm run ui:test -- frontend/src/entrypoints/task-create.test.tsx` and final `./tools/test_unit.sh` 
+**Integration Testing**: Existing Create page browser-to-API test harness in `frontend/src/entrypoints/task-create.test.tsx`; no Docker-backed integration is planned for this UI story 
+**Target Platform**: Mission Control browser UI served by FastAPI 
+**Project Type**: Web application UI backed by existing API contracts 
+**Performance Goals**: Jira target switching and local draft updates remain immediate for ordinary drafts and issue details 
+**Constraints**: Browser code must use MoonMind-owned Jira endpoints only; imported images must remain target-bound structured attachment candidates; Jira import must not create tasks or bypass create/edit/rerun validation 
 **Scale/Scope**: One Create page story covering declared Jira import targets, text append/replace, image target mapping, template detachment, preset reapply signaling, and Jira failure isolation
 
 ## Constitution Check
@@ -33,7 +33,7 @@ Implement MM-381 by tightening the Create page Jira browser around declared impo
 - **VIII. Modular and Extensible Architecture**: PASS. Work is scoped to the existing Create page entrypoint and tests.
 - **IX. Resilient by Default**: PASS. Jira errors remain local and do not corrupt the draft or submit partial data.
 - **XI. Spec-Driven Development Is the Source of Truth**: PASS. MM-381 input is preserved in spec artifacts and tasks.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Runtime implementation artifacts live under `specs/` and `docs/tmp`; canonical docs are source requirements.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Runtime implementation artifacts live under `specs/` and `local-only handoffs`; canonical docs are source requirements.
 - **XIII. Pre-Release Compatibility Policy**: PASS. No compatibility aliases or hidden Jira/attachment retargeting are introduced.
 
 ## Project Structure
@@ -48,9 +48,9 @@ specs/200-jira-import-declared-targets/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── create-page-jira-import-targets.md
+│ └── create-page-jira-import-targets.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 
@@ -64,7 +64,6 @@ frontend/src/entrypoints/
 docs/UI/
 └── CreatePage.md
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-381-moonspec-orchestration-input.md
 ```
 

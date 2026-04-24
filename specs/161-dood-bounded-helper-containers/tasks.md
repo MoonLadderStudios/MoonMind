@@ -6,6 +6,6 @@
 - [X] T004 Implement bounded helper schema fields and validation in `moonmind/schemas/workload_models.py`.
 - [X] T005 Implement helper request/profile policy validation in `moonmind/workloads/registry.py`.
 - [X] T006 Implement detached helper launch, readiness probing, teardown, and helper janitor behavior in `moonmind/workloads/docker_launcher.py`.
-- [X] T007 Update Phase 7 implementation tracker in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`.
+- [X] T007 Update Phase 7 implementation tracker in `docs/ManagedAgents/DockerOutOfDocker.md`.
 - [X] T008 Run focused unit tests for workload contracts and launcher.
 - [X] T009 Run full unit test suite or document blocker.

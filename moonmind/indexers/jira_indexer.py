@@ -10,7 +10,6 @@ from llama_index.readers.jira import (  # Assuming it's directly available, adju
     JiraReader,
 )
 
-
 class JiraIndexer:
     def __init__(
         self,

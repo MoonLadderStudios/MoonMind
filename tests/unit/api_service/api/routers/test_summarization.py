@@ -10,7 +10,6 @@ from api_service.api.routers.summarization import (
 )
 from api_service.db.models import User
 
-
 @pytest.mark.asyncio
 async def test_get_user_github_token():
     db = AsyncMock()
@@ -26,7 +25,6 @@ async def test_get_user_github_token():
 
         token = await get_user_github_token(user, db)
         assert token == "test_github_token"
-
 
 @pytest.mark.asyncio
 async def test_get_user_llm_api_key():
@@ -44,7 +42,6 @@ async def test_get_user_llm_api_key():
         token = await get_user_llm_api_key(user, "openai", db)
         assert token == "test_openai_key"
 
-
 @pytest.mark.asyncio
 async def test_get_user_llm_api_key_ollama():
     db = AsyncMock()
@@ -53,7 +50,6 @@ async def test_get_user_llm_api_key_ollama():
 
     token = await get_user_llm_api_key(user, "ollama", db)
     assert token is None
-
 
 @pytest.mark.asyncio
 async def test_get_user_llm_api_key_no_profile():
@@ -68,7 +64,6 @@ async def test_get_user_llm_api_key_no_profile():
 
         token = await get_user_llm_api_key(user, "anthropic", db)
         assert token is None
-
 
 @pytest.mark.asyncio
 async def test_get_user_llm_api_key_no_key_for_provider():
@@ -87,7 +82,6 @@ async def test_get_user_llm_api_key_no_key_for_provider():
         token = await get_user_llm_api_key(user, "anthropic", db)
         assert token is None
 
-
 def test_sanitize_repo_url_with_credentials():
     repo_url = "https://oauth2:secret-token@github.com/example/repo.git"
 
@@ -96,12 +90,10 @@ def test_sanitize_repo_url_with_credentials():
         == "https://***REDACTED***@github.com/example/repo.git"
     )
 
-
 def test_sanitize_repo_url_without_credentials():
     repo_url = "https://github.com/example/repo.git"
 
     assert sanitize_repo_url(repo_url) == repo_url
-
 
 def test_redact_sensitive_git_error_redacts_token_and_repo_url():
     repo_url = "https://oauth2:super-secret@github.com/example/repo.git"

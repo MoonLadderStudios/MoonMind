@@ -30,7 +30,6 @@ from moonmind.config.settings import settings
 
 pytestmark = [pytest.mark.asyncio]
 
-
 @asynccontextmanager
 async def template_db(tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/task_template_catalog.db"
@@ -47,13 +46,11 @@ async def template_db(tmp_path):
     finally:
         await engine.dispose()
 
-
 def _write_seed_template(seed_dir, seed_data: dict) -> None:
     seed_dir.mkdir(exist_ok=True)
     seed_file = seed_dir / f"{seed_data['slug']}.yaml"
     with open(seed_file, "w") as f:
         yaml.dump(seed_data, f)
-
 
 async def test_create_and_expand_template_deterministic_ids(tmp_path):
     user_id = uuid4()
@@ -109,7 +106,6 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
     assert set(expanded["capabilities"]) >= {"codex", "docker"}
     assert expanded["appliedTemplate"]["slug"] == "pr-check"
     assert expanded["appliedTemplate"]["version"] == "1.0.0"
-
 
 async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path):
     user_id = uuid4()
@@ -213,7 +209,6 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
         step["id"] for step in expanded["steps"]
     ]
 
-
 async def test_create_template_rejects_templated_include_version(tmp_path):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -251,7 +246,6 @@ async def test_create_template_rejects_templated_include_version(tmp_path):
                     created_by=None,
                 )
 
-
 async def test_create_template_rejects_unsupported_include_fields(tmp_path):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -284,7 +278,6 @@ async def test_create_template_rejects_unsupported_include_fields(tmp_path):
                     required_capabilities=[],
                     created_by=None,
                 )
-
 
 async def test_expand_template_rejects_global_parent_personal_include(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -325,7 +318,6 @@ async def test_expand_template_rejects_global_parent_personal_include(tmp_path):
                     context={},
                     options=ExpandOptions(),
                 )
-
 
 async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -387,7 +379,6 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
                     context={},
                     options=ExpandOptions(),
                 )
-
 
 async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -498,7 +489,6 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
                     options=ExpandOptions(),
                 )
 
-
 async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_path):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -565,7 +555,6 @@ async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_pa
                     options=ExpandOptions(should_enforce_step_limit=True),
                 )
 
-
 async def test_template_recents_declares_unique_user_version_constraint() -> None:
     constraint_names = {
         constraint.name
@@ -573,7 +562,6 @@ async def test_template_recents_declares_unique_user_version_constraint() -> Non
         if isinstance(constraint, UniqueConstraint)
     }
     assert "uq_task_template_recent_user_version" in constraint_names
-
 
 async def test_save_from_task_rejects_secret_patterns(tmp_path):
     user_id = uuid4()
@@ -598,7 +586,6 @@ async def test_save_from_task_rejects_secret_patterns(tmp_path):
                 )
 
     assert "Potential secrets detected" in str(exc.value)
-
 
 async def test_list_templates_with_favorites_and_recents(tmp_path):
     user_id = uuid4()
@@ -662,7 +649,6 @@ async def test_list_templates_with_favorites_and_recents(tmp_path):
     assert listed[0]["isFavorite"] is True
     assert listed[0]["recentAppliedAt"] is not None
 
-
 async def test_save_from_task_marks_favorite_and_recent(tmp_path):
     user_id = uuid4()
     user_str = str(user_id)
@@ -692,7 +678,6 @@ async def test_save_from_task_marks_favorite_and_recent(tmp_path):
     assert listed[0]["slug"] == "saved-preset"
     assert listed[0]["isFavorite"] is True
     assert listed[0]["recentAppliedAt"] is not None
-
 
 async def test_recents_trimmed_to_latest_five_rows(tmp_path):
     user_id = uuid4()
@@ -734,7 +719,6 @@ async def test_recents_trimmed_to_latest_five_rows(tmp_path):
 
     assert count == 5
 
-
 async def test_release_status_sets_reviewer_fields(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
@@ -765,7 +749,6 @@ async def test_release_status_sets_reviewer_fields(tmp_path):
     assert reviewed["releaseStatus"] == "active"
     assert reviewed["reviewedBy"] == str(user_id)
     assert reviewed["reviewedAt"] is not None
-
 
 async def test_soft_delete_template_marks_inactive(tmp_path):
     user_id = uuid4()
@@ -806,7 +789,6 @@ async def test_soft_delete_template_marks_inactive(tmp_path):
             )
             assert template.is_active is False
 
-
 async def test_soft_delete_template_not_found(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
@@ -818,7 +800,6 @@ async def test_soft_delete_template_not_found(tmp_path):
                     scope="personal",
                     scope_ref=str(user_id),
                 )
-
 
 async def test_deactivate_templates_marks_matching_rows_inactive(tmp_path, monkeypatch):
     increment_calls: list[tuple[str, int]] = []
@@ -911,7 +892,6 @@ async def test_deactivate_templates_marks_matching_rows_inactive(tmp_path, monke
             )
             assert current_template.is_active is True
 
-
 async def test_import_seed_templates_success(tmp_path):
     seed_dir = tmp_path / "seeds"
     seed_data = {
@@ -941,7 +921,6 @@ async def test_import_seed_templates_success(tmp_path):
             assert len(template.versions) == 1
             assert template.versions[0].version == "1.0.0"
 
-
 async def test_import_seed_templates_skips_existing(tmp_path):
     seed_dir = tmp_path / "seeds"
     seed_data = {
@@ -966,7 +945,6 @@ async def test_import_seed_templates_skips_existing(tmp_path):
                 seed_dir=seed_dir
             )
             assert created_count_second == 0
-
 
 async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
     seed_dir = (
@@ -1026,7 +1004,6 @@ async def test_seed_catalog_includes_jira_breakdown_preset(tmp_path):
                 "linear_blocker_chain"
             )
 
-
 async def test_jira_breakdown_uses_first_allowed_project_as_runtime_default(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1080,7 +1057,6 @@ async def test_jira_breakdown_uses_first_allowed_project_as_runtime_default(
                 "dependencyMode": "none",
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
-
 
 async def test_jira_breakdown_orchestrate_uses_first_allowed_project_as_runtime_default(
     tmp_path,
@@ -1143,7 +1119,6 @@ async def test_jira_breakdown_orchestrate_uses_first_allowed_project_as_runtime_
                 },
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
-
 
 async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
     seed_dir = (
@@ -1242,7 +1217,6 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 for step in expanded["steps"]
             )
 
-
 async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path):
     seed_dir = (
         Path(__file__).resolve().parents[3]
@@ -1319,7 +1293,6 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                 "MM-404"
             )
 
-
 async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
     tmp_path,
 ):
@@ -1379,7 +1352,6 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 for step in expanded["steps"]
             )
 
-
 async def test_sync_seed_templates_creates_missing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"
     seed_data = {
@@ -1423,7 +1395,6 @@ async def test_sync_seed_templates_creates_missing_seed(tmp_path):
             assert template.latest_version is not None
             assert template.latest_version.steps[0]["skill"]["id"] == "moonspec-specify"
 
-
 async def test_sync_seed_templates_preserves_default_expansion_limit_for_includes(
     tmp_path,
 ):
@@ -1461,7 +1432,6 @@ async def test_sync_seed_templates_preserves_default_expansion_limit_for_include
 
     assert template.latest_version is not None
     assert template.latest_version.max_step_count == 25
-
 
 async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_path):
     seed_dir = tmp_path / "seeds"
@@ -1521,7 +1491,6 @@ async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_pa
     assert result.updated == 1
     assert template.latest_version is not None
     assert template.latest_version.max_step_count == 25
-
 
 async def test_sync_seed_templates_updates_existing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"

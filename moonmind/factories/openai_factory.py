@@ -6,7 +6,6 @@ from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-
 def list_openai_models(api_key: str | None = None):
     key_to_use = api_key if api_key else settings.openai.openai_api_key
     if not key_to_use:
@@ -26,7 +25,6 @@ def list_openai_models(api_key: str | None = None):
         logger.error(f"Error listing OpenAI models: {e}")
         return []
 
-
 def get_openai_model(model_name: str = None):
     if not model_name:
         model_name = settings.openai.openai_chat_model
@@ -41,7 +39,6 @@ def get_openai_model(model_name: str = None):
     # This function will return the model name, which is then used in API requests.
     # If you need to wrap or configure it further, this is the place.
     return model_name
-
 
 # Example of how to adjust settings if they are not already structured for openai
 # This is a placeholder, actual settings structure might differ.

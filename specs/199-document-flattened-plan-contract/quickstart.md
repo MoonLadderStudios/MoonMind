@@ -31,7 +31,7 @@ Expected result:
 ## Source Traceability Check
 
 ```bash
-rg -n "MM-386|DESIGN-REQ-001|DESIGN-REQ-019|DESIGN-REQ-020|DESIGN-REQ-021|DESIGN-REQ-025|DESIGN-REQ-026" specs/199-document-flattened-plan-contract docs/tmp/jira-orchestration-inputs/MM-386-moonspec-orchestration-input.md
+rg -n "MM-386|DESIGN-REQ-001|DESIGN-REQ-019|DESIGN-REQ-020|DESIGN-REQ-021|DESIGN-REQ-025|DESIGN-REQ-026" specs/199-document-flattened-plan-contract
 ```
 
 Expected result: MM-386 and all in-scope source design requirements are present in MoonSpec artifacts.

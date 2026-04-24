@@ -19,7 +19,6 @@ ClaudeHomeValidationIssue = Literal[
     "not_writable_for_oauth",
 ]
 
-
 def resolve_worker_runtime(
     *,
     default_runtime: str,
@@ -38,7 +37,6 @@ def resolve_worker_runtime(
         )
     ai_cli = runtime if runtime != "universal" else "universal"
     return runtime, ai_cli
-
 
 def resolve_worker_queue(
     *,
@@ -60,7 +58,6 @@ def resolve_worker_queue(
 
     return default_queue.strip() or "moonmind.jobs"
 
-
 def resolve_gemini_cli_auth_mode(
     *,
     env: Mapping[str, str] | None = None,
@@ -75,13 +72,11 @@ def resolve_gemini_cli_auth_mode(
         return default_mode, raw
     return mode, raw
 
-
 def is_invalid_gemini_cli_auth_mode(raw_value: str) -> bool:
     """Return whether raw auth-mode input is an unsupported non-empty value."""
 
     raw = str(raw_value).strip()
     return bool(raw) and raw.lower() not in ALLOWED_GEMINI_CLI_AUTH_MODES
-
 
 def summarize_untrusted_auth_mode_value(raw_value: str) -> str:
     """Return a safe summary for untrusted auth-mode inputs."""
@@ -91,7 +86,6 @@ def summarize_untrusted_auth_mode_value(raw_value: str) -> str:
         return "<empty>"
     return f"<redacted:{len(raw)} chars>"
 
-
 def format_invalid_gemini_cli_auth_mode_error(raw_value: str) -> str:
     """Build a safe, actionable invalid-auth-mode error message."""
 
@@ -100,7 +94,6 @@ def format_invalid_gemini_cli_auth_mode_error(raw_value: str) -> str:
         "MOONMIND_GEMINI_CLI_AUTH_MODE must be one of: api_key, oauth "
         f"(received {summary})"
     )
-
 
 def inspect_gemini_home_for_auth_mode(
     *,
@@ -125,7 +118,6 @@ def inspect_gemini_home_for_auth_mode(
 
     return normalized_home, None
 
-
 def resolve_claude_cli_auth_mode(
     *,
     env: Mapping[str, str] | None = None,
@@ -140,13 +132,11 @@ def resolve_claude_cli_auth_mode(
         return default_mode, raw
     return mode, raw
 
-
 def is_invalid_claude_cli_auth_mode(raw_value: str) -> bool:
     """Return whether raw auth-mode input is an unsupported non-empty value."""
 
     raw = str(raw_value).strip()
     return bool(raw) and raw.lower() not in ALLOWED_CLAUDE_CLI_AUTH_MODES
-
 
 def format_invalid_claude_cli_auth_mode_error(raw_value: str) -> str:
     """Build a safe, actionable invalid-auth-mode error message."""
@@ -156,7 +146,6 @@ def format_invalid_claude_cli_auth_mode_error(raw_value: str) -> str:
         "MOONMIND_CLAUDE_CLI_AUTH_MODE must be one of: api_key, oauth "
         f"(received {summary})"
     )
-
 
 def inspect_claude_home_for_auth_mode(
     *,
@@ -180,7 +169,6 @@ def inspect_claude_home_for_auth_mode(
         return normalized_home, "not_writable_for_oauth"
 
     return normalized_home, None
-
 
 __all__ = [
     "ALLOWED_CLAUDE_CLI_AUTH_MODES",

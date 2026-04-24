@@ -23,7 +23,7 @@
 
 **Purpose**: Verify the canonical doc is already aligned before updating the plan tracker.
 
-- [X] T001 [US1] Read and audit `docs/Tasks/TaskDependencies.md` against all Phase 0 requirements from `docs/tmp/011-TaskDependenciesPlan.md` — confirm all terminology, snapshot, and v1 scope checks pass
+- [X] T001 [US1] Read and audit `docs/Tasks/TaskDependencies.md` against all Phase 0 requirements from `docs/Tasks/TaskDependencies.md` — confirm all terminology, snapshot, and v1 scope checks pass
 
 **Checkpoint**: Audit complete. Canonical doc verified as aligned.
 
@@ -49,17 +49,17 @@
 
 ## Phase 4: User Story 2 - Update plan tracking doc (Priority: P2)
 
-**Goal**: Mark Phase 0 as complete in `docs/tmp/011-TaskDependenciesPlan.md` so downstream phases can be identified as next up.
+**Goal**: Mark Phase 0 as complete in `docs/Tasks/TaskDependencies.md` so downstream phases can be identified as next up.
 
-**Independent Test**: Read `docs/tmp/011-TaskDependenciesPlan.md` to confirm Phase 0 is marked complete while Phases 1–5 remain open.
+**Independent Test**: Read `docs/Tasks/TaskDependencies.md` to confirm Phase 0 is marked complete while Phases 1–5 remain open.
 
 ### Implementation for User Story 2
 
-- [X] T007 [US2] Update `docs/tmp/011-TaskDependenciesPlan.md` to mark Phase 0 as complete (FR-006, FR-007)
+- [X] T007 [US2] Update `docs/Tasks/TaskDependencies.md` to mark Phase 0 as complete (FR-006, FR-007)
 
 ### Validation for User Story 2
 
-- [X] T008 [US2] Confirm `docs/tmp/011-TaskDependenciesPlan.md` Phase 0 entry shows completed status and Phases 1–5 remain open (FR-007)
+- [X] T008 [US2] Confirm `docs/Tasks/TaskDependencies.md` Phase 0 entry shows completed status and Phases 1–5 remain open (FR-007)
 
 **Checkpoint**: US2 complete — plan tracking doc reflects Phase 0 completion.
 

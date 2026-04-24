@@ -8,7 +8,6 @@ import pytest
 from moonmind.observability.transport import SpoolLogPublisher, SpoolLogReader
 from moonmind.schemas.agent_runtime_models import LiveLogChunk
 
-
 def test_spool_log_publisher_appends_json_chunks(tmp_path: Path) -> None:
     # Mimic the /work/agent_jobs/run-123 directory
     workspace_dir = tmp_path / "run-123"
@@ -55,7 +54,6 @@ def test_spool_log_publisher_appends_json_chunks(tmp_path: Path) -> None:
     assert parsed2["runId"] == "run-123"
     assert parsed2["sessionId"] == "sess-1"
 
-
 @pytest.mark.asyncio
 async def test_spool_log_reader_tails_file(tmp_path: Path) -> None:
     workspace_dir = tmp_path / "run-reader"
@@ -91,7 +89,6 @@ async def test_spool_log_reader_tails_file(tmp_path: Path) -> None:
     assert chunks[1].sequence == 2
     assert chunks[1].stream == "stderr"
 
-
 @pytest.mark.asyncio
 async def test_spool_log_reader_respects_since_sequence(tmp_path: Path) -> None:
     workspace_dir = tmp_path / "run-since"
@@ -109,7 +106,6 @@ async def test_spool_log_reader_respects_since_sequence(tmp_path: Path) -> None:
     
     assert len(chunks) == 1
     assert chunks[0].sequence == 3
-
 
 @pytest.mark.asyncio
 async def test_spool_log_reader_without_since_starts_at_end_when_requested(tmp_path: Path) -> None:

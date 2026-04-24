@@ -1,6 +1,6 @@
 # Implementation Plan: MaskedConicBorderBeam Border-Only Contract
 
-**Branch**: `234-masked-conic-border-beam-contract` | **Date**: 2026-04-22 | **Spec**: [spec.md](./spec.md)  
+**Branch**: `234-masked-conic-border-beam-contract` | **Date**: 2026-04-22 | **Spec**: [spec.md](./spec.md) 
 **Input**: Single-story feature specification from `specs/234-masked-conic-border-beam-contract/spec.md`
 
 ## Summary
@@ -34,15 +34,15 @@ Implement MM-465 by adding a standalone Mission Control React surface that wraps
 
 ## Technical Context
 
-**Language/Version**: TypeScript with React 19.2  
-**Primary Dependencies**: React, existing Mission Control CSS, Vitest, Testing Library, PostCSS for CSS inspection  
-**Storage**: N/A  
-**Unit Testing**: `npm run ui:test -- frontend/src/components/MaskedConicBorderBeam.test.tsx` and final `./tools/test_unit.sh`  
-**Integration Testing**: Existing UI unit tests exercise component-level integration; no service or database integration is needed for this presentation-only surface  
-**Target Platform**: Mission Control web UI  
-**Project Type**: Frontend component/runtime UI  
-**Performance Goals**: Animation uses transform/rotation-oriented CSS and a bounded number of layers  
-**Constraints**: Decorative only, no content-area animation, no full-card shimmer, no spinner replacement, no new package dependency  
+**Language/Version**: TypeScript with React 19.2 
+**Primary Dependencies**: React, existing Mission Control CSS, Vitest, Testing Library, PostCSS for CSS inspection 
+**Storage**: N/A 
+**Unit Testing**: `npm run ui:test -- frontend/src/components/MaskedConicBorderBeam.test.tsx` and final `./tools/test_unit.sh` 
+**Integration Testing**: Existing UI unit tests exercise component-level integration; no service or database integration is needed for this presentation-only surface 
+**Target Platform**: Mission Control web UI 
+**Project Type**: Frontend component/runtime UI 
+**Performance Goals**: Animation uses transform/rotation-oriented CSS and a bounded number of layers 
+**Constraints**: Decorative only, no content-area animation, no full-card shimmer, no spinner replacement, no new package dependency 
 **Scale/Scope**: One reusable component, one CSS contract, one focused test file
 
 ## Constitution Check
@@ -58,7 +58,7 @@ Implement MM-465 by adding a standalone Mission Control React surface that wraps
 - IX. Resilient by Default: PASS - no workflow or persisted payload changes.
 - X. Facilitate Continuous Improvement: PASS - tests and verification preserve evidence.
 - XI. Spec-Driven Development: PASS - this plan follows the MM-465 spec.
-- XII. Canonical Documentation Separation: PASS - temporary orchestration artifacts remain under `specs/` and `docs/tmp/`.
+- XII. Canonical Documentation Separation: PASS - temporary orchestration artifacts remain under `specs/` and `local-only handoffs`.
 - XIII. Pre-release Compatibility Policy: PASS - no internal compatibility aliases are introduced.
 
 ## Project Structure
@@ -73,7 +73,7 @@ specs/234-masked-conic-border-beam-contract/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── masked-conic-border-beam.md
+│ └── masked-conic-border-beam.md
 ├── tasks.md
 └── verification.md
 ```

@@ -1,6 +1,6 @@
 # Alembic Migration Generation
 
-**Process notes:** [`docs/tmp/remaining-work/ExternalAgents-AlembicMigrationGeneration.md`](../tmp/remaining-work/ExternalAgents-AlembicMigrationGeneration.md)
+**Process notes:** 
 
 This document explains how to create new Alembic database migration scripts for this project. There are two approaches: using the API container (recommended) or using a local Poetry environment with `tools/generate_migrations.sh`.
 

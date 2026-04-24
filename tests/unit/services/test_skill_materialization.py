@@ -13,7 +13,6 @@ from moonmind.schemas.agent_skill_models import (
 )
 from moonmind.services.skill_materialization import AgentSkillMaterializer
 
-
 @pytest.mark.asyncio
 async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: Path):
     artifact_service = _StaticArtifactService(
@@ -82,7 +81,6 @@ async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: P
     assert result.metadata["manifestPath"] == str(manifest_path)
     assert result.metadata["activeSkills"] == ["my_skill"]
 
-
 @pytest.mark.asyncio
 async def test_materializer_projects_only_selected_skills(tmp_path: Path):
     repo_skill = tmp_path / "repo" / ".agents" / "skills" / "unselected_skill"
@@ -123,7 +121,6 @@ async def test_materializer_projects_only_selected_skills(tmp_path: Path):
     ]
     assert not (visible_dir / "unselected_skill").exists()
 
-
 @pytest.mark.asyncio
 async def test_materializer_rejects_incompatible_agents_skills_path(tmp_path: Path):
     source_dir = tmp_path / ".agents" / "skills"
@@ -150,7 +147,6 @@ async def test_materializer_rejects_incompatible_agents_skills_path(tmp_path: Pa
     assert "attempted action: project active skill snapshot" in message
     assert "remediation:" in message
     assert source_file.read_text(encoding="utf-8") == "do not rewrite"
-
 
 @pytest.mark.asyncio
 async def test_materializer_does_not_block_on_incompatible_gemini_skills_path(
@@ -182,7 +178,6 @@ async def test_materializer_does_not_block_on_incompatible_gemini_skills_path(
     assert (
         gemini_skill / "SKILL.md"
     ).read_text(encoding="utf-8") == "local gemini skill"
-
 
 @pytest.mark.asyncio
 async def test_materializer_hybrid_returns_compact_metadata_without_skill_body(
@@ -231,7 +226,6 @@ async def test_materializer_prompt_bundle_mode(tmp_path: Path):
     assert not active_dir.exists()
     assert result.prompt_index_ref == "index_snap_prompt"
 
-
 def _skill(name: str, content_ref: str) -> ResolvedSkillEntry:
     return ResolvedSkillEntry(
         skill_name=name,
@@ -239,7 +233,6 @@ def _skill(name: str, content_ref: str) -> ResolvedSkillEntry:
         content_ref=content_ref,
         provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT),
     )
-
 
 class _StaticArtifactService:
     def __init__(self, payloads: dict[str, bytes]) -> None:

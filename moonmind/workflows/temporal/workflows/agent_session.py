@@ -42,7 +42,6 @@ with workflow.unsafe.imports_passed_through():
         build_default_activity_catalog,
     )
 
-
 AGENT_SESSION_STATUS_INITIALIZING = "initializing"
 AGENT_SESSION_STATUS_ACTIVE = "active"
 AGENT_SESSION_STATUS_CLEARING = "clearing"
@@ -50,7 +49,6 @@ AGENT_SESSION_STATUS_TERMINATING = "terminating"
 AGENT_SESSION_STATUS_TERMINATED = "terminated"
 MAX_REQUEST_TRACKING_ENTRIES = 100
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
-
 
 @workflow.defn(name="MoonMind.AgentSession")
 class MoonMindAgentSessionWorkflow:

@@ -117,7 +117,7 @@ No `DOC-REQ-*` identifiers are present in `spec.md`, and the request is not docu
 | IX. Resilient by Default | PASS | Cleanup and artifact behavior reuse existing hardened workload launcher paths. |
 | X. Continuous Improvement | PASS | Pilot outcomes are diagnosable from bounded outputs. |
 | XI. Spec-Driven Development | PASS | Design artifacts align with the current spec. |
-| XII. Canonical Docs vs Tmp | PASS | Rollout notes stay in `docs/tmp/remaining-work/`. |
+| XII. Canonical Docs vs Tmp | PASS | Rollout notes stay in `docs/ManagedAgents/DockerOutOfDocker.md`. |
 | XIII. Delete, Don't Deprecate | PASS | No legacy compatibility path is introduced. |
 
 ## Complexity Tracking

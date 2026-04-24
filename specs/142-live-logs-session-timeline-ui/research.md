@@ -4,7 +4,7 @@
 
 - `docs/ManagedAgents/LiveLogs.md`
 - `docs/ManagedAgents/CodexCliManagedSessions.md`
-- `docs/tmp/009-LiveLogsPlan.md`
+- `docs/ManagedAgents/LiveLogs.md`
 - `specs/141-live-logs-history-events/*`
 - `frontend/src/entrypoints/task-detail.tsx`
 - `frontend/src/entrypoints/task-detail.test.tsx`

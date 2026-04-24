@@ -9,7 +9,6 @@ pytest.importorskip("temporalio")
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
-
 @pytest.fixture
 def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     workflow = MoonMindRunWorkflow()
@@ -38,14 +37,12 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
 
     return workflow
 
-
 def _to_serializable(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):
         return obj.model_dump()
     if hasattr(obj, "dict"):
         return obj.dict()
     return str(obj)
-
 
 @pytest.mark.asyncio
 async def test_run_proposals_stage_propagates_policy(
@@ -96,7 +93,6 @@ async def test_run_proposals_stage_propagates_policy(
     assert mock_run_workflow._proposals_generated == 1
     assert mock_run_workflow._proposals_submitted == 1
 
-
 @pytest.mark.asyncio
 async def test_run_proposals_stage_ignores_flattened_legacy_policy_fields(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -132,7 +128,6 @@ async def test_run_proposals_stage_ignores_flattened_legacy_policy_fields(
     assert len(captured) == 2
     submit_payload = captured[1][1]
     assert submit_payload["policy"] == {}
-
 
 @pytest.mark.asyncio
 async def test_run_proposals_stage_honors_nested_task_propose_tasks(
@@ -170,7 +165,6 @@ async def test_run_proposals_stage_honors_nested_task_propose_tasks(
         "proposal.submit",
     ]
 
-
 @pytest.mark.asyncio
 async def test_run_proposals_stage_skipped_when_proposeTasks_false(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -193,7 +187,6 @@ async def test_run_proposals_stage_skipped_when_proposeTasks_false(
     await mock_run_workflow._run_proposals_stage(parameters=parameters)
 
     assert len(captured) == 0
-
 
 @pytest.mark.asyncio
 async def test_run_proposals_stage_skipped_when_globally_disabled(

@@ -1,8 +1,8 @@
 # Feature Specification: Composable Preset Expansion
 
-**Feature Branch**: `195-composable-preset-expansion`  
-**Created**: 2026-04-17  
-**Status**: Draft  
+**Feature Branch**: `195-composable-preset-expansion` 
+**Created**: 2026-04-17 
+**Status**: Draft 
 **Input**:
 
 ```text
@@ -35,22 +35,22 @@ Source Reference
 - Source Document: docs/Tasks/PresetComposability.md
 - Source Title: Preset Composability
 - Source Sections:
-  - Design posture throughout
-  - 1. docs/Tasks/TaskPresetsSystem.md
-  - 8. Cross-document invariants
+ - Design posture throughout
+ - 1. docs/Tasks/TaskPresetsSystem.md
+ - 8. Cross-document invariants
 - Coverage IDs:
-  - DESIGN-REQ-001
-  - DESIGN-REQ-002
-  - DESIGN-REQ-003
-  - DESIGN-REQ-004
-  - DESIGN-REQ-005
-  - DESIGN-REQ-006
-  - DESIGN-REQ-007
-  - DESIGN-REQ-008
-  - DESIGN-REQ-009
-  - DESIGN-REQ-010
-  - DESIGN-REQ-025
-  - DESIGN-REQ-026
+ - DESIGN-REQ-001
+ - DESIGN-REQ-002
+ - DESIGN-REQ-003
+ - DESIGN-REQ-004
+ - DESIGN-REQ-005
+ - DESIGN-REQ-006
+ - DESIGN-REQ-007
+ - DESIGN-REQ-008
+ - DESIGN-REQ-009
+ - DESIGN-REQ-010
+ - DESIGN-REQ-025
+ - DESIGN-REQ-026
 
 User Story
 As a task platform engineer, I want TaskPresetsSystem to define composable preset entries and deterministic expansion so presets can reuse other presets without changing runtime execution semantics.
@@ -72,7 +72,7 @@ Requirements
 - Document exact-match preservation semantics for save-as-preset.
 
 Verification
-- Confirm the canonical documentation updates preserve desired-state documentation under `docs/` and keep volatile implementation planning under `docs/tmp/`.
+- Confirm the canonical documentation updates preserve desired-state documentation under `docs/` and keep volatile implementation planning under `local-only handoffs`.
 - Confirm coverage for DESIGN-REQ-001 through DESIGN-REQ-010, DESIGN-REQ-025, and DESIGN-REQ-026 from `docs/Tasks/PresetComposability.md`.
 - Run documentation-focused validation and relevant tests for task preset behavior if implementation touches executable preset contracts.
 

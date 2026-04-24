@@ -17,13 +17,10 @@ from moonmind.schemas.temporal_activity_models import AgentRuntimeFetchResultInp
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
-
 pytestmark = [pytest.mark.asyncio]
-
 
 def _patch_all_enabled(_patch_id: str) -> bool:
     return True
-
 
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     workflow_info = type(
@@ -51,7 +48,6 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda: datetime.now(timezone.utc),
     )
 
-
 def _managed_session_request(
     *,
     parameters: dict[str, Any] | None = None,
@@ -77,13 +73,11 @@ def _managed_session_request(
         workspaceSpec=workspace_spec if workspace_spec is not None else {},
     )
 
-
 async def test_managed_session_request_preserves_explicit_empty_inputs() -> None:
     request = _managed_session_request(parameters={}, workspace_spec={})
 
     assert request.parameters == {}
     assert request.workspace_spec == {}
-
 
 async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_head_branch() -> None:
     run = MoonMindAgentRun()
@@ -97,7 +91,6 @@ async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_he
     assert isinstance(activity_input, AgentRuntimeFetchResultInput)
     assert activity_input.target_branch == "main"
     assert activity_input.head_branch is None
-
 
 async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     monkeypatch: pytest.MonkeyPatch,
@@ -120,7 +113,6 @@ async def test_managed_session_result_enrichment_omits_large_inline_instruction(
     assert len(result.metadata["instructionRefSha256"]) == 64
     assert "instructionRef" not in result.metadata
     assert result.metadata["managedSession"]["taskRunId"] == "wf-task-1"
-
 
 async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     monkeypatch: pytest.MonkeyPatch,
@@ -307,7 +299,6 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
     assert routed_calls[2][1].run_id == "wf-task-1"
     assert routed_calls[2][1].agent_id == "codex"
 
-
 async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -400,7 +391,6 @@ async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(
         "agent_runtime.fetch_result",
         "agent_runtime.publish_artifacts",
     ]
-
 
 async def test_agent_run_managed_session_passes_publish_branch_context_to_fetch_result(
     monkeypatch: pytest.MonkeyPatch,
@@ -547,7 +537,6 @@ async def test_agent_run_managed_session_passes_publish_branch_context_to_fetch_
     assert fetch_payload.target_branch == "main"
     assert fetch_payload.head_branch == "feature/recover-detached-head"
 
-
 async def test_agent_run_managed_session_start_runtime_error_returns_failed_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -662,7 +651,6 @@ async def test_agent_run_managed_session_start_runtime_error_returns_failed_resu
         },
     )
 
-
 async def test_agent_run_managed_session_start_runtime_error_truncates_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -762,7 +750,6 @@ async def test_agent_run_managed_session_start_runtime_error_truncates_summary(
     assert len(result.summary) == _MAX_SUMMARY_CHARS
     assert result.summary.endswith("...")
     assert result.summary.startswith("managed start failed: ")
-
 
 async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
     monkeypatch: pytest.MonkeyPatch,
@@ -892,7 +879,6 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
         ),
     ]
 
-
 async def test_agent_run_keeps_legacy_session_fetch_path_when_patch_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -992,7 +978,6 @@ async def test_agent_run_keeps_legacy_session_fetch_path_when_patch_unset(
     assert [name for name, _payload in routed_calls] == [
         "agent_runtime.publish_artifacts",
     ]
-
 
 async def test_agent_run_keeps_legacy_instruction_preparation_for_pre_patch_histories(
     monkeypatch: pytest.MonkeyPatch,

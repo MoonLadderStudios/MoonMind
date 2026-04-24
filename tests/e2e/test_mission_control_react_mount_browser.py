@@ -24,7 +24,6 @@ from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.main import app as main_app
 
-
 @contextmanager
 def _playwright_page(playwright_obj):
     browser = playwright_obj.chromium.launch()
@@ -36,7 +35,6 @@ def _playwright_page(playwright_obj):
             page.close()
     finally:
         browser.close()
-
 
 @pytest.fixture(scope="module")
 def server():
@@ -57,7 +55,6 @@ def server():
     server_inst.should_exit = True
     thread.join(timeout=5)
     main_app.dependency_overrides.clear()
-
 
 @pytest.mark.parametrize(
     "path,expected_text",

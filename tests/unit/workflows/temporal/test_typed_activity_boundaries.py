@@ -16,13 +16,11 @@ from moonmind.schemas.temporal_activity_models import (
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.typed_execution import execute_typed_activity
 
-
 def test_external_agent_run_input_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         ExternalAgentRunInput.model_validate(
             {"runId": "run-1", "providerPayload": {"raw": True}}
         )
-
 
 def test_external_agent_run_input_validates_legacy_alias_at_boundary() -> None:
     request = ExternalAgentRunInput.model_validate({"external_id": "ext-1"})
@@ -30,13 +28,11 @@ def test_external_agent_run_input_validates_legacy_alias_at_boundary() -> None:
     assert request.run_id == "ext-1"
     assert request.model_dump(mode="json", by_alias=True) == {"runId": "ext-1"}
 
-
 def test_agent_runtime_fetch_result_input_rejects_unsupported_publish_mode() -> None:
     with pytest.raises(ValidationError):
         AgentRuntimeFetchResultInput.model_validate(
             {"runId": "managed-1", "publishMode": "side-channel"}
         )
-
 
 def test_agent_runtime_fetch_result_input_normalizes_parent_and_fetch_fields() -> None:
     request = AgentRuntimeFetchResultInput.model_validate(
@@ -55,7 +51,6 @@ def test_agent_runtime_fetch_result_input_normalizes_parent_and_fetch_fields() -
     assert request.target_branch == "main"
     assert request.head_branch is None
 
-
 @activity.defn(name="typed.boundary.status")
 async def _typed_status_activity(request: ExternalAgentRunInput) -> AgentRunStatus:
     assert isinstance(request, ExternalAgentRunInput)
@@ -67,7 +62,6 @@ async def _typed_status_activity(request: ExternalAgentRunInput) -> AgentRunStat
         observedAt=datetime.now(tz=UTC),
     )
 
-
 @workflow.defn(name="TypedActivityBoundaryWorkflow")
 class _TypedActivityBoundaryWorkflow:
     @workflow.run
@@ -77,7 +71,6 @@ class _TypedActivityBoundaryWorkflow:
             ExternalAgentRunInput(runId=run_id),
             start_to_close_timeout=timedelta(seconds=30),
         )
-
 
 @pytest.mark.asyncio
 async def test_typed_activity_request_round_trips_through_temporal_worker() -> None:

@@ -9,7 +9,6 @@ from moonmind.indexers.jira_indexer import JiraIndexer
 
 # Assuming JiraReader is in llama_index.readers.jira. If it's elsewhere, adjust path.
 
-
 class TestJiraIndexer(unittest.TestCase):
     def setUp(self):
         self.mock_logger = MagicMock(spec=logging.Logger)
@@ -275,7 +274,6 @@ class TestJiraIndexer(unittest.TestCase):
             "Failed to load data from Jira: Jira API Error", exc_info=True
         )
         self.mock_storage_context.persist.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()

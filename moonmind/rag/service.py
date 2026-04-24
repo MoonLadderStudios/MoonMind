@@ -15,7 +15,6 @@ from moonmind.rag.qdrant_client import RagQdrantClient
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.rag.telemetry import VectorTelemetry
 
-
 class RetrievalBudgetExceededError(RuntimeError):
     """Raised when retrieval budgets are exceeded."""
 
@@ -23,10 +22,8 @@ class RetrievalBudgetExceededError(RuntimeError):
         super().__init__(message)
         self.budget_type = budget_type
 
-
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
-
 
 class ContextRetrievalService:
     def __init__(

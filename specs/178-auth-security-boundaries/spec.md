@@ -18,7 +18,7 @@ Source Document
 - Sections: 4. Volume Targeting Rules, 8. Verification, 9. Security Model, 11. Required Boundaries
 - Coverage IDs: DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-017, DESIGN-REQ-018, DESIGN-REQ-019, DESIGN-REQ-021, DESIGN-REQ-022
 - Breakdown Story ID: STORY-004
-- Breakdown JSON: docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthtermina-74125184/stories.json
+- Breakdown JSON: artifacts/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthtermina-74125184/stories.json
 
 Acceptance Criteria
 - Workflow payloads carry profile_id, volume_ref, and mount target refs only, never credential file contents.

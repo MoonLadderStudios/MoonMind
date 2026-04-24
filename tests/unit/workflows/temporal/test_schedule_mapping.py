@@ -18,11 +18,9 @@ from moonmind.workflows.temporal.schedule_mapping import (
     map_overlap_policy,
 )
 
-
 # ---------------------------------------------------------------------------
 # map_overlap_policy
 # ---------------------------------------------------------------------------
-
 
 class TestMapOverlapPolicy:
     """DOC-REQ-003: overlap policy mapping."""
@@ -46,11 +44,9 @@ class TestMapOverlapPolicy:
         with pytest.raises(ValueError, match="Unknown overlap mode"):
             map_overlap_policy("bogus")
 
-
 # ---------------------------------------------------------------------------
 # map_catchup_window
 # ---------------------------------------------------------------------------
-
 
 class TestMapCatchupWindow:
     """DOC-REQ-004: catchup policy mapping."""
@@ -71,11 +67,9 @@ class TestMapCatchupWindow:
         with pytest.raises(ValueError, match="Unknown catchup mode"):
             map_catchup_window("bogus")
 
-
 # ---------------------------------------------------------------------------
 # build_schedule_spec
 # ---------------------------------------------------------------------------
-
 
 class TestBuildScheduleSpec:
     """DOC-REQ-006: jitter mapping + spec construction."""
@@ -108,11 +102,9 @@ class TestBuildScheduleSpec:
         spec_utc = build_schedule_spec("30 2 * * *", timezone="UTC")
         assert spec_utc.time_zone_name == "UTC"
 
-
 # ---------------------------------------------------------------------------
 # build_schedule_policy
 # ---------------------------------------------------------------------------
-
 
 class TestBuildSchedulePolicy:
     def test_defaults(self) -> None:
@@ -125,11 +117,9 @@ class TestBuildSchedulePolicy:
         assert policy.overlap == ScheduleOverlapPolicy.ALLOW_ALL
         assert policy.catchup_window == timedelta(days=365)
 
-
 # ---------------------------------------------------------------------------
 # build_schedule_state
 # ---------------------------------------------------------------------------
-
 
 class TestBuildScheduleState:
     def test_enabled(self) -> None:
@@ -141,13 +131,11 @@ class TestBuildScheduleState:
         state = build_schedule_state(enabled=False)
         assert state.paused is True
 
-
 # ---------------------------------------------------------------------------
 # ID conventions
 # ---------------------------------------------------------------------------
 
 _TEST_UUID = UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
-
 
 class TestIdConventions:
     """DOC-REQ-005: schedule and workflow ID conventions."""
@@ -159,7 +147,6 @@ class TestIdConventions:
         template = make_workflow_id_template(_TEST_UUID)
         assert template.startswith("mm:a1b2c3d4-e5f6-7890-abcd-ef1234567890:")
         assert "{{.ScheduleTime}}" in template
-
 
 class TestDSTBoundarySemantics:
     """DOC-REQ-006: DST Boundary tests for schedule spec semantics (5.1: US/Eastern, Europe/London, UTC)."""

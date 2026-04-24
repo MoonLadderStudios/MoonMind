@@ -1,14 +1,14 @@
 # Tasks: Skill Selection and Snapshot Resolution
 
 **Input**: `specs/207-skill-selection-snapshot-resolution/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/skill-snapshot-resolution.md`, `quickstart.md`
-**Prerequisites**: `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md`; existing agent-skill resolver/activity/materializer services
+**Prerequisites**: `spec.md` (Input); existing agent-skill resolver/activity/materializer services
 **Unit Test Command**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/services/test_skill_resolution.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py tests/unit/services/test_skill_materialization.py`
 **Integration Test Command**: `./tools/test_integration.sh` when Docker is available
 **Source Traceability**: FR-001 through FR-012; acceptance scenarios 1-5; SC-001 through SC-006; DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-019; Jira issue MM-406.
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm active feature locator in `.specify/feature.json` points to `specs/207-skill-selection-snapshot-resolution` and MM-406 source input exists in `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md` (FR-012, SC-006)
+- [X] T001 Confirm active feature locator in `.specify/feature.json` points to `specs/207-skill-selection-snapshot-resolution` and MM-406 source input exists in `spec.md` (Input) (FR-012, SC-006)
 - [X] T002 Inspect existing selector, resolver, activity, materializer, and AgentRun request code in `moonmind/workflows/tasks/task_contract.py`, `moonmind/services/skill_resolution.py`, `moonmind/workflows/agent_skills/agent_skills_activities.py`, `moonmind/services/skill_materialization.py`, and `moonmind/workflows/temporal/workflows/run.py` (FR-001-FR-011)
 
 ## Phase 2: Foundational
@@ -51,7 +51,7 @@
 ### Story Validation
 
 - [X] T015 Run focused tests `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/tasks/test_task_contract.py tests/unit/workflows/temporal/workflows/test_run_agent_dispatch.py tests/unit/services/test_skill_resolution.py tests/unit/workflows/agent_skills/test_agent_skills_activities.py tests/unit/services/test_skill_materialization.py` and confirm pass (FR-001-FR-011, SC-001-SC-005)
-- [X] T016 Run traceability check `rg -n "MM-406|DESIGN-REQ-006|DESIGN-REQ-007|DESIGN-REQ-008|DESIGN-REQ-009|DESIGN-REQ-010|DESIGN-REQ-019" specs/207-skill-selection-snapshot-resolution docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md` (FR-012, SC-006)
+- [X] T016 Run traceability check `rg -n "MM-406|DESIGN-REQ-006|DESIGN-REQ-007|DESIGN-REQ-008|DESIGN-REQ-009|DESIGN-REQ-010|DESIGN-REQ-019" specs/207-skill-selection-snapshot-resolution` (FR-012, SC-006)
 
 ## Final Phase: Polish And Verification
 

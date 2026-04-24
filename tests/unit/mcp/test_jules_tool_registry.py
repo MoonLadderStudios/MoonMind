@@ -21,7 +21,6 @@ from moonmind.workflows.adapters.jules_client import JulesClientError
 
 pytestmark = [pytest.mark.asyncio]
 
-
 class _FakeJulesClient:
     """Fake Jules client with canned responses and call tracking."""
 
@@ -40,7 +39,6 @@ class _FakeJulesClient:
         self.calls.append(("get_task", request))
         return JulesTaskResponse(task_id=request.task_id, status="pending", url=None)
 
-
 class _FailingJulesClient(_FakeJulesClient):
     """Fake client that raises JulesClientError on every call."""
 
@@ -53,15 +51,12 @@ class _FailingJulesClient(_FakeJulesClient):
     async def get_task(self, request: JulesGetTaskRequest) -> JulesTaskResponse:
         raise JulesClientError("connection refused")
 
-
 def _build_context(
     client: _FakeJulesClient | None = None,
 ) -> JulesToolExecutionContext:
     return JulesToolExecutionContext(client=client or _FakeJulesClient())  # type: ignore[arg-type]
 
-
 # --- discovery tests ---
-
 
 async def test_list_tools_returns_three_jules_tools():
     registry = JulesToolRegistry()
@@ -73,9 +68,7 @@ async def test_list_tools_returns_three_jules_tools():
         "jules.resolve_task",
     ]
 
-
 # --- dispatch tests ---
-
 
 @pytest.mark.asyncio
 async def test_call_create_task():
@@ -91,7 +84,6 @@ async def test_call_create_task():
     assert result["id"] == "task-001"
     assert len(fake.calls) == 1
     assert fake.calls[0][0] == "create_task"
-
 
 @pytest.mark.asyncio
 async def test_call_resolve_task():
@@ -112,7 +104,6 @@ async def test_call_resolve_task():
     assert len(fake.calls) == 1
     assert fake.calls[0][0] == "resolve_task"
 
-
 @pytest.mark.asyncio
 async def test_call_get_task():
     fake = _FakeJulesClient()
@@ -128,9 +119,7 @@ async def test_call_get_task():
     assert len(fake.calls) == 1
     assert fake.calls[0][0] == "get_task"
 
-
 # --- error tests ---
-
 
 @pytest.mark.asyncio
 async def test_call_unknown_tool_raises():
@@ -143,7 +132,6 @@ async def test_call_unknown_tool_raises():
             context=context,
         )
 
-
 @pytest.mark.asyncio
 async def test_call_with_bad_args_raises():
     registry = JulesToolRegistry()
@@ -154,7 +142,6 @@ async def test_call_with_bad_args_raises():
             arguments={},  # missing required fields
             context=context,
         )
-
 
 @pytest.mark.asyncio
 async def test_client_error_propagates_from_handler():

@@ -2,7 +2,7 @@
 
 **Feature**: Report-Aware Execution Projections  
 **Spec**: `specs/248-report-aware-execution-projections/spec.md`  
-**Original Request Source**: `spec.md` Input and `docs/tmp/jira-orchestration-inputs/MM-496-moonspec-orchestration-input.md`  
+**Original Request Source**: `spec.md` Input and `spec.md` (Input)  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH
 
@@ -28,7 +28,7 @@
 | FR-005 | `spec.md`; `plan.md`; `tasks.md`; `contracts/execution-report-projection-contract.md`; router grep verification | VERIFIED | The dedicated `/report` endpoint remains explicitly deferred in MM-496 and no new `/report` execution route was added. |
 | FR-006 | `test_describe_execution_report_projection_degrades_safely_when_no_report_exists` | VERIFIED | No-report execution detail responses return `{'hasReport': false}` without fabricated refs or counts. |
 | FR-007 | `build_report_projection_summary`; existing helper rollout tests; router metadata filtering | VERIFIED | Execution detail only forwards bounded `findingCounts` / `severityCounts` metadata through the canonical helper path. |
-| FR-008 | `spec.md`; `plan.md`; `tasks.md`; `verification.md`; `docs/tmp/jira-orchestration-inputs/MM-496-moonspec-orchestration-input.md` | VERIFIED | MM-496 remains preserved across the MoonSpec artifacts and final verification output. |
+| FR-008 | `spec.md`; `plan.md`; `tasks.md`; `verification.md`; `spec.md` (Input) | VERIFIED | MM-496 remains preserved across the MoonSpec artifacts and final verification output. |
 
 ## Acceptance Scenario Coverage
 

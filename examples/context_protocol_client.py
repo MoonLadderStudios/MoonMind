@@ -12,7 +12,6 @@ import requests
 # Default to localhost, but allow override via environment variable
 API_BASE_URL = os.environ.get("MOONMIND_API_URL", "http://localhost:8000")
 
-
 def send_context_request(messages, model="gemini-pro"):
     """
     Send a request to the Model Context Protocol endpoint.
@@ -44,7 +43,6 @@ def send_context_request(messages, model="gemini-pro"):
         return None
 
     return response.json()
-
 
 def main():
     # Example conversation
@@ -78,7 +76,6 @@ def main():
             print(f"Prompt tokens: {usage.get('prompt_tokens', 'N/A')}")
             print(f"Completion tokens: {usage.get('completion_tokens', 'N/A')}")
             print(f"Total tokens: {usage.get('total_tokens', 'N/A')}")
-
 
 if __name__ == "__main__":
     main()

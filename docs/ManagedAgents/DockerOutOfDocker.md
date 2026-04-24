@@ -1,6 +1,6 @@
 # DockerOutOfDocker: Docker-backed Specialized Workload Containers for MoonMind
 
-**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`](../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 **Status:** Desired state
 **Owners:** MoonMind Platform
 **Last updated:** 2026-04-23
@@ -56,34 +56,34 @@ This document replaces older framing that treated DooD primarily as a profile-on
 MoonMind adopts the following governing rules for Docker-backed workloads:
 
 1. **Specialized Docker workloads are control-plane-launched workloads.**
-   They are not ad hoc containers started directly by the Codex runtime.
+ They are not ad hoc containers started directly by the Codex runtime.
 
 2. **Docker workflow access is governed by an explicit deployment mode.**
-   The canonical modes are `disabled`, `profiles`, and `unrestricted`.
+ The canonical modes are `disabled`, `profiles`, and `unrestricted`.
 
 3. **A Codex session container is not given unrestricted Docker authority by default.**
-   This remains true even when the deployment mode is `unrestricted`.
+ This remains true even when the deployment mode is `unrestricted`.
 
 4. **The profile-backed path remains the normal execution path.**
-   `container.run_workload`, `container.start_helper`, and `container.stop_helper` remain profile-validated and deployment-curated.
+ `container.run_workload`, `container.start_helper`, and `container.stop_helper` remain profile-validated and deployment-curated.
 
 5. **Arbitrary runtime containers are first-class only in `unrestricted` mode.**
-   They are exposed through a structured MoonMind tool contract rather than by widening the profile-backed contract.
+ They are exposed through a structured MoonMind tool contract rather than by widening the profile-backed contract.
 
 6. **Raw Docker CLI is an unrestricted escape hatch, not the normal arbitrary-container contract.**
-   The public unrestricted container interface is `container.run_container`. The public unrestricted Docker CLI interface is `container.run_docker`.
+ The public unrestricted container interface is `container.run_container`. The public unrestricted Docker CLI interface is `container.run_docker`.
 
 7. **Session identity and workload identity remain separate.**
-   A workload container is not a managed session and not a `MoonMind.AgentRun` unless it is itself a true agent runtime.
+ A workload container is not a managed session and not a `MoonMind.AgentRun` unless it is itself a true agent runtime.
 
 8. **Artifacts and bounded metadata remain authoritative.**
-   Container-local state, daemon state, and terminal scrollback are not durable truth.
+ Container-local state, daemon state, and terminal scrollback are not durable truth.
 
 9. **Invalid mode values fail fast.**
-   Unsupported Docker mode values are configuration errors and must prevent startup.
+ Unsupported Docker mode values are configuration errors and must prevent startup.
 
 10. **The DooD core remains domain-agnostic.**
-    Unreal, dotnet, load test, and similar workloads are modeled as profiles, curated wrappers, or unrestricted requests. The DooD core does not contain workload-specific branching.
+ Unreal, dotnet, load test, and similar workloads are modeled as profiles, curated wrappers, or unrestricted requests. The DooD core does not contain workload-specific branching.
 
 ---
 
@@ -751,32 +751,32 @@ image: ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3
 workdir_template: /work/agent_jobs/${task_run_id}/repo
 entrypoint: ["/bin/bash", "-lc"]
 required_mounts:
-  - type: volume
-    source: agent_workspaces
-    target: /work/agent_jobs
+ - type: volume
+ source: agent_workspaces
+ target: /work/agent_jobs
 optional_mounts:
-  - type: volume
-    source: unreal_ccache_volume
-    target: /work/.ccache
-  - type: volume
-    source: unreal_ubt_volume
-    target: /work/ubt-cache
+ - type: volume
+ source: unreal_ccache_volume
+ target: /work/.ccache
+ - type: volume
+ source: unreal_ubt_volume
+ target: /work/ubt-cache
 env_allowlist:
-  - UE_PROJECT_PATH
-  - UE_TARGET
-  - UE_MAP
-  - CI
-  - CCACHE_DIR
+ - UE_PROJECT_PATH
+ - UE_TARGET
+ - UE_MAP
+ - CI
+ - CCACHE_DIR
 resource_profile:
-  cpu: "8"
-  memory: "16g"
-  shm_size: "2g"
+ cpu: "8"
+ memory: "16g"
+ shm_size: "2g"
 network_policy: none
 device_policy: none
 timeout_seconds: 7200
 cleanup:
-  remove_container_on_exit: true
-  kill_grace_seconds: 30
+ remove_container_on_exit: true
+ kill_grace_seconds: 30
 ```
 
 ### 12.3 Example runner profile: .NET SDK
@@ -788,20 +788,20 @@ image: mcr.microsoft.com/dotnet/sdk:8.0
 workdir_template: /work/agent_jobs/${task_run_id}/repo
 entrypoint: ["/bin/bash", "-lc"]
 required_mounts:
-  - type: volume
-    source: agent_workspaces
-    target: /work/agent_jobs
+ - type: volume
+ source: agent_workspaces
+ target: /work/agent_jobs
 env_allowlist:
-  - CI
-  - DOTNET_CLI_HOME
+ - CI
+ - DOTNET_CLI_HOME
 resource_profile:
-  cpu: "4"
-  memory: "8g"
+ cpu: "4"
+ memory: "8g"
 network_policy: default
 timeout_seconds: 3600
 cleanup:
-  remove_container_on_exit: true
-  kill_grace_seconds: 15
+ remove_container_on_exit: true
+ kill_grace_seconds: 15
 ```
 
 ### 12.4 Profile selection rule
@@ -1228,17 +1228,17 @@ A trusted workflow selects the runtime image at execution time without changing 
 
 ```json
 {
-  "name": "container.run_container",
-  "type": "skill",
-  "inputs": {
-    "image": "mcr.microsoft.com/dotnet/sdk:8.0",
-    "repoDir": "/work/agent_jobs/task-123/repo",
-    "artifactsDir": "/work/agent_jobs/task-123/artifacts/test-step",
-    "command": ["bash", "-lc", "dotnet test MySolution.sln --logger trx"],
-    "declaredOutputs": {
-      "trx": "TestResults/results.trx"
-    }
-  }
+ "name": "container.run_container",
+ "type": "skill",
+ "inputs": {
+ "image": "mcr.microsoft.com/dotnet/sdk:8.0",
+ "repoDir": "/work/agent_jobs/task-123/repo",
+ "artifactsDir": "/work/agent_jobs/task-123/artifacts/test-step",
+ "command": ["bash", "-lc", "dotnet test MySolution.sln --logger trx"],
+ "declaredOutputs": {
+ "trx": "TestResults/results.trx"
+ }
+ }
 }
 ```
 
@@ -1248,18 +1248,18 @@ A trusted workflow selects a runtime load test image at execution time and write
 
 ```json
 {
-  "name": "container.run_container",
-  "type": "skill",
-  "inputs": {
-    "image": "ghcr.io/example/loadtest-runner:latest",
-    "repoDir": "/work/agent_jobs/task-456/repo",
-    "artifactsDir": "/work/agent_jobs/task-456/artifacts/loadtest",
-    "command": ["bash", "-lc", "./run-loadtest.sh --out /work/agent_jobs/task-456/artifacts/loadtest"],
-    "declaredOutputs": {
-      "summary": "summary.json",
-      "logs": "logs/output.log"
-    }
-  }
+ "name": "container.run_container",
+ "type": "skill",
+ "inputs": {
+ "image": "ghcr.io/example/loadtest-runner:latest",
+ "repoDir": "/work/agent_jobs/task-456/repo",
+ "artifactsDir": "/work/agent_jobs/task-456/artifacts/loadtest",
+ "command": ["bash", "-lc", "./run-loadtest.sh --out /work/agent_jobs/task-456/artifacts/loadtest"],
+ "declaredOutputs": {
+ "summary": "summary.json",
+ "logs": "logs/output.log"
+ }
+ }
 }
 ```
 
@@ -1269,16 +1269,16 @@ A trusted workflow uses the Docker CLI escape hatch for compose-driven behavior.
 
 ```json
 {
-  "name": "container.run_docker",
-  "type": "skill",
-  "inputs": {
-    "command": ["docker", "compose", "-f", "infra/docker-compose.yml", "up", "--abort-on-container-exit"],
-    "repoDir": "/work/agent_jobs/task-789/repo",
-    "artifactsDir": "/work/agent_jobs/task-789/artifacts/compose-step",
-    "declaredOutputs": {
-      "composeLog": "compose.log"
-    }
-  }
+ "name": "container.run_docker",
+ "type": "skill",
+ "inputs": {
+ "command": ["docker", "compose", "-f", "infra/docker-compose.yml", "up", "--abort-on-container-exit"],
+ "repoDir": "/work/agent_jobs/task-789/repo",
+ "artifactsDir": "/work/agent_jobs/task-789/artifacts/compose-step",
+ "declaredOutputs": {
+ "composeLog": "compose.log"
+ }
+ }
 }
 ```
 

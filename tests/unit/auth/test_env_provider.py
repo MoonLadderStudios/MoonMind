@@ -2,7 +2,6 @@ import pytest
 
 from moonmind.auth.env_provider import EnvAuthProvider
 
-
 @pytest.mark.asyncio
 async def test_env_provider_returns_secret(monkeypatch):
     monkeypatch.setenv("TEST_SECRET_KEY", "supersecretvalue")
@@ -14,7 +13,6 @@ async def test_env_provider_returns_secret(monkeypatch):
     # RedactedSecret's repr contains 'redacted'
     assert "redacted" in repr(secret).lower()
 
-
 @pytest.mark.asyncio
 async def test_env_provider_returns_none_when_missing(monkeypatch):
     monkeypatch.delenv("NON_EXISTENT_KEY", raising=False)
@@ -23,7 +21,6 @@ async def test_env_provider_returns_none_when_missing(monkeypatch):
     secret = await provider.get_secret(key="NON_EXISTENT_KEY")
 
     assert secret is None
-
 
 @pytest.mark.asyncio
 async def test_env_provider_handles_kwargs(monkeypatch):

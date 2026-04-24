@@ -21,7 +21,6 @@ spec:
 
 MANIFEST_YAML_MOD = MANIFEST_YAML.replace("token: 1", "token: 2")
 
-
 @pytest.mark.asyncio
 async def test_manifest_sync_detects_changes(tmp_path):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

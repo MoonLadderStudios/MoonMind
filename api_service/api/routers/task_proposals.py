@@ -40,12 +40,10 @@ router = APIRouter(prefix="/api/proposals", tags=["task-proposals"])
 
 _PRESET_SOURCE_KINDS = frozenset({"preset-derived", "preset-include", "detached"})
 
-
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TaskProposalService:
     return get_task_proposal_service(session)
-
 
 def _build_task_preview(
     task_request: dict[str, object],
@@ -128,7 +126,6 @@ def _build_task_preview(
         stepSourceKinds=step_source_kinds,
     )
 
-
 def _serialize_similar(similar: list[TaskProposal] | None) -> list[dict[str, object]]:
     if not similar:
         return []
@@ -144,7 +141,6 @@ def _serialize_similar(similar: list[TaskProposal] | None) -> list[dict[str, obj
             }
         )
     return items
-
 
 def _serialize_proposal(
     proposal: TaskProposal, *, similar: list[TaskProposal] | None = None
@@ -182,7 +178,6 @@ def _serialize_proposal(
     }
     return TaskProposalModel.model_validate(data)
 
-
 async def _resolve_actor(
     *,
     user: Optional[User],
@@ -196,7 +191,6 @@ async def _resolve_actor(
             "message": "User authentication is required.",
         },
     )
-
 
 @router.post("", response_model=TaskProposalModel, status_code=status.HTTP_201_CREATED)
 async def create_proposal(
@@ -225,7 +219,6 @@ async def create_proposal(
             detail={"code": "invalid_proposal", "message": str(exc)},
         ) from exc
     return _serialize_proposal(proposal)
-
 
 @router.get("", response_model=TaskProposalListResponse)
 async def list_proposals(
@@ -277,7 +270,6 @@ async def list_proposals(
     items = [_serialize_proposal(item) for item in proposals]
     return TaskProposalListResponse(items=items, next_cursor=next_cursor)
 
-
 @router.get("/{proposal_id}", response_model=TaskProposalModel)
 async def get_proposal(
     *,
@@ -297,7 +289,6 @@ async def get_proposal(
     if include_similars:
         similar_rows = await service.get_similar_proposals(proposal)
     return _serialize_proposal(proposal, similar=similar_rows)
-
 
 def _get_temporal_execution_service(
     session: AsyncSession = Depends(get_async_session),
@@ -319,7 +310,6 @@ def _get_temporal_execution_service(
             settings.temporal.run_continue_as_new_wait_cycle_threshold
         ),
     )
-
 
 @router.post("/{proposal_id}/promote", response_model=TaskProposalPromoteResponse)
 async def promote_proposal(
@@ -426,7 +416,6 @@ async def promote_proposal(
         promoted_execution_id=execution_record.workflow_id,
     )
 
-
 @router.post("/{proposal_id}/dismiss", response_model=TaskProposalModel)
 async def dismiss_proposal(
     *,
@@ -454,7 +443,6 @@ async def dismiss_proposal(
             detail={"code": "proposal_not_found", "message": str(exc)},
         ) from exc
     return _serialize_proposal(proposal)
-
 
 @router.post("/{proposal_id}/priority", response_model=TaskProposalModel)
 async def update_priority(

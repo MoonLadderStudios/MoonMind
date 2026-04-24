@@ -3,7 +3,7 @@
 ## Input Classification
 
 Decision: The MM-454 brief is a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-454-moonspec-orchestration-input.md` defines one actor, one user story, one source document slice, one validation set, and no sibling stories requiring splitting.
+Evidence: `spec.md` (Input) defines one actor, one user story, one source document slice, one validation set, and no sibling stories requiring splitting.
 Rationale: The story is independently testable by evaluating typed remediation action requests and durable decision outputs.
 Alternatives considered: Treating `docs/Tasks/TaskRemediation.md` as a broad design was rejected because the Jira brief already selected sections 11, 10.6, and 17 for one action-registry slice.
 Test implications: Unit and service-boundary tests are sufficient for the selected slice; broader remediation workflows belong to adjacent specs.

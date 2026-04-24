@@ -5,15 +5,12 @@ from typing import Any
 
 import pytest
 
-
 def _load_module(script_path: str) -> dict[str, Any]:
     import runpy
 
     return runpy.run_path(script_path)
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
 
 @pytest.fixture
 def get_pr_comments_module() -> dict[str, Any]:
@@ -28,7 +25,6 @@ def get_pr_comments_module() -> dict[str, Any]:
         )
     )
 
-
 @pytest.fixture
 def get_branch_pr_comments_module() -> dict[str, Any]:
     return _load_module(
@@ -41,7 +37,6 @@ def get_branch_pr_comments_module() -> dict[str, Any]:
             / "get_branch_pr_comments.py"
         )
     )
-
 
 @pytest.fixture
 def pr_resolve_snapshot_module() -> dict[str, Any]:
@@ -56,7 +51,6 @@ def pr_resolve_snapshot_module() -> dict[str, Any]:
         )
     )
 
-
 @pytest.fixture
 def pr_resolve_finalize_module() -> dict[str, Any]:
     return _load_module(
@@ -69,7 +63,6 @@ def pr_resolve_finalize_module() -> dict[str, Any]:
             / "pr_resolve_finalize.py"
         )
     )
-
 
 @pytest.fixture
 def pr_resolve_full_module() -> dict[str, Any]:
@@ -84,7 +77,6 @@ def pr_resolve_full_module() -> dict[str, Any]:
         )
     )
 
-
 @pytest.fixture
 def pr_resolve_orchestrate_module() -> dict[str, Any]:
     return _load_module(
@@ -97,7 +89,6 @@ def pr_resolve_orchestrate_module() -> dict[str, Any]:
             / "pr_resolve_orchestrate.py"
         )
     )
-
 
 @pytest.fixture
 def pr_resolve_contract_module() -> dict[str, Any]:
@@ -112,7 +103,6 @@ def pr_resolve_contract_module() -> dict[str, Any]:
         )
     )
 
-
 def test_parse_remote_url_accepts_https_and_ssh_urls(
     get_pr_comments_module: dict[str, Any],
 ) -> None:
@@ -122,7 +112,6 @@ def test_parse_remote_url_accepts_https_and_ssh_urls(
     assert parse_remote_url("git@github.com:org/example.git") == ("org", "example")
     assert parse_remote_url("ssh://git@github.com/org/example") == ("org", "example")
 
-
 def test_parse_remote_url_returns_none_for_unrelated_inputs(
     get_pr_comments_module: dict[str, Any],
 ) -> None:
@@ -131,7 +120,6 @@ def test_parse_remote_url_returns_none_for_unrelated_inputs(
     assert parse_remote_url("") is None
     assert parse_remote_url("not-a-repo") is None
     assert parse_remote_url("owner_only/") is None
-
 
 def test_parse_repo_slug_accepts_remote_urls_and_owner_repo_forms(
     get_pr_comments_module: dict[str, Any],
@@ -145,7 +133,6 @@ def test_parse_repo_slug_accepts_remote_urls_and_owner_repo_forms(
     with pytest.raises(ValueError, match="Invalid --repo value"):
         parse_repo_slug("owner_only")
 
-
 def test_infer_repo_from_pr_url_handles_pull_url(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -153,7 +140,6 @@ def test_infer_repo_from_pr_url_handles_pull_url(
 
     assert infer_repo("https://github.com/org/example/pull/123") == "org/example"
     assert infer_repo("https://github.com/org/example.git/pull/123") == "org/example"
-
 
 def test_infer_repo_from_pr_url_returns_none_for_invalid_url(
     pr_resolve_snapshot_module: dict[str, Any],
@@ -163,7 +149,6 @@ def test_infer_repo_from_pr_url_returns_none_for_invalid_url(
     assert infer_repo("") is None
     assert infer_repo("not a url") is None
     assert infer_repo("https://github.com/org") is None
-
 
 def test_get_branch_pr_comments_run_json_command_ignores_stderr_warnings(
     get_branch_pr_comments_module: dict[str, Any],
@@ -185,7 +170,6 @@ def test_get_branch_pr_comments_run_json_command_ignores_stderr_warnings(
     payload = run_json_command(["fake", "command"], "failure hint")
     assert payload == {"ok": True, "count": 2}
 
-
 def test_pr_resolve_snapshot_run_command_ignores_stderr_warnings(
     pr_resolve_snapshot_module: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -205,7 +189,6 @@ def test_pr_resolve_snapshot_run_command_ignores_stderr_warnings(
 
     payload = run_command(["fake", "snapshot"], "failure hint")
     assert payload == {"ok": True, "result": "ready"}
-
 
 def test_pr_resolve_snapshot_run_command_resolves_executable_with_fallback_path(
     pr_resolve_snapshot_module: dict[str, Any],
@@ -241,7 +224,6 @@ def test_pr_resolve_snapshot_run_command_resolves_executable_with_fallback_path(
     assert captured_cmd[0] == "/usr/bin/gh"
     assert "/usr/bin" in captured_path
 
-
 def test_fetch_pr_data_falls_back_to_current_branch_selector(
     pr_resolve_snapshot_module: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -276,7 +258,6 @@ def test_fetch_pr_data_falls_back_to_current_branch_selector(
     assert len(errors) == 1
     assert errors[0].startswith("<default>:")
 
-
 def test_fetch_pr_data_can_fallback_to_discovered_pr_number(
     pr_resolve_snapshot_module: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -307,7 +288,6 @@ def test_fetch_pr_data_can_fallback_to_discovered_pr_number(
     assert pr_data["number"] == 780
     assert selector == "780"
     assert len(errors) >= 1
-
 
 def test_get_branch_pr_comments_resolve_metadata_falls_back_to_head_pr_list(
     get_branch_pr_comments_module: dict[str, Any],
@@ -363,7 +343,6 @@ def test_review_bot_comments_are_actionable_by_default(
     assert summary["actionableCommentCount"] == 2
     assert summary["includeBotReviewComments"] is True
 
-
 def test_review_bot_comments_can_be_excluded_when_disabled(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -380,7 +359,6 @@ def test_review_bot_comments_can_be_excluded_when_disabled(
     summary = summarize_comments(comments, include_bot_review_comments=False)
     assert summary["actionableCommentCount"] == 0
     assert summary["includeBotReviewComments"] is False
-
 
 def test_issue_command_comments_are_not_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
@@ -407,7 +385,6 @@ def test_issue_command_comments_are_not_actionable(
     assert summary["actionableCommentIds"] == [2]
     assert summary["nonActionableReasonCounts"]["command_comment"] == 1
 
-
 def test_resolved_review_threads_are_not_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -421,7 +398,6 @@ def test_resolved_review_threads_are_not_actionable(
     }
 
     assert is_comment_actionable(comment) is False
-
 
 def test_finalize_blocks_when_actionable_comments_exist(
     pr_resolve_finalize_module: dict[str, Any],
@@ -442,7 +418,6 @@ def test_finalize_blocks_when_actionable_comments_exist(
 
     assert decision == {"action": "blocked", "reason": "actionable_comments"}
 
-
 def test_finalize_blocks_when_ci_running_and_comments_addressed(
     pr_resolve_finalize_module: dict[str, Any],
 ) -> None:
@@ -461,7 +436,6 @@ def test_finalize_blocks_when_ci_running_and_comments_addressed(
     )
 
     assert decision == {"action": "blocked", "reason": "ci_running"}
-
 
 def test_finalize_merges_when_ci_complete_and_clean(
     pr_resolve_finalize_module: dict[str, Any],
@@ -482,7 +456,6 @@ def test_finalize_merges_when_ci_complete_and_clean(
 
     assert decision == {"action": "merge_now", "reason": "ci_complete"}
 
-
 def test_finalize_blocks_when_comments_are_unavailable(
     pr_resolve_finalize_module: dict[str, Any],
 ) -> None:
@@ -502,7 +475,6 @@ def test_finalize_blocks_when_comments_are_unavailable(
 
     assert decision == {"action": "blocked", "reason": "comments_unavailable"}
 
-
 def test_finalize_blocks_when_comment_policy_not_enforced(
     pr_resolve_finalize_module: dict[str, Any],
 ) -> None:
@@ -521,7 +493,6 @@ def test_finalize_blocks_when_comment_policy_not_enforced(
     )
 
     assert decision == {"action": "blocked", "reason": "comment_policy_not_enforced"}
-
 
 def test_finalize_blocks_when_ci_signal_is_degraded(
     pr_resolve_finalize_module: dict[str, Any],
@@ -546,7 +517,6 @@ def test_finalize_blocks_when_ci_signal_is_degraded(
 
     assert decision == {"action": "blocked", "reason": "ci_signal_degraded"}
 
-
 def test_full_marks_actionable_comments_as_needs_remediation(
     pr_resolve_full_module: dict[str, Any],
 ) -> None:
@@ -565,7 +535,6 @@ def test_full_marks_actionable_comments_as_needs_remediation(
     assert result["status"] == "needs_remediation"
     assert result["reason"] == "actionable_comments"
     assert result["next_step"] == "run_fix_comments_skill"
-
 
 def test_orchestrate_actionable_comments_escalates_once_then_merges(
     pr_resolve_orchestrate_module: dict[str, Any],
@@ -611,7 +580,6 @@ def test_orchestrate_actionable_comments_escalates_once_then_merges(
     assert full_calls[0][2] == "actionable_comments"
     assert sleeps == []
 
-
 def test_orchestrate_caps_retries_with_attempts_exhausted(
     pr_resolve_orchestrate_module: dict[str, Any],
 ) -> None:
@@ -642,7 +610,6 @@ def test_orchestrate_caps_retries_with_attempts_exhausted(
     assert result["status"] == "attempts_exhausted"
     assert result["merge_outcome"] == "attempts_exhausted"
     assert result["final_reason"] == "actionable_comments"
-
 
 def test_orchestrate_ci_running_uses_finalize_only_retry_path(
     pr_resolve_orchestrate_module: dict[str, Any],
@@ -680,7 +647,6 @@ def test_orchestrate_ci_running_uses_finalize_only_retry_path(
     assert result["status"] == "merged"
     assert full_invocations == 0
     assert sleeps == [15]
-
 
 def test_orchestrate_ci_failures_after_transient_ci_states_escalates_fix_ci(
     pr_resolve_orchestrate_module: dict[str, Any],
@@ -739,7 +705,6 @@ def test_orchestrate_ci_failures_after_transient_ci_states_escalates_fix_ci(
     assert full_calls == [(3, 1, "ci_failures")]
     assert sleeps == [15, 30]
 
-
 def test_orchestrate_merge_conflicts_after_ci_running_escalates_fix_conflicts(
     pr_resolve_orchestrate_module: dict[str, Any],
 ) -> None:
@@ -792,7 +757,6 @@ def test_orchestrate_merge_conflicts_after_ci_running_escalates_fix_conflicts(
     assert full_calls == [(2, 1, "merge_conflicts")]
     assert sleeps == [15]
 
-
 def test_orchestrate_merge_conflicts_after_merge_not_ready_escalates_fix_conflicts(
     pr_resolve_orchestrate_module: dict[str, Any],
 ) -> None:
@@ -844,7 +808,6 @@ def test_orchestrate_merge_conflicts_after_merge_not_ready_escalates_fix_conflic
     assert result["status"] == "merged"
     assert full_calls == [(2, 1, "merge_conflicts")]
     assert sleeps == [15]
-
 
 def test_orchestrate_main_uses_extended_finalize_wait_defaults(
     pr_resolve_orchestrate_module: dict[str, Any],
@@ -904,7 +867,6 @@ def test_orchestrate_main_uses_extended_finalize_wait_defaults(
     assert captured["max_sleep_seconds"] == 120
     assert captured["max_elapsed_seconds"] == 1800
 
-
 def test_contract_snapshot_refresh_failed_is_finalize_only_retry(
     pr_resolve_contract_module: dict[str, Any],
 ) -> None:
@@ -915,7 +877,6 @@ def test_contract_snapshot_refresh_failed_is_finalize_only_retry(
         merge_not_ready_grace_remaining=1,
     )
     assert action == "finalize_only_retry"
-
 
 def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     pr_resolve_finalize_module: dict[str, Any],
@@ -972,7 +933,6 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
         main()
     assert int(raised_strict.value.code) == int(exit_code_blocked)
 
-
 def test_run_snapshot_captures_stderr_for_auth_classifier(
     pr_resolve_finalize_module: dict[str, Any],
     tmp_path: Path,
@@ -1011,7 +971,6 @@ def test_run_snapshot_captures_stderr_for_auth_classifier(
     )
     assert "not logged into any github hosts" in exc.stderr.lower()
     assert snapshot_failed_reason(exc) == "publish_unavailable"
-
 
 def test_finalize_snapshot_auth_failure_reports_publish_unavailable(
     pr_resolve_finalize_module: dict[str, Any],
@@ -1079,7 +1038,6 @@ def test_finalize_snapshot_auth_failure_reports_publish_unavailable(
         main()
     assert int(raised_strict.value.code) == int(exit_code_blocked)
 
-
 def test_summarize_ci_treats_stale_rollup_as_running(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -1109,7 +1067,6 @@ def test_summarize_ci_treats_stale_rollup_as_running(
     # Verify the condition our cross-check uses
     assert rollup_non_sec > 0 and head_non_sec == 0
 
-
 def test_summarize_ci_head_checks_propagate_failures(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -1138,7 +1095,6 @@ def test_summarize_ci_head_checks_propagate_failures(
     assert len(summary["failedChecks"]) == 1
     assert summary["failedChecks"][0]["name"] == "test"
 
-
 def test_finalize_already_merged_pr_returns_already_merged(
     pr_resolve_finalize_module: dict[str, Any],
 ) -> None:
@@ -1161,7 +1117,6 @@ def test_finalize_already_merged_pr_returns_already_merged(
     )
 
     assert decision == {"action": "already_merged", "reason": "already_merged"}
-
 
 def test_finalize_pr_not_found_but_merged_succeeds(
     pr_resolve_finalize_module: dict[str, Any],
@@ -1218,11 +1173,9 @@ def test_finalize_pr_not_found_but_merged_succeeds(
     assert payload["reason"] == "already_merged"
     assert payload["merge_outcome"] == "merged"
 
-
 # ---------------------------------------------------------------------------
 # Stale-commit bot comment filtering (Phase 1)
 # ---------------------------------------------------------------------------
-
 
 def test_stale_bot_comment_on_old_commit_is_not_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
@@ -1245,7 +1198,6 @@ def test_stale_bot_comment_on_old_commit_is_not_actionable(
     assert actionable is False
     assert reason == "stale_bot_comment"
 
-
 def test_human_comment_on_old_commit_stays_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -1266,7 +1218,6 @@ def test_human_comment_on_old_commit_stays_actionable(
     )
     assert actionable is True
     assert reason == "actionable"
-
 
 def test_stale_bot_comment_with_matching_sha_stays_actionable(
     pr_resolve_snapshot_module: dict[str, Any],
@@ -1289,11 +1240,9 @@ def test_stale_bot_comment_with_matching_sha_stays_actionable(
     assert actionable is True
     assert reason == "actionable"
 
-
 # ---------------------------------------------------------------------------
 # Ledger path/format normalization (Phase 2)
 # ---------------------------------------------------------------------------
-
 
 def test_load_addressed_ids_reads_disposition_field(
     pr_resolve_snapshot_module: dict[str, Any],
@@ -1311,7 +1260,6 @@ def test_load_addressed_ids_reads_disposition_field(
     ids = extract(entries)
     assert ids == {100, 200}
 
-
 def test_load_addressed_ids_reads_status_field(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -1324,7 +1272,6 @@ def test_load_addressed_ids_reads_status_field(
     ids = extract(entries)
     assert ids == {100, 200}
 
-
 def test_load_addressed_ids_reads_comment_id_key(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -1335,7 +1282,6 @@ def test_load_addressed_ids_reads_comment_id_key(
     ]
     ids = extract(entries)
     assert ids == {500}
-
 
 def test_load_addressed_ids_searches_multiple_paths(
     pr_resolve_snapshot_module: dict[str, Any],
@@ -1361,11 +1307,9 @@ def test_load_addressed_ids_searches_multiple_paths(
     ids = load_ids(ledger_path=ledger_path)
     assert 42 in ids
 
-
 # ---------------------------------------------------------------------------
 # Thread-resolved enrichment (Phase 3)
 # ---------------------------------------------------------------------------
-
 
 def test_review_comment_with_thread_resolved_via_enrichment(
     pr_resolve_snapshot_module: dict[str, Any],
@@ -1402,7 +1346,6 @@ def test_review_comment_with_thread_resolved_via_enrichment(
     assert summary["actionableCommentCount"] == 1
     assert summary["actionableCommentIds"] == [2]
     assert summary["nonActionableReasonCounts"].get("thread_resolved") == 1
-
 
 def test_pr_resolver_skill_requires_orchestrated_merge_completion() -> None:
     skill_text = (

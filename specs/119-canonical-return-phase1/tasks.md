@@ -19,7 +19,6 @@
 - [x] T009 [US1] Add `build_canonical_result` to `moonmind/schemas/agent_runtime_models.py` (DOC-REQ-002)
 - [x] T010 [US1] Write test case asserting `build_canonical_result` enforces correct metadata schema
 
-
 ## Final Phase: Polish & Validation
 
 - [ ] T011 Run `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`

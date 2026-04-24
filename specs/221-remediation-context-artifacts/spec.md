@@ -3,12 +3,12 @@
 **Feature Branch**: `221-remediation-context-artifacts`
 **Created**: 2026-04-21
 **Status**: Draft
-**Input**: Jira Orchestrate for MM-432 using `docs/tmp/jira-orchestration-inputs/MM-432-moonspec-orchestration-input.md` as the canonical MoonSpec orchestration input.
+**Input**: Jira Orchestrate for MM-432 using `spec.md` (Input) as the canonical MoonSpec orchestration input.
 
 Source story: STORY-002.
 Source summary: Build bounded remediation context artifacts.
 Source Jira issue: MM-432.
-Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-432-moonspec-orchestration-input.md`.
+Original brief reference: `spec.md` (Input).
 
 Use the existing Jira Orchestrate workflow for this Jira issue. Do not run implementation inline inside the breakdown task.
 

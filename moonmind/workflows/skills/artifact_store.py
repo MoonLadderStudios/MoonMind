@@ -11,10 +11,8 @@ from typing import Any, Mapping, Protocol
 
 from .skill_plan_contracts import ARTIFACT_REF_PREFIX, ArtifactRef
 
-
 class ArtifactStoreError(RuntimeError):
     """Raised when artifacts cannot be read or written."""
-
 
 class ArtifactStore(Protocol):
     """Minimal artifact store interface used by plan/skill runtime modules."""
@@ -41,7 +39,6 @@ class ArtifactStore(Protocol):
 
     def get_json(self, artifact_ref: str) -> Any:
         pass
-
 
 @dataclass(slots=True)
 class InMemoryArtifactStore:
@@ -107,7 +104,6 @@ class InMemoryArtifactStore:
     def get_json(self, artifact_ref: str) -> Any:
         raw = self.get_bytes(artifact_ref)
         return json.loads(raw.decode("utf-8"))
-
 
 @dataclass(slots=True)
 class FileArtifactStore:
@@ -208,7 +204,6 @@ class FileArtifactStore:
     def get_json(self, artifact_ref: str) -> Any:
         raw = self.get_bytes(artifact_ref)
         return json.loads(raw.decode("utf-8"))
-
 
 __all__ = [
     "ArtifactStore",

@@ -18,9 +18,7 @@ from moonmind.workflows.skills.approval_policy import (
     parse_review_verdict,
 )
 
-
 # ── ApprovalPolicyPolicy ──────────────────────────────────────────────────
-
 
 class TestApprovalPolicyPolicy:
     def test_defaults(self):
@@ -54,9 +52,7 @@ class TestApprovalPolicyPolicy:
         assert payload["enabled"] is True
         assert payload["skip_tool_types"] == ["agent_runtime"]
 
-
 # ── ReviewRequest ─────────────────────────────────────────────────────
-
 
 class TestReviewRequest:
     def _make(self, **overrides):
@@ -94,9 +90,7 @@ class TestReviewRequest:
         assert payload["previous_feedback"] == "try harder"
         assert payload["tool_type"] == "skill"
 
-
 # ── ReviewVerdict ─────────────────────────────────────────────────────
-
 
 class TestReviewVerdict:
     def test_pass(self):
@@ -126,9 +120,7 @@ class TestReviewVerdict:
         assert p["verdict"] == "FAIL"
         assert len(p["issues"]) == 1
 
-
 # ── parse_review_verdict ──────────────────────────────────────────────
-
 
 class TestParseReviewVerdict:
     def test_parse_valid(self):
@@ -156,9 +148,7 @@ class TestParseReviewVerdict:
         )
         assert len(v.issues) == 1
 
-
 # ── build_feedback_input ──────────────────────────────────────────────
-
 
 class TestBuildFeedbackInput:
     def test_injects_review_feedback_key(self):
@@ -178,9 +168,7 @@ class TestBuildFeedbackInput:
         build_feedback_input(original, attempt=1, feedback="f")
         assert "_review_feedback" not in original
 
-
 # ── build_feedback_instruction ────────────────────────────────────────
-
 
 class TestBuildFeedbackInstruction:
     def test_appends_feedback_block(self):
@@ -191,9 +179,7 @@ class TestBuildFeedbackInstruction:
         assert "REVIEW FEEDBACK (attempt 2)" in result
         assert "Still failing" in result
 
-
 # ── build_review_prompt ───────────────────────────────────────────────
-
 
 class TestBuildReviewPrompt:
     def test_produces_populated_prompt(self):

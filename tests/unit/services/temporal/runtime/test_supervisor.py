@@ -12,7 +12,6 @@ from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.temporal.runtime.strategies.base import ManagedRuntimeExitResult
 
-
 class _StubArtifactStorage:
     """Minimal file-based artifact storage for tests (replaces AgentQueueArtifactStorage)."""
 
@@ -28,7 +27,6 @@ class _StubArtifactStorage:
 
     def resolve_storage_path(self, ref):
         return self._root / ref
-
 
 def _make_record(
     store: ManagedRunStore,
@@ -47,7 +45,6 @@ def _make_record(
     store.save(record)
     return record
 
-
 def _resolve_diagnostics_path(
     artifact_storage: _StubArtifactStorage,
     record: ManagedRunRecord,
@@ -55,7 +52,6 @@ def _resolve_diagnostics_path(
     if not record.diagnostics_ref:
         return None
     return str(artifact_storage.resolve_storage_path(record.diagnostics_ref))
-
 
 @pytest.fixture
 def supervisor_env(tmp_path):
@@ -69,7 +65,6 @@ def supervisor_env(tmp_path):
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
     return store, artifact_storage, log_streamer, supervisor
-
 
 @pytest.mark.asyncio
 async def test_success_exit_classification(supervisor_env):
@@ -92,7 +87,6 @@ async def test_success_exit_classification(supervisor_env):
     assert record.failure_class is None
     assert record.diagnostics_ref is not None
 
-
 @pytest.mark.asyncio
 async def test_failure_exit_classification(supervisor_env):
     store, _, _, supervisor = supervisor_env
@@ -114,7 +108,6 @@ async def test_failure_exit_classification(supervisor_env):
     assert record.failure_class == "execution_error"
     assert "exited with code 1" in record.error_message
 
-
 @pytest.mark.asyncio
 async def test_timeout_exit_classification(supervisor_env):
     store, _, _, supervisor = supervisor_env
@@ -134,7 +127,6 @@ async def test_timeout_exit_classification(supervisor_env):
     assert record.status == "timed_out"
     assert record.failure_class == "execution_error"
     assert "timed out" in record.error_message
-
 
 @pytest.mark.asyncio
 async def test_supervise_terminates_stalled_runtime_progress(supervisor_env):
@@ -190,7 +182,6 @@ async def test_supervise_terminates_stalled_runtime_progress(supervisor_env):
         and annotation.get("annotation_type") == "termination_requested_stalled_progress"
         for annotation in annotations
     )
-
 
 @pytest.mark.asyncio
 async def test_supervise_uses_record_started_at_for_progress_probe(supervisor_env):
@@ -248,7 +239,6 @@ async def test_supervise_uses_record_started_at_for_progress_probe(supervisor_en
     assert result.failure_class == "system_error"
     assert to_thread_calls
     assert captured_started_at == [expected_started_at, expected_started_at]
-
 
 @pytest.mark.asyncio
 async def test_stalled_progress_does_not_override_clean_exit_without_termination(supervisor_env):
@@ -317,7 +307,6 @@ async def test_stalled_progress_does_not_override_clean_exit_without_termination
         for annotation in annotations
     )
 
-
 @pytest.mark.asyncio
 async def test_exit_code_file_is_authoritative(supervisor_env, tmp_path):
     store, artifact_storage, _, supervisor = supervisor_env
@@ -357,7 +346,6 @@ async def test_exit_code_file_is_authoritative(supervisor_env, tmp_path):
         for annotation in annotations
     )
 
-
 @pytest.mark.asyncio
 async def test_missing_exit_code_file_fails_closed(supervisor_env, tmp_path):
     store, _, _, supervisor = supervisor_env
@@ -382,7 +370,6 @@ async def test_missing_exit_code_file_fails_closed(supervisor_env, tmp_path):
     assert record.status == "failed"
     assert record.exit_code == 1
     assert record.failure_class == "execution_error"
-
 
 @pytest.mark.asyncio
 async def test_timeout_ignores_exit_code_file_and_cleans_it(
@@ -411,7 +398,6 @@ async def test_timeout_ignores_exit_code_file_and_cleans_it(
     assert record.status == "timed_out"
     assert record.exit_code is None
     assert not exit_code_path.exists()
-
 
 @pytest.mark.asyncio
 async def test_supervise_limits_repeated_warning_annotations(supervisor_env):
@@ -450,7 +436,6 @@ async def test_supervise_limits_repeated_warning_annotations(supervisor_env):
         in str(warning_annotations[0].get("text", ""))
     )
     assert warning_annotations[0].get("metadata", {}).get("duplicate_count") == 3
-
 
 @pytest.mark.asyncio
 async def test_supervise_debounces_no_output_interval(supervisor_env):
@@ -509,7 +494,6 @@ async def test_supervise_debounces_no_output_interval(supervisor_env):
     ]
     assert len(no_output_annotations) == 2
 
-
 @pytest.mark.asyncio
 async def test_cancel_terminates(supervisor_env):
     store, _, _, supervisor = supervisor_env
@@ -528,7 +512,6 @@ async def test_cancel_terminates(supervisor_env):
     loaded = store.load("run-1")
     assert loaded.status == "canceled"
     assert "run-1" not in supervisor._active_processes
-
 
 @pytest.mark.asyncio
 async def test_cancel_cleans_registered_runtime_files(supervisor_env, tmp_path):
@@ -557,7 +540,6 @@ async def test_cancel_cleans_registered_runtime_files(supervisor_env, tmp_path):
     assert loaded.status == "canceled"
     assert not cleanup_path.exists()
     assert not deferred_cleanup_path.exists()
-
 
 @pytest.mark.asyncio
 async def test_supervise_preserves_deferred_cleanup_until_explicit_release(
@@ -589,7 +571,6 @@ async def test_supervise_preserves_deferred_cleanup_until_explicit_release(
 
     assert not deferred_cleanup_path.exists()
 
-
 def test_cleanup_runtime_files_removes_directories(tmp_path):
     nested_dir = tmp_path / "cleanup.dir" / "nested"
     nested_dir.mkdir(parents=True)
@@ -600,7 +581,6 @@ def test_cleanup_runtime_files_removes_directories(tmp_path):
 
     assert not (tmp_path / "cleanup.dir").exists()
 
-
 @pytest.mark.asyncio
 async def test_cancel_without_process(supervisor_env):
     store, _, _, supervisor = supervisor_env
@@ -610,7 +590,6 @@ async def test_cancel_without_process(supervisor_env):
 
     loaded = store.load("run-1")
     assert loaded.status == "canceled"
-
 
 @pytest.mark.asyncio
 async def test_reconcile_dead_pids(supervisor_env):
@@ -626,7 +605,6 @@ async def test_reconcile_dead_pids(supervisor_env):
     assert reconciled[0].status == "failed"
     assert reconciled[0].failure_class == "system_error"
 
-
 @pytest.mark.asyncio
 async def test_reconcile_skips_alive_pids(supervisor_env):
     store, _, _, supervisor = supervisor_env
@@ -638,7 +616,6 @@ async def test_reconcile_skips_alive_pids(supervisor_env):
     assert len(reconciled) == 0
     loaded = store.load("run-1")
     assert loaded.status == "running"
-
 
 @pytest.mark.asyncio
 async def test_heartbeat_updates(supervisor_env):
@@ -665,11 +642,9 @@ async def test_heartbeat_updates(supervisor_env):
     loaded = store.load("run-1")
     assert loaded.last_heartbeat_at is not None
 
-
 # ---------------------------------------------------------------------------
 # Completion callback tests
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_completion_callback_called_on_success(supervisor_env):
@@ -703,7 +678,6 @@ async def test_completion_callback_called_on_success(supervisor_env):
     assert "summary" in payload
     assert isinstance(payload["output_refs"], list)
 
-
 @pytest.mark.asyncio
 async def test_completion_callback_called_on_failure(supervisor_env):
     store, _, log_streamer, _ = supervisor_env
@@ -735,7 +709,6 @@ async def test_completion_callback_called_on_failure(supervisor_env):
     assert payload["failure_class"] == "execution_error"
     assert "exited with code 1" in payload["summary"]
 
-
 @pytest.mark.asyncio
 async def test_completion_callback_error_does_not_crash_supervisor(supervisor_env):
     store, _, log_streamer, _ = supervisor_env
@@ -760,7 +733,6 @@ async def test_completion_callback_error_does_not_crash_supervisor(supervisor_en
         run_id="run-cb-err", process=process, timeout_seconds=30
     )
     assert record.status == "completed"
-
 
 @pytest.mark.asyncio
 async def test_supervise_uses_output_parser_from_strategy(supervisor_env, tmp_path):

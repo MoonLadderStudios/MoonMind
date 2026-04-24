@@ -28,7 +28,6 @@ No remediation required. The latest analysis reports 100% requirement coverage, 
 
 No CRITICAL, HIGH, MEDIUM, or LOW remediation items were identified for this artifact.
 
-
 ## Remediation Item Fields
 
 No remediation rows are required because no remediation items were found. If any item had been found, each row would include: Severity (CRITICAL/HIGH/MEDIUM/LOW), Artifact, Location, Problem, Remediation, and Rationale.

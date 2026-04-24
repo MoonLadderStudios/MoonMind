@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import textwrap
 
-
 from moonmind.manifest.validator import (
     ValidationResult,
     validate_manifest_file,
     validate_manifest_string,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,15 +42,12 @@ MINIMAL_VALID = textwrap.dedent("""\
         indices: ["idx1"]
 """)
 
-
 def _result(yaml_str: str) -> ValidationResult:
     return validate_manifest_string(yaml_str)
-
 
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
-
 
 class TestValidManifest:
     def test_minimal_valid(self):
@@ -67,11 +62,9 @@ class TestValidManifest:
         r = _result(MINIMAL_VALID)
         assert r.summary().startswith("✓")
 
-
 # ---------------------------------------------------------------------------
 # Schema validation
 # ---------------------------------------------------------------------------
-
 
 class TestSchemaValidation:
     def test_missing_required_field_embeddings(self):
@@ -103,11 +96,9 @@ class TestSchemaValidation:
         r = _result(bad)
         assert not r.valid
 
-
 # ---------------------------------------------------------------------------
 # Cross-field reference validation
 # ---------------------------------------------------------------------------
-
 
 class TestReferenceValidation:
     def test_retriever_references_unknown_index(self):
@@ -122,11 +113,9 @@ class TestReferenceValidation:
         assert not r.valid
         assert any("missing_ds" in e.message for e in r.errors)
 
-
 # ---------------------------------------------------------------------------
 # Secret leak detection
 # ---------------------------------------------------------------------------
-
 
 class TestSecretDetection:
     def test_github_pat_rejected(self):
@@ -162,11 +151,9 @@ class TestSecretDetection:
         # The key pattern should be detected somewhere
         assert any("secret" in i.message.lower() for i in r.issues)
 
-
 # ---------------------------------------------------------------------------
 # Auth warnings
 # ---------------------------------------------------------------------------
-
 
 class TestAuthWarnings:
     def test_github_reader_without_auth_warns(self):
@@ -184,11 +171,9 @@ class TestAuthWarnings:
         r = _result(MINIMAL_VALID)
         assert len(r.warnings) == 0
 
-
 # ---------------------------------------------------------------------------
 # ID uniqueness
 # ---------------------------------------------------------------------------
-
 
 class TestIdUniqueness:
     def test_duplicate_datasource_id(self):
@@ -215,11 +200,9 @@ class TestIdUniqueness:
         assert not r.valid
         assert any("Duplicate" in e.message for e in r.errors)
 
-
 # ---------------------------------------------------------------------------
 # File-based validation
 # ---------------------------------------------------------------------------
-
 
 class TestFileValidation:
     def test_file_not_found(self):
@@ -233,11 +216,9 @@ class TestFileValidation:
         r = validate_manifest_file(str(f))
         assert r.valid
 
-
 # ---------------------------------------------------------------------------
 # YAML parse errors
 # ---------------------------------------------------------------------------
-
 
 class TestYamlErrors:
     def test_invalid_yaml(self):
@@ -249,11 +230,9 @@ class TestYamlErrors:
         assert not r.valid
         assert any("mapping" in e.message for e in r.errors)
 
-
 # ---------------------------------------------------------------------------
 # T026: PII redaction enforcement
 # ---------------------------------------------------------------------------
-
 
 class TestPiiRedactionEnforcement:
     def test_pii_enabled_without_splitter_warns(self):
@@ -284,11 +263,9 @@ class TestPiiRedactionEnforcement:
         assert r.valid
         assert not any("piiRedaction" in w.field for w in r.warnings)
 
-
 # ---------------------------------------------------------------------------
 # T027: Metadata allowlist enforcement
 # ---------------------------------------------------------------------------
-
 
 class TestMetadataAllowlistEnforcement:
     def test_extra_metadata_not_in_allowlist_errors(self):
@@ -369,11 +346,9 @@ class TestMetadataAllowlistEnforcement:
         r = _result(yaml_str)
         assert r.valid
 
-
 # ---------------------------------------------------------------------------
 # T010: CI example YAML validation
 # ---------------------------------------------------------------------------
-
 
 class TestCIExampleValidation:
     """Validate all example manifest YAML files (CI gate)."""

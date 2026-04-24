@@ -2,7 +2,6 @@ import logging
 import pathlib
 from typing import Optional
 
-
 def read_text_file(file_path: str, safe_base_dir: Optional[str] = None):
     logger = logging.getLogger(__name__)
     if not file_path:

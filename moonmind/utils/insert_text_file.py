@@ -2,7 +2,6 @@ import io
 import logging
 from pathlib import Path
 
-
 def insert_text_file(
     file_path, text, line_number, blank_lines_before=0, blank_lines_after=0
 ):

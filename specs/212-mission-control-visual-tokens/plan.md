@@ -1,6 +1,6 @@
 # Implementation Plan: Mission Control Visual Tokens and Atmosphere
 
-**Branch**: `run-jira-orchestrate-for-mm-424-establis-342df6cf` | **Date**: 2026-04-20 | **Spec**: `specs/212-mission-control-visual-tokens/spec.md`  
+**Branch**: `run-jira-orchestrate-for-mm-424-establis-342df6cf` | **Date**: 2026-04-20 | **Spec**: `specs/212-mission-control-visual-tokens/spec.md` 
 **Input**: Single-story feature specification from `specs/212-mission-control-visual-tokens/spec.md`
 
 ## Summary
@@ -18,20 +18,20 @@ Establish MM-424 by promoting Mission Control's atmospheric and glass styling in
 | FR-005 | implemented_verified | semantic text, muted, border, and status token usage remains authoritative; verification records no task/runtime behavior change | no new implementation | final verify |
 | FR-006 | implemented_verified | shared app-shell rendering tests pass for route loading, alerts, constrained/data-wide shells, and unknown pages | no new implementation | final verify |
 | FR-007 | implemented_verified | `mission-control.test.tsx` covers token definitions and token consumption; targeted Vitest rerun passed with 14 tests | no new implementation | final verify |
-| FR-008 | implemented_verified | `spec.md`, `verification.md`, and `docs/tmp/jira-orchestration-inputs/MM-424-moonspec-orchestration-input.md` preserve MM-424 and the trusted Jira preset brief | no new implementation | final verify |
+| FR-008 | implemented_verified | `spec.md`, `verification.md`, and `spec.md` (Input) preserve MM-424 and the trusted Jira preset brief | no new implementation | final verify |
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control tests; CSS for shared Mission Control styling  
-**Primary Dependencies**: React, Vite/Vitest, existing Mission Control shared app shell, existing shared stylesheet  
-**Storage**: No new persistent storage  
-**Unit Testing**: `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx` for focused validation; `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx` when final wrapper validation is feasible  
-**Integration Testing**: Shared app-shell rendering in `frontend/src/entrypoints/mission-control.test.tsx`; no compose-backed integration is required for this CSS-only design-system story  
-**Target Platform**: Browser-hosted Mission Control UI served by FastAPI  
-**Project Type**: Web UI design-system foundation  
-**Performance Goals**: Avoid adding JavaScript, network calls, heavy runtime effects, or additional rendering loops  
-**Constraints**: Preserve existing routes, lazy-loaded pages, dashboard alerts, task payload semantics, and tokenized readability  
-**Scale/Scope**: One shared CSS file, one shared app-shell test file, MoonSpec artifacts, and traceability input under `docs/tmp`
+**Language/Version**: TypeScript/React for Mission Control tests; CSS for shared Mission Control styling 
+**Primary Dependencies**: React, Vite/Vitest, existing Mission Control shared app shell, existing shared stylesheet 
+**Storage**: No new persistent storage 
+**Unit Testing**: `npm run ui:test -- frontend/src/entrypoints/mission-control.test.tsx` for focused validation; `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx` when final wrapper validation is feasible 
+**Integration Testing**: Shared app-shell rendering in `frontend/src/entrypoints/mission-control.test.tsx`; no compose-backed integration is required for this CSS-only design-system story 
+**Target Platform**: Browser-hosted Mission Control UI served by FastAPI 
+**Project Type**: Web UI design-system foundation 
+**Performance Goals**: Avoid adding JavaScript, network calls, heavy runtime effects, or additional rendering loops 
+**Constraints**: Preserve existing routes, lazy-loaded pages, dashboard alerts, task payload semantics, and tokenized readability 
+**Scale/Scope**: One shared CSS file, one shared app-shell test file, MoonSpec artifacts, and traceability input under `local-only handoffs`
 
 ## Constitution Check
 
@@ -46,7 +46,7 @@ Establish MM-424 by promoting Mission Control's atmospheric and glass styling in
 - IX. Resilient by Default: PASS. CSS-only change has no workflow side effects and is covered by app-shell regression tests.
 - X. Continuous Improvement: PASS. Verification evidence is captured in MoonSpec artifacts.
 - XI. Spec-Driven Development: PASS. Implementation proceeds from this single-story spec.
-- XII. Documentation Separation: PASS. Desired-state docs remain canonical; runtime traceability input stays under `docs/tmp`.
+- XII. Documentation Separation: PASS. Desired-state docs remain canonical; runtime traceability input stays under `local-only handoffs`.
 - XIII. Pre-Release Compatibility Policy: PASS. No compatibility aliases or hidden fallbacks are introduced.
 
 ## Project Structure
@@ -58,7 +58,7 @@ specs/212-mission-control-visual-tokens/
 ├── research.md
 ├── quickstart.md
 ├── contracts/
-│   └── visual-token-contract.md
+│ └── visual-token-contract.md
 ├── tasks.md
 └── verification.md
 
@@ -66,7 +66,6 @@ frontend/src/
 ├── entrypoints/mission-control.test.tsx
 └── styles/mission-control.css
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-424-moonspec-orchestration-input.md
 ```
 

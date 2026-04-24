@@ -458,7 +458,7 @@ This design is considered implemented when all of the following are true:
 Implementation sequencing and migration details should be tracked in:
 
 ```text
-docs/tmp/021-TaskEditingSystemPlan.md
+docs/Tasks/TaskEditingSystem.md
 ```
 
 That plan should remain an execution checklist. This document is the canonical target-state design.

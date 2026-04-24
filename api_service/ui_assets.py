@@ -5,34 +5,26 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit, urlunsplit
 
-
 class MissionControlUIAssetsError(Exception):
     """Mission Control cannot resolve Vite assets (strict mode; see MOONMIND_LENIENT_UI_ASSETS)."""
-
 
 class ManifestNotFoundError(MissionControlUIAssetsError):
     pass
 
-
 class ManifestInvalidJsonError(MissionControlUIAssetsError):
     pass
-
 
 class EntrypointMissingError(MissionControlUIAssetsError):
     pass
 
-
 class AssetFileMissingError(MissionControlUIAssetsError):
     pass
-
 
 class InvalidDevServerUrlError(MissionControlUIAssetsError):
     pass
 
-
 def local_ui_dist_root() -> Path:
     return Path(__file__).resolve().parent / "static" / "task_dashboard" / "dist"
-
 
 def bundled_ui_dist_root() -> Path:
     return Path(
@@ -42,19 +34,15 @@ def bundled_ui_dist_root() -> Path:
         )
     )
 
-
 def _manifest_path_for_dist_root(dist_root: Path) -> Path:
     return dist_root / ".vite" / "manifest.json"
-
 
 def _configured_manifest_path() -> str | None:
     value = os.environ.get("VITE_MANIFEST_PATH")
     return value if value else None
 
-
 def _manifest_entry_key(entrypoint: str) -> str:
     return f"entrypoints/{entrypoint}.tsx"
-
 
 def _default_manifest_path(entrypoint: str = "mission-control") -> str:
     configured_path = _configured_manifest_path()
@@ -63,14 +51,12 @@ def _default_manifest_path(entrypoint: str = "mission-control") -> str:
 
     return str(_manifest_path_for_dist_root(resolve_mission_control_dist_root(entrypoint)))
 
-
 def _lenient_ui_assets() -> bool:
     return os.environ.get("MOONMIND_LENIENT_UI_ASSETS", "").lower() in (
         "1",
         "true",
         "yes",
     )
-
 
 def _vite_dev_server_url() -> str | None:
     raw = os.environ.get("MOONMIND_UI_DEV_SERVER_URL", "").strip()
@@ -90,7 +76,6 @@ def _vite_dev_server_url() -> str | None:
 
     normalized_path = parsed.path.rstrip("/")
     return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
-
 
 class ViteAssetResolver:
     """Loads the Vite manifest for tests and tooling (lenient I/O)."""
@@ -118,10 +103,8 @@ class ViteAssetResolver:
             return manifest[key]
         return {}
 
-
 def _dist_root_for_manifest(manifest_path: str) -> Path:
     return Path(manifest_path).resolve().parent.parent
-
 
 def _manifest_entry_is_usable(
     dist_root: Path, manifest: Dict[str, Any], entrypoint: str
@@ -138,7 +121,6 @@ def _manifest_entry_is_usable(
         return False
 
     return True
-
 
 def _manifest_tree_is_usable(
     dist_root: Path, entrypoint: str | None = None
@@ -174,14 +156,12 @@ def _manifest_tree_is_usable(
 
     return True
 
-
 def _dist_root_manifest_mtime_ns(dist_root: Path) -> int:
     manifest_path = _manifest_path_for_dist_root(dist_root)
     try:
         return manifest_path.stat().st_mtime_ns
     except OSError:
         return -1
-
 
 def resolve_mission_control_dist_root(entrypoint: str = "mission-control") -> Path:
     configured_manifest_path = _configured_manifest_path()
@@ -203,7 +183,6 @@ def resolve_mission_control_dist_root(entrypoint: str = "mission-control") -> Pa
         return local_root
 
     return bundled_root
-
 
 def _verify_asset_paths(dist_root: Path, asset_info: Dict[str, Any]) -> None:
     js_file = asset_info.get("file")
@@ -228,7 +207,6 @@ def _verify_asset_paths(dist_root: Path, asset_info: Dict[str, Any]) -> None:
             raise AssetFileMissingError(
                 f"Referenced stylesheet is missing on disk: {css_path}"
             )
-
 
 def _walk_manifest_imports(
     manifest: Dict[str, Any], manifest_key: str, seen: set[str] | None = None
@@ -262,7 +240,6 @@ def _walk_manifest_imports(
     ordered_assets.append((manifest_key, asset_info))
     return ordered_assets
 
-
 def _collect_css_files(
     manifest: Dict[str, Any], manifest_key: str
 ) -> list[str]:
@@ -285,7 +262,6 @@ def _collect_css_files(
 
     return css_files
 
-
 def _vite_dev_server_assets(entrypoint: str, dev_server_url: str) -> str:
     client_url = escape(f"{dev_server_url}/@vite/client", quote=True)
     entrypoint_url = escape(
@@ -297,7 +273,6 @@ def _vite_dev_server_assets(entrypoint: str, dev_server_url: str) -> str:
             f'<script type="module" src="{entrypoint_url}"></script>',
         )
     )
-
 
 def ui_assets(entrypoint: str) -> str:
     """Return HTML tags to load the Vite bundle for a Mission Control entrypoint.

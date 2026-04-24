@@ -152,7 +152,7 @@
 - [X] T063 [US4] Add deployment-safety helper logic for sensitive changed paths, explicit base-ref comparison, replay coverage, active feature override, and cutover validation in `moonmind/workflows/temporal/deployment_safety.py`
 - [X] T064 [US4] Add executable deployment-safety validation entrypoint with `--base-ref` and local `SPECIFY_FEATURE`/active-feature handling in `tools/validate_agent_session_deployment_safety.py`
 - [X] T065 [US4] Wire AgentSession deployment-safety validation into backend CI with full-history checkout and explicit pull-request base SHA handling in `.github/workflows/pytest-unit-tests.yml`
-- [X] T066 [US4] Add cutover playbook entries for enabling steering, enabling Continue-As-New, changing cancel/terminate semantics, and introducing visibility metadata in `docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md`
+- [X] T066 [US4] Add cutover playbook entries for enabling steering, enabling Continue-As-New, changing cancel/terminate semantics, and introducing visibility metadata in `docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md`
 - [X] T067 [US4] Wire deployment-safety validation guidance into the feature quickstart in `specs/165-agent-session-deployment-safety/quickstart.md`
 
 ### Validation for User Story 4

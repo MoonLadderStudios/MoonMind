@@ -6,7 +6,6 @@ from pathlib import Path
 
 from moonmind.rag.overlay import OverlayChunk, chunk_file
 
-
 def test_overlay_chunk_hash_is_deterministic() -> None:
     chunk = OverlayChunk(
         path=Path("test.py"),
@@ -20,7 +19,6 @@ def test_overlay_chunk_hash_is_deterministic() -> None:
     assert hash1 == hash2
     assert hash1.startswith("sha256:")
 
-
 def test_overlay_chunk_hash_differs_for_different_text() -> None:
     chunk_a = OverlayChunk(
         path=Path("test.py"), offset_start=0, offset_end=5, text="hello"
@@ -30,7 +28,6 @@ def test_overlay_chunk_hash_differs_for_different_text() -> None:
     )
 
     assert chunk_a.chunk_hash != chunk_b.chunk_hash
-
 
 def test_chunk_file_splits_content(tmp_path: Path) -> None:
     file = tmp_path / "test.py"
@@ -45,14 +42,12 @@ def test_chunk_file_splits_content(tmp_path: Path) -> None:
     # Second chunk starts at 30-10=20 (overlap)
     assert chunks[1].offset_start == 20
 
-
 def test_chunk_file_returns_empty_for_empty_file(tmp_path: Path) -> None:
     file = tmp_path / "empty.py"
     file.write_text("", encoding="utf-8")
 
     result = list(chunk_file(file, chunk_chars=30, overlap=10))
     assert result == []
-
 
 def test_chunk_file_single_chunk_for_small_file(tmp_path: Path) -> None:
     file = tmp_path / "small.py"

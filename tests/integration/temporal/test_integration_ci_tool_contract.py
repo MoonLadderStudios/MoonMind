@@ -25,9 +25,7 @@ from moonmind.workloads.tool_bridge import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 WORKSPACE_ROOT = Path("/work/agent_jobs")
-
 
 def _integration_profile_payload() -> dict[str, object]:
     return {
@@ -49,7 +47,6 @@ def _integration_profile_payload() -> dict[str, object]:
         "timeoutSeconds": 3600,
         "maxTimeoutSeconds": 7200,
     }
-
 
 class _FakeLauncher:
     def __init__(self) -> None:
@@ -76,7 +73,6 @@ class _FakeLauncher:
                 "artifactPublication": {"status": "complete"},
             },
         )
-
 
 async def test_moonmind_integration_ci_routes_through_curated_workload_tool() -> None:
     snapshot = create_registry_snapshot(
@@ -133,7 +129,6 @@ async def test_moonmind_integration_ci_routes_through_curated_workload_tool() ->
     assert result.outputs["stdoutRef"] == "art:sha256:stdout"
     assert result.outputs["stderrRef"] == "art:sha256:stderr"
     assert result.outputs["diagnosticsRef"] == "art:sha256:diagnostics"
-
 
 async def test_workflow_docker_mode_keeps_registry_and_dispatch_aligned() -> None:
     registry = RunnerProfileRegistry(

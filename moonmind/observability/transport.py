@@ -7,7 +7,6 @@ from typing import AsyncIterator
 
 from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 
-
 class SpoolLogPublisher:
     """Publishes live log chunks by appending them to a workspace spool file."""
 
@@ -24,7 +23,6 @@ class SpoolLogPublisher:
         # but in our architecture, only the single supervisor writes to it.
         with open(self._spool_path, "a", encoding="utf-8") as f:
             f.write(payload + "\n")
-
 
 class SpoolLogReader:
     """Consumes live log chunks by tailing the spool file."""

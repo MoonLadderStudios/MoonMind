@@ -9,7 +9,6 @@ from ..config.settings import AppSettings
 
 logger = logging.getLogger(__name__)
 
-
 def build_vector_store(settings: AppSettings, embed_model, embed_dimensions: int = -1):
     """
     High-level factory for building a vector store based on provider settings.
@@ -21,7 +20,6 @@ def build_vector_store(settings: AppSettings, embed_model, embed_dimensions: int
         raise ValueError(
             f"Unsupported vector store provider: {settings.vector_store_provider}"
         )
-
 
 def build_qdrant(settings: AppSettings, embed_model, embed_dimensions: int = -1):
     """

@@ -20,7 +20,6 @@ from moonmind.services.observability.subscriber import log_stream_generator
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -34,16 +33,13 @@ def _evt(seq: int, stream: LogStreamType = LogStreamType.stdout, text: str = "")
         text=text or f"log line {seq}",
     )
 
-
 class _AlwaysConnected:
     async def is_disconnected(self):
         return False
 
-
 class _AlwaysDisconnected:
     async def is_disconnected(self):
         return True
-
 
 class _DisconnectAfterFirstCheck:
     """Request stub that is connected for the first check, then disconnects."""
@@ -54,7 +50,6 @@ class _DisconnectAfterFirstCheck:
     async def is_disconnected(self) -> bool:
         self._checks += 1
         return self._checks > 1
-
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -86,7 +81,6 @@ async def test_publisher_fanout_to_multiple_subscribers(anyio_backend="asyncio")
     assert len(collected_a) == 2  # DOC-REQ-002
     assert len(collected_b) == 2
 
-
 @pytest.mark.asyncio
 async def test_logstreamevent_payload_shape():
     """DOC-REQ-003, DOC-REQ-008: LogStreamEvent serialises correctly incl system stream."""
@@ -98,7 +92,6 @@ async def test_logstreamevent_payload_shape():
     assert data["text"] == "Supervisor crashed"
     assert "offset" in data
     assert "timestamp" in data
-
 
 @pytest.mark.asyncio
 async def test_since_resumption_yields_history_then_live():
@@ -128,7 +121,6 @@ async def test_since_resumption_yields_history_then_live():
 
     assert sequences_seen == [3, 4, 5], f"Expected [3, 4, 5], got {sequences_seen}"
 
-
 @pytest.mark.asyncio
 async def test_disconnect_cleanup_releases_subscriber():
     """DOC-REQ-005: Disconnecting request causes subscriber queue to be removed."""
@@ -157,7 +149,6 @@ async def test_disconnect_cleanup_releases_subscriber():
     queues = pub._channels.get(run_id, [])
     assert len(queues) == 0, f"Expected 0 queues after disconnect, got {len(queues)}"
 
-
 @pytest.mark.asyncio
 async def test_publisher_history_bounded():
     """DOC-REQ-006 (implicit): history is bounded to max_history items."""
@@ -170,7 +161,6 @@ async def test_publisher_history_bounded():
     history = pub._histories[run_id]
     assert len(history) == 3
     assert history[0].sequence == 2  # oldest kept
-
 
 @pytest.mark.asyncio
 async def test_sse_generator_format():

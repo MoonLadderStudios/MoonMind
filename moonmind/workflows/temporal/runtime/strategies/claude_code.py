@@ -9,7 +9,6 @@ from moonmind.workflows.temporal.runtime.strategies.base import (
     ManagedRuntimeStrategy,
 )
 
-
 class ClaudeCodeStrategy(ManagedRuntimeStrategy):
     """Strategy for launching ``claude`` CLI runs."""
 

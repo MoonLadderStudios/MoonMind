@@ -51,14 +51,12 @@ _AUTH_FAILURE_MARKERS = (
     "authentication failed",
 )
 
-
 @dataclass(frozen=True)
 class ProviderFailureClassification:
     failure_class: str
     provider_error_code: str
     retry_recommendation: str
     reason: str
-
 
 def classify_provider_failure(
     reason: Any,
@@ -92,7 +90,6 @@ def classify_provider_failure(
         )
     return None
 
-
 def provider_error_requires_cooldown(
     *,
     provider_error_code: str | None,
@@ -106,7 +103,6 @@ def provider_error_requires_cooldown(
         PROVIDER_RATE_LIMIT_ERROR_CODE,
         PROVIDER_CAPACITY_ERROR_CODE,
     } or normalized_retry == RETRY_AFTER_COOLDOWN_RECOMMENDATION
-
 
 __all__ = [
     "PROVIDER_AUTH_ERROR_CODE",

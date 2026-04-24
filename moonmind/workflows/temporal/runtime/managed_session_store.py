@@ -11,9 +11,7 @@ from typing import Any
 
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 
-
 TERMINAL_MANAGED_SESSION_STATUSES = frozenset({"terminated", "degraded", "failed"})
-
 
 class ManagedSessionStore:
     """Persist ``CodexManagedSessionRecord`` objects under a store root."""

@@ -36,7 +36,6 @@ __all__ = [
     "with_retry_suffix",
 ]
 
-
 def _secure_delete_file(path: Path) -> None:
     """Best-effort secure deletion for ``path`` if it points to a file."""
 
@@ -88,7 +87,6 @@ def _secure_delete_file(path: Path) -> None:
     except OSError as exc:  # pragma: no cover - filesystem specific
         logger.warning("Failed to remove %s during secure deletion: %s", path, exc)
 
-
 def _secure_rmtree(path: Path) -> None:
     """Securely delete directory trees by overwriting contents before removal."""
 
@@ -139,10 +137,8 @@ def _secure_rmtree(path: Path) -> None:
         logger.debug("Falling back to recursive removal for %s: %s", path, exc)
         shutil.rmtree(path, ignore_errors=True)
 
-
 class WorkspaceConfigurationError(RuntimeError):
     """Raised when workspace paths fall outside the configured root."""
-
 
 @dataclass(frozen=True, slots=True)
 class RunWorkspacePaths:
@@ -155,7 +151,6 @@ class RunWorkspacePaths:
     skills_active_path: Path
     agents_skills_path: Path
     gemini_skills_path: Path
-
 
 class WorkflowWorkspaceManager:
     """Manage run-scoped directories for workflow automation.
@@ -519,14 +514,12 @@ class WorkflowWorkspaceManager:
                 f"Path {resolved} is outside workspace root {self.workspace_root}"
             )
 
-
 def sanitize_branch_component(component: str) -> str:
     """Return a repository-branch-safe component string."""
 
     cleaned = _BRANCH_COMPONENT_PATTERN.sub("-", component.strip())
     cleaned = cleaned.strip("-")
     return cleaned.lower() or "run"
-
 
 def generate_branch_name(
     run_id: UUID | str,
@@ -549,7 +542,6 @@ def generate_branch_name(
     if suffix:
         tail = f"{tail}-{sanitize_branch_component(suffix)}"
     return f"{prefix_fragment}/{date_fragment}/{tail}"
-
 
 def with_retry_suffix(branch_name: str, attempt: int) -> str:
     """Append a retry suffix for non-initial attempts while preserving hierarchy."""

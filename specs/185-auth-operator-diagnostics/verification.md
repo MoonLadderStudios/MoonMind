@@ -6,7 +6,7 @@ Verdict: FULLY_IMPLEMENTED
 
 - Jira issue: MM-336
 - Feature spec: `specs/185-auth-operator-diagnostics/spec.md`
-- Preserved source brief: `docs/tmp/jira-orchestration-inputs/MM-336-moonspec-orchestration-input.md`
+- Preserved source brief: `spec.md` (Input)
 - Runtime mode: runtime
 
 ## Requirement Coverage

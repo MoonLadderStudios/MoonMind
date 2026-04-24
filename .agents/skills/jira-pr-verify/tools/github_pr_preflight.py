@@ -9,7 +9,6 @@ import subprocess
 import sys
 from typing import Any
 
-
 def _run(command: list[str]) -> dict[str, Any]:
     completed = subprocess.run(
         command,
@@ -24,7 +23,6 @@ def _run(command: list[str]) -> dict[str, Any]:
         "stdout": completed.stdout.strip(),
         "stderr": completed.stderr.strip(),
     }
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -62,7 +60,6 @@ def main() -> int:
     ok = all(check["returncode"] == 0 for check in checks)
     print(json.dumps({"ok": ok, "repo": args.repo, "pr": str(args.pr), "checks": checks}))
     return 0 if ok else 1
-
 
 if __name__ == "__main__":
     sys.exit(main())

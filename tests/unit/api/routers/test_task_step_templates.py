@@ -17,14 +17,12 @@ from api_service.api.routers.task_step_templates import (
 from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
 
-
 def _mock_user():
     return SimpleNamespace(
         id=uuid4(),
         email="template-tester@example.com",
         is_superuser=True,
     )
-
 
 def _override_user_dependencies(app: FastAPI) -> None:
     dependencies = {
@@ -39,7 +37,6 @@ def _override_user_dependencies(app: FastAPI) -> None:
     for dependency in dependencies:
         app.dependency_overrides[dependency] = _mock_user
 
-
 def _build_app() -> tuple[TestClient, AsyncMock, AsyncMock]:
     app = FastAPI()
     app.include_router(router)
@@ -51,7 +48,6 @@ def _build_app() -> tuple[TestClient, AsyncMock, AsyncMock]:
     settings.feature_flags.task_template_catalog = True
     settings.feature_flags.disable_task_template_catalog = False
     return TestClient(app), catalog, saver
-
 
 def test_list_templates_success() -> None:
     client, catalog, _ = _build_app()
@@ -82,7 +78,6 @@ def test_list_templates_success() -> None:
     assert response.status_code == 200
     assert response.json()["items"][0]["slug"] == "example"
 
-
 def test_list_templates_defaults_to_personal_scope_when_omitted() -> None:
     client, catalog, _ = _build_app()
     catalog.list_templates.return_value = []
@@ -93,7 +88,6 @@ def test_list_templates_defaults_to_personal_scope_when_omitted() -> None:
     kwargs = catalog.list_templates.await_args.kwargs
     assert kwargs["scope"] == "personal"
     assert kwargs["scope_ref"] is not None
-
 
 def test_expand_template_success() -> None:
     client, catalog, _ = _build_app()
@@ -128,7 +122,6 @@ def test_expand_template_success() -> None:
     assert payload["appliedTemplate"]["slug"] == "demo"
     assert payload["composition"]["slug"] == "demo"
     assert payload["capabilities"] == ["codex", "git"]
-
 
 def test_save_from_task_success() -> None:
     client, _, saver = _build_app()
@@ -166,7 +159,6 @@ def test_save_from_task_success() -> None:
 
     assert response.status_code == 201
     assert response.json()["slug"] == "saved-template"
-
 
 def test_list_templates_returns_404_when_catalog_disabled() -> None:
     client, _, _ = _build_app()

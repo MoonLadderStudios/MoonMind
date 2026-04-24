@@ -1,6 +1,6 @@
 # Tasks: DooD Phase 5 Hardening
 
-**Input**: Design documents from `/specs/158-dood-phase5-hardening/`  
+**Input**: Design documents from `/specs/158-dood-phase5-hardening/` 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md
 
 **Tests**: Required. The feature request explicitly requires test-driven development and validation tests for runtime behavior.
@@ -150,11 +150,11 @@
 
 **Purpose**: Final integration checks, tracker consistency, and canonical verification.
 
-- [X] T044 [P] Update Phase 5 completion notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md` if runtime work changes tracker state
+- [X] T044 [P] Update Phase 5 completion notes in `docs/ManagedAgents/DockerOutOfDocker.md` if runtime work changes tracker state
 - [X] T045 [P] Validate the planning contract schema with `python -m json.tool specs/158-dood-phase5-hardening/contracts/workload-hardening-contract.schema.json`
 - [X] T046 Run focused workload and Temporal verification with `pytest tests/unit/workloads tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py::test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting -q`
 - [X] T047 Run canonical final verification with `./tools/test_unit.sh`
-- [X] T048 Review `git diff` for unrelated changes and ensure no secrets or raw environment dumps appear in `moonmind/`, `tests/`, `docs/tmp/`, or `specs/158-dood-phase5-hardening/`
+- [X] T048 Review `git diff` for unrelated changes and ensure no secrets or raw environment dumps appear in `moonmind/`, `tests/`, `artifacts/`, or `specs/158-dood-phase5-hardening/`
 
 ---
 

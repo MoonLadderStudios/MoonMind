@@ -36,7 +36,6 @@ from moonmind.workflows.temporal.service import TemporalExecutionService
 
 CURRENT_USER_DEP = get_current_user()
 
-
 class _QueryHandle:
     def __init__(self, state: dict[str, dict[str, object]], workflow_id: str) -> None:
         self._state = state
@@ -46,14 +45,12 @@ class _QueryHandle:
         workflow_state = self._state.get(self._workflow_id, {})
         return workflow_state.get(name)
 
-
 class _QueryClient:
     def __init__(self, state: dict[str, dict[str, object]]) -> None:
         self._state = state
 
     def get_workflow_handle(self, workflow_id: str) -> _QueryHandle:
         return _QueryHandle(self._state, workflow_id)
-
 
 def _build_local_artifact_service(
     session: AsyncSession,
@@ -65,20 +62,17 @@ def _build_local_artifact_service(
         store=LocalTemporalArtifactStore(root_path),
     )
 
-
 @pytest.fixture(autouse=True)
 def _reset_dependency_overrides():
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
 
-
 @pytest.fixture
 def query_state():
     state: dict[str, dict[str, object]] = {}
     app.dependency_overrides[get_temporal_client] = lambda: _QueryClient(state)
     return state
-
 
 async def _create_uploaded_artifact(
     artifact_id: str,
@@ -106,7 +100,6 @@ async def _create_uploaded_artifact(
         )
         await session.commit()
     return artifact_id
-
 
 @pytest.mark.asyncio
 async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, monkeypatch):
@@ -495,7 +488,6 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
 
-
 @pytest.mark.asyncio
 async def test_request_rerun_keeps_workflow_id_and_rotates_run_id(tmp_path, query_state):
     original_db_url = db_base.DATABASE_URL
@@ -584,7 +576,6 @@ async def test_request_rerun_keeps_workflow_id_and_rotates_run_id(tmp_path, quer
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
-
 
 @pytest.mark.asyncio
 async def test_execution_list_pagination_and_state_filter(tmp_path, query_state):
@@ -745,7 +736,6 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
 
-
 @pytest.mark.asyncio
 async def test_projection_orphaned_rows_repair_from_canonical_public_routes(tmp_path, query_state):
     original_db_url = db_base.DATABASE_URL
@@ -814,7 +804,6 @@ async def test_projection_orphaned_rows_repair_from_canonical_public_routes(tmp_
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
-
 
 @pytest.mark.asyncio
 async def test_task_shaped_create_returns_temporal_identity_and_redirect(
@@ -1015,7 +1004,6 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
 
-
 @pytest.mark.asyncio
 async def test_task_shaped_create_rejects_pending_upload_input_artifact(tmp_path):
     original_db_url = db_base.DATABASE_URL
@@ -1078,7 +1066,6 @@ async def test_task_shaped_create_rejects_pending_upload_input_artifact(tmp_path
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
-
 
 @pytest.mark.asyncio
 async def test_task_shaped_create_preserves_image_input_attachments(tmp_path, monkeypatch):
@@ -1192,7 +1179,6 @@ async def test_task_shaped_create_preserves_image_input_attachments(tmp_path, mo
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
-
 
 @pytest.mark.asyncio
 async def test_manifest_execution_status_and_node_page_contract(tmp_path):

@@ -58,7 +58,7 @@ Implement MM-425 by making Mission Control's shared surface hierarchy explicit i
 - IX. Resilient by Default: PASS. Existing UI behavior is preserved and regression-tested.
 - X. Continuous Improvement: PASS. Verification evidence is captured in MoonSpec artifacts.
 - XI. Spec-Driven Development: PASS. This plan follows the MM-425 single-story spec.
-- XII. Canonical Documentation Separation: PASS. Jira input and implementation evidence stay in `docs/tmp` and `specs/`.
+- XII. Canonical Documentation Separation: PASS. Jira input and implementation evidence stay in `local-only handoffs` and `specs/`.
 - XIII. Pre-Release Velocity: PASS. No compatibility alias or hidden fallback is introduced.
 
 ## Project Structure
@@ -72,7 +72,7 @@ specs/217-surface-hierarchy-liquidgl/
 ├── research.md
 ├── quickstart.md
 ├── contracts/
-│   └── surface-hierarchy-contract.md
+│ └── surface-hierarchy-contract.md
 ├── tasks.md
 └── verification.md
 ```
@@ -88,7 +88,6 @@ frontend/src/entrypoints/
 ├── task-create.test.tsx
 └── tasks-list.test.tsx
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-425-moonspec-orchestration-input.md
 ```
 

@@ -22,7 +22,7 @@ Finish the remaining live-logs contract work by persisting a durable workflow-to
 - **VII. Powerful Runtime Configurability**: PASS. The existing `MOONMIND_LOG_STREAMING_ENABLED` flag remains canonical.
 - **VIII. Modular and Extensible Architecture**: PASS. Binding and authorization fixes stay in runtime/API boundaries instead of adding UI-side guesses.
 - **IX. Resilient by Default**: PASS. Durable workflow binding removes a best-effort-only dependency from the task-detail path.
-- **XI. Spec-Driven Development Is the Source of Truth**: PASS. This spec covers the remaining functional gap called out by `docs/tmp/009-LiveLogsPlan.md`.
+- **XI. Spec-Driven Development Is the Source of Truth**: PASS. This spec covers the remaining functional gap called out by `docs/ManagedAgents/LiveLogs.md`.
 - **XIII. Pre-Release Velocity: Delete, Don't Deprecate**: PASS. The UI will stop using the Temporal run id as a pseudo-`taskRunId` fallback.
 
 ## Scope
@@ -48,7 +48,7 @@ Finish the remaining live-logs contract work by persisting a durable workflow-to
 - Update launch binding behavior in `moonmind/workflows/temporal/activity_runtime.py` and the managed agent workflow handoff in `moonmind/workflows/temporal/workflows/agent_run.py`.
 - Update execution detail and observability routers in `api_service/api/routers/executions.py` and `api_service/api/routers/task_runs.py`.
 - Update Mission Control task detail behavior in `frontend/src/entrypoints/task-detail.tsx`.
-- Add focused backend, frontend, and integration tests; update `docs/tmp/009-LiveLogsPlan.md` when implementation status changes.
+- Add focused backend, frontend, and integration tests; update `docs/ManagedAgents/LiveLogs.md` when implementation status changes.
 
 ## Verification Plan
 

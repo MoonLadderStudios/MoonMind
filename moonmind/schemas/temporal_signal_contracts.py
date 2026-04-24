@@ -39,7 +39,6 @@ class ExternalEventSignal(BaseModel):
             field_name="providerSummary",
         )
 
-
 class RescheduleSignal(BaseModel):
     """Payload for reschedule signals.
 
@@ -48,7 +47,6 @@ class RescheduleSignal(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     scheduled_for: datetime = Field(..., alias="scheduledFor")
-
 
 # ---------------------------------------------------------------------------
 # Internal Coordination Signals
@@ -63,7 +61,6 @@ class RequestSlotSignal(BaseModel):
 
     requester_workflow_id: str = Field(..., alias="requesterWorkflowId")
 
-
 class ReleaseSlotSignal(BaseModel):
     """Payload for release_slot signals.
 
@@ -72,7 +69,6 @@ class ReleaseSlotSignal(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     requester_workflow_id: str = Field(..., alias="requesterWorkflowId")
-
 
 class ReportCooldownSignal(BaseModel):
     """Payload for report_cooldown signals.
@@ -85,14 +81,12 @@ class ReportCooldownSignal(BaseModel):
     profile_id: str = Field(..., alias="profileId")
     cooldown_seconds: int = Field(..., alias="cooldownSeconds", ge=0)
 
-
 class SyncProfilesSignal(BaseModel):
     """Payload for sync_profiles signals.
 
     Requests the manager to reload its target profile definitions.
     """
     model_config = ConfigDict(populate_by_name=True)
-
 
 class SlotAssignedSignal(BaseModel):
     """Payload for slot_assigned signals.
@@ -103,7 +97,6 @@ class SlotAssignedSignal(BaseModel):
 
     profile_id: str = Field(..., alias="profileId")
     assignment_id: str = Field(..., alias="assignmentId")
-
 
 class ChildStateChangedSignal(BaseModel):
     """Payload for child_state_changed signals.
@@ -116,7 +109,6 @@ class ChildStateChangedSignal(BaseModel):
     status: str = Field(..., alias="status")
     result_artifact_ref: Optional[str] = Field(None, alias="resultArtifactRef")
 
-
 class ProfileAssignedSignal(BaseModel):
     """Payload for profile_assigned signals.
 
@@ -125,7 +117,6 @@ class ProfileAssignedSignal(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     profile_id: str = Field(..., alias="profileId")
-
 
 class CompletionSignal(BaseModel):
     """Payload for completion_signal signals.
@@ -137,7 +128,6 @@ class CompletionSignal(BaseModel):
     status: str = Field(..., alias="status")
     result_artifact_ref: Optional[str] = Field(None, alias="resultArtifactRef")
 
-
 # ---------------------------------------------------------------------------
 # OAuth Session Signals
 # ---------------------------------------------------------------------------
@@ -148,7 +138,6 @@ class FinalizeSessionSignal(BaseModel):
     Requests transition from waiting-for-user to verification and registration.
     """
     model_config = ConfigDict(populate_by_name=True)
-
 
 class CancelSessionSignal(BaseModel):
     """Payload for cancel session signals.

@@ -5,11 +5,9 @@ import pytest
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
 from moonmind.workflows.adapters.materializer import ProviderProfileMaterializer
 
-
 class MockSecretResolver:
     async def resolve_secrets(self, secret_refs):
         return {k: f"decrypted_{v}" for k, v in secret_refs.items()}
-
 
 class StaticSecretResolver:
     def __init__(self, resolved):
@@ -21,7 +19,6 @@ class StaticSecretResolver:
             for k, v in secret_refs.items()
             if v in self.resolved
         }
-
 
 @pytest.mark.asyncio
 async def test_materializer_generates_correct_env():
@@ -59,7 +56,6 @@ async def test_materializer_generates_correct_env():
     assert env["KEY_ECHO"] == "decrypted_1234"
     assert env["OVERRIDE_VAR"] == "new_val"
     assert cmd == ["claude", "start"]
-
 
 @pytest.mark.asyncio
 async def test_materializer_launches_claude_anthropic_from_secret_ref_alias():
@@ -104,7 +100,6 @@ async def test_materializer_launches_claude_anthropic_from_secret_ref_alias():
     assert "OPENAI_API_KEY" not in env
     assert cmd == ["claude", "-p", "hello"]
 
-
 @pytest.mark.asyncio
 async def test_materializer_excludes_file_template_secret_alias_from_base_env(tmp_path):
     materializer = ProviderProfileMaterializer(
@@ -139,7 +134,6 @@ async def test_materializer_excludes_file_template_secret_alias_from_base_env(tm
         encoding="utf-8"
     ) == 'model_provider = "openrouter"\napi_key = "resolved-key"\n'
 
-
 @pytest.mark.asyncio
 async def test_materializer_excludes_home_path_template_secret_alias_from_base_env():
     materializer = ProviderProfileMaterializer(
@@ -161,7 +155,6 @@ async def test_materializer_excludes_home_path_template_secret_alias_from_base_e
 
     assert "home_root" not in env
     assert env["CLAUDE_CONFIG_DIR"].endswith("/profile-home")
-
 
 @pytest.mark.asyncio
 async def test_materializer_missing_claude_secret_ref_alias_fails_secret_free():
@@ -186,7 +179,6 @@ async def test_materializer_missing_claude_secret_ref_alias_fails_secret_free():
     message = str(exc_info.value)
     assert "db://missing-claude-token" not in message
     assert "resolved-claude-key" not in message
-
 
 @pytest.mark.asyncio
 async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_path):
@@ -268,7 +260,6 @@ async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_pa
     assert not os.path.exists(config_path), "Config file should be removed after cleanup()"
     assert materializer.generated_files == []
 
-
 @pytest.mark.asyncio
 async def test_materializer_cleanup_removes_generated_support_dir_tree():
     materializer = ProviderProfileMaterializer(
@@ -308,7 +299,6 @@ async def test_materializer_cleanup_removes_generated_support_dir_tree():
     assert not Path(support_dir).exists()
     assert materializer.generated_dirs == []
 
-
 @pytest.mark.asyncio
 async def test_materializer_rejects_unknown_template_variables(tmp_path):
     materializer = ProviderProfileMaterializer(
@@ -333,7 +323,6 @@ async def test_materializer_rejects_unknown_template_variables(tmp_path):
             profile,
             runtime_support_dir=str(tmp_path / ".moonmind"),
         )
-
 
 @pytest.mark.asyncio
 async def test_materializer_rejects_paths_outside_runtime_support_dir(tmp_path):

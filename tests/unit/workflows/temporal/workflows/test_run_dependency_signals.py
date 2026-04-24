@@ -38,7 +38,6 @@ async def fake_execute_activity(activity_name, *args, **kwargs):
         }).encode("utf-8")
     return {}
 
-
 @pytest.fixture
 def mock_run_environment(monkeypatch):
     """Provide a time-skipping environment with workflow stubs."""
@@ -63,7 +62,6 @@ def mock_run_environment(monkeypatch):
         MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage
     )
 
-
 def _make_dependency_resolved_payload(
     prerequisite_workflow_id: str,
     terminal_state: str = "completed",
@@ -82,7 +80,6 @@ def _make_dependency_resolved_payload(
         "message": message,
     }
 
-
 async def _wait_for_state(handle, expected_state: str, max_retries: int = 50):
     """Poll a workflow's get_status query until it reaches *expected_state*."""
     for _ in range(max_retries):
@@ -95,7 +92,6 @@ async def _wait_for_state(handle, expected_state: str, max_retries: int = 50):
         f"Workflow did not reach {expected_state!r}; last state was "
         f"{status.get('state')!r}"
     )
-
 
 def _start_dep_workflow(
     env,
@@ -117,7 +113,6 @@ def _start_dep_workflow(
         id=wf_id,
         task_queue=queue,
     )
-
 
 # ---------------------------------------------------------------------------
 # 1. Signal-driven unblocking after startup reconciliation
@@ -178,7 +173,6 @@ async def test_run_workflow_unblocked_by_real_dependency_resolved_signal(
 
     assert result["status"] == "success"
     assert reconcile_called, "Reconcile should have been called at startup"
-
 
 # ---------------------------------------------------------------------------
 # 2. Duplicate signal idempotency
@@ -257,7 +251,6 @@ async def test_run_workflow_duplicate_signal_is_idempotent(
         }
     ]
 
-
 # ---------------------------------------------------------------------------
 # 3. Stale / unexpected signal for undeclared prerequisite
 # ---------------------------------------------------------------------------
@@ -318,7 +311,6 @@ async def test_run_workflow_ignores_undeclared_dependency_signal(
 
     assert result["status"] == "success"
 
-
 # ---------------------------------------------------------------------------
 # 4. Prerequisite cancellation propagation
 # ---------------------------------------------------------------------------
@@ -371,7 +363,6 @@ async def test_run_workflow_fails_when_prerequisite_is_canceled(
             with pytest.raises(WorkflowFailureError):
                 await handle.result()
 
-
 # ---------------------------------------------------------------------------
 # 5. Prerequisite termination propagation
 # ---------------------------------------------------------------------------
@@ -423,7 +414,6 @@ async def test_run_workflow_fails_when_prerequisite_is_terminated(
             with pytest.raises(WorkflowFailureError):
                 await handle.result()
 
-
 # ---------------------------------------------------------------------------
 # 6. Prerequisite timed_out propagation
 # ---------------------------------------------------------------------------
@@ -474,7 +464,6 @@ async def test_run_workflow_fails_when_prerequisite_timed_out(
 
             with pytest.raises(WorkflowFailureError):
                 await handle.result()
-
 
 # ---------------------------------------------------------------------------
 # 7. Chained dependencies (A → B → C)
@@ -538,7 +527,6 @@ async def test_run_workflow_chained_dependencies(
             result_c = await handle_c.result()
             assert result_c["status"] == "success"
 
-
 # ---------------------------------------------------------------------------
 # 8. Multiple prerequisites — fan-in via signals
 # ---------------------------------------------------------------------------
@@ -593,7 +581,6 @@ async def test_run_workflow_multi_dep_fan_in_via_signals(
 
             result = await handle.result()
             assert result["status"] == "success"
-
 
 # ---------------------------------------------------------------------------
 # 9. Dependent pause → prerequisite failure → immediate fail on resume
@@ -654,7 +641,6 @@ async def test_run_workflow_pause_then_prerequisite_failure(
 
             with pytest.raises(WorkflowFailureError):
                 await handle.result()
-
 
 # ---------------------------------------------------------------------------
 # 10. Dependent pause → prerequisite succeeds → resume completes

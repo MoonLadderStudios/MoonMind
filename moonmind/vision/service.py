@@ -13,7 +13,6 @@ from moonmind.config.settings import settings
 
 from .settings import VisionConfig, get_vision_config
 
-
 @dataclass(frozen=True)
 class AttachmentContextInput:
     """Attachment metadata used when rendering image context."""
@@ -25,7 +24,6 @@ class AttachmentContextInput:
     digest: str | None
     local_path: str
     user_caption_hint: str | None = None
-
 
 @dataclass(frozen=True)
 class VisionContextTargetInput:
@@ -51,7 +49,6 @@ class VisionContextTargetInput:
             attachments=tuple(attachments),
         )
 
-
 @dataclass(frozen=True)
 class RenderedAttachmentContext:
     """Rendered attachment entry used in Markdown output."""
@@ -66,7 +63,6 @@ class RenderedAttachmentContext:
     description: str
     ocr_text: str
 
-
 class VisionContextStatus(str, Enum):
     """High-level status for rendered vision context."""
 
@@ -74,7 +70,6 @@ class VisionContextStatus(str, Enum):
     DISABLED = "disabled"
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     OK = "ok"
-
 
 @dataclass(frozen=True)
 class VisionContext:
@@ -85,7 +80,6 @@ class VisionContext:
     markdown: str
     attachments: tuple[RenderedAttachmentContext, ...]
 
-
 @dataclass(frozen=True)
 class VisionTargetContextArtifact:
     """Rendered context artifact metadata for one explicit target."""
@@ -95,7 +89,6 @@ class VisionTargetContextArtifact:
     context_path: Path
     context: VisionContext
 
-
 @dataclass(frozen=True)
 class VisionContextArtifactBundle:
     """Target-aware vision context artifacts and deterministic index payload."""
@@ -104,7 +97,6 @@ class VisionContextArtifactBundle:
     index: dict[str, object]
     index_path: Path
     diagnostics: tuple[dict[str, object], ...] = ()
-
 
 class VisionService:
     """Render Markdown summaries for job attachments."""

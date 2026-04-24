@@ -1,6 +1,6 @@
 # Implementation Plan: OAuth Terminal Docker Verification
 
-**Branch**: `194-oauth-terminal-docker-verification` | **Date**: 2026-04-16 | **Spec**: `specs/194-oauth-terminal-docker-verification/spec.md`  
+**Branch**: `194-oauth-terminal-docker-verification` | **Date**: 2026-04-16 | **Spec**: `specs/194-oauth-terminal-docker-verification/spec.md` 
 **Input**: Single-story feature specification from `specs/194-oauth-terminal-docker-verification/spec.md`
 
 ## Summary
@@ -11,15 +11,15 @@ MM-363 is a runtime verification-closure story for OAuthTerminal managed-session
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Pydantic v2, Temporal Python SDK, pytest, Docker Compose, existing OAuth session workflow/activity catalog, managed Codex session controller/runtime helpers  
-**Storage**: Existing workflow artifacts and verification reports only; no new persistent storage  
-**Unit Testing**: Focused OAuthTerminal and managed Codex unit targets from `quickstart.md` when harness fixes are needed  
-**Integration Testing**: `./tools/test_integration.sh` for compose-backed `integration_ci` coverage; focused direct integration targets may be used during diagnosis before the full script  
-**Target Platform**: MoonMind API and Temporal worker/runtime containers on Linux with Docker available for hermetic integration  
-**Project Type**: Backend/runtime verification story with Temporal, Docker, and artifact/report boundaries  
-**Performance Goals**: Integration verification should complete within the existing hermetic suite timeout budget; no new long-running workflow boundary tests should be added to required CI  
-**Constraints**: Preserve `MM-363` traceability; do not claim report closure without Docker-backed evidence; do not copy credentials, tokens, auth volume listings, or sensitive environment dumps into reports; preserve existing runtime ownership boundaries  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: Pydantic v2, Temporal Python SDK, pytest, Docker Compose, existing OAuth session workflow/activity catalog, managed Codex session controller/runtime helpers 
+**Storage**: Existing workflow artifacts and verification reports only; no new persistent storage 
+**Unit Testing**: Focused OAuthTerminal and managed Codex unit targets from `quickstart.md` when harness fixes are needed 
+**Integration Testing**: `./tools/test_integration.sh` for compose-backed `integration_ci` coverage; focused direct integration targets may be used during diagnosis before the full script 
+**Target Platform**: MoonMind API and Temporal worker/runtime containers on Linux with Docker available for hermetic integration 
+**Project Type**: Backend/runtime verification story with Temporal, Docker, and artifact/report boundaries 
+**Performance Goals**: Integration verification should complete within the existing hermetic suite timeout budget; no new long-running workflow boundary tests should be added to required CI 
+**Constraints**: Preserve `MM-363` traceability; do not claim report closure without Docker-backed evidence; do not copy credentials, tokens, auth volume listings, or sensitive environment dumps into reports; preserve existing runtime ownership boundaries 
 **Scale/Scope**: One independently testable verification story covering OAuthTerminal managed-session auth behavior and the existing verification reports for specs 175, 180, and 183
 
 ## Constitution Check
@@ -37,7 +37,7 @@ MM-363 is a runtime verification-closure story for OAuthTerminal managed-session
 - IX Resilient by Default: PASS. Verification records exact blockers and avoids false closure when required evidence is unavailable.
 - X Continuous Improvement: PASS. Prior ADDITIONAL_WORK_NEEDED reports are updated only with evidence or precise blockers.
 - XI Spec-Driven Development: PASS. MM-363 has isolated spec and planning artifacts before runtime verification closure.
-- XII Canonical Docs Separation: PASS. Canonical docs remain source requirements; migration/run evidence stays under `specs/` and `docs/tmp`.
+- XII Canonical Docs Separation: PASS. Canonical docs remain source requirements; migration/run evidence stays under `specs/` and `local-only handoffs`.
 - XIII Pre-Release Compatibility: PASS. No compatibility aliases are planned; existing internal contract behavior is verified as-is.
 
 ## Project Structure
@@ -52,9 +52,9 @@ specs/194-oauth-terminal-docker-verification/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── oauth-terminal-docker-verification.md
+│ └── oauth-terminal-docker-verification.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 

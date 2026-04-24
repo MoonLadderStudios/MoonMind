@@ -40,7 +40,6 @@ from moonmind.workflows.temporal.report_artifacts import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):
     """Provide isolated async sqlite DB for Temporal artifact tests."""
@@ -56,7 +55,6 @@ async def temporal_db(tmp_path: Path):
         yield session_maker
     finally:
         await engine.dispose()
-
 
 class _MultipartMemoryStore(TemporalArtifactStore):
     """In-memory multipart-capable store used for service unit tests."""
@@ -141,7 +139,6 @@ class _MultipartMemoryStore(TemporalArtifactStore):
         self._uploads[upload_id][part_number] = payload
         return str(part_number)
 
-
 class _EventuallyVisibleMemoryStore(_MultipartMemoryStore):
     """Store that hides uploaded bytes for a bounded number of initial reads."""
 
@@ -156,7 +153,6 @@ class _EventuallyVisibleMemoryStore(_MultipartMemoryStore):
             raise KeyError(storage_key)
         return super().read_bytes(storage_key)
 
-
 async def test_generate_artifact_id_uses_art_prefix_and_ulid_shape() -> None:
     """Generated artifact IDs should follow ``art_<ULID>`` shape."""
 
@@ -167,14 +163,12 @@ async def test_generate_artifact_id_uses_art_prefix_and_ulid_shape() -> None:
     allowed = set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
     assert set(suffix).issubset(allowed)
 
-
 async def test_local_store_rejects_traversal_storage_key(tmp_path: Path) -> None:
     """Storage key traversal attempts should be rejected."""
 
     store = LocalTemporalArtifactStore(tmp_path)
     with pytest.raises(TemporalArtifactValidationError):
         store.resolve_storage_key("../escape.txt")
-
 
 async def test_s3_store_uses_thread_local_clients(
     monkeypatch: pytest.MonkeyPatch,
@@ -221,7 +215,6 @@ async def test_s3_store_uses_thread_local_clients(
 
     assert other_thread_client is not main_thread_client
     assert len(created_clients) == 2
-
 
 async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
     """Service should create, upload, read, and list artifacts by execution linkage."""
@@ -272,7 +265,6 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
             )
             assert [item.artifact_id for item in listed] == [artifact.artifact_id]
 
-
 async def test_report_artifact_contract_accepts_supported_link_types() -> None:
     """MM-492: Report artifact link types should be explicit and stable."""
 
@@ -305,7 +297,6 @@ async def test_report_artifact_contract_accepts_supported_link_types() -> None:
             },
         )
 
-
 async def test_report_artifact_contract_rejects_unsupported_report_link_type() -> None:
     """MM-460: Unknown report link types must not create implicit semantics."""
 
@@ -317,7 +308,6 @@ async def test_report_artifact_contract_rejects_unsupported_report_link_type() -
             link_type="report.raw_dump",
             metadata={"title": "Raw dump"},
         )
-
 
 @pytest.mark.parametrize(
     ("metadata", "message"),
@@ -340,7 +330,6 @@ async def test_report_artifact_contract_rejects_unsafe_metadata(
             link_type="report.primary",
             metadata=metadata,
         )
-
 
 async def test_create_accepts_report_primary_with_bounded_metadata(
     tmp_path: Path,
@@ -381,7 +370,6 @@ async def test_create_accepts_report_primary_with_bounded_metadata(
             assert artifact.metadata_json["report_type"] == "unit_test"
             assert links[0].link_type == "report.primary"
 
-
 async def test_report_primary_and_summary_default_to_long_retention(
     tmp_path: Path,
 ) -> None:
@@ -409,7 +397,6 @@ async def test_report_primary_and_summary_default_to_long_retention(
                 )
 
                 assert artifact.retention_class is TemporalArtifactRetentionClass.LONG
-
 
 async def test_report_structured_and_evidence_retention_policy_defaults(
     tmp_path: Path,
@@ -454,7 +441,6 @@ async def test_report_structured_and_evidence_retention_policy_defaults(
             )
             assert evidence.retention_class is TemporalArtifactRetentionClass.LONG
 
-
 async def test_unpin_report_primary_restores_report_retention(tmp_path: Path) -> None:
     """MM-463: Unpinning a final report should restore report-derived retention."""
 
@@ -497,7 +483,6 @@ async def test_unpin_report_primary_restores_report_retention(tmp_path: Path) ->
             )
             unpinned = await repo.get_artifact(artifact.artifact_id)
             assert unpinned.retention_class is TemporalArtifactRetentionClass.LONG
-
 
 async def test_unpin_ephemeral_artifact_restores_ephemeral_retention(
     tmp_path: Path,
@@ -542,7 +527,6 @@ async def test_unpin_ephemeral_artifact_restores_ephemeral_retention(
                 unpinned.retention_class is TemporalArtifactRetentionClass.EPHEMERAL
             )
 
-
 async def test_create_rejects_bad_report_link_and_metadata(tmp_path: Path) -> None:
     """MM-460: Report publication should fail before unsafe data is stored."""
 
@@ -586,7 +570,6 @@ async def test_create_rejects_bad_report_link_and_metadata(tmp_path: Path) -> No
                     metadata_json={"title": "token=abc123"},
                 )
 
-
 async def test_link_artifact_rejects_unsafe_report_metadata(tmp_path: Path) -> None:
     """MM-460: Existing artifacts must satisfy report metadata before report linking."""
 
@@ -617,7 +600,6 @@ async def test_link_artifact_rejects_unsafe_report_metadata(tmp_path: Path) -> N
                         "link_type": "report.primary",
                     },
                 )
-
 
 async def test_link_artifact_allows_internal_preview_metadata_for_reports(
     tmp_path: Path,
@@ -659,7 +641,6 @@ async def test_link_artifact_allows_internal_preview_metadata_for_reports(
 
             assert link.link_type == "report.primary"
 
-
 async def test_generic_output_links_remain_accepted_with_generic_metadata(
     tmp_path: Path,
 ) -> None:
@@ -690,7 +671,6 @@ async def test_generic_output_links_remain_accepted_with_generic_metadata(
                 )
                 links = await repo.list_links(artifact.artifact_id)
                 assert links[0].link_type == link_type
-
 
 async def test_latest_report_primary_uses_existing_execution_linkage(
     tmp_path: Path,
@@ -741,7 +721,6 @@ async def test_latest_report_primary_uses_existing_execution_linkage(
                 second.artifact_id
             ]
             assert first.artifact_id != second.artifact_id
-
 
 async def test_latest_report_primary_coexists_with_intermediate_report_without_mutation(
     tmp_path: Path,
@@ -824,7 +803,6 @@ async def test_latest_report_primary_coexists_with_intermediate_report_without_m
             assert final_payload_artifact.artifact_id == final_bundle["primary_report_ref"]["artifact_id"]
             assert final_payload == b"# Final report"
 
-
 async def test_report_bundle_result_is_compact_and_rejects_inline_payloads() -> None:
     """MM-461: Report bundle results must be refs and bounded metadata only."""
 
@@ -874,7 +852,6 @@ async def test_report_bundle_result_is_compact_and_rejects_inline_payloads() -> 
                 "raw_download_url": "https://example.invalid/report",
             }
         )
-
 
 async def test_publish_report_bundle_writes_links_final_marker_and_step_metadata(
     tmp_path: Path,
@@ -956,7 +933,6 @@ async def test_publish_report_bundle_writes_links_final_marker_and_step_metadata
             )
             assert structured_payload == b'{"findings": [], "status": "complete"}'
 
-
 async def test_publish_report_bundle_rejects_missing_and_duplicate_final_marker(
     tmp_path: Path,
 ) -> None:
@@ -1007,7 +983,6 @@ async def test_publish_report_bundle_rejects_missing_and_duplicate_final_marker(
                     ],
                 )
 
-
 async def test_write_complete_rejects_invalid_task_image_signature(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1044,7 +1019,6 @@ async def test_write_complete_rejects_invalid_task_image_signature(
                     content_type="image/png",
                 )
 
-
 async def test_write_complete_rejects_invalid_image_signature_without_task_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1080,7 +1054,6 @@ async def test_write_complete_rejects_invalid_image_signature_without_task_metad
                     content_type="image/png",
                 )
 
-
 async def test_create_rejects_reserved_input_attachment_storage_key(
     tmp_path: Path,
 ) -> None:
@@ -1106,7 +1079,6 @@ async def test_create_rejects_reserved_input_attachment_storage_key(
                         "artifact_path": "inputs/objective/screenshot.png",
                     },
                 )
-
 
 @pytest.mark.parametrize(
     "reserved_path",
@@ -1144,7 +1116,6 @@ async def test_create_rejects_normalized_reserved_input_attachment_storage_keys(
                     },
                 )
 
-
 async def test_create_uses_same_origin_content_endpoint_for_small_s3_uploads(
     tmp_path: Path,
 ) -> None:
@@ -1167,7 +1138,6 @@ async def test_create_uses_same_origin_content_endpoint_for_small_s3_uploads(
 
             assert upload.mode == "single_put"
             assert upload.upload_url == f"/api/artifacts/{artifact.artifact_id}/content"
-
 
 async def test_compute_preview_redacts_token_like_pairs(tmp_path: Path) -> None:
     """Preview activity should redact token/password assignments."""
@@ -1204,7 +1174,6 @@ async def test_compute_preview_redacts_token_like_pairs(tmp_path: Path) -> None:
             assert "letmein" not in preview_text
             assert "[REDACTED]" in preview_text
 
-
 async def test_create_rejects_declared_size_over_local_limit(tmp_path: Path) -> None:
     """Service should fail fast when declared bytes exceed direct-upload max."""
 
@@ -1222,7 +1191,6 @@ async def test_create_rejects_declared_size_over_local_limit(tmp_path: Path) -> 
                     content_type="text/plain",
                     size_bytes=5,
                 )
-
 
 async def test_create_rejects_negative_declared_size(tmp_path: Path) -> None:
     """Service should reject invalid negative declared sizes."""
@@ -1243,7 +1211,6 @@ async def test_create_rejects_negative_declared_size(tmp_path: Path) -> None:
                     content_type="text/plain",
                     size_bytes=-1,
                 )
-
 
 async def test_create_switches_to_multipart_for_large_declared_size(
     tmp_path: Path,
@@ -1268,7 +1235,6 @@ async def test_create_switches_to_multipart_for_large_declared_size(
             assert artifact.upload_mode.value == "multipart"
             assert upload.mode == "multipart"
             assert upload.upload_id is not None
-
 
 async def test_complete_rejects_undeclared_single_put_over_size_limit(
     tmp_path: Path,
@@ -1300,7 +1266,6 @@ async def test_complete_rejects_undeclared_single_put_over_size_limit(
                     artifact_id=artifact.artifact_id,
                     principal="user-1",
                 )
-
 
 async def test_complete_retries_single_put_reads_until_uploaded_bytes_are_visible(
     tmp_path: Path,
@@ -1341,7 +1306,6 @@ async def test_complete_retries_single_put_reads_until_uploaded_bytes_are_visibl
             assert completed.status is TemporalArtifactStatus.COMPLETE
             assert store.read_attempts == 4
 
-
 async def test_complete_still_fails_when_single_put_bytes_never_appear(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1372,7 +1336,6 @@ async def test_complete_still_fails_when_single_put_bytes_never_appear(
                     artifact_id=artifact.artifact_id,
                     principal="user-1",
                 )
-
 
 async def test_complete_single_put_raises_non_visibility_read_error_immediately(
     tmp_path: Path,
@@ -1418,7 +1381,6 @@ async def test_complete_single_put_raises_non_visibility_read_error_immediately(
                     principal="user-1",
                 )
 
-
 async def test_complete_multipart_upload_sets_integrity_metadata(
     tmp_path: Path,
 ) -> None:
@@ -1454,7 +1416,6 @@ async def test_complete_multipart_upload_sets_integrity_metadata(
             assert completed.size_bytes == 8
             assert completed.sha256 is not None
 
-
 async def test_write_integration_event_artifact_creates_restricted_preview(
     tmp_path: Path,
 ) -> None:
@@ -1489,7 +1450,6 @@ async def test_write_integration_event_artifact_creates_restricted_preview(
             assert artifact.metadata_json["artifact_kind"] == "integration_event"
             assert artifact.retention_class.value == "ephemeral"
             assert policy.preview_artifact_ref is not None
-
 
 async def test_write_integration_result_and_failure_artifacts_assign_link_retention(
     tmp_path: Path,

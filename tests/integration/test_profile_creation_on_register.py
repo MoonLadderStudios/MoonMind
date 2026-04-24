@@ -15,7 +15,6 @@ from moonmind.config.settings import settings
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @pytest.mark.asyncio
 async def test_profile_created_on_register(monkeypatch, tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"

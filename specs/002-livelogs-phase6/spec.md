@@ -1,4 +1,4 @@
-# Specification: Fully implement Phase 6 from docs/tmp/009-LiveLogsPlan.md
+# Specification: Fully implement Phase 6 from docs/ManagedAgents/LiveLogs.md
 
 ## High-Level Objective
 Retire the deprecated session-based (`tmate` / `web_ro`) observability path for managed runs across the stack. Ensure historical runs degrade gracefully via artifact-backed displays while the legacy observability models are stripped out entirely.

@@ -65,7 +65,7 @@ Needs Clarification
 - None"
 
 **Input Classification**: Single-story feature request.  
-**Canonical Jira Brief**: `docs/tmp/jira-orchestration-inputs/MM-374-moonspec-orchestration-input.md`
+**Canonical Jira Brief**: `spec.md` (Input)
 
 ## Original Jira Preset Brief
 

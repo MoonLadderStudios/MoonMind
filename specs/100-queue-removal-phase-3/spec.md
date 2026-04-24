@@ -3,7 +3,7 @@
 **Feature Branch**: `100-queue-removal-phase-3`  
 **Created**: 2026-03-21  
 **Status**: Approved  
-**Input**: User request: `Implement phase 3 of docs/tmp/SingleSubstrateMigration.md`
+**Input**: User request: `Implement phase 3 of spec.md (Input)`
 
 ## 1. Overview
 As part of the Single Substrate Migration, Phase 3 aims to completely remove the legacy queue execution backend code from MoonMind. Since Phase 2 collapsed the frontend APIs to Temporal exclusively, the legacy backend system (the Agent Queue module, orchestrator, database tables, models, routers, and associated unit tests) is now completely unused and can be safely deleted. 

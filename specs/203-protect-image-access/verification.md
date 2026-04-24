@@ -16,7 +16,7 @@
 | Targeted UI | `./tools/test_unit.sh --ui-args frontend/src/entrypoints/task-detail.test.tsx` | PASS | 3531 Python tests passed, then 70 task-detail UI tests passed. |
 | Full unit | `./tools/test_unit.sh` | PASS | 3531 Python tests passed, 1 xpassed, 16 subtests passed; 274 frontend tests passed. |
 | Hermetic integration | `./tools/test_integration.sh` | NOT RUN | Docker socket unavailable: `dial unix /var/run/docker.sock: connect: no such file or directory`. |
-| Source traceability | `rg -n "MM-374\|DESIGN-REQ-016\|DESIGN-REQ-017\|DESIGN-REQ-020" specs/203-protect-image-access docs/tmp/jira-orchestration-inputs/MM-374-moonspec-orchestration-input.md` | PASS | Jira key and source design IDs are preserved. |
+| Source traceability | `rg -n "MM-374\|DESIGN-REQ-016\|DESIGN-REQ-017\|DESIGN-REQ-020" specs/203-protect-image-access` | PASS | Jira key and source design IDs are preserved. |
 
 ## Requirement Coverage
 
@@ -34,7 +34,7 @@
 | FR-010 | `tests/unit/workflows/tasks/test_task_contract.py` data URL and embedded image rejection coverage; worker data URL omission test | VERIFIED | Embedded image bytes/data URLs are rejected or omitted. |
 | FR-011 | No Jira browser endpoint is introduced; task image UI evidence uses `/api/artifacts/.../download` | VERIFIED | Live Jira sync and direct browser Jira attachment access remain out of scope. |
 | FR-012 | No generic non-image attachment support was added | VERIFIED | Implementation only changes image-derived context safety text. |
-| FR-013 | `docs/tmp/jira-orchestration-inputs/MM-374-moonspec-orchestration-input.md`; this spec; source traceability command | VERIFIED | MM-374 is preserved in source input, spec, tasks, and verification. |
+| FR-013 | `spec.md` (Input); this spec; source traceability command | VERIFIED | MM-374 is preserved in source input, spec, tasks, and verification. |
 
 ## Acceptance Scenario Coverage
 

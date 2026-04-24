@@ -1,6 +1,6 @@
 # Task Dependencies
 
-Related: `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/MissionControlArchitecture.md`, `docs/tmp/remaining-work/TaskDependencies-OperationalGuidance.md`
+Related: `docs/Api/ExecutionsApiContract.md`, `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/MissionControlArchitecture.md`
 
 ---
 

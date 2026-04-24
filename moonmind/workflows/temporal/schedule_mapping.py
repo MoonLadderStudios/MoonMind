@@ -28,7 +28,6 @@ _OVERLAP_MAP: dict[str, ScheduleOverlapPolicy] = {
     "cancel_previous": ScheduleOverlapPolicy.CANCEL_OTHER,
 }
 
-
 def map_overlap_policy(mode: str) -> ScheduleOverlapPolicy:
     """Map a MoonMind overlap mode string to a Temporal ``ScheduleOverlapPolicy``.
 
@@ -42,7 +41,6 @@ def map_overlap_policy(mode: str) -> ScheduleOverlapPolicy:
             f"Unknown overlap mode {mode!r}; expected one of {sorted(_OVERLAP_MAP)}"
         ) from None
 
-
 # ---------------------------------------------------------------------------
 # Catchup / backfill window
 # ---------------------------------------------------------------------------
@@ -52,7 +50,6 @@ _CATCHUP_MAP: dict[str, timedelta] = {
     "last": timedelta(minutes=15),
     "all": timedelta(days=365),
 }
-
 
 def map_catchup_window(mode: str) -> timedelta:
     """Map a MoonMind catchup mode to a ``catchup_window`` timedelta.
@@ -67,11 +64,9 @@ def map_catchup_window(mode: str) -> timedelta:
             f"Unknown catchup mode {mode!r}; expected one of {sorted(_CATCHUP_MAP)}"
         ) from None
 
-
 # ---------------------------------------------------------------------------
 # Composite builders
 # ---------------------------------------------------------------------------
-
 
 def build_schedule_spec(
     cron: str,
@@ -85,7 +80,6 @@ def build_schedule_spec(
         time_zone_name=timezone,
     )
 
-
 def build_schedule_policy(
     overlap_mode: str = "skip",
     catchup_mode: str = "last",
@@ -95,7 +89,6 @@ def build_schedule_policy(
         overlap=map_overlap_policy(overlap_mode),
         catchup_window=map_catchup_window(catchup_mode),
     )
-
 
 def build_schedule_state(
     enabled: bool = True,
@@ -107,16 +100,13 @@ def build_schedule_state(
         note=note,
     )
 
-
 # ---------------------------------------------------------------------------
 # ID conventions
 # ---------------------------------------------------------------------------
 
-
 def make_schedule_id(definition_id: UUID) -> str:
     """Return the Temporal Schedule ID for a recurring task definition."""
     return f"mm-schedule:{definition_id}"
-
 
 def make_workflow_id_template(definition_id: UUID) -> str:
     """Return a deterministic workflow-ID template for schedule-spawned runs.
@@ -125,7 +115,6 @@ def make_workflow_id_template(definition_id: UUID) -> str:
     schedule fires, producing a unique workflow ID per time slot.
     """
     return f"mm:{definition_id}:{{{{.ScheduleTime}}}}"
-
 
 __all__ = [
     "build_schedule_policy",

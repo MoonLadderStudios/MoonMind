@@ -13,13 +13,11 @@ from moonmind.workflows.temporal.service import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 def _make_pause_state(paused: bool):
     """Create a minimal mock pause state object."""
     state = MagicMock()
     state.paused = paused
     return state
-
 
 @pytest.fixture
 def mock_session():
@@ -29,14 +27,11 @@ def mock_session():
     session.refresh = AsyncMock()
     return session
 
-
 @pytest.fixture
 def mock_client_adapter():
     return AsyncMock()
 
-
 # ---- check_system_paused ----
-
 
 async def test_check_system_paused_returns_false_after_queue_removal(mock_session, mock_client_adapter):
     """check_system_paused always returns False after Phase 3.5 queue removal (stub)."""
@@ -44,7 +39,6 @@ async def test_check_system_paused_returns_false_after_queue_removal(mock_sessio
 
     result = await svc.check_system_paused()
     assert result is False
-
 
 async def test_check_system_paused_returns_false(mock_session, mock_client_adapter):
     """check_system_paused should return False when pause state is inactive."""
@@ -62,9 +56,7 @@ async def test_check_system_paused_returns_false(mock_session, mock_client_adapt
         result = await svc.check_system_paused()
         assert result is False
 
-
 # ---- API Guard on create_execution ----
-
 
 async def test_create_execution_blocked_when_paused(mock_session, mock_client_adapter):
     """create_execution should raise TemporalExecutionValidationError when system is paused."""
@@ -83,7 +75,6 @@ async def test_create_execution_blocked_when_paused(mock_session, mock_client_ad
                 initial_parameters=None,
                 idempotency_key=None,
             )
-
 
 async def test_create_execution_allowed_when_not_paused(mock_session, mock_client_adapter):
     """create_execution should NOT raise the pause error when system is not paused."""

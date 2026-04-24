@@ -7,7 +7,7 @@
 
 ## Source Document Requirements
 
-Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowArtifactSystemDesign.md`, `docs/UI/MissionControlArchitecture.md`, `docs/tmp/remaining-work/*step-ledger rollout trackers`
+Source: `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/RunHistoryAndRerunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowArtifactSystemDesign.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/StepLedgerAndProgressModel.md*step-ledger rollout trackers`
 
 | ID | Source Section | Requirement Summary |
 | --- | --- | --- |
@@ -52,7 +52,7 @@ An operator or API caller hits degraded-mode execution reads and expects truthfu
 
 ### User Story 3 - Step-ledger rollout trackers are retired after hardening lands (Priority: P2)
 
-An engineer reading canonical docs should no longer see already-finished step-ledger rollout work lingering in `docs/tmp/remaining-work`.
+An engineer reading canonical docs should no longer see already-finished step-ledger rollout work lingering in `docs/Temporal/StepLedgerAndProgressModel.md`.
 
 **Why this priority**: Constitution Principle XII requires finishing migration work by deleting or retiring completed rollout notes.
 

@@ -17,7 +17,6 @@ from moonmind.workflows.temporal.workflows.agent_session import (
     MoonMindAgentSessionWorkflow,
 )
 
-
 @activity.defn(name="agent_runtime.terminate_session")
 async def mock_replay_terminate_session(payload: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -33,7 +32,6 @@ async def mock_replay_terminate_session(payload: dict[str, Any]) -> dict[str, An
         "controlUrl": f"docker-exec://{payload['containerId']}",
         "metadata": {"containerRemoved": True, "supervisionFinalized": True},
     }
-
 
 @activity.defn(name="agent_runtime.fetch_session_summary")
 async def mock_replay_fetch_session_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -51,7 +49,6 @@ async def mock_replay_fetch_session_summary(payload: dict[str, Any]) -> dict[str
         "latestResetBoundaryRef": None,
         "metadata": {},
     }
-
 
 @activity.defn(name="agent_runtime.publish_session_artifacts")
 async def mock_replay_publish_session_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
@@ -73,7 +70,6 @@ async def mock_replay_publish_session_artifacts(payload: dict[str, Any]) -> dict
         "metadata": {},
     }
 
-
 async def _wait_for_status(
     handle: Any,
     predicate: Any,
@@ -88,7 +84,6 @@ async def _wait_for_status(
         if asyncio.get_running_loop().time() >= deadline:
             raise AssertionError(f"Timed out waiting for status; last={status!r}")
         await asyncio.sleep(0.05)
-
 
 @pytest.mark.asyncio
 async def test_agent_session_terminate_history_replays_deterministically(

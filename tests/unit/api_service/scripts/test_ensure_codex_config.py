@@ -10,11 +10,9 @@ from api_service.scripts.ensure_codex_config import (
     ensure_codex_config,
 )
 
-
 def _write_text(path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-
 
 def test_ensure_codex_config_enforces_network_defaults_and_preserves_custom_keys(
     tmp_path,
@@ -65,7 +63,6 @@ network_access = false
     assert rendered["sandbox_workspace_write"]["writable_roots"] == ["/work/repo"]
     assert rendered["sandbox_read_only"]["network_access"] is False
 
-
 def test_ensure_codex_config_replaces_invalid_nested_shape(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     template_path = tmp_path / "template.toml"
     target_path = tmp_path / "codex" / "config.toml"
@@ -94,7 +91,6 @@ sandbox_workspace_write = "invalid"
     rendered = toml.load(target_path)
 
     assert rendered["sandbox_workspace_write"]["network_access"] is True
-
 
 def test_ensure_codex_config_requires_workspace_network_key(
     tmp_path,

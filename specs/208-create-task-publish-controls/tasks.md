@@ -15,7 +15,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm the canonical MM-412 Jira preset brief is preserved in `docs/tmp/jira-orchestration-inputs/MM-412-moonspec-orchestration-input.md` and `specs/208-create-task-publish-controls/spec.md` (MM-412, SC-007)
+- [X] T001 Confirm the canonical MM-412 Jira preset brief is preserved in `spec.md` (Input) and `specs/208-create-task-publish-controls/spec.md` (MM-412, SC-007)
 - [X] T002 Confirm Moon Spec artifact set exists in `specs/208-create-task-publish-controls/` with spec, plan, research, data model, UI contract, quickstart, and tasks
 
 ## Phase 2: Foundational

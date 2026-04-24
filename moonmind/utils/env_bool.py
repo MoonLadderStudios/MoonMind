@@ -4,7 +4,6 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for Python >= 3.12
     from setuptools._distutils.util import strtobool
 from typing import Any, Optional
 
-
 def env_to_bool(value: Optional[Any], default: bool = False) -> bool:
     """Convert various string/int/boolean representations to a proper bool.
 

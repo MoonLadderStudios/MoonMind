@@ -17,7 +17,6 @@ from moonmind.schemas.agent_skill_models import (
     SkillSelector,
 )
 
-
 class SkillResolutionContext:
     """Contextual parameters for skill resolution (e.g. paths, run ID)."""
 
@@ -37,7 +36,6 @@ class SkillResolutionContext:
         self.allow_local_skills = allow_local_skills
         self.async_session_maker = async_session_maker
 
-
 class SkillLoader(abc.ABC):
     """Base interface for an agent skill source provider."""
 
@@ -47,7 +45,6 @@ class SkillLoader(abc.ABC):
     ) -> list[ResolvedSkillEntry]:
         """Return resolved skill entries from this source that match the selector."""
         raise NotImplementedError
-
 
 class BuiltInSkillLoader(SkillLoader):
     """Loads embedded capabilities shipped directly with the system."""
@@ -76,7 +73,6 @@ class BuiltInSkillLoader(SkillLoader):
                 )
             )
         return results
-
 
 class DeploymentSkillLoader(SkillLoader):
     """Loads authoritative skills administered through the central DB/API."""
@@ -122,7 +118,6 @@ class DeploymentSkillLoader(SkillLoader):
 
         return results
 
-
 def _scan_for_skills(
     skills_dir: Path, source_kind: AgentSkillSourceKind
 ) -> list[ResolvedSkillEntry]:
@@ -143,7 +138,6 @@ def _scan_for_skills(
             )
     return results
 
-
 class RepoSkillLoader(SkillLoader):
     """Loads skills from the canonical `.agents/skills` repository path."""
 
@@ -154,7 +148,6 @@ class RepoSkillLoader(SkillLoader):
             return []
         skills_dir = Path(context.workspace_root) / ".agents" / "skills"
         return _scan_for_skills(skills_dir, AgentSkillSourceKind.REPO)
-
 
 class LocalSkillLoader(SkillLoader):
     """Loads local override skills from `.agents/skills/local`."""
@@ -168,7 +161,6 @@ class LocalSkillLoader(SkillLoader):
             Path(context.workspace_root) / ".agents" / "skills" / "local"
         )
         return _scan_for_skills(skills_dir, AgentSkillSourceKind.LOCAL)
-
 
 class AgentSkillResolver:
     """Core orchestrator that computes the final immutable ResolvedSkillSet."""

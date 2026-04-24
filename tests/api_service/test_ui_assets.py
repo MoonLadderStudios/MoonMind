@@ -9,12 +9,10 @@ from api_service.ui_assets import (
 )
 from api_service.ui_boot import generate_boot_payload
 
-
 def test_vite_asset_resolver_missing_file():
     resolver = ViteAssetResolver("non-existent-manifest.json")
     assert resolver.get_manifest() == {}
     assert resolver.resolve_entrypoint("unknown") == {}
-
 
 def test_vite_asset_resolver_valid_file(tmp_path):
     manifest_data = {
@@ -32,7 +30,6 @@ def test_vite_asset_resolver_valid_file(tmp_path):
     assert entry["file"] == "assets/test.js"
     assert entry["css"] == ["assets/test.css"]
 
-
 def test_ui_assets_uses_vite_dev_server_when_configured(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MOONMIND_UI_DEV_SERVER_URL", "http://127.0.0.1:5173/")
     monkeypatch.setenv("VITE_MANIFEST_PATH", "non-existent-manifest.json")
@@ -43,7 +40,6 @@ def test_ui_assets_uses_vite_dev_server_when_configured(monkeypatch: pytest.Monk
     assert 'src="http://127.0.0.1:5173/entrypoints/mission-control.tsx"' in html
     assert "/static/task_dashboard/dist/" not in html
 
-
 def test_ui_assets_rejects_invalid_vite_dev_server_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -51,7 +47,6 @@ def test_ui_assets_rejects_invalid_vite_dev_server_url(
 
     with pytest.raises(InvalidDevServerUrlError):
         ui_assets("tasks-list")
-
 
 def test_generate_boot_payload():
     payload = generate_boot_payload(page="test_page")

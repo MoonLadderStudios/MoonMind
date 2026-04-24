@@ -91,7 +91,7 @@
 
 - [X] T018 Rerun the focused unit command from T012 until MM-496 verification passes
 - [X] T019 Rerun the execution API contract command from T013 until MM-496 verification passes
-- [X] T020 Run `rg -n "MM-496|DESIGN-REQ-013|DESIGN-REQ-022|DESIGN-REQ-024" specs/248-report-aware-execution-projections docs/tmp/jira-orchestration-inputs/MM-496-moonspec-orchestration-input.md` to verify traceability (FR-008, SC-005)
+- [X] T020 Run `rg -n "MM-496|DESIGN-REQ-013|DESIGN-REQ-022|DESIGN-REQ-024" specs/248-report-aware-execution-projections` to verify traceability (FR-008, SC-005)
 - [X] T021 Escalate to `./tools/test_integration.sh` only if MM-496 implementation crosses the hermetic integration boundary
 
 **Checkpoint**: MM-496 execution detail projection behavior is implemented and independently testable, while the dedicated `/report` endpoint remains explicitly deferred.

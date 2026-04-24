@@ -29,5 +29,5 @@
 5. Confirm `MM-364` remains preserved in MoonSpec artifacts:
 
    ```bash
-   rg -n "MM-364" specs/193-remove-legacy-merge-automation docs/tmp/jira-orchestration-inputs/MM-364-moonspec-orchestration-input.md
+   rg -n "MM-364" specs/193-remove-legacy-merge-automation
    ```

@@ -1,6 +1,6 @@
 # Tasks: Jira Chain Blockers
 
-**Input**: Design documents from `specs/177-jira-chain-blockers/`  
+**Input**: Design documents from `specs/177-jira-chain-blockers/` 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
@@ -65,7 +65,7 @@
 - [X] T009 [P] Add failing story-output unit test for dependency mode `none` creating issues without link requests covering FR-005, SC-002 in `tests/unit/workflows/temporal/test_story_output_tools.py`
 - [X] T010 [P] Add failing story-output unit test for partial link failure preserving created issue keys and reporting incomplete chain covering FR-008, SC-003 in `tests/unit/workflows/temporal/test_story_output_tools.py`
 - [X] T011 [P] Add failing story-output unit test for retry/reuse of existing issues and existing links without duplicate creation covering FR-009, SC-004 in `tests/unit/workflows/temporal/test_story_output_tools.py`
-- [X] T012 [P] Add failing story-output unit test for missing Jira target configuration with dependency mode preserving docs/tmp fallback covering FR-010 and acceptance scenario 5 in `tests/unit/workflows/temporal/test_story_output_tools.py`
+- [X] T012 [P] Add failing story-output unit test for missing Jira target configuration with dependency mode preserving local-only handoffs fallback covering FR-010 and acceptance scenario 5 in `tests/unit/workflows/temporal/test_story_output_tools.py`
 
 ### Integration Tests (write first)
 

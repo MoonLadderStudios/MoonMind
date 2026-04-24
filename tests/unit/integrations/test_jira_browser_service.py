@@ -13,7 +13,6 @@ from moonmind.integrations.jira.errors import JiraToolError
 
 pytestmark = [pytest.mark.asyncio]
 
-
 class _StubJiraBrowserService(JiraBrowserService):
     def __init__(
         self,
@@ -118,7 +117,6 @@ class _StubJiraBrowserService(JiraBrowserService):
             raise response
         return response
 
-
 def _settings(
     *,
     allowed_projects: str | None = None,
@@ -141,7 +139,6 @@ def _settings(
         jira=JiraSettings(jira_allowed_projects=allowed_projects),
     )
 
-
 async def test_browser_service_requires_create_page_feature_flag() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(),
@@ -154,7 +151,6 @@ async def test_browser_service_requires_create_page_feature_flag() -> None:
     assert excinfo.value.code == "tool_not_found"
     assert service.calls == []
 
-
 async def test_browser_service_surfaces_missing_jira_configuration() -> None:
     service = JiraBrowserService(
         atlassian_settings=_settings(),
@@ -165,7 +161,6 @@ async def test_browser_service_surfaces_missing_jira_configuration() -> None:
         await service.verify_connection()
 
     assert excinfo.value.code == "jira_not_configured"
-
 
 async def test_verify_connection_with_project_uses_allowed_project_boundary() -> None:
     service = _StubJiraBrowserService(
@@ -189,7 +184,6 @@ async def test_verify_connection_with_project_uses_allowed_project_boundary() ->
         }
     ]
 
-
 async def test_verify_connection_denies_disallowed_project_before_request() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -200,7 +194,6 @@ async def test_verify_connection_denies_disallowed_project_before_request() -> N
 
     assert excinfo.value.code == "jira_policy_denied"
     assert service.calls == []
-
 
 async def test_list_projects_fetches_only_allowed_projects() -> None:
     service = _StubJiraBrowserService(
@@ -215,7 +208,6 @@ async def test_list_projects_fetches_only_allowed_projects() -> None:
 
     assert [item.project_key for item in result.items] == ["ENG", "OPS"]
     assert [call["path"] for call in service.calls] == ["/project/ENG", "/project/OPS"]
-
 
 async def test_list_projects_preserves_allowed_project_key_for_followup_requests() -> None:
     service = _StubJiraBrowserService(
@@ -234,7 +226,6 @@ async def test_list_projects_preserves_allowed_project_key_for_followup_requests
     assert service.calls[0]["path"] == "/project/ENG"
     assert service.calls[1]["path"] == "agile:/board"
     assert service.calls[1]["params"]["projectKeyOrId"] == "ENG"
-
 
 async def test_list_projects_skips_failed_allowed_project_fetches() -> None:
     service = _StubJiraBrowserService(
@@ -255,7 +246,6 @@ async def test_list_projects_skips_failed_allowed_project_fetches() -> None:
     assert [item.project_key for item in result.items] == ["ENG"]
     assert [call["path"] for call in service.calls] == ["/project/ENG", "/project/OPS"]
 
-
 async def test_list_projects_returns_empty_response_when_jira_has_no_projects() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(),
@@ -266,7 +256,6 @@ async def test_list_projects_returns_empty_response_when_jira_has_no_projects() 
 
     assert result.items == []
     assert service.calls[0]["path"] == "/project/search"
-
 
 async def test_list_boards_uses_agile_path_alias() -> None:
     service = _StubJiraBrowserService(
@@ -294,7 +283,6 @@ async def test_list_boards_uses_agile_path_alias() -> None:
         "maxResults": 50,
     }
 
-
 async def test_list_boards_returns_empty_response_when_project_has_no_boards() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -306,7 +294,6 @@ async def test_list_boards_returns_empty_response_when_project_has_no_boards() -
     assert result.project_key == "ENG"
     assert result.items == []
 
-
 async def test_list_boards_enforces_project_allowlist() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -317,7 +304,6 @@ async def test_list_boards_enforces_project_allowlist() -> None:
 
     assert excinfo.value.code == "jira_policy_denied"
     assert service.calls == []
-
 
 async def test_browser_service_rejects_invalid_path_inputs_before_request() -> None:
     service = _StubJiraBrowserService(
@@ -335,7 +321,6 @@ async def test_browser_service_rejects_invalid_path_inputs_before_request() -> N
     assert board_error.value.code == "jira_validation_failed"
     assert issue_error.value.code == "jira_validation_failed"
     assert service.calls == []
-
 
 async def test_board_columns_preserve_order_and_status_mapping() -> None:
     service = _StubJiraBrowserService(
@@ -374,7 +359,6 @@ async def test_board_columns_preserve_order_and_status_mapping() -> None:
         "agile:/board/42",
         "agile:/board/42/configuration",
     ]
-
 
 async def test_board_columns_use_selected_project_scope_when_board_location_differs() -> None:
     service = _StubJiraBrowserService(
@@ -426,7 +410,6 @@ async def test_board_columns_use_selected_project_scope_when_board_location_diff
         "startAt": 0,
     }
 
-
 async def test_board_columns_deny_selected_project_scope_when_board_is_not_listed() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -450,7 +433,6 @@ async def test_board_columns_deny_selected_project_scope_when_board_is_not_liste
         "agile:/board",
     ]
 
-
 async def test_board_columns_returns_empty_columns_when_configuration_has_no_columns() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -469,7 +451,6 @@ async def test_board_columns_returns_empty_columns_when_configuration_has_no_col
 
     assert result.board.project_key == "ENG"
     assert result.columns == []
-
 
 async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
     service = _StubJiraBrowserService(
@@ -555,7 +536,6 @@ async def test_board_issues_group_by_status_and_keep_unmapped_bucket() -> None:
         "startAt": 0,
     }
 
-
 async def test_board_issues_can_exclude_done_statuses_entirely() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -588,7 +568,6 @@ async def test_board_issues_can_exclude_done_statuses_entirely() -> None:
         call for call in service.calls if call["path"] == "agile:/board/42/issue"
     ]
     assert issue_calls[0]["params"]["jql"] == "statusCategory != Done"
-
 
 async def test_board_issues_filter_to_selected_project_scope() -> None:
     service = _StubJiraBrowserService(
@@ -639,7 +618,6 @@ async def test_board_issues_filter_to_selected_project_scope() -> None:
     result = await service.list_issues("42", project_key="ENG")
 
     assert [item.issue_key for item in result.items_by_column["selected"]] == ["ENG-1"]
-
 
 async def test_board_issues_accepts_selected_project_alias_by_project_id() -> None:
     service = _StubJiraBrowserService(
@@ -706,7 +684,6 @@ async def test_board_issues_accepts_selected_project_alias_by_project_id() -> No
         "agile:/board/15/issue",
     ]
 
-
 async def test_board_issues_returns_empty_column_buckets_when_jira_has_no_issues() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -734,7 +711,6 @@ async def test_board_issues_returns_empty_column_buckets_when_jira_has_no_issues
     assert [column.id for column in result.columns] == ["to-do", "done"]
     assert result.items_by_column == {"to-do": [], "done": []}
     assert result.unmapped_items == []
-
 
 async def test_board_issues_paginates_until_all_issues_are_loaded() -> None:
     first_page = [
@@ -783,7 +759,6 @@ async def test_board_issues_paginates_until_all_issues_are_loaded() -> None:
     issue_calls = [call for call in service.calls if call["path"] == "agile:/board/42/issue"]
     assert [call["params"]["startAt"] for call in issue_calls] == [0, 50]
 
-
 async def test_board_issues_filters_by_query_text() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -820,7 +795,6 @@ async def test_board_issues_filters_by_query_text() -> None:
     result = await service.list_issues("42", q="docs")
 
     assert [item.issue_key for item in result.items_by_column["to-do"]] == ["ENG-2"]
-
 
 async def test_issue_detail_normalizes_text_and_recommended_imports() -> None:
     service = _StubJiraBrowserService(
@@ -868,7 +842,6 @@ async def test_issue_detail_normalizes_text_and_recommended_imports() -> None:
     assert "ENG-123: Add Jira browser" in result.recommended_imports.preset_instructions
     assert "Acceptance criteria\nGiven a board" in result.recommended_imports.step_instructions
 
-
 async def test_issue_detail_exposes_only_image_attachments() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -907,7 +880,6 @@ async def test_issue_detail_exposes_only_image_attachments() -> None:
     assert result.attachments[0].download_url == (
         "/api/jira/issues/ENG-123/attachments/10001/content"
     )
-
 
 async def test_download_issue_image_attachment_validates_membership_and_origin() -> None:
     service = _StubJiraBrowserService(
@@ -949,7 +921,6 @@ async def test_download_issue_image_attachment_validates_membership_and_origin()
         "/secure/attachment/10001/wireframe.png",
     ]
 
-
 async def test_download_issue_image_attachment_allows_tenant_origin_in_scoped_mode() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=AtlassianSettings(
@@ -990,7 +961,6 @@ async def test_download_issue_image_attachment_allows_tenant_origin_in_scoped_mo
         "/secure/attachment/10001/wireframe.png",
     ]
 
-
 async def test_issue_detail_ignores_blank_browse_url_and_falls_back_to_self_url() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(allowed_projects="ENG"),
@@ -1011,7 +981,6 @@ async def test_issue_detail_ignores_blank_browse_url_and_falls_back_to_self_url(
     result = await service.get_issue("ENG-123")
 
     assert result.url == "https://jira.example/browse/ENG-123"
-
 
 async def test_issue_detail_maps_status_to_board_column_when_board_context_is_provided() -> None:
     service = _StubJiraBrowserService(
@@ -1054,7 +1023,6 @@ async def test_issue_detail_maps_status_to_board_column_when_board_context_is_pr
         "agile:/board/42",
         "agile:/board/42/configuration",
     ]
-
 
 async def test_issue_detail_accepts_selected_project_alias_by_project_id() -> None:
     service = _StubJiraBrowserService(
@@ -1110,7 +1078,6 @@ async def test_issue_detail_accepts_selected_project_alias_by_project_id() -> No
         "agile:/board/15/configuration",
     ]
 
-
 async def test_issue_detail_falls_back_to_description_acceptance_section() -> None:
     service = _StubJiraBrowserService(
         atlassian_settings=_settings(),
@@ -1129,7 +1096,6 @@ async def test_issue_detail_falls_back_to_description_acceptance_section() -> No
 
     assert result.description_text == "Do the work"
     assert result.acceptance_criteria_text == "- It works"
-
 
 async def test_service_errors_do_not_include_secret_material() -> None:
     service = _StubJiraBrowserService(

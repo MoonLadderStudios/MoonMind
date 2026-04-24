@@ -6,7 +6,6 @@ from api_service.services.profile_service import ProfileService
 from .providers import AuthProvider
 from .utils import RedactedSecret, manifest_key_to_profile_field
 
-
 class ProfileAuthProvider(AuthProvider):
     def __init__(self, db: AsyncSession, profile_svc: ProfileService) -> None:
         self.db = db

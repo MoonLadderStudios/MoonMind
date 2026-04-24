@@ -7,7 +7,7 @@
 
 **Organization**: Tasks are grouped by phase around the single MM-430 story so the work stays focused, traceable, and independently testable.
 
-**Source Traceability**: Original Jira reference and preset brief are preserved in `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-430-moonspec-orchestration-input.md`. This task list maps all `FR-*`, acceptance scenarios, edge cases, `SC-*`, and `DESIGN-REQ-*` evidence to concrete test, implementation, and verification work.
+**Source Traceability**: Original Jira reference and preset brief are preserved in `spec.md` and `spec.md` (Input). This task list maps all `FR-*`, acceptance scenarios, edge cases, `SC-*`, and `DESIGN-REQ-*` evidence to concrete test, implementation, and verification work.
 
 **Test Commands**:
 
@@ -100,7 +100,7 @@
 
 **Purpose**: Strengthen the completed story without changing its core scope.
 
-- [X] T030 [P] Review MM-430 traceability in `specs/225-preserve-styling-invariants/spec.md`, `plan.md`, `tasks.md`, `contracts/styling-invariants.md`, and `docs/tmp/jira-orchestration-inputs/MM-430-moonspec-orchestration-input.md`
+- [X] T030 [P] Review MM-430 traceability in `specs/225-preserve-styling-invariants/spec.md`, `plan.md`, `tasks.md`, `contracts/styling-invariants.md`, and `spec.md` (Input)
 - [X] T031 Run quickstart validation commands from `specs/225-preserve-styling-invariants/quickstart.md`
 - [X] T032 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh --ui-args frontend/src/entrypoints/mission-control.test.tsx frontend/src/entrypoints/task-create.test.tsx frontend/src/entrypoints/task-detail.test.tsx frontend/src/entrypoints/tasks-list.test.tsx frontend/src/vite-config.test.ts` for final focused unit evidence
 - [X] T033 Run `moonspec-verify` final verification and write the result to `specs/225-preserve-styling-invariants/verification.md`

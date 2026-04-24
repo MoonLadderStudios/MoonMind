@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class MetricScore:
     """A single evaluation metric result."""
@@ -30,7 +29,6 @@ class MetricScore:
             return True
         return self.score >= self.threshold
 
-
 @dataclass
 class DatasetEvaluation:
     """Evaluation results for one dataset."""
@@ -41,7 +39,6 @@ class DatasetEvaluation:
     @property
     def passed(self) -> bool:
         return all(m.passed for m in self.metrics)
-
 
 @dataclass
 class EvaluationResult:
@@ -76,11 +73,9 @@ class EvaluationResult:
             ],
         }
 
-
 # ---------------------------------------------------------------------------
 # Metric implementations
 # ---------------------------------------------------------------------------
-
 
 def hit_rate_at_k(
     queries: List[Dict[str, Any]],
@@ -111,7 +106,6 @@ def hit_rate_at_k(
             hits += 1
 
     return hits / len(queries)
-
 
 def ndcg_at_k(
     queries: List[Dict[str, Any]],
@@ -153,11 +147,9 @@ def ndcg_at_k(
 
     return total_ndcg / len(queries)
 
-
 # ---------------------------------------------------------------------------
 # Evaluation runner
 # ---------------------------------------------------------------------------
-
 
 def _load_dataset(path: str) -> List[Dict[str, Any]]:
     """Load a JSONL evaluation dataset.
@@ -186,7 +178,6 @@ def _load_dataset(path: str) -> List[Dict[str, Any]]:
         entries.append(entry)
 
     return entries
-
 
 def evaluate_manifest(
     manifest: Any,  # ManifestV0 — Any to avoid circular imports

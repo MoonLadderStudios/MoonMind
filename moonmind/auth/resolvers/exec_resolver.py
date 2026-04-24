@@ -12,7 +12,6 @@ from moonmind.utils.logging import SecretRedactor
 
 logger = structlog.get_logger(__name__)
 
-
 class ExecSecretResolver(SecretBackendResolver):
     """
     Resolves secrets dynamically by executing a local binary (`exec://`).

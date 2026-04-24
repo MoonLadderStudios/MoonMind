@@ -9,11 +9,8 @@ from moonmind.config.settings import (
     settings,
 )
 
-
-
 def _resolve_google_api_key() -> str | None:
     return os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-
 
 def _schema_default_google_embedding() -> tuple[str, int]:
     """Canonical defaults from GoogleSettings (not process env overrides)."""
@@ -24,13 +21,11 @@ def _schema_default_google_embedding() -> tuple[str, int]:
     assert isinstance(dims, int) and dims > 0
     return model, dims
 
-
 def _avoid_local_workflows_package_shadowing() -> None:
     """Remove `<repo>/moonmind` from sys.path to avoid `workflows` shadowing."""
     moonmind_src_path = str(Path(__file__).resolve().parents[2] / "moonmind")
     while moonmind_src_path in sys.path:
         sys.path.remove(moonmind_src_path)
-
 
 @pytest.mark.integration
 def test_default_gemini_embedding_model_live(monkeypatch):

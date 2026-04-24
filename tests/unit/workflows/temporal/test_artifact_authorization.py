@@ -20,7 +20,6 @@ from moonmind.workflows.temporal.artifacts import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_artifacts_auth.db"
@@ -34,7 +33,6 @@ async def temporal_db(tmp_path: Path):
         yield session_maker
     finally:
         await engine.dispose()
-
 
 async def test_authenticated_mode_denies_cross_principal_read(
     tmp_path: Path,
@@ -65,7 +63,6 @@ async def test_authenticated_mode_denies_cross_principal_read(
                     principal="user-2",
                 )
 
-
 async def test_disabled_mode_allows_local_default_principal_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -94,7 +91,6 @@ async def test_disabled_mode_allows_local_default_principal_reads(
                 principal="another-local-user",
             )
             assert payload == b"local"
-
 
 async def test_restricted_raw_presign_denied_for_non_owner_in_auth_mode(
     tmp_path: Path,
@@ -126,7 +122,6 @@ async def test_restricted_raw_presign_denied_for_non_owner_in_auth_mode(
                     artifact_id=artifact.artifact_id,
                     principal="user-2",
                 )
-
 
 async def test_restricted_report_metadata_uses_preview_default_read_without_raw_access(
     tmp_path: Path,

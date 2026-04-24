@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Final, Literal
 
-
 WorkflowDockerMode = Literal["disabled", "profiles", "unrestricted"]
 WORKFLOW_DOCKER_MODE_VALUES: Final[tuple[WorkflowDockerMode, ...]] = (
     "disabled",
@@ -12,7 +11,6 @@ WORKFLOW_DOCKER_MODE_VALUES: Final[tuple[WorkflowDockerMode, ...]] = (
     "unrestricted",
 )
 DEFAULT_WORKFLOW_DOCKER_MODE: Final[WorkflowDockerMode] = "profiles"
-
 
 def normalize_workflow_docker_mode(value: object) -> WorkflowDockerMode:
     """Return the canonical deployment-owned workflow Docker mode."""

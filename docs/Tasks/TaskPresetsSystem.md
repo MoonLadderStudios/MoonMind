@@ -1,6 +1,6 @@
 # Task Presets System
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Tasks-TaskPresetsSystem.md`](../tmp/remaining-work/Tasks-TaskPresetsSystem.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Status: Active
 Owners: MoonMind Engineering (Task Platform + UI)
@@ -24,22 +24,22 @@ Presets are the authoring and discovery surface; Plans are the runtime execution
 
 ```
 Preset (catalog entry)
-  ├── inputs_schema (parameterization)
-  ├── step blueprints (Jinja2 templates)
-  └── metadata (scope, tags, capabilities)
-         │
-         │  expand(inputs) — server-side
-         v
+ ├── inputs_schema (parameterization)
+ ├── step blueprints (Jinja2 templates)
+ └── metadata (scope, tags, capabilities)
+ │
+ │ expand(inputs) — server-side
+ v
 PlanDefinition (immutable artifact)
-  ├── nodes[] (concrete Step invocations)
-  ├── edges[] (dependency DAG)
-  ├── policy (failure_mode, max_concurrency)
-  └── metadata.registry_snapshot (pinned skill versions)
-         │
-         │  submit to Temporal
-         v
+ ├── nodes[] (concrete Step invocations)
+ ├── edges[] (dependency DAG)
+ ├── policy (failure_mode, max_concurrency)
+ └── metadata.registry_snapshot (pinned skill versions)
+ │
+ │ submit to Temporal
+ v
 Plan Executor (MoonMind.Run workflow)
-  └── schedules Activities, tracks progress, enforces policy
+ └── schedules Activities, tracks progress, enforces policy
 ```
 
 ### 1.2 Terminology
@@ -80,33 +80,33 @@ Plan Executor (MoonMind.Run workflow)
 ## 3. System Overview
 
 ```
-             +---------------------+
-             |  Preset Catalog DB  |
-             +----------+----------+
-                        ^
-                        | CRUD + version seed
-+-------------+   REST  |                      +----------------+
-| Task UI /   +-------->+  Preset Catalog API  <-+ MCP / CLI / CI |
-| Automations |         |                      +----------------+
-+------+------+         v
-       |          +-----+------------------+
-       | expand   | Preset Expansion Svc   |
-       +--------->+ (validate + hydrate    |
-                  |  + compile to Plan)    |
-                  +-----+------------------+
-                        |
-                        | PlanDefinition artifact
-                        v
-                  +-----+------------------+
-                  | Plan Submission        |
-                  | (store artifact +      |
-                  |  start workflow)       |
-                  +-----+------------------+
-                        v
-                  +-----+------------------+
-                  | Plan Executor       |
-                  | (MoonMind.Run workflow) |
-                  +------------------------+
+ +---------------------+
+ | Preset Catalog DB |
+ +----------+----------+
+ ^
+ | CRUD + version seed
++-------------+ REST | +----------------+
+| Task UI / +-------->+ Preset Catalog API <-+ MCP / CLI / CI |
+| Automations | | +----------------+
++------+------+ v
+ | +-----+------------------+
+ | expand | Preset Expansion Svc |
+ +--------->+ (validate + hydrate |
+ | + compile to Plan) |
+ +-----+------------------+
+ |
+ | PlanDefinition artifact
+ v
+ +-----+------------------+
+ | Plan Submission |
+ | (store artifact + |
+ | start workflow) |
+ +-----+------------------+
+ v
+ +-----+------------------+
+ | Plan Executor |
+ | (MoonMind.Run workflow) |
+ +------------------------+
 ```
 
 Key properties:
@@ -162,11 +162,11 @@ Each entry in `inputs_schema` declares a parameterizable field:
 
 ```yaml
 - name: feature_request
-  label: Feature Request
-  type: markdown        # text | textarea | markdown | enum | boolean | user | team | repo_path
-  required: true
-  default: null
-  options: []           # populated for enum type
+ label: Feature Request
+ type: markdown # text | textarea | markdown | enum | boolean | user | team | repo_path
+ required: true
+ default: null
+ options: [] # populated for enum type
 ```
 
 ### 4.4 Step blueprints
@@ -176,18 +176,18 @@ without an explicit `kind` are treated as `kind: step` for compatibility:
 
 ```yaml
 - title: Invoke moonspec-specify
-  kind: step
-  instructions: |-
-    Run moonspec-specify with the canonical feature request:
-    {{ inputs.feature_request }}
+ kind: step
+ instructions: |-
+ Run moonspec-specify with the canonical feature request:
+ {{ inputs.feature_request }}
 
-    Selected mode: {{ inputs.orchestration_mode }}.
-  skill:
-    id: moonspec-specify
-    args: {}
-    requiredCapabilities: [codex, git]
-  annotations:
-    phase: specification
+ Selected mode: {{ inputs.orchestration_mode }}.
+ skill:
+ id: moonspec-specify
+ args: {}
+ requiredCapabilities: [codex, git]
+ annotations:
+ phase: specification
 ```
 
 **Allowed keys**: `kind`, `instructions`, `title`, `slug`, `skill`, `annotations`.
@@ -201,12 +201,12 @@ entries:
 
 ```yaml
 - kind: include
-  slug: shared-quality-checks
-  version: 1.0.0
-  alias: quality
-  scope: global
-  inputMapping:
-    feature_request: "{{ inputs.feature_request }}"
+ slug: shared-quality-checks
+ version: 1.0.0
+ alias: quality
+ scope: global
+ inputMapping:
+ feature_request: "{{ inputs.feature_request }}"
 ```
 
 Rules:
@@ -235,18 +235,18 @@ version: 1.0.0
 tags: [moonspec, orchestration]
 requiredCapabilities: [git]
 annotations:
-  sourceSkill: moonspec-orchestrate
+ sourceSkill: moonspec-orchestrate
 inputs:
-  - name: feature_request
-    label: Feature Request
-    type: markdown
-    required: true
+ - name: feature_request
+ label: Feature Request
+ type: markdown
+ required: true
 steps:
-  - title: Step 1
-    instructions: "{{ inputs.feature_request }}"
-    skill:
-      id: auto
-      args: {}
+ - title: Step 1
+ instructions: "{{ inputs.feature_request }}"
+ skill:
+ id: auto
+ args: {}
 ```
 
 ---
@@ -261,69 +261,69 @@ Expansion is a server-side, deterministic compilation that transforms a preset +
 
 ```
 1. Resolve preset version
-   └── Look up (slug, scope, version) in catalog DB
-   └── Verify release_status is ACTIVE (or DRAFT for preview)
+ └── Look up (slug, scope, version) in catalog DB
+ └── Verify release_status is ACTIVE (or DRAFT for preview)
 
 2. Validate and resolve inputs
-   └── Check required fields present
-   └── Validate types and enum constraints
-   └── Apply defaults for optional inputs
+ └── Check required fields present
+ └── Validate types and enum constraints
+ └── Apply defaults for optional inputs
 
 3. Build Jinja2 variable context
-   └── { inputs: {...}, context: {...}, now: ISO-timestamp, iso_today: YYYY-MM-DD }
+ └── { inputs: {...}, context: {...}, now: ISO-timestamp, iso_today: YYYY-MM-DD }
 
 4. Render step blueprints and includes
-   └── Apply SandboxedEnvironment to each step's instructions/title
-   └── Reject any unresolved {{ ... }} placeholders
-   └── Reject any forbidden keys in rendered output
-   └── For `kind: include`, render `inputMapping` and resolve the child preset
-       version by slug, scope, and pinned version
+ └── Apply SandboxedEnvironment to each step's instructions/title
+ └── Reject any unresolved {{ ... }} placeholders
+ └── Reject any forbidden keys in rendered output
+ └── For `kind: include`, render `inputMapping` and resolve the child preset
+ version by slug, scope, and pinned version
 
 5. Resolve composition
-   └── Recursively resolve include entries into an expansion tree
-   └── Reject cycles with a path such as parent@1.0.0 → child:shared@1.0.0
-   └── Reject GLOBAL → PERSONAL includes
-   └── Reject missing, unreadable, inactive, or child-input-incompatible includes
-   └── Enforce `max_step_count` after flattening
+ └── Recursively resolve include entries into an expansion tree
+ └── Reject cycles with a path such as parent@1.0.0 → child:shared@1.0.0
+ └── Reject GLOBAL → PERSONAL includes
+ └── Reject missing, unreadable, inactive, or child-input-incompatible includes
+ └── Enforce `max_step_count` after flattening
 
 6. Generate deterministic step IDs
-   └── Format: tpl:{slug}:{version}:{index:02d}:{input_hash}
-   └── input_hash = sha256(canonical JSON of inputs)[:8]
-   └── `index` is the flattened step index from the root preset expansion
+ └── Format: tpl:{slug}:{version}:{index:02d}:{input_hash}
+ └── input_hash = sha256(canonical JSON of inputs)[:8]
+ └── `index` is the flattened step index from the root preset expansion
 
 7. Attach provenance
-   └── Each flattened step receives `presetProvenance`
-   └── Provenance includes root slug/version, source slug/version/scope,
-       source step index, include alias, and include path
+ └── Each flattened step receives `presetProvenance`
+ └── Provenance includes root slug/version, source slug/version/scope,
+ source step index, include alias, and include path
 
-8. Resolve registry snapshot                              ← NEW
-   └── Load current skill registry
-   └── Compute snapshot digest
-   └── Store snapshot as artifact, capture ArtifactRef
+8. Resolve registry snapshot ← NEW
+ └── Load current skill registry
+ └── Compute snapshot digest
+ └── Store snapshot as artifact, capture ArtifactRef
 
-9. Map steps to Plan nodes                                ← NEW
-   └── For each rendered step:
-   │   ├── Resolve skill.id → ToolDefinition(name, version) from registry
-   │   ├── Validate step inputs against ToolDefinition.input_schema
-   │   └── Create Step(id, skill_name, skill_version, inputs)
-   └── Infer edges from sequential ordering (linear chain)
-       └── Future: support explicit dependency annotations in blueprints
+9. Map steps to Plan nodes ← NEW
+ └── For each rendered step:
+ │ ├── Resolve skill.id → ToolDefinition(name, version) from registry
+ │ ├── Validate step inputs against ToolDefinition.input_schema
+ │ └── Create Step(id, skill_name, skill_version, inputs)
+ └── Infer edges from sequential ordering (linear chain)
+ └── Future: support explicit dependency annotations in blueprints
 
-10. Assemble PlanDefinition                                ← NEW
-   └── plan_version: "1.0"
-   └── metadata: { title, created_at, registry_snapshot }
-   └── policy: { failure_mode: from preset annotations or default FAIL_FAST,
-                  max_concurrency: from preset annotations or default 1 }
-   └── nodes: [Step, ...]
-   └── edges: [PlanEdge, ...] (linear chain by default)
+10. Assemble PlanDefinition ← NEW
+ └── plan_version: "1.0"
+ └── metadata: { title, created_at, registry_snapshot }
+ └── policy: { failure_mode: from preset annotations or default FAIL_FAST,
+ max_concurrency: from preset annotations or default 1 }
+ └── nodes: [Step, ...]
+ └── edges: [PlanEdge, ...] (linear chain by default)
 
-11. Store Plan artifact                                    ← NEW
-   └── Write PlanDefinition JSON as immutable artifact
-   └── Return ArtifactRef for workflow submission
+11. Store Plan artifact ← NEW
+ └── Write PlanDefinition JSON as immutable artifact
+ └── Return ArtifactRef for workflow submission
 
 12. Record audit metadata
-    └── Write appliedPreset { slug, version, inputs, planArtifactRef, appliedAt }
-    └── Update recents table (top 5 per user)
+ └── Write appliedPreset { slug, version, inputs, planArtifactRef, appliedAt }
+ └── Update recents table (top 5 per user)
 ```
 
 ### 5.3 Dependency inference
@@ -346,8 +346,8 @@ Every expanded Plan pins a `registry_snapshot`:
 
 ```json
 {
-  "digest": "reg:sha256:abc123...",
-  "artifact_ref": "art:sha256:def456..."
+ "digest": "reg:sha256:abc123...",
+ "artifact_ref": "art:sha256:def456..."
 }
 ```
 
@@ -359,9 +359,9 @@ Presets can declare execution policy via `annotations`:
 
 ```yaml
 annotations:
-  planPolicy:
-    failure_mode: CONTINUE    # default: FAIL_FAST
-    max_concurrency: 4        # default: 1
+ planPolicy:
+ failure_mode: CONTINUE # default: FAIL_FAST
+ max_concurrency: 4 # default: 1
 ```
 
 If omitted, the expansion service applies defaults (`FAIL_FAST`, concurrency 1).
@@ -416,16 +416,16 @@ Base path: `/api/task-step-templates`
 POST /api/task-step-templates/{slug}:expand
 
 {
-  "version": "1.0.0",
-  "inputs": {
-    "feature_request": "Add caching to the API layer",
-    "orchestration_mode": "runtime"
-  },
-  "context": {},
-  "options": {
-    "enforceStepLimit": true,
-    "preview": false
-  }
+ "version": "1.0.0",
+ "inputs": {
+ "feature_request": "Add caching to the API layer",
+ "orchestration_mode": "runtime"
+ },
+ "context": {},
+ "options": {
+ "enforceStepLimit": true,
+ "preview": false
+ }
 }
 ```
 
@@ -433,39 +433,39 @@ POST /api/task-step-templates/{slug}:expand
 
 ```json
 {
-  "plan": {
-    "plan_version": "1.0",
-    "metadata": {
-      "title": "moonspec-orchestrate v1.0.0",
-      "created_at": "2026-03-13T12:00:00Z",
-      "registry_snapshot": {
-        "digest": "reg:sha256:abc123...",
-        "artifact_ref": "art:sha256:def456..."
-      }
-    },
-    "policy": {
-      "failure_mode": "FAIL_FAST",
-      "max_concurrency": 1
-    },
-    "nodes": [
-      {
-        "id": "tpl:moonspec-orchestrate:1.0.0:01:a1b2c3d4",
-        "tool": { "type": "skill", "name": "moonspec-specify", "version": "1.2.0" },
-        "inputs": { "feature_request": "Add caching to the API layer" }
-      }
-    ],
-    "edges": []
-  },
-  "planArtifactRef": "art:sha256:789abc...",
-  "appliedPreset": {
-    "slug": "moonspec-orchestrate",
-    "version": "1.0.0",
-    "inputs": { "feature_request": "Add caching...", "orchestration_mode": "runtime" },
-    "nodeIds": ["tpl:moonspec-orchestrate:1.0.0:01:a1b2c3d4"],
-    "appliedAt": "2026-03-13T12:00:00Z"
-  },
-  "capabilities": ["git", "codex"],
-  "warnings": []
+ "plan": {
+ "plan_version": "1.0",
+ "metadata": {
+ "title": "moonspec-orchestrate v1.0.0",
+ "created_at": "2026-03-13T12:00:00Z",
+ "registry_snapshot": {
+ "digest": "reg:sha256:abc123...",
+ "artifact_ref": "art:sha256:def456..."
+ }
+ },
+ "policy": {
+ "failure_mode": "FAIL_FAST",
+ "max_concurrency": 1
+ },
+ "nodes": [
+ {
+ "id": "tpl:moonspec-orchestrate:1.0.0:01:a1b2c3d4",
+ "tool": { "type": "skill", "name": "moonspec-specify", "version": "1.2.0" },
+ "inputs": { "feature_request": "Add caching to the API layer" }
+ }
+ ],
+ "edges": []
+ },
+ "planArtifactRef": "art:sha256:789abc...",
+ "appliedPreset": {
+ "slug": "moonspec-orchestrate",
+ "version": "1.0.0",
+ "inputs": { "feature_request": "Add caching...", "orchestration_mode": "runtime" },
+ "nodeIds": ["tpl:moonspec-orchestrate:1.0.0:01:a1b2c3d4"],
+ "appliedAt": "2026-03-13T12:00:00Z"
+ },
+ "capabilities": ["git", "codex"],
+ "warnings": []
 }
 ```
 
@@ -477,13 +477,13 @@ When `options.preview` is true, the Plan is returned but not stored as an artifa
 POST /api/task-step-templates/save-from-task
 
 {
-  "scope": "personal",
-  "scopeRef": "user-uuid",
-  "title": "My custom pipeline",
-  "description": "Steps I use for feature work",
-  "steps": [ ... ],
-  "suggestedInputs": [ ... ],
-  "tags": ["custom", "feature-work"]
+ "scope": "personal",
+ "scopeRef": "user-uuid",
+ "title": "My custom pipeline",
+ "description": "Steps I use for feature work",
+ "steps": [ ... ],
+ "suggestedInputs": [ ... ],
+ "tags": ["custom", "feature-work"]
 }
 ```
 
@@ -530,11 +530,11 @@ The save service sanitizes steps (strips forbidden keys), scans for secrets (Git
 - Parameterize repeated values as input placeholders.
 - Choose scope (personal; global requires admin promotion).
 - Preserve an include only when the selected steps exactly match an intact
-  provenance subtree from one include expansion and the source preset/version is
-  still readable.
+ provenance subtree from one include expansion and the source preset/version is
+ still readable.
 - Serialize detached, partial, reordered, or customized selections as concrete
-  `kind: step` entries so saved presets never silently retain stale nested
-  semantics.
+ `kind: step` entries so saved presets never silently retain stale nested
+ semantics.
 
 ---
 
@@ -571,7 +571,7 @@ StatsD counters emitted under `moonmind.task_templates.*`:
 
 ## 10. Plan-based expansion (target)
 
-**Steady-state:** preset expansion produces a **`PlanDefinition`** (and `planArtifactRef`) consumed by `MoonMind.Run`; legacy `steps[]` / `appliedStepTemplates` paths may exist only during transition. **Target API** surface is `/api/presets` with `Preset` / `PresetVersion` models; expanders and compilers align on `appliedPreset` + artifact refs. Interim dual-output and rename steps are tracked in [`docs/tmp/remaining-work/Tasks-TaskPresetsSystem.md`](../tmp/remaining-work/Tasks-TaskPresetsSystem.md).
+**Steady-state:** preset expansion produces a **`PlanDefinition`** (and `planArtifactRef`) consumed by `MoonMind.Run`; legacy `steps[]` / `appliedStepTemplates` paths may exist only during transition. **Target API** surface is `/api/presets` with `Preset` / `PresetVersion` models; expanders and compilers align on `appliedPreset` + artifact refs. Interim dual-output and rename steps are tracked in MoonSpec feature artifacts or local planning notes when needed.
 
 ---
 
@@ -583,21 +583,21 @@ StatsD counters emitted under `moonmind.task_templates.*`:
 
 ```yaml
 steps:
-  - slug: run-tests
-    title: Run tests
-    instructions: "..."
-    skill: { id: repo.run_tests }
+ - slug: run-tests
+ title: Run tests
+ instructions: "..."
+ skill: { id: repo.run_tests }
 
-  - slug: run-lint
-    title: Run linter
-    instructions: "..."
-    skill: { id: repo.lint }
+ - slug: run-lint
+ title: Run linter
+ instructions: "..."
+ skill: { id: repo.lint }
 
-  - slug: merge-results
-    title: Merge results
-    instructions: "..."
-    skill: { id: plan.merge }
-    dependsOn: [run-tests, run-lint]    # ← parallel predecessors
+ - slug: merge-results
+ title: Merge results
+ instructions: "..."
+ skill: { id: plan.merge }
+ dependsOn: [run-tests, run-lint] # ← parallel predecessors
 ```
 
 The expansion service would translate `dependsOn` into `PlanEdge` entries. Steps without `dependsOn` default to depending on the previous step (linear chain). This is a Phase 2+ feature.
@@ -608,11 +608,11 @@ The expansion service would translate `dependsOn` into `PlanEdge` entries. Steps
 
 ```json
 {
-  "inputs": { ... },
-  "policyOverrides": {
-    "failure_mode": "CONTINUE",
-    "max_concurrency": 4
-  }
+ "inputs": { ... },
+ "policyOverrides": {
+ "failure_mode": "CONTINUE",
+ "max_concurrency": 4
+ }
 }
 ```
 

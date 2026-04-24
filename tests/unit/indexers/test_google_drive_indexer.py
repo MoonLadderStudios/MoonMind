@@ -9,7 +9,6 @@ from llama_index.core.schema import Document  # For creating mock documents
 
 from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
 
-
 class TestGoogleDriveIndexer(unittest.TestCase):
     def setUp(self):
         self.mock_storage_context = MagicMock(spec=StorageContext)
@@ -187,7 +186,6 @@ class TestGoogleDriveIndexer(unittest.TestCase):
             self.assertEqual(result["total_nodes_indexed"], 0)
             self.assertEqual(result["index"], mock_empty_index)
             self.mock_storage_context.persist.assert_called_once()
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,7 +15,6 @@ from api_service.services.agent_skills_service import (
 )
 from moonmind.workflows.temporal import TemporalArtifactService
 
-
 @pytest.fixture
 def mock_artifact_service() -> AsyncMock:
     svc = AsyncMock(spec=TemporalArtifactService)
@@ -35,7 +34,6 @@ def mock_artifact_service() -> AsyncMock:
     
     return svc
 
-
 @asynccontextmanager
 async def template_db(tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/agent_skills.db"
@@ -52,7 +50,6 @@ async def template_db(tmp_path):
     finally:
         await engine.dispose()
 
-
 @pytest.mark.asyncio
 async def test_create_skill_success(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -68,7 +65,6 @@ async def test_create_skill_success(tmp_path):
             assert fetched is not None
             assert fetched.slug == "test-skill"
 
-
 @pytest.mark.asyncio
 async def test_create_skill_duplicate_slug(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -79,7 +75,6 @@ async def test_create_skill_duplicate_slug(tmp_path):
             with pytest.raises(AgentSkillDuplicateError):
                 await svc.create_skill(slug="duplicate-skill", title="Second Option")
 
-
 @pytest.mark.asyncio
 async def test_require_skill_not_found(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -87,7 +82,6 @@ async def test_require_skill_not_found(tmp_path):
             svc = AgentSkillsService(session=db_session)
             with pytest.raises(AgentSkillNotFoundError):
                 await svc.require_skill("nonexistent")
-
 
 @pytest.mark.asyncio
 async def test_create_version_success(tmp_path, mock_artifact_service: AsyncMock):
@@ -111,7 +105,6 @@ async def test_create_version_success(tmp_path, mock_artifact_service: AsyncMock
             # Verify that the artifact service was awaited
             mock_artifact_service.create.assert_awaited_once()
             mock_artifact_service.write_complete.assert_awaited_once()
-
 
 @pytest.mark.asyncio
 async def test_create_second_version_preserves_first_version(
@@ -147,7 +140,6 @@ async def test_create_second_version_preserves_first_version(
             assert fetched.versions[1].artifact_ref == second.artifact_ref
             assert fetched.versions[1].content_digest == second.content_digest
 
-
 @pytest.mark.asyncio
 async def test_create_version_duplicate(tmp_path, mock_artifact_service: AsyncMock):
     async with template_db(tmp_path) as session_maker:
@@ -167,7 +159,6 @@ async def test_create_version_duplicate(tmp_path, mock_artifact_service: AsyncMo
                     version_string="1.0.0",
                     content="second",
                 )
-
 
 @pytest.mark.asyncio
 async def test_create_skill_set(tmp_path):

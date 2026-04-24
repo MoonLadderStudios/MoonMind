@@ -8,7 +8,7 @@
 **Test Commands**:
 
 - Focused documentation contract check: `rg -n "Preset provenance|Manual|Preset path|unresolved preset includes|Expansion summaries|subtask|sub-plan|separate workflow" docs/UI/MissionControlArchitecture.md`
-- Source traceability check: `rg -n "MM-387|DESIGN-REQ-014|DESIGN-REQ-015|DESIGN-REQ-022|DESIGN-REQ-025|DESIGN-REQ-026" specs/200-mission-control-preset-provenance docs/tmp/jira-orchestration-inputs/MM-387-moonspec-orchestration-input.md`
+- Source traceability check: `rg -n "MM-387|DESIGN-REQ-014|DESIGN-REQ-015|DESIGN-REQ-022|DESIGN-REQ-025|DESIGN-REQ-026" specs/200-mission-control-preset-provenance`
 - Full unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - Final verification: `/moonspec-verify`
 
@@ -21,12 +21,12 @@
 - FR-005, SC-003, DESIGN-REQ-014: `/tasks/new` can preview composed presets and blocks unresolved includes before runtime submission.
 - FR-006, SC-004, DESIGN-REQ-025: expansion summaries remain secondary to canonical execution evidence.
 - FR-007, DESIGN-REQ-026: vocabulary avoids subtask, sub-plan, and separate workflow-run labels for preset includes.
-- FR-008: canonical docs remain desired-state; volatile planning stays under `docs/tmp/` and `specs/`.
+- FR-008: canonical docs remain desired-state; volatile planning stays under `local-only handoffs` and `specs/`.
 - FR-009, SC-006: MM-387 and original Jira preset brief remain visible in artifacts and verification evidence.
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm active MM-387 feature directory and source input in `.specify/feature.json`, `docs/tmp/jira-orchestration-inputs/MM-387-moonspec-orchestration-input.md`, and `specs/200-mission-control-preset-provenance/spec.md` (FR-009, SC-006).
+- [X] T001 Confirm active MM-387 feature directory and source input in `.specify/feature.json`, `spec.md` (Input), and `specs/200-mission-control-preset-provenance/spec.md` (FR-009, SC-006).
 - [X] T002 Confirm `docs/UI/MissionControlArchitecture.md` is the canonical documentation target and `docs/Tasks/PresetComposability.md` is absent in the current checkout in `specs/200-mission-control-preset-provenance/research.md` (FR-008).
 
 ## Phase 2: Foundational

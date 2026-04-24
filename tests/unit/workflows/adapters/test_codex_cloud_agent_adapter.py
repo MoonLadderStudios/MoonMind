@@ -10,7 +10,6 @@ from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClientError
 
 pytestmark = [pytest.mark.asyncio]
 
-
 class _FakeCodexCloudClient:
     def __init__(
         self,
@@ -59,7 +58,6 @@ class _FakeCodexCloudClient:
     async def aclose(self):
         self.closed_count += 1
 
-
 def _request(*, idempotency_key: str = "idem-1") -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="external",
@@ -73,7 +71,6 @@ def _request(*, idempotency_key: str = "idem-1") -> AgentExecutionRequest:
             "metadata": {"origin": "unit-test"},
         },
     )
-
 
 async def test_start_returns_canonical_handle_and_reuses_idempotency_key():
     client = _FakeCodexCloudClient()
@@ -89,7 +86,6 @@ async def test_start_returns_canonical_handle_and_reuses_idempotency_key():
     assert second.run_id == first.run_id
     assert len(client.created) == 1
 
-
 async def test_status_normalizes_provider_states():
     client = _FakeCodexCloudClient(get_status="completed")
     adapter = CodexCloudAgentAdapter(client_factory=lambda: client)
@@ -99,7 +95,6 @@ async def test_status_normalizes_provider_states():
     assert status.run_id == "task-abc"
     assert status.status == "completed"
     assert status.metadata["normalizedStatus"] == "completed"
-
 
 async def test_fetch_result_returns_summary():
     client = _FakeCodexCloudClient(get_status="completed")
@@ -111,7 +106,6 @@ async def test_fetch_result_returns_summary():
     assert "completed" in result.summary
     assert result.failure_class is None
 
-
 async def test_fetch_result_includes_failure_class_on_failure():
     client = _FakeCodexCloudClient(get_status="failed")
     adapter = CodexCloudAgentAdapter(client_factory=lambda: client)
@@ -119,7 +113,6 @@ async def test_fetch_result_includes_failure_class_on_failure():
     result = await adapter.fetch_result("task-abc")
 
     assert result.failure_class == "integration_error"
-
 
 async def test_cancel_returns_intervention_requested_when_provider_rejects():
     client = _FakeCodexCloudClient(cancel_raises=True)
@@ -130,7 +123,6 @@ async def test_cancel_returns_intervention_requested_when_provider_rejects():
     assert status.run_id == "task-cancel"
     assert status.status == "intervention_requested"
     assert status.metadata["cancelAccepted"] is False
-
 
 async def test_cancel_returns_success_when_accepted():
     client = _FakeCodexCloudClient(cancel_raises=False)
