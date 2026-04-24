@@ -97,10 +97,10 @@ motion:
     easing: linear
 
   path:
-    start_x_pct: -135
-    start_y_pct: -160
-    end_x_pct: 135
-    end_y_pct: 160
+    start_x_pct: 135
+    start_y_pct: 160
+    end_x_pct: -135
+    end_y_pct: -160
     y_behavior: diagonal_travel
     angle_deg: -18
 
@@ -278,16 +278,20 @@ acceptance_criteria:
 
 ```yaml
 effect_tokens:
-  --mm-executing-sweep-duration: 1650ms
-  --mm-executing-sweep-delay: 0ms
+  --mm-executing-sweep-cycle-duration: 1650ms
   --mm-executing-sweep-angle: -18deg
   --mm-executing-sweep-band-width: 24%
+  --mm-executing-sweep-band-height: 180%
+  --mm-executing-sweep-halo-width-multiplier: 10
+  --mm-executing-sweep-core-width-multiplier: 9.1667
   --mm-executing-sweep-core-opacity: 0.34
   --mm-executing-sweep-halo-opacity: 0.14
-  --mm-executing-sweep-blur: 6px
-  --mm-executing-sweep-start-x: -135%
-  --mm-executing-sweep-end-x: 135%
-  --mm-executing-sweep-radius-inset: 1px
+  --mm-executing-sweep-start-x: 135%
+  --mm-executing-sweep-start-y: 160%
+  --mm-executing-sweep-end-x: -135%
+  --mm-executing-sweep-end-y: -160%
+  --mm-executing-sweep-layer-offset-x: -12%
+  --mm-executing-sweep-layer-offset-y: -10%
 ```
 
 ## Non-Goals
