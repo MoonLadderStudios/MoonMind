@@ -54,6 +54,8 @@ WorkloadStatus = Literal[
 WorkloadKind = Literal["one_shot", "bounded_service"]
 WorkloadOwnershipKind = Literal["workload", "bounded_service"]
 WorkloadNetworkPolicy = Literal["none", "bridge"]
+WorkflowDockerMode = Literal["disabled", "profiles", "unrestricted"]
+WorkloadAccessKind = Literal["profile", "unrestricted_container", "unrestricted_docker_cli"]
 WorkloadDeviceMode = Literal["none"]
 WorkloadReadinessProbeType = Literal["exec"]
 
@@ -222,6 +224,24 @@ class WorkloadCredentialMount(BaseModel):
             )
         if not _is_safe_absolute_profile_path(self.target):
             raise ValueError("credential mount target must be an absolute safe path")
+        return self
+
+
+class UnrestrictedCacheMount(BaseModel):
+    """Deployment-approved named-cache mount for unrestricted containers."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    source: NonBlankStr = Field(..., alias="source")
+    target: NonBlankStr = Field(..., alias="target")
+    read_only: bool = Field(False, alias="readOnly")
+
+    @model_validator(mode="after")
+    def _validate_mount(self) -> "UnrestrictedCacheMount":
+        if _VOLUME_NAME_PATTERN.match(self.source) is None:
+            raise ValueError("cacheMounts source must be a Docker named volume")
+        if not _is_safe_absolute_profile_path(self.target):
+            raise ValueError("cacheMounts target must be an absolute safe path")
         return self
 
 
@@ -440,6 +460,7 @@ class WorkloadOwnershipMetadata(BaseModel):
     workload_profile: NonBlankStr = Field(..., alias="workloadProfile")
     session_id: NonBlankStr | None = Field(None, alias="sessionId")
     session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
+    workload_access: WorkloadAccessKind = Field("profile", alias="workloadAccess")
 
     @property
     def labels(self) -> dict[str, str]:
@@ -455,6 +476,7 @@ class WorkloadOwnershipMetadata(BaseModel):
             labels["moonmind.session_id"] = self.session_id
         if self.session_epoch is not None:
             labels["moonmind.session_epoch"] = str(self.session_epoch)
+        labels["moonmind.workload_access"] = self.workload_access
         return labels
 
 
@@ -484,6 +506,7 @@ class WorkloadRequest(BaseModel):
     )
     session_id: NonBlankStr | None = Field(None, alias="sessionId")
     session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
+    workload_access: WorkloadAccessKind = Field("profile", alias="workloadAccess")
     source_turn_id: NonBlankStr | None = Field(None, alias="sourceTurnId")
 
     @model_validator(mode="after")
@@ -521,6 +544,7 @@ class WorkloadRequest(BaseModel):
             workloadProfile=self.profile_id,
             sessionId=self.session_id,
             sessionEpoch=self.session_epoch,
+            workloadAccess="profile",
         )
 
     @property
@@ -532,13 +556,150 @@ class WorkloadRequest(BaseModel):
         )
 
 
+class UnrestrictedContainerRequest(BaseModel):
+    """Canonical unrestricted runtime-container request."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    step_id: NonBlankStr = Field(..., alias="stepId")
+    attempt: int = Field(..., alias="attempt", ge=1)
+    tool_name: Literal["container.run_container"] = Field(..., alias="toolName")
+    repo_dir: NonBlankStr = Field(..., alias="repoDir")
+    artifacts_dir: NonBlankStr = Field(..., alias="artifactsDir")
+    scratch_dir: NonBlankStr = Field(..., alias="scratchDir")
+    image: NonBlankStr = Field(..., alias="image")
+    entrypoint: tuple[NonBlankStr, ...] = Field(default_factory=tuple, alias="entrypoint")
+    command: tuple[NonBlankStr, ...] = Field(..., alias="command", min_length=1)
+    workdir: NonBlankStr | None = Field(None, alias="workdir")
+    env_overrides: dict[str, str] = Field(default_factory=dict, alias="envOverrides")
+    cache_mounts: tuple[UnrestrictedCacheMount, ...] = Field(default_factory=tuple, alias="cacheMounts")
+    network_mode: WorkloadNetworkPolicy = Field("none", alias="networkMode")
+    timeout_seconds: int | None = Field(None, alias="timeoutSeconds", ge=1)
+    resources: WorkloadResourceOverrides = Field(default_factory=WorkloadResourceOverrides, alias="resources")
+    declared_outputs: dict[str, str] = Field(default_factory=dict, alias="declaredOutputs")
+    session_id: NonBlankStr | None = Field(None, alias="sessionId")
+    session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
+    source_turn_id: NonBlankStr | None = Field(None, alias="sourceTurnId")
+
+    @model_validator(mode="after")
+    def _normalize_request(self) -> "UnrestrictedContainerRequest":
+        if not _image_has_tag_or_digest(self.image):
+            raise ValueError("image must include an explicit tag or digest")
+        if self.image.rsplit("/", 1)[-1].endswith(":latest"):
+            raise ValueError("image must not use the latest tag")
+        self.command = tuple(require_non_blank(item, field_name="command[]") for item in self.command)
+        self.entrypoint = tuple(require_non_blank(item, field_name="entrypoint[]") for item in self.entrypoint)
+        normalized_env: dict[str, str] = {}
+        for raw_key, raw_value in self.env_overrides.items():
+            key = _normalize_env_name(str(raw_key), field_name="envOverrides key")
+            normalized_env[key] = str(raw_value)
+        self.env_overrides = normalized_env
+        self.declared_outputs = {
+            _validate_declared_output_key(key): _validate_relative_artifact_path(str(value), field_name="declaredOutputs value")
+            for key, value in self.declared_outputs.items()
+        }
+        if self.workdir is not None:
+            self.workdir = require_non_blank(self.workdir, field_name="workdir")
+        if self.session_id is None and (self.session_epoch is not None or self.source_turn_id is not None):
+            raise ValueError("sessionEpoch/sourceTurnId require sessionId association metadata")
+        return self
+
+    def ownership_metadata(self) -> WorkloadOwnershipMetadata:
+        return WorkloadOwnershipMetadata(
+            taskRunId=self.task_run_id,
+            stepId=self.step_id,
+            attempt=self.attempt,
+            toolName=self.tool_name,
+            workloadProfile="unrestricted",
+            sessionId=self.session_id,
+            sessionEpoch=self.session_epoch,
+            workloadAccess="unrestricted_container",
+        )
+
+    @property
+    def container_name(self) -> str:
+        return workload_container_name(task_run_id=self.task_run_id, step_id=self.step_id, attempt=self.attempt)
+
+
+class UnrestrictedDockerRequest(BaseModel):
+    """Canonical unrestricted Docker CLI request."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    task_run_id: NonBlankStr = Field(..., alias="taskRunId")
+    step_id: NonBlankStr = Field(..., alias="stepId")
+    attempt: int = Field(..., alias="attempt", ge=1)
+    tool_name: Literal["container.run_docker"] = Field(..., alias="toolName")
+    repo_dir: NonBlankStr = Field(..., alias="repoDir")
+    artifacts_dir: NonBlankStr = Field(..., alias="artifactsDir")
+    command: tuple[NonBlankStr, ...] = Field(..., alias="command", min_length=1)
+    env_overrides: dict[str, str] = Field(default_factory=dict, alias="envOverrides")
+    timeout_seconds: int | None = Field(None, alias="timeoutSeconds", ge=1)
+    resources: WorkloadResourceOverrides = Field(default_factory=WorkloadResourceOverrides, alias="resources")
+    declared_outputs: dict[str, str] = Field(default_factory=dict, alias="declaredOutputs")
+    session_id: NonBlankStr | None = Field(None, alias="sessionId")
+    session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
+    source_turn_id: NonBlankStr | None = Field(None, alias="sourceTurnId")
+
+    @model_validator(mode="after")
+    def _normalize_request(self) -> "UnrestrictedDockerRequest":
+        self.command = tuple(require_non_blank(item, field_name="command[]") for item in self.command)
+        if not self.command or self.command[0] != "docker":
+            raise ValueError("container.run_docker command[0] must be docker")
+        normalized_env: dict[str, str] = {}
+        for raw_key, raw_value in self.env_overrides.items():
+            key = _normalize_env_name(str(raw_key), field_name="envOverrides key")
+            normalized_env[key] = str(raw_value)
+        self.env_overrides = normalized_env
+        self.declared_outputs = {
+            _validate_declared_output_key(key): _validate_relative_artifact_path(str(value), field_name="declaredOutputs value")
+            for key, value in self.declared_outputs.items()
+        }
+        if self.session_id is None and (self.session_epoch is not None or self.source_turn_id is not None):
+            raise ValueError("sessionEpoch/sourceTurnId require sessionId association metadata")
+        return self
+
+    def ownership_metadata(self) -> WorkloadOwnershipMetadata:
+        return WorkloadOwnershipMetadata(
+            taskRunId=self.task_run_id,
+            stepId=self.step_id,
+            attempt=self.attempt,
+            toolName=self.tool_name,
+            workloadProfile="unrestricted",
+            sessionId=self.session_id,
+            sessionEpoch=self.session_epoch,
+            workloadAccess="unrestricted_docker_cli",
+        )
+
+    @property
+    def container_name(self) -> str:
+        return workload_container_name(task_run_id=self.task_run_id, step_id=self.step_id, attempt=self.attempt)
+
+
+AnyWorkloadRequest = WorkloadRequest | UnrestrictedContainerRequest | UnrestrictedDockerRequest
+
+
+def parse_workload_request(value: Any) -> AnyWorkloadRequest:
+    if isinstance(value, (WorkloadRequest, UnrestrictedContainerRequest, UnrestrictedDockerRequest)):
+        return value
+    if not isinstance(value, dict):
+        raise TypeError("workload request must be an object")
+    tool_name = str(value.get("toolName") or "").strip()
+    if tool_name == "container.run_container":
+        return UnrestrictedContainerRequest.model_validate(value)
+    if tool_name == "container.run_docker":
+        return UnrestrictedDockerRequest.model_validate(value)
+    return WorkloadRequest.model_validate(value)
+
+
 class ValidatedWorkloadRequest(BaseModel):
     """Profile-aware validated workload request."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    request: WorkloadRequest = Field(..., alias="request")
-    profile: RunnerProfile = Field(..., alias="profile")
+    request: AnyWorkloadRequest = Field(..., alias="request")
+    profile: RunnerProfile | None = Field(None, alias="profile")
     ownership: WorkloadOwnershipMetadata = Field(..., alias="ownership")
     container_name: NonBlankStr = Field(..., alias="containerName")
 

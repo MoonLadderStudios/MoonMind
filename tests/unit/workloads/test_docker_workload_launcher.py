@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from moonmind.schemas.workload_models import WorkloadRequest
+from moonmind.schemas.workload_models import UnrestrictedDockerRequest, WorkloadRequest
 from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
     DockerWorkloadConcurrencyLimiter,
@@ -310,6 +310,52 @@ def test_launcher_wraps_multi_part_shell_command_as_single_arg(
     )
 
     assert run_args[-3:] == ["python:3.12-slim", "-lc", "python -V"]
+
+
+def test_unrestricted_docker_request_replaces_leading_docker_binary(
+    tmp_path: Path,
+) -> None:
+    request = UnrestrictedDockerRequest.model_validate(
+        {
+            "toolName": "container.run_docker",
+            "taskRunId": "task-1",
+            "stepId": "docker-cli",
+            "attempt": 1,
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/docker-cli",
+            "command": ["docker", "ps"],
+        }
+    )
+    registry = _registry(tmp_path)
+    validated = registry.validate_request(request)
+
+    args = DockerWorkloadLauncher(docker_binary="podman").build_run_args(validated)
+
+    assert args == ["podman", "ps"]
+
+
+def test_unrestricted_helper_request_reuses_unrestricted_arg_builder(
+    tmp_path: Path,
+) -> None:
+    request = UnrestrictedDockerRequest.model_validate(
+        {
+            "toolName": "container.run_docker",
+            "taskRunId": "task-1",
+            "stepId": "docker-helper",
+            "attempt": 1,
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/docker-helper",
+            "command": ["docker", "images"],
+        }
+    )
+    registry = _registry(tmp_path)
+    validated = registry.validate_request(request)
+
+    args = DockerWorkloadLauncher(docker_binary="podman").build_helper_run_args(validated)
+
+    assert args == ["podman", "images"]
+
+
 
 
 def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> None:
@@ -891,6 +937,44 @@ async def test_launcher_captures_bounded_process_output(
 
     assert len(result.metadata["stdout"]) == 64_000
     assert result.metadata["stdout"].endswith("tail\n")
+
+
+@pytest.mark.asyncio
+async def test_launcher_runs_unrestricted_requests_without_profile_concurrency_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "ps":
+            return _Process(returncode=0, stdout=b"CONTAINER ID\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    registry = _registry(tmp_path)
+    validated = registry.validate_request(
+        UnrestrictedDockerRequest.model_validate(
+            {
+                "toolName": "container.run_docker",
+                "taskRunId": "task-unrestricted",
+                "stepId": "docker-cli",
+                "attempt": 1,
+                "repoDir": "/work/agent_jobs/task-unrestricted/repo",
+                "artifactsDir": "/work/agent_jobs/task-unrestricted/artifacts/docker-cli",
+                "command": ["docker", "ps"],
+            }
+        )
+    )
+
+    result = await DockerWorkloadLauncher(
+        concurrency_limiter=DockerWorkloadConcurrencyLimiter(fleet_limit=2)
+    ).run(validated)
+
+    assert result.status == "succeeded"
+    assert result.exit_code == 0
+
 
 
 @pytest.mark.asyncio

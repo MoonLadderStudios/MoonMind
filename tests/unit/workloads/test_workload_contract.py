@@ -7,6 +7,8 @@ import pytest
 from pydantic import ValidationError
 
 from moonmind.schemas.workload_models import (
+    UnrestrictedContainerRequest,
+    UnrestrictedDockerRequest,
     WorkloadRequest,
     WorkloadResult,
     parse_size_bytes,
@@ -111,6 +113,7 @@ def test_registry_validates_request_and_derives_required_labels(tmp_path: Path) 
         "moonmind.workload_profile": "local-python",
         "moonmind.session_id": "session-1",
         "moonmind.session_epoch": "2",
+        "moonmind.workload_access": "profile",
     }
     assert validated.container_name == "mm-workload-task-1-step-test-1"
 
@@ -754,3 +757,94 @@ def test_registry_rejects_bounded_helper_ttl_above_profile_limit(
         "resource": "ttlSeconds",
         "profileId": "redis-helper",
     }
+
+
+def test_unrestricted_container_request_accepts_runtime_container_shape() -> None:
+    request = UnrestrictedContainerRequest.model_validate(
+        {
+            "taskRunId": "task-1",
+            "stepId": "step-test",
+            "attempt": 1,
+            "toolName": "container.run_container",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+            "scratchDir": "/work/agent_jobs/task-1/scratch",
+            "image": "ghcr.io/example/runtime:1.2.3",
+            "entrypoint": ["/bin/bash", "-lc"],
+            "command": ["pytest", "-q"],
+            "workdir": "/work/agent_jobs/task-1/repo",
+            "envOverrides": {"CI": "1"},
+            "cacheMounts": [
+                {
+                    "source": "build_cache",
+                    "target": "/work/cache",
+                }
+            ],
+            "networkMode": "bridge",
+            "timeoutSeconds": 300,
+            "declaredOutputs": {"output.primary": "reports/results.json"},
+        }
+    )
+
+    assert request.image == "ghcr.io/example/runtime:1.2.3"
+    assert request.tool_name == "container.run_container"
+    assert request.command == ("pytest", "-q")
+    assert request.cache_mounts[0].source == "build_cache"
+
+
+def test_unrestricted_docker_request_requires_docker_cli_prefix() -> None:
+    with pytest.raises(ValidationError, match="docker"):
+        UnrestrictedDockerRequest.model_validate(
+            {
+                "taskRunId": "task-1",
+                "stepId": "step-test",
+                "attempt": 1,
+                "toolName": "container.run_docker",
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                "command": ["bash", "-lc", "docker ps"],
+            }
+        )
+
+
+def test_registry_accepts_unrestricted_requests_without_runner_profile(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+
+    validated = registry.validate_request(
+        {
+            "taskRunId": "task-1",
+            "stepId": "step-test",
+            "attempt": 1,
+            "toolName": "container.run_container",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+            "scratchDir": "/work/agent_jobs/task-1/scratch",
+            "image": "ghcr.io/example/runtime:1.2.3",
+            "command": ["pytest", "-q"],
+            "networkMode": "none",
+            "timeoutSeconds": 300,
+        }
+    )
+
+    assert validated.profile is None
+    assert validated.ownership.labels["moonmind.workload_access"] == "unrestricted_container"
+    assert validated.ownership.labels["moonmind.tool_name"] == "container.run_container"
+
+
+def test_registry_rejects_unrestricted_request_outside_workspace_root(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+
+    with pytest.raises(WorkloadPolicyError, match="workspace root") as exc_info:
+        registry.validate_request(
+            {
+                "taskRunId": "task-1",
+                "stepId": "step-test",
+                "attempt": 1,
+                "toolName": "container.run_docker",
+                "repoDir": "/tmp/elsewhere",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                "command": ["docker", "ps"],
+            }
+        )
+
+    assert exc_info.value.reason == "disallowed_mount"

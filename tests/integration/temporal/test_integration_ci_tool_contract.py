@@ -15,10 +15,12 @@ from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
 from moonmind.workflows.skills.tool_registry import create_registry_snapshot
 from moonmind.workloads.registry import RunnerProfileRegistry
 from moonmind.workloads.tool_bridge import (
+    CONTAINER_RUN_CONTAINER_TOOL,
     INTEGRATION_CI_PROFILE_ID,
     INTEGRATION_CI_TOOL,
     build_dood_tool_definition_payload,
     build_workload_tool_handler,
+    register_workload_tool_handlers,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -57,7 +59,7 @@ class _FakeLauncher:
         self.validated = validated
         return WorkloadResult(
             requestId=validated.container_name,
-            profileId=validated.profile.id,
+            profileId=(validated.profile.id if validated.profile is not None else validated.request.tool_name),
             status="succeeded",
             labels=validated.ownership.labels,
             exitCode=0,
@@ -68,7 +70,7 @@ class _FakeLauncher:
             metadata={
                 "workload": {
                     "toolName": validated.request.tool_name,
-                    "profileId": validated.profile.id,
+                    "profileId": (validated.profile.id if validated.profile is not None else validated.request.tool_name),
                     "command": list(validated.request.command),
                 },
                 "artifactPublication": {"status": "complete"},
@@ -131,3 +133,107 @@ async def test_moonmind_integration_ci_routes_through_curated_workload_tool() ->
     assert result.outputs["stdoutRef"] == "art:sha256:stdout"
     assert result.outputs["stderrRef"] == "art:sha256:stderr"
     assert result.outputs["diagnosticsRef"] == "art:sha256:diagnostics"
+
+
+async def test_workflow_docker_mode_keeps_registry_and_dispatch_aligned() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_integration_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+
+    disabled_dispatcher = ToolActivityDispatcher()
+    register_workload_tool_handlers(
+        disabled_dispatcher,
+        registry=registry,
+        launcher=_FakeLauncher(),
+        workflow_docker_mode="disabled",
+    )
+    assert disabled_dispatcher._skill_handlers == {}
+
+    profiles_snapshot = create_registry_snapshot(
+        skills=(
+            parse_tool_definition(
+                build_dood_tool_definition_payload(
+                    name=CONTAINER_RUN_CONTAINER_TOOL,
+                    version="1.0",
+                )
+            ),
+        ),
+        artifact_store=InMemoryArtifactStore(),
+    )
+    profiles_dispatcher = ToolActivityDispatcher()
+    register_workload_tool_handlers(
+        profiles_dispatcher,
+        registry=registry,
+        launcher=_FakeLauncher(),
+        workflow_docker_mode="profiles",
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await execute_tool_activity(
+            invocation_payload={
+                "id": "step-run-container",
+                "tool": {
+                    "type": "skill",
+                    "name": CONTAINER_RUN_CONTAINER_TOOL,
+                    "version": "1.0",
+                },
+                "inputs": {
+                    "repoDir": "/work/agent_jobs/wf-1/repo",
+                    "artifactsDir": "/work/agent_jobs/wf-1/artifacts/integration-ci",
+                    "scratchDir": "/work/agent_jobs/wf-1/scratch",
+                    "image": "ghcr.io/example/runtime:1.2.3",
+                    "command": ["pytest", "-q"],
+                },
+            },
+            registry_snapshot=profiles_snapshot,
+            dispatcher=profiles_dispatcher,
+            context={"workflow_id": "wf-1", "node_id": "step-run-container"},
+        )
+    message = getattr(exc_info.value, "message", str(exc_info.value))
+    assert "No mm.tool.execute handler registered" in message or "PERMISSION_DENIED" in message
+
+    unrestricted_dispatcher = ToolActivityDispatcher()
+    launcher = _FakeLauncher()
+    register_workload_tool_handlers(
+        unrestricted_dispatcher,
+        registry=registry,
+        launcher=launcher,
+        workflow_docker_mode="unrestricted",
+    )
+    unrestricted_snapshot = create_registry_snapshot(
+        skills=(
+            parse_tool_definition(
+                build_dood_tool_definition_payload(
+                    name=CONTAINER_RUN_CONTAINER_TOOL,
+                    version="1.0",
+                )
+            ),
+        ),
+        artifact_store=InMemoryArtifactStore(),
+    )
+
+    result = await execute_tool_activity(
+        invocation_payload={
+            "id": "step-run-container",
+            "tool": {
+                "type": "skill",
+                "name": CONTAINER_RUN_CONTAINER_TOOL,
+                "version": "1.0",
+            },
+            "inputs": {
+                "repoDir": "/work/agent_jobs/wf-1/repo",
+                "artifactsDir": "/work/agent_jobs/wf-1/artifacts/integration-ci",
+                "scratchDir": "/work/agent_jobs/wf-1/scratch",
+                "image": "ghcr.io/example/runtime:1.2.3",
+                "command": ["pytest", "-q"],
+            },
+        },
+        registry_snapshot=unrestricted_snapshot,
+        dispatcher=unrestricted_dispatcher,
+        context={"workflow_id": "wf-1", "node_id": "step-run-container"},
+    )
+
+    assert launcher.validated is not None
+    assert launcher.validated.profile is None
+    assert result.status == "COMPLETED"

@@ -9,10 +9,14 @@ from moonmind.schemas.workload_models import RunnerProfile, WorkloadResult
 from moonmind.workflows.skills.skill_plan_contracts import SkillFailure, SkillResult
 from moonmind.workloads.registry import RunnerProfileRegistry
 from moonmind.workloads.tool_bridge import (
+    CONTAINER_RUN_CONTAINER_TOOL,
+    CONTAINER_RUN_DOCKER_TOOL,
+    DOOD_TOOL_NAMES,
     INTEGRATION_CI_PROFILE_ID,
     INTEGRATION_CI_TOOL,
     build_dood_tool_definition_payload,
     build_workload_tool_handler,
+    register_workload_tool_handlers,
 )
 
 
@@ -89,7 +93,7 @@ class _FakeLauncher:
         self.validated = validated
         return WorkloadResult(
             requestId=validated.container_name,
-            profileId=validated.profile.id,
+            profileId=(validated.profile.id if validated.profile is not None else validated.request.tool_name),
             status=self._status,
             labels=validated.ownership.labels,
             exitCode=0 if self._status == "succeeded" else 1,
@@ -118,7 +122,7 @@ class _FakeLauncher:
                     "stepId": validated.request.step_id,
                     "attempt": validated.request.attempt,
                     "toolName": validated.request.tool_name,
-                    "profileId": validated.profile.id,
+                    "profileId": (validated.profile.id if validated.profile is not None else validated.request.tool_name),
                     "sessionContext": (
                         {
                             "sessionId": validated.request.session_id,
@@ -137,7 +141,7 @@ class _FakeLauncher:
         self.validated = validated
         return WorkloadResult(
             requestId=validated.container_name,
-            profileId=validated.profile.id,
+            profileId=(validated.profile.id if validated.profile is not None else validated.request.tool_name),
             status="ready",
             labels=validated.ownership.labels,
             exitCode=None,
@@ -162,7 +166,7 @@ class _FakeLauncher:
         self.validated = validated
         return WorkloadResult(
             requestId=validated.container_name,
-            profileId=validated.profile.id,
+            profileId=(validated.profile.id if validated.profile is not None else validated.request.tool_name),
             status="stopped",
             labels=validated.ownership.labels,
             exitCode=None,
@@ -370,7 +374,7 @@ async def test_workload_tool_handler_denies_when_workflow_docker_disabled() -> N
         tool_name="container.run_workload",
         registry=_FailingRegistry(),
         launcher=_FailingLauncher(),
-        workflow_docker_enabled=False,
+        workflow_docker_mode="disabled",
     )
 
     with pytest.raises(SkillFailure) as exc_info:
@@ -395,7 +399,7 @@ async def test_integration_ci_tool_denies_when_workflow_docker_disabled() -> Non
         tool_name=INTEGRATION_CI_TOOL,
         registry=_FailingRegistry(),
         launcher=_FailingLauncher(),
-        workflow_docker_enabled=False,
+        workflow_docker_mode="disabled",
     )
 
     with pytest.raises(SkillFailure) as exc_info:
@@ -896,3 +900,113 @@ async def test_unreal_run_tests_handler_requires_project_path_before_launch() ->
     assert exc_info.value.error_code == "INVALID_INPUT"
     assert "projectPath" in exc_info.value.message
     assert launcher.validated is None
+
+
+class _RecordingDispatcher:
+    def __init__(self) -> None:
+        self.skills: list[tuple[str, str]] = []
+
+    def register_skill(self, *, skill_name: str, version: str, handler: Any) -> None:
+        self.skills.append((skill_name, version))
+
+
+def test_unrestricted_tool_definitions_are_registered_as_docker_workloads() -> None:
+    for tool_name in (CONTAINER_RUN_CONTAINER_TOOL, CONTAINER_RUN_DOCKER_TOOL):
+        definition = build_dood_tool_definition_payload(name=tool_name, version="1.0")
+
+        assert definition["type"] == "skill"
+        assert definition["executor"]["activity_type"] == "mm.tool.execute"
+        assert definition["requirements"]["capabilities"] == ["docker_workload"]
+
+
+def test_register_workload_tool_handlers_omits_all_dood_tools_when_disabled() -> None:
+    dispatcher = _RecordingDispatcher()
+
+    register_workload_tool_handlers(
+        dispatcher,
+        registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
+        launcher=_FailingLauncher(),
+        workflow_docker_mode="disabled",
+    )
+
+    assert dispatcher.skills == []
+
+
+def test_register_workload_tool_handlers_exposes_only_curated_tools_in_profiles_mode() -> None:
+    dispatcher = _RecordingDispatcher()
+
+    register_workload_tool_handlers(
+        dispatcher,
+        registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
+        launcher=_FailingLauncher(),
+        workflow_docker_mode="profiles",
+    )
+
+    registered = {name for name, _version in dispatcher.skills}
+    assert CONTAINER_RUN_CONTAINER_TOOL not in registered
+    assert CONTAINER_RUN_DOCKER_TOOL not in registered
+    assert INTEGRATION_CI_TOOL in registered
+
+
+def test_register_workload_tool_handlers_exposes_unrestricted_tools_only_in_unrestricted_mode() -> None:
+    dispatcher = _RecordingDispatcher()
+
+    register_workload_tool_handlers(
+        dispatcher,
+        registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
+        launcher=_FailingLauncher(),
+        workflow_docker_mode="unrestricted",
+    )
+
+    registered = {name for name, _version in dispatcher.skills}
+    assert registered == DOOD_TOOL_NAMES
+
+
+@pytest.mark.asyncio
+async def test_profiles_mode_denies_direct_unrestricted_container_invocation() -> None:
+    handler = build_workload_tool_handler(
+        tool_name=CONTAINER_RUN_CONTAINER_TOOL,
+        registry=_FailingRegistry(),
+        launcher=_FailingLauncher(),
+        workflow_docker_mode="profiles",
+    )
+
+    with pytest.raises(SkillFailure) as exc_info:
+        await handler(
+            {
+                "image": "ghcr.io/example/runtime:1.2.3",
+                "repoDir": "/work/agent_jobs/task-1/repo",
+                "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                "scratchDir": "/work/agent_jobs/task-1/scratch",
+                "command": ["pytest", "-q"],
+            },
+            {"workflow_id": "task-1", "node_id": "step-test"},
+        )
+
+    assert exc_info.value.error_code == "PERMISSION_DENIED"
+    assert exc_info.value.details["reason"] == "docker_workflow_mode_forbidden"
+    assert exc_info.value.details["workflowDockerMode"] == "profiles"
+
+
+@pytest.mark.asyncio
+async def test_unrestricted_mode_allows_unrestricted_docker_handler() -> None:
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name=CONTAINER_RUN_DOCKER_TOOL,
+        registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
+        launcher=launcher,
+        workflow_docker_mode="unrestricted",
+    )
+
+    result = await handler(
+        {
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+            "command": ["docker", "ps"],
+        },
+        {"workflow_id": "task-1", "node_id": "step-test"},
+    )
+
+    assert result.status == "COMPLETED"
+    assert launcher.validated.profile is None
+    assert launcher.validated.request.tool_name == CONTAINER_RUN_DOCKER_TOOL

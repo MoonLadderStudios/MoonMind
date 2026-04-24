@@ -1,27 +1,47 @@
 [
   {
-    "id": 4167224734,
+    "id": 4167329002,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary only; the actionable retention-mapping items were addressed in the referenced files."
+    "rationale": "Top-level review summary only; the actionable line comments below were evaluated and resolved individually."
   },
   {
-    "id": 3134907874,
+    "id": 3134994540,
     "disposition": "addressed",
-    "rationale": "Updated FR-005 and related spec language to include report.appendix, report.findings_index, and report.export as long-retention link types."
+    "rationale": "Unrestricted Docker CLI execution now replaces the leading docker token with the configured runtime binary so commands no longer become 'docker docker ...'."
   },
   {
-    "id": 3134907881,
+    "id": 3134994545,
     "disposition": "addressed",
-    "rationale": "Expanded the plan evidence summary for FR-005 to list every report link type that defaults to long retention."
+    "rationale": "The helper-side unrestricted Docker path now reuses the same normalized command builder and handles unrestricted requests before profile-only validation."
   },
   {
-    "id": 3134907887,
+    "id": 3134994548,
     "disposition": "addressed",
-    "rationale": "Revised the research decision and evidence text so the retention-default analysis matches the implementation mapping."
+    "rationale": "The unrestricted fallback runner profile is now a module-level constant instead of being revalidated from a hardcoded dict on every invocation."
   },
   {
-    "id": 3134907889,
+    "id": 3134994551,
     "disposition": "addressed",
-    "rationale": "Updated verification coverage to record all report link types that derive long retention by default."
+    "rationale": "The helper path now shares the module-level unrestricted runner profile and unrestricted arg builder instead of repeating inline model validation."
+  },
+  {
+    "id": 3134994554,
+    "disposition": "addressed",
+    "rationale": "Default timeout and kill-grace values are now centralized as module-level constants and reused across labels, diagnostics, and timeout handling."
+  },
+  {
+    "id": 3134994556,
+    "disposition": "addressed",
+    "rationale": "Workflow Docker mode normalization is now centralized in a shared module used by both settings and the tool bridge, removing the duplicated implementation."
+  },
+  {
+    "id": 3134997019,
+    "disposition": "addressed",
+    "rationale": "Removed the unused CONTAINER_RUN_CONTAINER_TOOL import from the Temporal worker runtime unit test."
+  },
+  {
+    "id": 3135008658,
+    "disposition": "addressed",
+    "rationale": "Unrestricted workload requests no longer dereference profile-only concurrency metadata; the launcher now skips per-profile concurrency caps when profile=None and covers the path with a regression test."
   }
 ]

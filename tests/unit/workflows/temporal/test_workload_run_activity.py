@@ -257,7 +257,7 @@ async def test_workload_run_activity_denies_when_workflow_docker_disabled() -> N
     activities = TemporalAgentRuntimeActivities(
         workload_registry=_FailingRegistry(),
         workload_launcher=_FailingLauncher(),
-        workflow_docker_enabled=False,
+        workflow_docker_mode="disabled",
     )
 
     with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
@@ -268,3 +268,30 @@ async def test_workload_run_activity_denies_when_workflow_docker_disabled() -> N
     assert "policy_denied" in message
     assert exc_info.value.type == "docker_workflows_disabled"
     assert exc_info.value.non_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_workload_run_activity_denies_unrestricted_tool_when_mode_is_profiles() -> None:
+    activities = TemporalAgentRuntimeActivities(
+        workload_registry=_FailingRegistry(),
+        workload_launcher=_FailingLauncher(),
+        workflow_docker_mode="profiles",
+    )
+
+    with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
+        await activities.workload_run(
+            {
+                "request": {
+                    "taskRunId": "task-1",
+                    "stepId": "step-test",
+                    "attempt": 1,
+                    "toolName": "container.run_docker",
+                    "repoDir": "/work/agent_jobs/task-1/repo",
+                    "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+                    "command": ["docker", "ps"],
+                }
+            }
+        )
+
+    assert exc_info.value.type == "docker_workflow_mode_forbidden"
+    assert "profiles" in str(exc_info.value)

@@ -11,12 +11,15 @@ from pydantic import ValidationError
 
 from moonmind.schemas.workload_models import (
     RunnerProfile,
+    UnrestrictedContainerRequest,
+    UnrestrictedDockerRequest,
     ValidatedWorkloadRequest,
     WorkloadRequest,
     WorkloadOwnershipMetadata,
     helper_container_name,
     parse_cpu_units,
     parse_size_bytes,
+    parse_workload_request,
 )
 
 
@@ -124,54 +127,64 @@ class RunnerProfileRegistry:
 
     def validate_request(
         self,
-        request: WorkloadRequest | Mapping[str, Any],
+        request: WorkloadRequest | UnrestrictedContainerRequest | UnrestrictedDockerRequest | Mapping[str, Any],
     ) -> ValidatedWorkloadRequest:
-        parsed_request = (
-            request
-            if isinstance(request, WorkloadRequest)
-            else WorkloadRequest.model_validate(request)
-        )
-        profile = self._profiles.get(parsed_request.profile_id)
-        if profile is None:
-            raise WorkloadPolicyError(
-                f"unknown runner profile: {parsed_request.profile_id}",
-                reason="unknown_profile",
-                details={"profileId": parsed_request.profile_id},
+        parsed_request = parse_workload_request(request) if isinstance(request, Mapping) else request
+
+        if isinstance(parsed_request, WorkloadRequest):
+            profile = self._profiles.get(parsed_request.profile_id)
+            if profile is None:
+                raise WorkloadPolicyError(
+                    f"unknown runner profile: {parsed_request.profile_id}",
+                    reason="unknown_profile",
+                    details={"profileId": parsed_request.profile_id},
+                )
+
+            self._validate_workspace_path(parsed_request.repo_dir, field_name="repoDir")
+            self._validate_workspace_path(
+                parsed_request.artifacts_dir,
+                field_name="artifactsDir",
+            )
+            self._validate_env_overrides(parsed_request, profile)
+            self._validate_timeout(parsed_request, profile)
+            self._validate_helper_ttl(parsed_request, profile)
+            self._validate_resources(parsed_request, profile)
+            container_name = parsed_request.container_name
+            ownership = parsed_request.ownership_metadata()
+            if profile.kind == "bounded_service":
+                container_name = helper_container_name(
+                    task_run_id=parsed_request.task_run_id,
+                    step_id=parsed_request.step_id,
+                    attempt=parsed_request.attempt,
+                )
+                ownership = WorkloadOwnershipMetadata(
+                    kind="bounded_service",
+                    taskRunId=parsed_request.task_run_id,
+                    stepId=parsed_request.step_id,
+                    attempt=parsed_request.attempt,
+                    toolName=parsed_request.tool_name,
+                    workloadProfile=parsed_request.profile_id,
+                    sessionId=parsed_request.session_id,
+                    sessionEpoch=parsed_request.session_epoch,
+                    workloadAccess="profile",
+                )
+
+            return ValidatedWorkloadRequest(
+                request=parsed_request,
+                profile=profile,
+                ownership=ownership,
+                containerName=container_name,
             )
 
         self._validate_workspace_path(parsed_request.repo_dir, field_name="repoDir")
-        self._validate_workspace_path(
-            parsed_request.artifacts_dir,
-            field_name="artifactsDir",
-        )
-        self._validate_env_overrides(parsed_request, profile)
-        self._validate_timeout(parsed_request, profile)
-        self._validate_helper_ttl(parsed_request, profile)
-        self._validate_resources(parsed_request, profile)
-        container_name = parsed_request.container_name
-        ownership = parsed_request.ownership_metadata()
-        if profile.kind == "bounded_service":
-            container_name = helper_container_name(
-                task_run_id=parsed_request.task_run_id,
-                step_id=parsed_request.step_id,
-                attempt=parsed_request.attempt,
-            )
-            ownership = WorkloadOwnershipMetadata(
-                kind="bounded_service",
-                taskRunId=parsed_request.task_run_id,
-                stepId=parsed_request.step_id,
-                attempt=parsed_request.attempt,
-                toolName=parsed_request.tool_name,
-                workloadProfile=parsed_request.profile_id,
-                sessionId=parsed_request.session_id,
-                sessionEpoch=parsed_request.session_epoch,
-            )
-
+        self._validate_workspace_path(parsed_request.artifacts_dir, field_name="artifactsDir")
+        if isinstance(parsed_request, UnrestrictedContainerRequest):
+            self._validate_workspace_path(parsed_request.scratch_dir, field_name="scratchDir")
         return ValidatedWorkloadRequest(
             request=parsed_request,
-            profile=profile,
-            ownership=ownership,
-            containerName=container_name,
+            profile=None,
+            ownership=parsed_request.ownership_metadata(),
+            containerName=parsed_request.container_name,
         )
 
     def _validate_workspace_path(self, value: str, *, field_name: str) -> None:
