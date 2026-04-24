@@ -13,5 +13,15 @@
     "id": 4168083355,
     "disposition": "addressed",
     "rationale": "Applied the review’s requested direction by moving the fix into markup and test semantics rather than maintaining CSS overrides."
+  },
+  {
+    "id": 3135664728,
+    "disposition": "addressed",
+    "rationale": "Replaced the hardcoded 38% midpoint with calc(50% + var(--mm-executing-sweep-layer-offset)) in frontend/src/styles/mission-control.css and verified the frontend/unit suites pass."
+  },
+  {
+    "id": 4168107533,
+    "disposition": "not-applicable",
+    "rationale": "This top-level review is only a summary of the inline feedback thread; the actionable CSS comment was addressed directly."
   }
 ]
