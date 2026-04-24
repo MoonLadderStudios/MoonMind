@@ -14,6 +14,7 @@ from moonmind.schemas.workload_models import (
     UnrestrictedContainerRequest,
     UnrestrictedDockerRequest,
     ValidatedWorkloadRequest,
+    WorkflowDockerMode,
     WorkloadRequest,
     WorkloadOwnershipMetadata,
     helper_container_name,
@@ -128,6 +129,8 @@ class RunnerProfileRegistry:
     def validate_request(
         self,
         request: WorkloadRequest | UnrestrictedContainerRequest | UnrestrictedDockerRequest | Mapping[str, Any],
+        *,
+        workflow_docker_mode: WorkflowDockerMode | None = None,
     ) -> ValidatedWorkloadRequest:
         parsed_request = parse_workload_request(request) if isinstance(request, Mapping) else request
 
@@ -150,7 +153,9 @@ class RunnerProfileRegistry:
             self._validate_helper_ttl(parsed_request, profile)
             self._validate_resources(parsed_request, profile)
             container_name = parsed_request.container_name
-            ownership = parsed_request.ownership_metadata()
+            ownership = parsed_request.ownership_metadata(
+                workflow_docker_mode=workflow_docker_mode or "profiles"
+            )
             if profile.kind == "bounded_service":
                 container_name = helper_container_name(
                     task_run_id=parsed_request.task_run_id,
@@ -167,6 +172,7 @@ class RunnerProfileRegistry:
                     sessionId=parsed_request.session_id,
                     sessionEpoch=parsed_request.session_epoch,
                     workloadAccess="profile",
+                    workflowDockerMode=ownership.workflow_docker_mode,
                 )
 
             return ValidatedWorkloadRequest(
@@ -183,7 +189,9 @@ class RunnerProfileRegistry:
         return ValidatedWorkloadRequest(
             request=parsed_request,
             profile=None,
-            ownership=parsed_request.ownership_metadata(),
+            ownership=parsed_request.ownership_metadata(
+                workflow_docker_mode=workflow_docker_mode or "unrestricted"
+            ),
             containerName=parsed_request.container_name,
         )
 

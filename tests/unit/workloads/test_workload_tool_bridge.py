@@ -123,6 +123,7 @@ class _FakeLauncher:
                     "attempt": validated.request.attempt,
                     "toolName": validated.request.tool_name,
                     "profileId": (validated.profile.id if validated.profile is not None else validated.request.tool_name),
+                    "workflowDockerMode": validated.ownership.workflow_docker_mode,
                     "sessionContext": (
                         {
                             "sessionId": validated.request.session_id,
@@ -342,6 +343,7 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
         "sessionEpoch": 3,
         "sourceTurnId": "turn-1",
     }
+    assert workload_metadata["workflowDockerMode"] == "profiles"
     assert workload_metadata["artifactPublication"] == {"status": "complete"}
     assert result.progress["workloadMetadata"]["artifactPublication"] == {
         "status": "complete"
@@ -1010,3 +1012,4 @@ async def test_unrestricted_mode_allows_unrestricted_docker_handler() -> None:
     assert result.status == "COMPLETED"
     assert launcher.validated.profile is None
     assert launcher.validated.request.tool_name == CONTAINER_RUN_DOCKER_TOOL
+    assert result.outputs["workloadMetadata"]["workflowDockerMode"] == "unrestricted"

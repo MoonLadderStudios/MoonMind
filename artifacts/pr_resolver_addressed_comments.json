@@ -1,12 +1,12 @@
 [
   {
-    "id": 3135364204,
+    "id": 3135509592,
     "disposition": "addressed",
-    "rationale": "Updated the integration test fake launcher to build sessionContext like moonmind/workloads/docker_launcher.py, omitting sessionEpoch/sourceTurnId when those values are null."
+    "rationale": "Simplified helper ownership metadata initialization to reuse the already-resolved workflowDockerMode value."
   },
   {
-    "id": 3135364206,
+    "id": 3135514158,
     "disposition": "addressed",
-    "rationale": "Updated the Temporal activity unit test fake launcher to mirror the production _session_context behavior instead of materializing None-valued keys."
+    "rationale": "Propagated the active workflow_docker_mode through Temporal workload_run validation and added a regression test so unrestricted runs preserve accurate ownership labels."
   }
 ]

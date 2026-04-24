@@ -3217,7 +3217,10 @@ class TemporalAgentRuntimeActivities:
                 workflow_docker_mode=workflow_mode,
                 tool_name=request.tool_name,
             )
-        validated = self._workload_registry.validate_request(request)
+        validated = self._workload_registry.validate_request(
+            request,
+            workflow_docker_mode=workflow_mode,
+        )
         if request.tool_name == CONTAINER_START_HELPER_TOOL:
             result = await self._workload_launcher.start_helper(validated)
         elif request.tool_name == CONTAINER_STOP_HELPER_TOOL:

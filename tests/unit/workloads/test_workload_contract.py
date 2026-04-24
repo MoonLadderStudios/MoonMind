@@ -114,6 +114,7 @@ def test_registry_validates_request_and_derives_required_labels(tmp_path: Path) 
         "moonmind.session_id": "session-1",
         "moonmind.session_epoch": "2",
         "moonmind.workload_access": "profile",
+        "moonmind.workflow_docker_mode": "profiles",
     }
     assert validated.container_name == "mm-workload-task-1-step-test-1"
 
@@ -829,6 +830,29 @@ def test_registry_accepts_unrestricted_requests_without_runner_profile(tmp_path:
     assert validated.profile is None
     assert validated.ownership.labels["moonmind.workload_access"] == "unrestricted_container"
     assert validated.ownership.labels["moonmind.tool_name"] == "container.run_container"
+
+
+def test_registry_accepts_workflow_docker_mode_for_unrestricted_requests(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+
+    validated = registry.validate_request(
+        {
+            "taskRunId": "task-1",
+            "stepId": "step-test",
+            "attempt": 1,
+            "toolName": "container.run_container",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+            "scratchDir": "/work/agent_jobs/task-1/scratch",
+            "image": "ghcr.io/example/runtime:1.2.3",
+            "command": ["pytest", "-q"],
+            "networkMode": "none",
+            "timeoutSeconds": 300,
+        },
+        workflow_docker_mode="unrestricted",
+    )
+
+    assert validated.ownership.labels["moonmind.workflow_docker_mode"] == "unrestricted"
 
 
 def test_registry_rejects_unrestricted_request_outside_workspace_root(tmp_path: Path) -> None:
