@@ -5784,10 +5784,22 @@ describe("Task Create Entrypoint", () => {
       /\.queue-floating-bar\s*\{[^}]*width:\s*min\(100% - 2rem,\s*70rem\)[^}]*justify-content:\s*stretch/s,
     );
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(12rem,\s*1\.65fr\)\s*minmax\(10rem,\s*1\.45fr\)\s*minmax\(8rem,\s*1fr\)\s*auto/s,
+      /\.queue-floating-bar-row\s*\{[^}]*width:\s*100%[^}]*justify-self:\s*stretch[^}]*grid-template-columns:\s*minmax\(12rem,\s*1\.65fr\)\s*minmax\(10rem,\s*1\.45fr\)\s*minmax\(8rem,\s*1fr\)\s*auto/s,
     );
     expect(missionControlCss).toMatch(
       /@media \(max-width:\s*640px\)\s*\{[^}]*\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto/s,
+    );
+  });
+
+  it("keeps the floating submit rail stretched instead of right-aligning its grid", async () => {
+    const { readFileSync } = await import("node:fs");
+    const missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      "utf8",
+    );
+
+    expect(missionControlCss).toMatch(
+      /\.queue-step-submit-actions\s*\{[^}]*justify-content:\s*stretch/s,
     );
   });
 
