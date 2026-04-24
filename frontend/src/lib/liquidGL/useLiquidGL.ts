@@ -83,6 +83,16 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       return `[${TARGET_ATTR}="${targetId}"]`;
     };
 
+    const markInitialized = (element: HTMLElement) => {
+      initializedElement = element;
+      element.style.pointerEvents = "auto";
+      element.setAttribute(INITIALIZED_ATTR, "true");
+      if (stallTimerId !== null) {
+        window.clearTimeout(stallTimerId);
+        stallTimerId = null;
+      }
+    };
+
     const scheduleAttempt = (delayMs = 0) => {
       if (disposed || attempts >= MAX_INIT_ATTEMPTS) {
         return;
@@ -132,13 +142,7 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
                 return;
               }
               didInitialize = true;
-              initializedElement = element;
-              element.style.pointerEvents = "auto";
-              element.setAttribute(INITIALIZED_ATTR, "true");
-              if (stallTimerId !== null) {
-                window.clearTimeout(stallTimerId);
-                stallTimerId = null;
-              }
+              markInitialized(element);
               options.on?.init?.(lens);
             },
           },
@@ -165,10 +169,8 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       const isFallbackResult = liquidGLInstances.every(
         (instance) => instance instanceof HTMLElement,
       );
-      if (isFallbackResult) {
-        initializedElement = element;
-        element.style.pointerEvents = "auto";
-        element.setAttribute(INITIALIZED_ATTR, "true");
+      if (isFallbackResult || options.reveal === false) {
+        markInitialized(element);
         return;
       }
 

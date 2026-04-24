@@ -1,5 +1,6 @@
 import {
   afterEach,
+  beforeAll,
   beforeEach,
   describe,
   expect,
@@ -365,6 +366,7 @@ describe("Task Create Entrypoint", () => {
   let consoleInfoSpy: MockInstance;
   let executionResponseOverride: Response | null;
   let artifactCreateResponseOverride: Response | null;
+  let missionControlCss: string;
 
   function renderForEdit(executionId: string, payload: BootPayload = mockPayload) {
     window.history.pushState(
@@ -403,6 +405,14 @@ describe("Task Create Entrypoint", () => {
 
     expect(missingTitles).toEqual([]);
   }
+
+  beforeAll(async () => {
+    const { readFileSync } = await import("node:fs");
+    missionControlCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      "utf8",
+    );
+  });
 
   beforeEach(() => {
     window.history.pushState({}, "Task Create", "/tasks/new");
@@ -5604,12 +5614,6 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("keeps create page instruction textareas matte and outside the glass rail", async () => {
-    const { readFileSync } = await import("node:fs");
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
-      "utf8",
-    );
-
     renderWithClient(<TaskCreatePage payload={mockPayload} />);
 
     const instructions = await screen.findByLabelText("Instructions");
@@ -5753,12 +5757,6 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("keeps MM-429 liquid glass fallback shell complete before enhancement initializes", async () => {
-    const { readFileSync } = await import("node:fs");
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
-      "utf8",
-    );
-
     expect(missionControlCss).toMatch(
       /\.queue-floating-bar\s*\{[^}]*position:\s*fixed;[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-floating\);[^}]*display:\s*grid;/s,
     );
@@ -5774,30 +5772,24 @@ describe("Task Create Entrypoint", () => {
   });
 
   it("lets repository, branch, and publish controls fill the floating bar on desktop", async () => {
-    const { readFileSync } = await import("node:fs");
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
-      "utf8",
-    );
-
     expect(missionControlCss).toMatch(
       /\.queue-floating-bar\s*\{[^}]*width:\s*min\(100% - 2rem,\s*70rem\)[^}]*justify-content:\s*stretch/s,
     );
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(12rem,\s*1\.65fr\)\s*minmax\(10rem,\s*1\.45fr\)\s*minmax\(8rem,\s*1fr\)\s*auto/s,
+      /\.queue-floating-bar-row\s*\{[^}]*width:\s*100%[^}]*justify-self:\s*stretch[^}]*grid-template-columns:\s*minmax\(12rem,\s*1\.65fr\)\s*minmax\(10rem,\s*1\.45fr\)\s*minmax\(8rem,\s*1fr\)\s*auto/s,
     );
     expect(missionControlCss).toMatch(
       /@media \(max-width:\s*640px\)\s*\{[^}]*\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto/s,
     );
   });
 
-  it("centers the constrained create page panel with equal side margins", async () => {
-    const { readFileSync } = await import("node:fs");
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
-      "utf8",
+  it("keeps the floating submit rail stretched instead of right-aligning its grid", async () => {
+    expect(missionControlCss).toMatch(
+      /\.queue-step-submit-actions\s*\{[^}]*justify-content:\s*stretch/s,
     );
+  });
 
+  it("centers the constrained create page panel with equal side margins", async () => {
     expect(missionControlCss).toMatch(
       /\.panel:has\(\.task-create-page\)\s*\{[^}]*margin-inline:\s*auto/s,
     );
