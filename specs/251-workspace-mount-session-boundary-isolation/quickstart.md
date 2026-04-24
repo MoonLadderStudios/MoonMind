@@ -44,4 +44,4 @@ What this proves:
 2. Run the focused unit verification command.
 3. Run the hermetic integration verification command.
 4. Confirm session-associated workload results remain workload artifacts rather than session continuity artifacts.
-5. Complete final MoonSpec verification against MM-502, FR-001 through FR-007, SC-001 through SC-006, and DESIGN-REQ-002, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-022.
+5. Run `/moonspec-verify` for `specs/251-workspace-mount-session-boundary-isolation/` and complete final MoonSpec verification against MM-502, FR-001 through FR-007, SC-001 through SC-006, and DESIGN-REQ-002, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-022.
