@@ -1,8 +1,8 @@
 # Feature Specification: Profile-Backed Workload Contracts
 
-**Feature Branch**: `249-profile-backed-workload-contracts`  
-**Created**: 2026-04-24  
-**Status**: Draft  
+**Feature Branch**: `249-profile-backed-workload-contracts`
+**Created**: 2026-04-24
+**Status**: Draft
 **Input**: User description: "Use the Jira preset brief for MM-500 as the canonical Moon Spec orchestration input.
 
 Additional constraints:
