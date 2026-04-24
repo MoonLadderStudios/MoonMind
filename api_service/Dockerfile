@@ -8,7 +8,6 @@ ARG INSTALL_CODEX_CLI=true
 ARG INSTALL_GEMINI_CLI=true
 ARG INSTALL_CLAUDE_CLI=true
 ARG GEMINI_CLI_VERSION=latest
-ARG INSTALL_TEST_DEPS=false
 
 FROM node:22-bookworm AS tooling-builder
 
@@ -21,7 +20,6 @@ SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 ARG CODEX_CLI_VERSION
 ARG INSTALL_CODEX_CLI=true
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
-ARG INSTALL_TEST_DEPS
 ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
 ARG CLAUDE_CLI_VERSION
@@ -184,9 +182,15 @@ SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /build
 
 RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
+RUN npm config set fund false \
+    && npm config set audit false \
+    && npm config set update-notifier false
 
-# Copy only the files needed for the frontend build
 COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /build/
+RUN --mount=type=cache,target=/root/.npm npm ci --no-fund --no-audit
+
+# Copy only the source files needed for the frontend build after dependencies
+# are installed so source-only edits do not invalidate npm ci.
 COPY frontend/ /build/frontend/
 # Tailwind scans these paths for class usage (see tailwind.config.cjs content[])
 COPY api_service/templates/react_dashboard.html /build/api_service/templates/react_dashboard.html
@@ -195,20 +199,28 @@ COPY tools/verify_vite_manifest.py /build/tools/verify_vite_manifest.py
 
 # Always rebuild dist from source; do not rely on committed chunks surviving partial copies.
 RUN rm -rf /build/api_service/static/task_dashboard/dist \
-    && npm ci \
     && npm run ui:build \
     && python3 /build/tools/verify_vite_manifest.py
 
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm AS python-requirements
+SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
+WORKDIR /deps
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --disable-pip-version-check \
+        poetry==2.2.1 \
+        poetry-plugin-export==1.10.0
+
+COPY pyproject.toml poetry.lock README.md /deps/
+
+RUN poetry export --only main --format requirements.txt --without-hashes --output /deps/requirements-main.txt \
+    && poetry export --only main --extras tests --format requirements.txt --without-hashes --output /deps/requirements-tests.txt
+
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim-bookworm AS runtime-base
 
 ARG CODEX_CLI_VERSION
-ARG INSTALL_TEST_DEPS
-ARG GEMINI_CLI_VERSION
-ARG INSTALL_GEMINI_CLI
-ARG CLAUDE_CLI_VERSION
-ARG INSTALL_CLAUDE_CLI
-ARG MOONMIND_BUILD_ID
 # Use bash with pipefail and strict mode in the runtime image as well so
 # future RUN commands that rely on bash-specific behavior do not regress to
 # /bin/sh defaults or ignore unset variables. Keep the options explicit for
@@ -300,33 +312,27 @@ RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
 RUN install -d -o root -g app -m 0750 /etc/codex
 COPY --chown=root:app --chmod=0640 api_service/config.template.toml /etc/codex/config.toml
 
-RUN pip install --no-cache-dir watchfiles
+COPY --from=python-requirements /deps/requirements-main.txt /tmp/requirements-main.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --disable-pip-version-check -r /tmp/requirements-main.txt watchfiles \
+    && rm -f /tmp/requirements-main.txt
 
-# Copy pyproject.toml and README.md first for better Docker layer caching
 COPY pyproject.toml /app/pyproject.toml
+COPY poetry.lock /app/poetry.lock
 COPY README.md /app/README.md
 
-# Create empty directories to satisfy pip install
-RUN mkdir -p /app/moonmind /app/api_service
-RUN touch /app/moonmind/__init__.py /app/api_service/__init__.py
-
-# Install dependencies first (this layer will be cached as long as pyproject.toml doesn't change)
-RUN pip install --no-cache-dir -e .
 # Keep test runners available in all worker images (codex/gemini/claude).
-RUN pip install --no-cache-dir readmeai~=0.6.3 --no-deps && \
-    pip install --no-cache-dir pytest pytest-xdist pytest-timeout
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps \
+    && pip install --disable-pip-version-check pytest pytest-xdist pytest-timeout
 
-# Install test extras when requested so compose-driven test runs have pytest and
-# related dependencies baked into the image, avoiding runtime network installs.
-RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
-        pip install --no-cache-dir -e .[tests]; \
-    fi
-
-# Copy source code AFTER installing dependencies
-# This ensures that code changes don't invalidate the dependency cache
+# Copy source code AFTER installing locked dependencies so code changes only
+# invalidate the lightweight editable project install.
 COPY moonmind /app/moonmind/
 COPY api_service /app/api_service/
 COPY config /app/config/
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --disable-pip-version-check --no-deps -e .
 
 # Copy pre-built frontend assets from the frontend-builder stage
 COPY --from=frontend-builder /build/api_service/static/task_dashboard/ /app/api_service/static/task_dashboard/
@@ -335,6 +341,21 @@ COPY --from=frontend-builder /build/api_service/static/task_dashboard/ /opt/moon
 RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh
 
+FROM runtime-base AS test-runtime
+ARG INSTALL_TEST_DEPS=true
+COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
+        pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
+    fi && \
+    rm -f /tmp/requirements-tests.txt
+
+FROM runtime-base AS worker-runtime
+EXPOSE 8000
+CMD ["/app/api_service/entrypoint.sh"]
+
+FROM worker-runtime AS api-runtime
+ARG MOONMIND_BUILD_ID
 RUN build_id="${MOONMIND_BUILD_ID:-}" \
     && if [ -z "${build_id}" ]; then build_id="$(date -u +%Y%m%d.%H%M)"; fi \
     && printf '%s\n' "${build_id}" > /app/.moonmind-build-id
