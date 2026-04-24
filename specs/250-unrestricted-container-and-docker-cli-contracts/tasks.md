@@ -1,6 +1,6 @@
 # Tasks: Unrestricted Container and Docker CLI Contracts
 
-**Input**: Design documents from `specs/250-unrestricted-container-and-docker-cli-contracts/`  
+**Input**: Design documents from `specs/250-unrestricted-container-and-docker-cli-contracts/`
 **Prerequisites**: `spec.md`, `plan.md`, `research.md`, `contracts/unrestricted-docker-workload-contract.md`, `quickstart.md`
 
 **Tests**: Unit tests and hermetic integration verification are REQUIRED. For MM-501, the repository already contains most unrestricted-mode production behavior and broad test evidence, so the story work is verification-first: preserve the canonical artifacts, re-run the focused unrestricted verification suites, close the remaining `implemented_unverified` gaps with tests first, and implement code changes only if verification exposes drift.

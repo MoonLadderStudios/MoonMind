@@ -1,8 +1,8 @@
 # Feature Specification: Unrestricted Container and Docker CLI Contracts
 
-**Feature Branch**: `250-unrestricted-container-and-docker-cli-contracts`  
-**Created**: 2026-04-24  
-**Status**: Draft  
+**Feature Branch**: `250-unrestricted-container-and-docker-cli-contracts`
+**Created**: 2026-04-24
+**Status**: Draft
 **Input**: User description: "Use the Jira preset brief for MM-501 as the canonical Moon Spec orchestration input.
 
 Additional constraints:

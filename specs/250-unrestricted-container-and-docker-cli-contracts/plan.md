@@ -26,15 +26,15 @@ MM-501 is a runtime verification-first story. The repository already contains th
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Pydantic v2, Temporal Python SDK, existing Docker workload launcher/registry stack, pytest  
-**Storage**: No new persistent storage; existing workload registry, launcher, worker runtime wiring, and artifact-backed workload outputs only  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/config/test_settings.py`  
-**Integration Testing**: `./tools/test_integration.sh`  
-**Target Platform**: MoonMind worker runtime and Docker-backed workload tool path  
-**Project Type**: Backend runtime contract and verification story for unrestricted Docker-backed workload execution  
-**Performance Goals**: Preserve deterministic request validation and low-overhead mode-aware tool dispatch with no new orchestration layers or storage  
-**Constraints**: Keep unrestricted execution deployment-gated and auditable; preserve the profile-backed meaning of `container.run_workload`; do not widen unrestricted execution into generic shell or session-side Docker authority; keep `container.run_docker` Docker-specific; preserve MM-501 traceability  
+**Language/Version**: Python 3.12
+**Primary Dependencies**: Pydantic v2, Temporal Python SDK, existing Docker workload launcher/registry stack, pytest
+**Storage**: No new persistent storage; existing workload registry, launcher, worker runtime wiring, and artifact-backed workload outputs only
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/config/test_settings.py`
+**Integration Testing**: `./tools/test_integration.sh`
+**Target Platform**: MoonMind worker runtime and Docker-backed workload tool path
+**Project Type**: Backend runtime contract and verification story for unrestricted Docker-backed workload execution
+**Performance Goals**: Preserve deterministic request validation and low-overhead mode-aware tool dispatch with no new orchestration layers or storage
+**Constraints**: Keep unrestricted execution deployment-gated and auditable; preserve the profile-backed meaning of `container.run_workload`; do not widen unrestricted execution into generic shell or session-side Docker authority; keep `container.run_docker` Docker-specific; preserve MM-501 traceability
 **Scale/Scope**: One story covering unrestricted runtime-container requests, unrestricted Docker CLI requests, mode-aware denial, profile-backed-path preservation, and MM-501 traceability
 
 ## Constitution Check
