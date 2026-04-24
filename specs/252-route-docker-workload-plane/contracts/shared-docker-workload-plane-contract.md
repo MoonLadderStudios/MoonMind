@@ -35,7 +35,7 @@ Expected outcome:
 Contract rules:
 
 - each workload launch must carry deterministic task/run identity metadata
-- execution metadata must identify task run, step, attempt, tool, and workload access class
+- execution metadata must identify task run, step, attempt, tool, runtime mode, and workload access class
 - session association metadata, when present, remains bounded traceability metadata inside `sessionContext`
 - the shared execution plane must expose equivalent workload result metadata across supported launch classes
 

@@ -37,7 +37,7 @@ What this proves:
 - profile-backed and helper launches already use the shared workload plane
 - unrestricted container and Docker CLI paths, when enabled, share the same observable execution contract
 - timeout, cancellation, and cleanup behavior remain bounded across supported launch classes
-- metadata preserves task/run identity and workload access class consistently across the shared execution plane
+- metadata preserves task/run identity, runtime mode, and workload access class consistently across the shared execution plane
 
 ## End-To-End Story Validation
 
