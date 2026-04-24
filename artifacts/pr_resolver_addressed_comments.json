@@ -23,5 +23,30 @@
     "id": 4167425940,
     "disposition": "not-applicable",
     "rationale": "Top-level Codex review wrapper contained no standalone actionable feedback beyond the inline comment already addressed."
+  },
+  {
+    "id": 3135097062,
+    "disposition": "addressed",
+    "rationale": "Removed the unused user binding from _client_with_service while preserving dependency override side effects."
+  },
+  {
+    "id": 3135097068,
+    "disposition": "addressed",
+    "rationale": "Removed the unused admin test user binding in test_list_executions_passes_temporal_filters_for_admin."
+  },
+  {
+    "id": 3135097076,
+    "disposition": "addressed",
+    "rationale": "Removed an unused user binding in the send-message signal test setup."
+  },
+  {
+    "id": 3135097078,
+    "disposition": "addressed",
+    "rationale": "Removed an unused user binding in the skip-dependency signal test setup."
+  },
+  {
+    "id": 3135097081,
+    "disposition": "addressed",
+    "rationale": "Dropped the unused ArtifactRefModel import after switching execution report projections to CompactArtifactRefModel."
   }
 ]

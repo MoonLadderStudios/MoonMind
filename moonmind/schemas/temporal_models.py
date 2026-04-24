@@ -14,10 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-from moonmind.schemas.temporal_artifact_models import (
-    ArtifactRefModel,
-    CompactArtifactRefModel,
-)
+from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
 SUPPORTED_WORKFLOW_TYPES = (

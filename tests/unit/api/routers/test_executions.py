@@ -241,7 +241,7 @@ def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
-    user = _override_user_dependencies(app, is_superuser=True)
+    _override_user_dependencies(app, is_superuser=True)
 
     with TestClient(app) as test_client:
         yield test_client, mock_service
@@ -260,7 +260,7 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
     )
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
-    user = _override_user_dependencies(app, is_superuser=True)
+    _override_user_dependencies(app, is_superuser=True)
 
     owner_id = uuid4()
     with TestClient(app) as test_client:
@@ -2491,7 +2491,7 @@ def test_signal_execution_routes_send_message_and_serializes_audit(
     mock_service.signal_execution.return_value = record
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
-    user = _override_user_dependencies(app, is_superuser=True)
+    _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
 
     with TestClient(app) as test_client:
@@ -2531,7 +2531,7 @@ def test_signal_execution_routes_skip_dependency_wait(monkeypatch: pytest.Monkey
     mock_service.signal_execution.return_value = record
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
-    user = _override_user_dependencies(app, is_superuser=True)
+    _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
 
     with TestClient(app) as test_client:
