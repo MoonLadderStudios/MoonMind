@@ -3056,6 +3056,22 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   box-shadow: none;
 }
 
+.queue-page-size-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  transition: var(--mm-control-transition);
+}
+
+.queue-page-size-selector:has(select:disabled) {
+  opacity: var(--mm-control-disabled-opacity);
+}
+
 .queue-inline-toggle:has(input:disabled) {
   opacity: var(--mm-control-disabled-opacity);
 }
@@ -3113,7 +3129,8 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   .queue-step-icon-button,
   .queue-step-extension-button,
   .queue-inline-toggle,
-  .queue-inline-filter {
+  .queue-inline-filter,
+  .queue-page-size-selector {
     transition-duration: 0s !important;
     animation-duration: 0s !important;
     transform: none !important;

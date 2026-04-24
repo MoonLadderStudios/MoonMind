@@ -582,6 +582,12 @@ describe('Mission Control shared entry', () => {
     expect(inlineFilterBlock).toContain('background: var(--mm-control-shell)');
     expect(inlineFilterBlock).toContain('border: 1px solid var(--mm-control-border)');
 
+    const pageSizeSelectorBlock = cssRuleBlock(missionControlCss, '.queue-page-size-selector {');
+    expect(pageSizeSelectorBlock).toContain('background: transparent');
+    expect(pageSizeSelectorBlock).toContain('border: 0');
+    expect(pageSizeSelectorBlock).toContain('box-shadow: none');
+    expect(pageSizeSelectorBlock).toContain('transition: var(--mm-control-transition)');
+
     const filterChipBlock = cssRuleBlock(missionControlCss, '.task-list-filter-chip {');
     expect(filterChipBlock).toContain('background: var(--mm-control-shell)');
     expect(filterChipBlock).toContain('border: 1px solid var(--mm-control-border)');
@@ -598,7 +604,7 @@ describe('Mission Control shared entry', () => {
       /opacity:\s*var\(--mm-control-disabled-opacity\);[^}]*transform:\s*none;[^}]*box-shadow:\s*none;/s,
     );
     expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*button,[^}]*\.button,[^}]*\.queue-action,[^}]*\.queue-submit-primary,[^}]*\.queue-step-icon-button,[^}]*\.queue-step-extension-button,[^}]*\.queue-inline-toggle,[^}]*\.queue-inline-filter\s*\{[^}]*transition-duration:\s*0s !important;[^}]*animation-duration:\s*0s !important;[^}]*transform:\s*none !important;/s,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*button,[^}]*\.button,[^}]*\.queue-action,[^}]*\.queue-submit-primary,[^}]*\.queue-step-icon-button,[^}]*\.queue-step-extension-button,[^}]*\.queue-inline-toggle,[^}]*\.queue-inline-filter,[^}]*\.queue-page-size-selector\s*\{[^}]*transition-duration:\s*0s !important;[^}]*animation-duration:\s*0s !important;[^}]*transform:\s*none !important;/s,
     );
     expect(missionControlCss).toMatch(
       /@media \(forced-colors: active\)\s*\{[^}]*button:focus-visible,[^}]*\.button:focus-visible,[^}]*\.route-nav a:focus-visible,[^}]*\.live-logs-artifact-link:focus-visible,[^}]*\.queue-action:focus-visible,[^}]*\.queue-submit-primary:focus-visible\s*\{[^}]*outline:\s*2px solid ButtonText;[^}]*outline-offset:\s*2px;/s,

@@ -1,27 +1,12 @@
 [
   {
-    "id": 3137257910,
+    "id": 3139932227,
     "disposition": "addressed",
-    "rationale": "Simplified the gateway initiation_mode assignment in moonmind/rag/service.py without changing the fallback behavior."
+    "rationale": "Added transition: var(--mm-control-transition) to .queue-page-size-selector and covered it with the Mission Control CSS test."
   },
   {
-    "id": 4169956726,
-    "disposition": "not-applicable",
-    "rationale": "Review summary only; the underlying actionable suggestion is tracked as discussion comment 3137257910."
-  },
-  {
-    "id": 3137259440,
+    "id": 4172986718,
     "disposition": "addressed",
-    "rationale": "Restricted boolean durable retrieval metadata passthrough to retrievalContextTruncated and added a regression test for numeric fields."
-  },
-  {
-    "id": 3137259445,
-    "disposition": "addressed",
-    "rationale": "Normalized retrieval exceptions into explicit disabled reasons so fallback absence no longer masks the original retrieval failure cause."
-  },
-  {
-    "id": 4169958610,
-    "disposition": "not-applicable",
-    "rationale": "Automated review wrapper only; actionable feedback is captured by the individual review comments already classified above."
+    "rationale": "Top-level review summary duplicated the inline transition concern, which is fixed by the page size selector CSS/test update."
   }
 ]
