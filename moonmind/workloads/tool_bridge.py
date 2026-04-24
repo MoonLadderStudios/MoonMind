@@ -434,7 +434,9 @@ def build_workload_tool_handler(
                 inputs=inputs,
                 context=context,
             )
-            validated = registry.validate_request(request)
+            validated = registry.validate_request(
+                request, workflow_docker_mode=normalized_mode
+            )
             if normalized == CONTAINER_START_HELPER_TOOL:
                 result = await launcher.start_helper(validated)
             elif normalized == CONTAINER_STOP_HELPER_TOOL:

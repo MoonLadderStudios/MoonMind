@@ -461,6 +461,7 @@ class WorkloadOwnershipMetadata(BaseModel):
     session_id: NonBlankStr | None = Field(None, alias="sessionId")
     session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
     workload_access: WorkloadAccessKind = Field("profile", alias="workloadAccess")
+    workflow_docker_mode: WorkflowDockerMode = Field("profiles", alias="workflowDockerMode")
 
     @property
     def labels(self) -> dict[str, str]:
@@ -477,6 +478,7 @@ class WorkloadOwnershipMetadata(BaseModel):
         if self.session_epoch is not None:
             labels["moonmind.session_epoch"] = str(self.session_epoch)
         labels["moonmind.workload_access"] = self.workload_access
+        labels["moonmind.workflow_docker_mode"] = self.workflow_docker_mode
         return labels
 
 
@@ -535,7 +537,9 @@ class WorkloadRequest(BaseModel):
                 )
         return self
 
-    def ownership_metadata(self) -> WorkloadOwnershipMetadata:
+    def ownership_metadata(
+        self, *, workflow_docker_mode: WorkflowDockerMode = "profiles"
+    ) -> WorkloadOwnershipMetadata:
         return WorkloadOwnershipMetadata(
             taskRunId=self.task_run_id,
             stepId=self.step_id,
@@ -545,6 +549,7 @@ class WorkloadRequest(BaseModel):
             sessionId=self.session_id,
             sessionEpoch=self.session_epoch,
             workloadAccess="profile",
+            workflowDockerMode=workflow_docker_mode,
         )
 
     @property
@@ -605,7 +610,9 @@ class UnrestrictedContainerRequest(BaseModel):
             raise ValueError("sessionEpoch/sourceTurnId require sessionId association metadata")
         return self
 
-    def ownership_metadata(self) -> WorkloadOwnershipMetadata:
+    def ownership_metadata(
+        self, *, workflow_docker_mode: WorkflowDockerMode = "unrestricted"
+    ) -> WorkloadOwnershipMetadata:
         return WorkloadOwnershipMetadata(
             taskRunId=self.task_run_id,
             stepId=self.step_id,
@@ -615,6 +622,7 @@ class UnrestrictedContainerRequest(BaseModel):
             sessionId=self.session_id,
             sessionEpoch=self.session_epoch,
             workloadAccess="unrestricted_container",
+            workflowDockerMode=workflow_docker_mode,
         )
 
     @property
@@ -660,7 +668,9 @@ class UnrestrictedDockerRequest(BaseModel):
             raise ValueError("sessionEpoch/sourceTurnId require sessionId association metadata")
         return self
 
-    def ownership_metadata(self) -> WorkloadOwnershipMetadata:
+    def ownership_metadata(
+        self, *, workflow_docker_mode: WorkflowDockerMode = "unrestricted"
+    ) -> WorkloadOwnershipMetadata:
         return WorkloadOwnershipMetadata(
             taskRunId=self.task_run_id,
             stepId=self.step_id,
@@ -670,6 +680,7 @@ class UnrestrictedDockerRequest(BaseModel):
             sessionId=self.session_id,
             sessionEpoch=self.session_epoch,
             workloadAccess="unrestricted_docker_cli",
+            workflowDockerMode=workflow_docker_mode,
         )
 
     @property

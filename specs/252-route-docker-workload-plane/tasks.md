@@ -21,8 +21,8 @@
 
 **Purpose**: Confirm the MM-503 artifact set, target runtime surfaces, and focused validation files before verification work begins.
 
-- [ ] T001 Confirm `docs/tmp/jira-orchestration-inputs/MM-503-moonspec-orchestration-input.md`, `specs/252-route-docker-workload-plane/spec.md`, `specs/252-route-docker-workload-plane/plan.md`, `specs/252-route-docker-workload-plane/research.md`, `specs/252-route-docker-workload-plane/contracts/shared-docker-workload-plane-contract.md`, and `specs/252-route-docker-workload-plane/quickstart.md` remain the canonical MM-503 source and planning artifacts for FR-007 and SC-006
-- [ ] T002 Confirm the MM-503 runtime touchpoints in `moonmind/workloads/registry.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/activity_runtime.py`, `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py`
+- [X] T001 Confirm `docs/tmp/jira-orchestration-inputs/MM-503-moonspec-orchestration-input.md`, `specs/252-route-docker-workload-plane/spec.md`, `specs/252-route-docker-workload-plane/plan.md`, `specs/252-route-docker-workload-plane/research.md`, `specs/252-route-docker-workload-plane/contracts/shared-docker-workload-plane-contract.md`, and `specs/252-route-docker-workload-plane/quickstart.md` remain the canonical MM-503 source and planning artifacts for FR-007 and SC-006
+- [X] T002 Confirm the MM-503 runtime touchpoints in `moonmind/workloads/registry.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/activity_runtime.py`, `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py`
 
 ---
 
@@ -30,8 +30,8 @@
 
 **Purpose**: Lock the verification scope and prerequisites before story execution.
 
-- [ ] T003 Confirm `specs/252-route-docker-workload-plane/` needs no `data-model.md`, migration, or new persistent storage because MM-503 is a runtime boundary verification story
-- [ ] T004 Confirm `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py` are the correct validation surfaces for FR-001 through FR-006 and DESIGN-REQ-006/019/020/023/024
+- [X] T003 Confirm `specs/252-route-docker-workload-plane/` needs no `data-model.md`, migration, or new persistent storage because MM-503 is a runtime boundary verification story
+- [X] T004 Confirm `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py` are the correct validation surfaces for FR-001 through FR-006 and DESIGN-REQ-006/019/020/023/024
 
 **Checkpoint**: Foundation ready - story verification work can now begin.
 
@@ -57,31 +57,31 @@
 ### Unit Tests (write first) ⚠️
 
 - [ ] T005 [P] Add failing unit tests for FR-001, FR-006, DESIGN-REQ-006, and DESIGN-REQ-020 in `tests/unit/workflows/temporal/test_activity_runtime.py` covering capability-based routing and shared `mm.tool.execute` binding for curated and unrestricted Docker-backed tools
-- [ ] T006 [P] Add failing unit tests for FR-002, DESIGN-REQ-019, and SC-002 in `tests/unit/workloads/test_workload_contract.py` covering deterministic metadata and labels for unrestricted container and Docker CLI requests, including workload access class and any required runtime-mode metadata
+- [X] T006 [P] Add failing unit tests for FR-002, DESIGN-REQ-019, and SC-002 in `tests/unit/workloads/test_workload_contract.py` covering deterministic metadata and labels for unrestricted container and Docker CLI requests, including workload access class and any required runtime-mode metadata
 - [ ] T007 [P] Add failing unit tests for FR-003, FR-004, FR-005, DESIGN-REQ-023, and DESIGN-REQ-024 in `tests/unit/workloads/test_docker_workload_launcher.py` covering bounded timeout/cancellation metadata and conservative cleanup ownership for unrestricted launch classes
 - [ ] T008 Run targeted unit validation for `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workloads/test_workload_contract.py`, and `tests/unit/workloads/test_docker_workload_launcher.py`, confirming the MM-503 red-first gaps are isolated before any production changes
 
 ### Integration Tests (write first) ⚠️
 
-- [ ] T009 Add a failing hermetic integration test for FR-001, FR-003, SC-001, SC-003, and DESIGN-REQ-006 in `tests/integration/temporal/test_profile_backed_workload_contract.py` covering the shared workload result contract across profile-backed and unrestricted execution paths
+- [X] T009 Add a failing hermetic integration test for FR-001, FR-003, SC-001, SC-003, and DESIGN-REQ-006 in `tests/integration/temporal/test_profile_backed_workload_contract.py` covering the shared workload result contract across profile-backed and unrestricted execution paths
 - [ ] T010 Add a failing hermetic integration test for FR-002, FR-004, FR-005, SC-002, SC-004, SC-005, DESIGN-REQ-019, DESIGN-REQ-023, and DESIGN-REQ-024 in `tests/integration/temporal/test_profile_backed_workload_contract.py` covering metadata completeness, bounded timeout/cancellation behavior, and cleanup ownership boundaries for unrestricted execution
-- [ ] T011 Run `pytest tests/integration/temporal/test_profile_backed_workload_contract.py -q --tb=short -m 'integration_ci'` to confirm T009-T010 fail for the expected MM-503 shared-plane reason before any production changes
+- [X] T011 Run `pytest tests/integration/temporal/test_profile_backed_workload_contract.py -q --tb=short -m 'integration_ci'` to confirm T009-T010 fail for the expected MM-503 shared-plane reason before any production changes
 
 ### Red-First Confirmation
 
-- [ ] T012 Review the failures from `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py` to confirm the red-first evidence maps to FR-001 through FR-006 and DESIGN-REQ-006/019/020/023/024 rather than test-authoring mistakes
+- [X] T012 Review the failures from `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py` to confirm the red-first evidence maps to FR-001 through FR-006 and DESIGN-REQ-006/019/020/023/024 rather than test-authoring mistakes
 
 ### Conditional Fallback Implementation (only if verification fails) ⚠️
 
 - [ ] T013 Conditionally update `moonmind/workloads/tool_bridge.py` and `moonmind/workflows/temporal/activity_runtime.py` for FR-001, FR-006, DESIGN-REQ-006, and DESIGN-REQ-020 only if T008-T012 show any Docker-backed tool class bypasses the shared `docker_workload`/`mm.tool.execute` path or exposes fleet-coupled behavior
-- [ ] T014 Conditionally update `moonmind/workloads/registry.py` and `moonmind/workloads/docker_launcher.py` for FR-002, FR-003, DESIGN-REQ-019, and SC-002 only if T008-T012 show missing or inconsistent workload metadata across curated and unrestricted launch classes
+- [X] T014 Conditionally update `moonmind/workloads/registry.py` and `moonmind/workloads/docker_launcher.py` for FR-002, FR-003, DESIGN-REQ-019, and SC-002 only if T008-T012 show missing or inconsistent workload metadata across curated and unrestricted launch classes
 - [ ] T015 Conditionally update `moonmind/workloads/docker_launcher.py` for FR-004, FR-005, DESIGN-REQ-023, and DESIGN-REQ-024 only if T008-T012 show timeout/cancellation metadata or cleanup ownership boundaries are inconsistent or overly permissive
 
 ### Story Validation
 
-- [ ] T016 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_activity_runtime.py` and confirm MM-503 unit evidence passes together
-- [ ] T017 Attempt `./tools/test_integration.sh`, record any environment blocker precisely, then run `pytest tests/integration/temporal/test_profile_backed_workload_contract.py -q --tb=short -m 'integration_ci'` as a focused fallback to confirm the MM-503 dispatcher/runtime shared-plane evidence passes
-- [ ] T018 Review `specs/252-route-docker-workload-plane/spec.md`, `specs/252-route-docker-workload-plane/plan.md`, `specs/252-route-docker-workload-plane/research.md`, `specs/252-route-docker-workload-plane/contracts/shared-docker-workload-plane-contract.md`, `specs/252-route-docker-workload-plane/quickstart.md`, and `docs/tmp/jira-orchestration-inputs/MM-503-moonspec-orchestration-input.md` to confirm FR-007 and SC-006 preserve MM-503 across downstream artifacts
+- [X] T016 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workflows/temporal/test_activity_runtime.py` and confirm MM-503 unit evidence passes together
+- [X] T017 Attempt `./tools/test_integration.sh`, record any environment blocker precisely, then run `pytest tests/integration/temporal/test_profile_backed_workload_contract.py -q --tb=short -m 'integration_ci'` as a focused fallback to confirm the MM-503 dispatcher/runtime shared-plane evidence passes
+- [X] T018 Review `specs/252-route-docker-workload-plane/spec.md`, `specs/252-route-docker-workload-plane/plan.md`, `specs/252-route-docker-workload-plane/research.md`, `specs/252-route-docker-workload-plane/contracts/shared-docker-workload-plane-contract.md`, `specs/252-route-docker-workload-plane/quickstart.md`, and `docs/tmp/jira-orchestration-inputs/MM-503-moonspec-orchestration-input.md` to confirm FR-007 and SC-006 preserve MM-503 across downstream artifacts
 
 **Checkpoint**: MM-503 is complete when the existing shared workload-plane behavior is proven across curated and unrestricted tool classes and the canonical artifact set preserves the Jira source brief.
 
@@ -92,7 +92,7 @@
 **Purpose**: Final traceability, quickstart validation, and read-only verification for the completed story.
 
 - [ ] T019 [P] Align the feature-local artifacts in `specs/252-route-docker-workload-plane/` after MM-503 verification work so terminology, traceability, and commands stay coherent
-- [ ] T020 Run the quickstart validation from `specs/252-route-docker-workload-plane/quickstart.md` and record any environment blockers or deviations needed for MM-503
+- [X] T020 Run the quickstart validation from `specs/252-route-docker-workload-plane/quickstart.md` and record any environment blockers or deviations needed for MM-503
 - [ ] T021 Run `/moonspec-verify` for `specs/252-route-docker-workload-plane/` and produce a final evidence-backed verification report covering MM-503, FR-001 through FR-007, SC-001 through SC-006, and DESIGN-REQ-006, DESIGN-REQ-019, DESIGN-REQ-020, DESIGN-REQ-023, DESIGN-REQ-024
 
 ---

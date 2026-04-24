@@ -974,6 +974,15 @@ async def test_launcher_runs_unrestricted_requests_without_profile_concurrency_m
 
     assert result.status == "succeeded"
     assert result.exit_code == 0
+    assert result.metadata["workload"]["toolName"] == "container.run_docker"
+    assert result.metadata["workload"]["identityKind"] == "workload"
+    assert result.metadata["workload"]["workflowDockerMode"] == "unrestricted"
+    assert result.metadata["workload"]["labels"]["moonmind.workload_access"] == (
+        "unrestricted_docker_cli"
+    )
+    assert result.metadata["workload"]["labels"]["moonmind.workflow_docker_mode"] == (
+        "unrestricted"
+    )
 
 
 

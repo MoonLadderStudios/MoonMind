@@ -110,9 +110,10 @@ class _FakeLauncher:
 
     async def run(self, validated: Any) -> WorkloadResult:
         self.validated = validated
+        profile_id = validated.profile.id if validated.profile is not None else validated.request.tool_name
         return WorkloadResult(
             requestId=validated.container_name,
-            profileId=validated.profile.id,
+            profileId=profile_id,
             status="succeeded",
             labels=validated.ownership.labels,
             exitCode=0,
@@ -123,7 +124,8 @@ class _FakeLauncher:
                 "containerName": validated.container_name,
                 "workload": {
                     "toolName": validated.request.tool_name,
-                    "profileId": validated.profile.id,
+                    "profileId": profile_id,
+                    "workflowDockerMode": getattr(validated.ownership, "workflow_docker_mode", None),
                     "sessionContext": self._session_context(validated),
                 },
                 "artifactPublication": {"status": "complete"},
@@ -132,9 +134,10 @@ class _FakeLauncher:
 
     async def start_helper(self, validated: Any) -> WorkloadResult:
         self.validated = validated
+        profile_id = validated.profile.id if validated.profile is not None else validated.request.tool_name
         return WorkloadResult(
             requestId=validated.container_name,
-            profileId=validated.profile.id,
+            profileId=profile_id,
             status="ready",
             labels=validated.ownership.labels,
             metadata={
@@ -156,9 +159,10 @@ class _FakeLauncher:
     ) -> WorkloadResult:
         self.validated = validated
         self.reason = reason
+        profile_id = validated.profile.id if validated.profile is not None else validated.request.tool_name
         return WorkloadResult(
             requestId=validated.container_name,
-            profileId=validated.profile.id,
+            profileId=profile_id,
             status="stopped",
             labels=validated.ownership.labels,
             metadata={
@@ -402,6 +406,42 @@ async def test_profile_backed_helper_lifecycle_stays_bounded() -> None:
     assert stop_result.outputs["workloadMetadata"]["helper"]["teardown"]["reason"] == (
         "owner_task_canceled"
     )
+
+
+async def test_unrestricted_run_docker_preserves_shared_workload_metadata() -> None:
+    launcher = _FakeLauncher()
+    dispatcher = ToolActivityDispatcher()
+    register_workload_tool_handlers(
+        dispatcher,
+        registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
+        launcher=launcher,
+        workflow_docker_mode="unrestricted",
+    )
+
+    result = await execute_tool_activity(
+        invocation_payload={
+            "id": "step-run-docker",
+            "tool": {
+                "type": "skill",
+                "name": "container.run_docker",
+                "version": "1.0",
+            },
+            "inputs": {
+                "repoDir": "/work/agent_jobs/wf-1/repo",
+                "artifactsDir": "/work/agent_jobs/wf-1/artifacts/docker",
+                "command": ["docker", "ps"],
+            },
+        },
+        registry_snapshot=_snapshot("container.run_docker"),
+        dispatcher=dispatcher,
+        context={"workflow_id": "wf-1", "node_id": "step-run-docker"},
+    )
+
+    assert result.status == "COMPLETED"
+    assert launcher.validated is not None
+    assert launcher.validated.request.tool_name == "container.run_docker"
+    assert result.outputs["workloadMetadata"]["workflowDockerMode"] == "unrestricted"
+    assert result.outputs["workloadMetadata"]["toolName"] == "container.run_docker"
 
 
 async def test_disabled_mode_denies_profile_backed_workload_tools() -> None:
