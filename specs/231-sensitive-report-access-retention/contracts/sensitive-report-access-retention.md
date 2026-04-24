@@ -1,4 +1,4 @@
-# Contract: Sensitive Report Access and Retention
+# Contract: Apply Report Access and Lifecycle Policy
 
 ## Artifact Service Boundary
 
@@ -19,6 +19,7 @@ The story is implemented through existing artifact service calls and HTTP routes
   - `preview_artifact_ref` set when a preview exists.
   - `default_read_ref` pointing at the preview artifact.
 - Raw read and presign calls fail for callers without restricted raw access.
+- Report metadata validation rejects unsupported keys, secret-like values, cookies, session tokens, raw access grants, and oversized inline payloads.
 - Report retention defaults:
   - `report.primary` -> `long`
   - `report.summary` -> `long`
@@ -30,4 +31,4 @@ The story is implemented through existing artifact service calls and HTTP routes
 
 ## Compatibility Notes
 
-MoonMind is pre-release. This change updates internal default retention behavior directly and does not add compatibility aliases or alternate link semantics.
+MoonMind is pre-release. This change updates internal artifact policy behavior directly and does not add compatibility aliases or alternate link semantics.
