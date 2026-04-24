@@ -95,6 +95,43 @@ def test_context_returns_gateway_context_pack_for_authorized_request() -> None:
     assert body["items"][0]["source"] == "src/a.py"
 
 
+
+
+def test_context_rejects_missing_repository_scope_for_authorized_request() -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "q",
+                "budgets": {"tokens": 32},
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "repo" in str(detail)
+
+
+def test_context_rejects_unsupported_filter_keys_for_authorized_request() -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "q",
+                "filters": {"repo": "moonmind", "branch": "main"},
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "branch" in str(detail)
+
 def test_context_rejects_unsupported_budget_keys_for_authorized_request() -> None:
     app = _build_app()
     app.dependency_overrides[authorize_retrieval_request] = _oidc_auth

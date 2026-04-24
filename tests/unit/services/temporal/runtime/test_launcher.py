@@ -376,7 +376,6 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     assert "MoonMind retrieval capability:" in prompt_arg
     assert "moonmind rag search" in prompt_arg
 
-
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService")
 async def test_launch_uses_run_scoped_env_for_retrieval_capability_note(

@@ -165,6 +165,8 @@ async def test_claude_launcher_uses_shared_durable_retrieval_metadata_contract(
                 context_text="Retrieved context snippet",
                 retrieved_at="2026-04-24T00:00:00Z",
                 telemetry_id="tid-direct",
+                initiation_mode="automatic",
+                truncated=False,
             ),
             None,
         )
@@ -235,4 +237,9 @@ async def test_claude_launcher_uses_shared_durable_retrieval_metadata_contract(
     assert moonmind_meta["latestContextPackRef"] == artifact_ref
     assert moonmind_meta["retrievalDurabilityAuthority"] == "artifact_ref"
     assert moonmind_meta["sessionContinuityCacheStatus"] == "advisory_only"
+    assert moonmind_meta["retrievalInitiationMode"] == "automatic"
+    assert moonmind_meta["retrievalContextTruncated"] is False
+    artifact_text = (workspace / artifact_ref).read_text(encoding="utf-8")
+    assert '"initiation_mode": "automatic"' in artifact_text
+    assert '"truncated": false' in artifact_text
     assert (workspace / artifact_ref).exists()

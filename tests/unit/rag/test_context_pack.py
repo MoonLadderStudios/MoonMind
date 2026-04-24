@@ -45,6 +45,8 @@ def test_context_pack_to_json_roundtrips() -> None:
         context_text="### Retrieved Context\n...",
         retrieved_at="2026-03-20T12:00:00Z",
         telemetry_id="abc123",
+        initiation_mode="automatic",
+        truncated=False,
     )
 
     json_str = pack.to_json()
@@ -57,6 +59,8 @@ def test_context_pack_to_json_roundtrips() -> None:
     assert data["filters"]["repo"] == "moonmind"
     assert data["budgets"]["tokens"] == 500
     assert data["telemetry_id"] == "abc123"
+    assert data["initiation_mode"] == "automatic"
+    assert data["truncated"] is False
 
 def test_build_context_text_formats_markdown_with_citations() -> None:
     items = [
@@ -96,11 +100,33 @@ def test_build_context_pack_populates_all_fields() -> None:
         usage={"tokens": 10},
         transport="direct",
         telemetry_id="tel-1",
+        initiation_mode="session",
         max_chars=10000,
     )
 
     assert pack.transport == "direct"
     assert pack.telemetry_id == "tel-1"
+    assert pack.initiation_mode == "session"
+    assert pack.truncated is False
     assert len(pack.items) == 1
     assert pack.retrieved_at  # should be ISO timestamp
     assert "### Retrieved Context" in pack.context_text
+
+
+def test_build_context_pack_marks_truncation_in_durable_evidence() -> None:
+    item = _make_item(text="x" * 600)
+
+    pack = build_context_pack(
+        items=[item],
+        filters={"repo": "moonmind"},
+        budgets={"tokens": 500},
+        usage={"tokens": 10},
+        transport="direct",
+        telemetry_id="tel-2",
+        initiation_mode="automatic",
+        max_chars=80,
+    )
+
+    assert pack.truncated is True
+    assert pack.to_dict()["truncated"] is True
+    assert "[Context truncated]" in pack.context_text

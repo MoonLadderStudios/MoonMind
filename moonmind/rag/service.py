@@ -87,6 +87,7 @@ class ContextRetrievalService:
         overlay_policy: str,
         budgets: Mapping[str, Any],
         transport: str,
+        initiation_mode: str = "automatic",
     ) -> ContextPack:
         normalized_budgets = self._normalize_budgets(budgets)
         self._enforce_token_budget(query=query, top_k=top_k, budgets=normalized_budgets)
@@ -98,6 +99,7 @@ class ContextRetrievalService:
                 top_k=top_k,
                 overlay_policy=overlay_policy,
                 budgets=normalized_budgets,
+                initiation_mode=initiation_mode,
             )
         self._qdrant.ensure_collection_ready()
         with self._telemetry.timer("embedding"):
@@ -137,6 +139,7 @@ class ContextRetrievalService:
             transport=transport,
             telemetry_id=telemetry_id,
             max_chars=self._settings.max_context_chars,
+            initiation_mode=initiation_mode,
         )
 
     def _retrieve_via_gateway(
@@ -147,6 +150,7 @@ class ContextRetrievalService:
         top_k: int,
         overlay_policy: str,
         budgets: Mapping[str, Any],
+        initiation_mode: str,
     ) -> ContextPack:
         if not self._settings.retrieval_gateway_url:
             raise RuntimeError("RetrievalGateway URL is not configured")
@@ -199,6 +203,8 @@ class ContextRetrievalService:
             context_text=data.get("context_text", ""),
             retrieved_at=data.get("retrieved_at", ""),
             telemetry_id=data.get("telemetry_id", ""),
+            initiation_mode=str(data.get("initiation_mode") or initiation_mode),
+            truncated=bool(data.get("truncated", False)),
         )
 
     @staticmethod

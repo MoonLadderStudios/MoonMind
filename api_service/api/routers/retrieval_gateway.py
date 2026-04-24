@@ -41,6 +41,19 @@ class RetrievalQuery(BaseModel):
             raise ValueError(
                 f"Unsupported retrieval budget keys: {joined}. Allowed keys: latency_ms, tokens."
             )
+
+        allowed_filters = {"repo", "repository"}
+        unsupported_filters = sorted(set(self.filters) - allowed_filters)
+        if unsupported_filters:
+            joined = ", ".join(unsupported_filters)
+            raise ValueError(
+                f"Unsupported retrieval filter keys: {joined}. Allowed keys: repo, repository."
+            )
+
+        if not any(str(self.filters.get(key, "")).strip() for key in allowed_filters):
+            raise ValueError(
+                "Session-issued retrieval requires a repo or repository filter to bound corpus scope."
+            )
         return self
 
 def get_retrieval_service(request: Request) -> ContextRetrievalService:
@@ -125,6 +138,7 @@ async def retrieve_context_pack(
             overlay_policy=payload.overlay_policy,
             budgets=payload.budgets,
             transport="direct",
+            initiation_mode="session",
         )
         pack.transport = "gateway"
         return pack.to_dict()

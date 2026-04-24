@@ -10,6 +10,7 @@ from typing import Any, Iterable, List, Mapping, MutableMapping, Optional
 
 ISOFORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
+
 @dataclass(slots=True)
 class ContextItem:
     score: float
@@ -25,6 +26,7 @@ class ContextItem:
         data = asdict(self)
         return data
 
+
 @dataclass(slots=True)
 class ContextPack:
     items: List[ContextItem]
@@ -35,6 +37,8 @@ class ContextPack:
     context_text: str
     retrieved_at: str
     telemetry_id: str
+    initiation_mode: str = "automatic"
+    truncated: bool = False
 
     def to_dict(self) -> MutableMapping[str, Any]:
         return {
@@ -46,17 +50,24 @@ class ContextPack:
             "transport": self.transport,
             "retrieved_at": self.retrieved_at,
             "telemetry_id": self.telemetry_id,
+            "initiation_mode": self.initiation_mode,
+            "truncated": self.truncated,
         }
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
 
+
 def _normalize_whitespace(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.strip().splitlines())
 
-def build_context_text(items: Iterable[ContextItem], *, max_chars: int) -> str:
+
+def _build_context_text_parts(
+    items: Iterable[ContextItem], *, max_chars: int
+) -> tuple[str, bool]:
     body: list[str] = ["### Retrieved Context"]
     remaining = max_chars
+    truncated = False
     for idx, item in enumerate(items, start=1):
         snippet = _normalize_whitespace(item.text)
         header = (
@@ -65,15 +76,23 @@ def build_context_text(items: Iterable[ContextItem], *, max_chars: int) -> str:
         chunk = f"{header}\n{textwrap.indent(snippet, prefix='    ')}"
         if len(chunk) > remaining and idx > 1:
             body.append("[Context truncated]")
+            truncated = True
             break
         body.append(chunk)
         remaining -= len(chunk)
         if remaining <= 0:
             body.append("[Context truncated]")
+            truncated = True
             break
     if len(body) == 1:
         body.append("No context retrieved.")
-    return "\n".join(body)
+    return "\n".join(body), truncated
+
+
+def build_context_text(items: Iterable[ContextItem], *, max_chars: int) -> str:
+    text, _truncated = _build_context_text_parts(items, max_chars=max_chars)
+    return text
+
 
 def build_context_pack(
     *,
@@ -84,8 +103,9 @@ def build_context_pack(
     transport: str,
     telemetry_id: str,
     max_chars: int,
+    initiation_mode: str = "automatic",
 ) -> ContextPack:
-    context_text = build_context_text(items, max_chars=max_chars)
+    context_text, truncated = _build_context_text_parts(items, max_chars=max_chars)
     return ContextPack(
         items=items,
         filters=dict(filters),
@@ -95,4 +115,6 @@ def build_context_pack(
         context_text=context_text,
         retrieved_at=datetime.now(timezone.utc).strftime(ISOFORMAT),
         telemetry_id=telemetry_id,
+        initiation_mode=str(initiation_mode or "automatic").strip() or "automatic",
+        truncated=truncated,
     )
