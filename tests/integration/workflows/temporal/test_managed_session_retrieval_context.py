@@ -203,3 +203,96 @@ async def test_claude_launcher_publishes_context_artifact_reference_for_runtime_
         isinstance(arg, str) and "Retrieved context artifact: artifacts/context/" in arg
         for arg in captured_args
     )
+
+
+async def test_claude_launcher_marks_local_fallback_as_degraded_retrieval(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("MOONMIND_RAG_AUTO_CONTEXT", "true")
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    def _fake_retrieve(self, request):
+        return (None, "collection_unavailable")
+
+    def _fake_local_fallback(self, *, instruction, workspace_path):
+        return ContextPack(
+            items=[ContextItem(score=1.0, source="docs/spec.md", text="fallback text")],
+            filters={"mode": "local_fallback"},
+            budgets={},
+            usage={"matches": 1},
+            transport="local_fallback",
+            context_text="### Retrieved Context\n1. docs/spec.md\n    fallback text",
+            retrieved_at="2026-04-24T00:00:00Z",
+            telemetry_id="tid-local-fallback",
+        )
+
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack",
+        _fake_retrieve,
+    )
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack",
+        _fake_local_fallback,
+    )
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 893) -> None:
+            self.pid = pid
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_args: tuple[object, ...] = ()
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    profile = _make_profile()
+    request = _make_request(instruction_ref="Original instruction", parameters={"publishMode": "none"})
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-claude-rag-local-fallback",
+        request=request,
+        profile=profile,
+        workspace_path=workspace,
+    )
+    await process.wait()
+
+    moonmind_meta = request.parameters["metadata"]["moonmind"]
+    claude_md = (workspace / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert moonmind_meta["retrievedContextTransport"] == "local_fallback"
+    assert moonmind_meta["retrievalMode"] == "degraded_local_fallback"
+    assert moonmind_meta["retrievalDegradedReason"] == "collection_unavailable"
+    assert "Retrieved context mode: degraded local fallback" in claude_md
+    assert any(
+        isinstance(arg, str) and "Retrieved context mode: degraded local fallback" in arg
+        for arg in captured_args
+    )

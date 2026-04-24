@@ -66,7 +66,7 @@
 - [ ] T008 [P] Add failing unit coverage for FR-001, DESIGN-REQ-004, DESIGN-REQ-019, acceptance scenario 1, and SC-001 in `tests/unit/services/temporal/runtime/test_launcher.py` and `tests/unit/workflows/temporal/test_agent_runtime_activities.py` to prove retrieval settings remain independent from provider-profile launch settings.
 - [ ] T009 [P] Add failing unit coverage for FR-002, DESIGN-REQ-009, DESIGN-REQ-024, acceptance scenario 2, and SC-002 in `tests/unit/rag/test_settings.py`, `tests/unit/rag/test_service.py`, and `tests/unit/api/routers/test_retrieval_gateway.py` to prove gateway preference when runtime embedding credentials are unavailable or MoonMind owns outbound retrieval.
 - [ ] T010 [P] Add verification-first unit coverage for FR-003, DESIGN-REQ-010, acceptance scenario 3, and SC-003 in `tests/unit/rag/test_settings.py` and `tests/unit/rag/test_service.py` to prove direct retrieval remains an allowed path.
-- [ ] T011 [P] Add failing unit coverage for FR-004, DESIGN-REQ-014, acceptance scenario 4, and SC-004 in `tests/unit/rag/test_context_injection.py` to prove local fallback is explicit, policy gated, and degraded.
+- [X] T011 [P] Add failing unit coverage for FR-004, DESIGN-REQ-014, acceptance scenario 4, and SC-004 in `tests/unit/rag/test_context_injection.py` to prove local fallback is explicit, policy gated, and degraded.
 - [ ] T012 [P] Add failing unit coverage for FR-005, DESIGN-REQ-016, DESIGN-REQ-025, acceptance scenario 5, and SC-005 in `tests/unit/rag/test_service.py`, `tests/unit/rag/test_context_injection.py`, and `tests/unit/api/routers/test_retrieval_gateway.py` to prove overlay, filters, and budget knobs stay coherent across transports and compact metadata records the selected transport.
 - [ ] T013 [P] Add failing unit coverage for FR-006, DESIGN-REQ-025, acceptance scenario 5, and SC-006 in `tests/unit/services/temporal/runtime/test_launcher.py` and `tests/unit/api_service/api/routers/test_provider_profiles.py` to prove provider profiles do not become the implicit retrieval-transport or embedding-credential authority.
 - [ ] T014 Run the unit test command from `specs/256-retrieval-transport-separation/quickstart.md` to confirm T008-T013 fail for the expected reason before any production changes.
@@ -74,12 +74,12 @@
 ### Integration Tests (write first) ⚠️
 
 - [ ] T015 [P] Add a failing integration test in `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` for FR-001, FR-002, acceptance scenarios 1 and 2, SC-001, SC-002, and DESIGN-REQ-004 / DESIGN-REQ-009 / DESIGN-REQ-019 covering managed-runtime retrieval-versus-profile separation and gateway preference.
-- [ ] T016 [P] Add a failing integration test in `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` for FR-003, FR-004, FR-005, FR-006, acceptance scenarios 3 through 5, SC-003 through SC-006, and DESIGN-REQ-010 / DESIGN-REQ-014 / DESIGN-REQ-016 / DESIGN-REQ-024 / DESIGN-REQ-025 covering direct availability, degraded fallback, and coherent knob propagation.
+- [X] T016 [P] Add a failing integration test in `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` for FR-003, FR-004, FR-005, FR-006, acceptance scenarios 3 through 5, SC-003 through SC-006, and DESIGN-REQ-010 / DESIGN-REQ-014 / DESIGN-REQ-016 / DESIGN-REQ-024 / DESIGN-REQ-025 covering direct availability, degraded fallback, and coherent knob propagation.
 - [ ] T017 Run `pytest tests/integration/workflows/temporal/test_managed_session_retrieval_context.py -q --tb=short` to confirm T015-T016 fail for the expected reason before implementation.
 
 ### Red-First Confirmation ⚠️
 
-- [ ] T018 Record the intended red-first failure evidence from T014 and T017 in MM-508 implementation notes or verification notes so final verification can distinguish already-correct behavior from newly completed transport-separation work.
+- [X] T018 Record the intended red-first failure evidence from T014 and T017 in MM-508 implementation notes or verification notes so final verification can distinguish already-correct behavior from newly completed transport-separation work.
 
 ### Conditional Fallback Implementation (implemented_unverified rows)
 
@@ -87,7 +87,7 @@
 
 ### Implementation
 
-- [ ] T020 Implement explicit degraded fallback observability for FR-004, acceptance scenario 4, SC-004, and DESIGN-REQ-014 in `moonmind/rag/context_injection.py` and any affected retrieval metadata helpers so local fallback stays policy gated and transport-visible.
+- [X] T020 Implement explicit degraded fallback observability for FR-004, acceptance scenario 4, SC-004, and DESIGN-REQ-014 in `moonmind/rag/context_injection.py` and any affected retrieval metadata helpers so local fallback stays policy gated and transport-visible.
 - [ ] T021 Implement retrieval-setting separation for FR-001, acceptance scenario 1, SC-001, and DESIGN-REQ-004 / DESIGN-REQ-019 in `api_service/api/routers/executions.py`, `moonmind/workflows/temporal/runtime/launcher.py`, and any affected retrieval-setting helpers.
 - [ ] T022 Implement gateway-preference behavior for FR-002, acceptance scenario 2, SC-002, and DESIGN-REQ-009 / DESIGN-REQ-024 in `moonmind/rag/settings.py`, `moonmind/rag/service.py`, and `api_service/api/routers/retrieval_gateway.py`.
 - [ ] T023 Implement coherent transport metadata and knob propagation for FR-005, FR-006, acceptance scenario 5, SC-005, SC-006, and DESIGN-REQ-016 / DESIGN-REQ-025 in `moonmind/rag/context_injection.py`, `moonmind/rag/service.py`, `api_service/api/routers/retrieval_gateway.py`, and any affected runtime metadata helpers.

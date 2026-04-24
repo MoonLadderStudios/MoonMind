@@ -156,10 +156,15 @@ async def test_inject_context_uses_local_fallback_when_retrieval_fails(
 
     assert result.items_count == 2
     assert "BEGIN_RETRIEVED_CONTEXT" in result.instruction
+    assert "Retrieved context mode: degraded local fallback" in result.instruction
     assert "docs/TaskDetails.md" in result.instruction
     assert str(tmp_path) not in result.instruction
     assert "providerProfile is rendered in the details panel" in result.instruction
     assert mock_request.instruction_ref == result.instruction
+    moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
+    assert moonmind_meta["retrievedContextTransport"] == "local_fallback"
+    assert moonmind_meta["retrievalMode"] == "degraded_local_fallback"
+    assert moonmind_meta["retrievalDegradedReason"] == "local_fallback_after_retrieval_error"
 
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
@@ -237,6 +242,24 @@ def test_record_context_metadata_marks_durable_authority(
     assert moonmind_meta["latestContextPackRef"] == "artifacts/context/rag-context-abc123.json"
     assert moonmind_meta["retrievalDurabilityAuthority"] == "artifact_ref"
     assert moonmind_meta["sessionContinuityCacheStatus"] == "advisory_only"
+    assert moonmind_meta["retrievalMode"] == "semantic"
+
+
+def test_record_context_metadata_marks_degraded_local_fallback_reason(
+    mock_request: AgentExecutionRequest,
+) -> None:
+    ContextInjectionService._record_context_metadata(
+        request=mock_request,
+        artifact_ref="artifacts/context/rag-context-fallback.json",
+        transport="local_fallback",
+        items_count=3,
+        degraded_reason="collection_unavailable",
+    )
+
+    moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
+    assert moonmind_meta["retrievedContextTransport"] == "local_fallback"
+    assert moonmind_meta["retrievalMode"] == "degraded_local_fallback"
+    assert moonmind_meta["retrievalDegradedReason"] == "collection_unavailable"
 
 
 def test_persisted_context_artifact_uses_workspace_context_directory(mock_request: AgentExecutionRequest, tmp_path) -> None:
