@@ -8,6 +8,11 @@ vi.mock("./index", () => ({
   getLiquidGL: vi.fn(),
 }));
 
+type LiquidGLMock = NonNullable<ReturnType<typeof getLiquidGL>>;
+type LiquidGLMockOptions = Parameters<LiquidGLMock>[0];
+type LiquidGLMockResult = Exclude<ReturnType<LiquidGLMock>, undefined>;
+type LiquidGLMockLens = Extract<LiquidGLMockResult, { el: HTMLElement }>;
+
 function LiquidGLHarness() {
   useLiquidGL({
     options: {
@@ -27,8 +32,8 @@ describe("useLiquidGL", () => {
   it("marks the element initialized only after liquidGL finishes initializing", async () => {
     const destroy = vi.fn();
     const liquidGL = Object.assign(
-      vi.fn((options: { on?: { init?: (lens: { destroy?: () => void }) => void } }) => {
-        const lens = { el: document.createElement("div"), destroy };
+      vi.fn((options: LiquidGLMockOptions) => {
+        const lens: LiquidGLMockLens = { el: document.createElement("div"), destroy };
         options.on?.init?.(lens);
         return lens;
       }),
@@ -60,12 +65,12 @@ describe("useLiquidGL", () => {
     const firstDestroy = vi.fn();
     const secondDestroy = vi.fn();
     const liquidGL = Object.assign(
-      vi.fn((options: { on?: { init?: (lens: { destroy?: () => void }) => void } }) => {
-        const lenses = [
+      vi.fn((options: LiquidGLMockOptions) => {
+        const lenses: LiquidGLMockLens[] = [
           { el: document.createElement("div"), destroy: firstDestroy },
           { el: document.createElement("div"), destroy: secondDestroy },
         ];
-        options.on?.init?.(lenses[0]);
+        options.on?.init?.(lenses[0]!);
         return lenses;
       }),
       {
@@ -133,8 +138,8 @@ describe("useLiquidGL", () => {
     vi.useFakeTimers();
     const destroy = vi.fn();
     const liquidGL = Object.assign(
-      vi.fn((options: { on?: { init?: (lens: { destroy?: () => void }) => void } }) => {
-        const lens = { el: document.createElement("div"), destroy };
+      vi.fn((options: LiquidGLMockOptions) => {
+        const lens: LiquidGLMockLens = { el: document.createElement("div"), destroy };
         options.on?.init?.(lens);
         return lens;
       }),
@@ -183,13 +188,13 @@ describe("useLiquidGL", () => {
       }
     });
     const liquidGL = Object.assign(
-      vi.fn((options: { on?: { init?: (lens: { destroy?: () => void }) => void } }) => {
+      vi.fn((options: LiquidGLMockOptions) => {
         attempts += 1;
         const element = document.querySelector<HTMLElement>(".liquid-glass-panel");
         if (element) {
           element.style.opacity = attempts > 1 ? "1" : "0";
         }
-        const lens = { el: document.createElement("div"), destroy };
+        const lens: LiquidGLMockLens = { el: document.createElement("div"), destroy };
         if (attempts > 1) {
           options.on?.init?.(lens);
         }
@@ -222,8 +227,8 @@ describe("useLiquidGL", () => {
     document.body.appendChild(target);
     const destroy = vi.fn();
     const liquidGL = Object.assign(
-      vi.fn((options: { target: string; on?: { init?: (lens: { destroy?: () => void }) => void } }) => {
-        const lens = { el: document.createElement("div"), destroy };
+      vi.fn((options: LiquidGLMockOptions) => {
+        const lens: LiquidGLMockLens = { el: document.createElement("div"), destroy };
         options.on?.init?.(lens);
         return lens;
       }),
