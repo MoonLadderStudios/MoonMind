@@ -30,7 +30,9 @@ export type LiquidGLOptions = {
   on?: LiquidGLCallbacks;
 };
 
-type LiquidGLFn = ((options: LiquidGLOptions) => LiquidGLLens | LiquidGLLens[] | undefined) & {
+type LiquidGLResult = LiquidGLLens | LiquidGLLens[] | HTMLElement | HTMLElement[] | undefined;
+
+type LiquidGLFn = ((options: LiquidGLOptions) => LiquidGLResult) & {
   registerDynamic: (elements: HTMLElement | HTMLElement[] | NodeList) => void;
   syncWith: (config?: Record<string, unknown>) => unknown;
 };
@@ -57,7 +59,7 @@ export function getLiquidGL(): LiquidGLFn | undefined {
 
 export function initLiquidGL(
   options: LiquidGLOptions,
-): LiquidGLLens | LiquidGLLens[] | undefined {
+): LiquidGLResult {
   const fn = getLiquidGL();
   if (!fn) {
     return undefined;

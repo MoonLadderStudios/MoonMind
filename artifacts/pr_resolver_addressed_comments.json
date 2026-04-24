@@ -43,5 +43,35 @@
     "id": 4166856735,
     "disposition": "not-applicable",
     "rationale": "Top-level review summary only; its actionable items were handled through the inline review comments above."
+  },
+  {
+    "id": 3134718993,
+    "disposition": "addressed",
+    "rationale": "Handled the no-WebGL DOM fallback path as a successful initialization so the hook no longer retries after liquidGL returns fallback elements without calling on.init."
+  },
+  {
+    "id": 3134719011,
+    "disposition": "addressed",
+    "rationale": "HTMLElement targets are now translated into a temporary selector before calling the vendor library, preserving hook support without passing an invalid target type into liquidGL."
+  },
+  {
+    "id": 4167005196,
+    "disposition": "not-applicable",
+    "rationale": "Top-level bot review summary only; the actionable inline comments from this review were addressed separately."
+  },
+  {
+    "id": 3134722327,
+    "disposition": "addressed",
+    "rationale": "The hook now marks DOM fallback returns as initialized immediately, which stops false stall teardown and retry loops for fallback clients."
+  },
+  {
+    "id": 3134722330,
+    "disposition": "addressed",
+    "rationale": "The hook no longer forwards HTMLElement targets directly to the vendor API and now verifies that adapter path with a focused test."
+  },
+  {
+    "id": 4167008311,
+    "disposition": "not-applicable",
+    "rationale": "Top-level bot review summary only; the actionable inline comments from this review were addressed separately."
   }
 ]
