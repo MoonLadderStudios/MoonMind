@@ -2567,7 +2567,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   bottom: 1.1rem;
   transform: translateX(-50%);
   z-index: 40;
-  width: min(100% - 1.5rem, 70rem);
+  width: min(100% - 2rem, 70rem);
   padding: 0.55rem 0.7rem;
   border-radius: 1.5rem;
   background: var(--mm-glass-fill);
