@@ -402,8 +402,11 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-core-width-multiplier:\s*9\.1667/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-start-x:\s*-135%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-start-y:\s*-160%/);
     expect(missionControlCss).toMatch(/--mm-executing-sweep-end-x:\s*135%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset:\s*-12%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-end-y:\s*160%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-x:\s*-12%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
 
     const shimmerBlock = cssRuleBlocks(
       missionControlCss,
@@ -416,22 +419,22 @@ describe('Mission Control shared entry', () => {
     expect(shimmerBlock).toContain('isolation: isolate');
     expect(shimmerBlock).not.toContain('animation-delay:');
     expect(shimmerBlock).toContain('var(--mm-executing-sweep-cycle-duration)');
-    expect(shimmerBlock).toContain('cubic-bezier(0.32, 0.72, 0.2, 1)');
+    expect(shimmerBlock).toContain('cubic-bezier(0.28, 0.78, 0.24, 1)');
     expect(shimmerBlock).toContain('rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity))');
     expect(shimmerBlock).toContain('rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity))');
     expect(shimmerBlock).toMatch(
       /background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*100%,\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*100%/,
     );
     expect(shimmerBlock).toMatch(
-      /background-position:\s*var\(--mm-executing-sweep-start-x\)\s*0,\s*calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset\)\)\s*0/,
+      /background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),\s*calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-x\)\)\s*calc\(var\(--mm-executing-sweep-start-y\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-y\)\)/,
     );
 
-    expect(missionControlCss).toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?56%\s*\{[\s\S]*?background-size:[\s\S]*?84%\s*\{[\s\S]*?100%\s*\{/);
+    expect(missionControlCss).toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?52%\s*\{[\s\S]*?background-position:\s*50% 50%,\s*calc\(50% \+ var\(--mm-executing-sweep-layer-offset-x\)\)\s*calc\(50% \+ var\(--mm-executing-sweep-layer-offset-y\)\);[\s\S]*?100%\s*\{/);
     expect(missionControlCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,
     );
     expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?background-position:\s*50% 0,\s*44% 0;[\s\S]*?background-size:\s*160% 100%,\s*140% 100%;/,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?background-position:\s*50% 50%,\s*44% 42%;[\s\S]*?background-size:\s*160% 100%,\s*140% 100%;/,
     );
     const shimmerPseudoSelector = cssRuleBlockMatching(
       missionControlCss,
