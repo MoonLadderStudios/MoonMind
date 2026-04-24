@@ -196,6 +196,7 @@ under the mounted Claude home. The verifier may accept known Claude credential
 artifacts such as:
 
 - `credentials.json`
+- `.credentials.json`
 - `settings.json` when it contains evidence that Claude completed account setup
 - any other stable Claude CLI account-auth artifact explicitly documented by the
 runtime adapter
