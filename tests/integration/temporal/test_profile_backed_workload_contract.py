@@ -225,6 +225,74 @@ async def test_profile_backed_run_workload_routes_through_runner_profile() -> No
     assert result.status == "COMPLETED"
     assert result.outputs["profileId"] == "local-python"
 
+async def test_profile_backed_run_workload_preserves_durable_refs_and_publication_metadata() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+
+    class _PublicationLauncher(_FakeLauncher):
+        async def run(self, validated: Any) -> WorkloadResult:
+            result = await super().run(validated)
+            result.output_refs = {
+                "runtime.stdout": result.stdout_ref or "art:sha256:stdout",
+                "runtime.stderr": result.stderr_ref or "art:sha256:stderr",
+                "runtime.diagnostics": result.diagnostics_ref or "art:sha256:diagnostics",
+                "output.primary": "art:sha256:report",
+            }
+            result.metadata["workload"]["workloadAccess"] = validated.ownership.workload_access
+            result.metadata["reportPublication"] = {
+                "status": "configured",
+                "primaryDeclared": True,
+            }
+            return result
+
+    launcher = _PublicationLauncher()
+    dispatcher = ToolActivityDispatcher()
+    register_workload_tool_handlers(
+        dispatcher,
+        registry=registry,
+        launcher=launcher,
+        workflow_docker_mode="profiles",
+    )
+
+    result = await execute_tool_activity(
+        invocation_payload={
+            "id": "step-run-workload-publication",
+            "tool": {
+                "type": "skill",
+                "name": CONTAINER_RUN_WORKLOAD_TOOL,
+                "version": "1.0",
+            },
+            "inputs": {
+                "profileId": "local-python",
+                "repoDir": "/work/agent_jobs/wf-1/repo",
+                "artifactsDir": "/work/agent_jobs/wf-1/artifacts/workload",
+                "command": ["pytest", "-q"],
+                "envOverrides": {"CI": "1"},
+            },
+        },
+        registry_snapshot=_snapshot(CONTAINER_RUN_WORKLOAD_TOOL),
+        dispatcher=dispatcher,
+        context={"workflow_id": "wf-1", "node_id": "step-run-workload-publication"},
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["outputRefs"] == {
+        "runtime.stdout": "art:sha256:stdout",
+        "runtime.stderr": "art:sha256:stderr",
+        "runtime.diagnostics": "art:sha256:diagnostics",
+        "output.primary": "art:sha256:report",
+    }
+    assert result.outputs["workloadMetadata"]["artifactPublication"] == {
+        "status": "complete"
+    }
+    assert result.outputs["workloadMetadata"]["reportPublication"] == {
+        "status": "configured",
+        "primaryDeclared": True,
+    }
+    assert result.outputs["workloadMetadata"]["workloadAccess"] == "profile"
+
 async def test_profile_backed_run_workload_keeps_session_metadata_as_association_only() -> None:
     registry = RunnerProfileRegistry(
         [RunnerProfile.model_validate(_profile_payload())],
@@ -397,6 +465,68 @@ async def test_profile_backed_helper_lifecycle_stays_bounded() -> None:
     assert stop_result.outputs["workloadMetadata"]["helper"]["teardown"]["reason"] == (
         "owner_task_canceled"
     )
+
+async def test_unrestricted_run_docker_preserves_artifact_classes_and_publication_metadata() -> None:
+    class _UnrestrictedPublicationLauncher(_FakeLauncher):
+        async def run(self, validated: Any) -> WorkloadResult:
+            result = await super().run(validated)
+            result.output_refs = {
+                "runtime.stdout": result.stdout_ref or "art:sha256:stdout",
+                "runtime.stderr": result.stderr_ref or "art:sha256:stderr",
+                "runtime.diagnostics": result.diagnostics_ref or "art:sha256:diagnostics",
+                "output.primary": "art:sha256:report",
+            }
+            result.metadata["workload"]["workloadAccess"] = validated.ownership.workload_access
+            result.metadata["reportPublication"] = {
+                "status": "configured",
+                "primaryDeclared": True,
+            }
+            return result
+
+    launcher = _UnrestrictedPublicationLauncher()
+    dispatcher = ToolActivityDispatcher()
+    register_workload_tool_handlers(
+        dispatcher,
+        registry=RunnerProfileRegistry.empty(workspace_root=WORKSPACE_ROOT),
+        launcher=launcher,
+        workflow_docker_mode="unrestricted",
+    )
+
+    result = await execute_tool_activity(
+        invocation_payload={
+            "id": "step-run-docker-publication",
+            "tool": {
+                "type": "skill",
+                "name": "container.run_docker",
+                "version": "1.0",
+            },
+            "inputs": {
+                "repoDir": "/work/agent_jobs/wf-1/repo",
+                "artifactsDir": "/work/agent_jobs/wf-1/artifacts/docker",
+                "command": ["docker", "ps"],
+            },
+        },
+        registry_snapshot=_snapshot("container.run_docker"),
+        dispatcher=dispatcher,
+        context={"workflow_id": "wf-1", "node_id": "step-run-docker-publication"},
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["outputRefs"] == {
+        "runtime.stdout": "art:sha256:stdout",
+        "runtime.stderr": "art:sha256:stderr",
+        "runtime.diagnostics": "art:sha256:diagnostics",
+        "output.primary": "art:sha256:report",
+    }
+    assert result.outputs["workloadMetadata"]["artifactPublication"] == {
+        "status": "complete"
+    }
+    assert result.outputs["workloadMetadata"]["reportPublication"] == {
+        "status": "configured",
+        "primaryDeclared": True,
+    }
+    assert result.outputs["workloadMetadata"]["workloadAccess"] == "unrestricted_docker_cli"
+    assert result.outputs["workloadMetadata"]["workflowDockerMode"] == "unrestricted"
 
 async def test_unrestricted_run_docker_preserves_shared_workload_metadata() -> None:
     launcher = _FakeLauncher()

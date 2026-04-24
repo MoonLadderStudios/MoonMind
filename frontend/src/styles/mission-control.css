@@ -2595,6 +2595,8 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 
 .queue-floating-bar-row {
   display: grid;
+  width: 100%;
+  justify-self: stretch;
   grid-template-columns:
     minmax(12rem, 1.65fr)
     minmax(10rem, 1.45fr)
@@ -2981,7 +2983,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
 }
 
 .queue-step-submit-actions {
-  justify-content: flex-end;
+  justify-content: stretch;
 }
 
 .queue-submit-message {

@@ -130,6 +130,71 @@ async def test_moonmind_integration_ci_routes_through_curated_workload_tool() ->
     assert result.outputs["stderrRef"] == "art:sha256:stderr"
     assert result.outputs["diagnosticsRef"] == "art:sha256:diagnostics"
 
+async def test_curated_workload_result_preserves_report_publication_metadata() -> None:
+    snapshot = create_registry_snapshot(
+        skills=(
+            parse_tool_definition(
+                build_dood_tool_definition_payload(
+                    name=INTEGRATION_CI_TOOL,
+                    version="1.0",
+                )
+            ),
+        ),
+        artifact_store=InMemoryArtifactStore(),
+    )
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_integration_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+
+    class _ReportLauncher(_FakeLauncher):
+        async def run(self, validated: Any) -> WorkloadResult:
+            result = await super().run(validated)
+            result.metadata["workload"]["workloadAccess"] = validated.ownership.workload_access
+            result.metadata["reportPublication"] = {
+                "status": "configured",
+                "primaryDeclared": True,
+            }
+            return result
+
+    launcher = _ReportLauncher()
+    dispatcher = ToolActivityDispatcher()
+    dispatcher.register_skill(
+        skill_name=INTEGRATION_CI_TOOL,
+        version="1.0",
+        handler=build_workload_tool_handler(
+            tool_name=INTEGRATION_CI_TOOL,
+            registry=registry,
+            launcher=launcher,
+        ),
+    )
+
+    result = await execute_tool_activity(
+        invocation_payload={
+            "id": "step-integration-ci-report",
+            "tool": {
+                "type": "skill",
+                "name": INTEGRATION_CI_TOOL,
+                "version": "1.0",
+            },
+            "inputs": {
+                "repoDir": "/work/agent_jobs/wf-1/repo",
+                "artifactsDir": "/work/agent_jobs/wf-1/artifacts/integration-ci",
+                "envOverrides": {"CI": "1"},
+            },
+        },
+        registry_snapshot=snapshot,
+        dispatcher=dispatcher,
+        context={"workflow_id": "wf-1", "node_id": "step-integration-ci-report"},
+    )
+
+    assert result.outputs["workloadMetadata"]["workloadAccess"] == "profile"
+    assert result.outputs["workloadMetadata"]["reportPublication"] == {
+        "status": "configured",
+        "primaryDeclared": True,
+    }
+
+
 async def test_workflow_docker_mode_keeps_registry_and_dispatch_aligned() -> None:
     registry = RunnerProfileRegistry(
         [RunnerProfile.model_validate(_integration_profile_payload())],

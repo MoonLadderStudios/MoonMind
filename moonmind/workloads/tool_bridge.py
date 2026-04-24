@@ -641,6 +641,8 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
     workload_metadata["artifactPublication"] = result.metadata.get(
         "artifactPublication"
     )
+    if "reportPublication" in result.metadata:
+        workload_metadata["reportPublication"] = result.metadata["reportPublication"]
     return SkillResult(
         status=status,
         outputs={

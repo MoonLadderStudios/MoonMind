@@ -221,6 +221,42 @@ describe("useLiquidGL", () => {
     expect(element?.style.opacity).toBe("1");
   });
 
+  it("treats non-revealing renderer returns as initialized without retrying", async () => {
+    vi.useFakeTimers();
+    const destroy = vi.fn();
+    const liquidGL = Object.assign(
+      vi.fn(() => ({ el: document.createElement("div"), destroy })),
+      {
+        registerDynamic: vi.fn(),
+        syncWith: vi.fn(),
+      },
+    );
+    vi.mocked(getLiquidGL).mockReturnValue(liquidGL);
+
+    function NoRevealHarness() {
+      useLiquidGL({
+        options: {
+          target: ".liquid-glass-panel",
+          reveal: false,
+        },
+      });
+
+      return <div className="liquid-glass-panel" />;
+    }
+
+    render(<NoRevealHarness />);
+
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+    });
+
+    expect(liquidGL).toHaveBeenCalledTimes(1);
+    expect(destroy).not.toHaveBeenCalled();
+    expect(document.querySelector(".liquid-glass-panel")?.getAttribute("data-liquid-gl-initialized")).toBe(
+      "true",
+    );
+  });
+
   it("adapts HTMLElement targets into a selector before calling liquidGL", async () => {
     const target = document.createElement("div");
     target.className = "liquid-glass-panel";

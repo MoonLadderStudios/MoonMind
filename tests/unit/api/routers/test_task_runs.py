@@ -156,6 +156,60 @@ def test_get_observability_summary_accepts_moonmind_task_run_id(
     load_record.assert_called_once_with(task_run_id)
     assert response.json()["summary"]["runId"] == task_run_id
 
+def test_get_observability_summary_preserves_workload_artifact_refs_and_metadata(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    run_id = uuid4()
+
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {
+        "runId": str(run_id),
+        "status": "completed",
+        "stdoutArtifactRef": "art:sha256:stdout",
+        "stderrArtifactRef": "art:sha256:stderr",
+        "diagnosticsRef": "art:sha256:diagnostics",
+        "outputRefs": {
+            "runtime.stdout": "art:sha256:stdout",
+            "runtime.stderr": "art:sha256:stderr",
+            "runtime.diagnostics": "art:sha256:diagnostics",
+            "output.primary": "art:sha256:report",
+        },
+        "workloadMetadata": {
+            "workflowDockerMode": "profiles",
+            "artifactPublication": {"status": "complete"},
+            "reportPublication": {
+                "status": "configured",
+                "primaryDeclared": True,
+            },
+        },
+        "liveStreamCapable": False,
+    }
+    mock_record.status = "completed"
+    mock_record.live_stream_capable = False
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+
+    assert response.status_code == 200
+    body = response.json()["summary"]
+    assert body["outputRefs"] == {
+        "runtime.stdout": "art:sha256:stdout",
+        "runtime.stderr": "art:sha256:stderr",
+        "runtime.diagnostics": "art:sha256:diagnostics",
+        "output.primary": "art:sha256:report",
+    }
+    assert body["workloadMetadata"] == {
+        "workflowDockerMode": "profiles",
+        "artifactPublication": {"status": "complete"},
+        "reportPublication": {
+            "status": "configured",
+            "primaryDeclared": True,
+        },
+    }
+    assert body["supportsLiveStreaming"] is False
+    assert body["liveStreamStatus"] == "ended"
+
 def test_get_observability_summary_returns_session_backed_artifact_refs(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

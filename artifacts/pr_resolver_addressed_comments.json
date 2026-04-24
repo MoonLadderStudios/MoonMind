@@ -1,5 +1,25 @@
 [
   {
+    "id": 3136037593,
+    "disposition": "addressed",
+    "rationale": "Simplified _report_publication_metadata with declared-key comprehensions and guarded declared_outputs access in the MM-504 follow-up commit."
+  },
+  {
+    "id": 4168576905,
+    "disposition": "not-applicable",
+    "rationale": "Top-level review summary only; no separate actionable request beyond the inline comment already addressed."
+  },
+  {
+    "id": 3136058092,
+    "disposition": "addressed",
+    "rationale": "Removed the duplicate dockerMode alias so workflowDockerMode remains the single canonical mode field across launcher metadata, tests, and MM-504 spec artifacts."
+  },
+  {
+    "id": 4168605098,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Codex review wrapper only; the actionable inline feedback was handled separately."
+  },
+  {
     "id": 3136402860,
     "disposition": "addressed",
     "rationale": "Removed the redundant os.environ argument when computing the retrieval capability note state."
