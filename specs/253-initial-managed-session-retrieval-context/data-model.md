@@ -67,6 +67,7 @@ Validation rules:
 - One retrieval request produces one ContextPack.
 - One ContextPack may be published as one Retrieved Context Artifact for a managed-session step.
 - Prompt Context Resolution references the published artifact path and composes the runtime instruction that consumes the retrieved context.
+- The same Prompt Context Resolution contract is now consumed by both Codex and Claude workspace preparation paths.
 
 ## State Transitions
 

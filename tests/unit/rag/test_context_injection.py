@@ -216,3 +216,26 @@ def test_extract_query_terms_keeps_domain_words() -> None:
     assert "provider" in terms
     assert "profile" in terms
     assert "workflow" in terms
+
+def test_persisted_context_artifact_uses_workspace_context_directory(mock_request: AgentExecutionRequest, tmp_path) -> None:
+    service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
+    pack = ContextPack(
+        items=[ContextItem(score=0.9, source="docs/spec.md", text="retrieved text")],
+        filters={"repo": "test-repo"},
+        budgets={},
+        usage={},
+        transport="direct",
+        context_text="### Retrieved Context\n1. docs/spec.md (score: 0.900, trust: canonical)\n    retrieved text",
+        retrieved_at="2026-04-24T00:00:00Z",
+        telemetry_id="telemetry-1",
+    )
+
+    artifact_path = service._persist_context_pack(
+        request=mock_request,
+        pack=pack,
+        workspace_path=tmp_path,
+    )
+
+    assert artifact_path.parent == tmp_path / "artifacts" / "context"
+    assert artifact_path.read_text(encoding="utf-8").strip().startswith("{")
+    assert '"transport": "direct"' in artifact_path.read_text(encoding="utf-8")

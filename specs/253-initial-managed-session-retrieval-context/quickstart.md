@@ -46,6 +46,7 @@ pytest tests/integration/workflows/temporal/test_managed_session_retrieval_conte
 Expected use:
 - Prove durable retrieval publication and compact runtime-boundary behavior when unit tests are not sufficient.
 - Prove shared runtime contract behavior if Codex-only unit evidence is not enough.
+- MM-505 currently uses `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` as the focused boundary check for Claude startup reusing the shared context-injection contract before `CLAUDE.md` is written.
 
 ## End-to-End Verification Flow
 

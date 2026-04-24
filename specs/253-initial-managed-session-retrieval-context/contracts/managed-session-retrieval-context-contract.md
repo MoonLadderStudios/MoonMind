@@ -51,6 +51,7 @@ Contract:
 - Initial retrieval uses embedding-backed search and deterministic ContextPack assembly without a separate generative retrieval hop.
 - Durable publication is the authoritative startup truth for retrieved context.
 - The contract stays compatible with current Codex-style workspace preparation and any future managed runtime that consumes MoonMind-owned retrieval context.
+- Codex and Claude startup paths both consume the same shared `ContextInjectionService` contract during workspace preparation.
 - Retrieval transport choice does not change the visible contract at the runtime boundary.
 
 ## Verification Expectations

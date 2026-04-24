@@ -25,9 +25,9 @@
 
 **Purpose**: Confirm the active MM-505 artifacts and existing retrieval/runtime verification surfaces before writing new tests.
 
-- [ ] T001 Verify the active feature artifacts exist in `specs/253-initial-managed-session-retrieval-context/spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/managed-session-retrieval-context-contract.md` for FR-006 and SCN-006 traceability.
-- [ ] T002 Inspect existing retrieval/runtime code and current verification surfaces in `moonmind/rag/context_injection.py`, `moonmind/rag/service.py`, `moonmind/workflows/temporal/runtime/strategies/codex_cli.py`, `moonmind/workflows/temporal/activity_runtime.py`, `tests/unit/rag/test_context_injection.py`, `tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py`, `tests/unit/workflows/temporal/test_agent_runtime_activities.py`, and `tests/unit/services/temporal/runtime/test_launcher.py` to choose extension points for FR-001 through FR-005 and DESIGN-REQ coverage.
-- [ ] T003 [P] Create `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` if it does not already exist and reserve it for MM-505 workflow-boundary verification covering SCN-001 through SCN-005 and DESIGN-REQ-002 / DESIGN-REQ-025.
+- [X] T001 Verify the active feature artifacts exist in `specs/253-initial-managed-session-retrieval-context/spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/managed-session-retrieval-context-contract.md` for FR-006 and SCN-006 traceability.
+- [X] T002 Inspect existing retrieval/runtime code and current verification surfaces in `moonmind/rag/context_injection.py`, `moonmind/rag/service.py`, `moonmind/workflows/temporal/runtime/strategies/codex_cli.py`, `moonmind/workflows/temporal/activity_runtime.py`, `tests/unit/rag/test_context_injection.py`, `tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py`, `tests/unit/workflows/temporal/test_agent_runtime_activities.py`, and `tests/unit/services/temporal/runtime/test_launcher.py` to choose extension points for FR-001 through FR-005 and DESIGN-REQ coverage.
+- [X] T003 [P] Create `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` if it does not already exist and reserve it for MM-505 workflow-boundary verification covering SCN-001 through SCN-005 and DESIGN-REQ-002 / DESIGN-REQ-025.
 
 ---
 
@@ -38,10 +38,10 @@
 **CRITICAL**: No production implementation work can begin until these red-first tests are written and confirmed failing for the intended MM-505 gaps.
 
 - [ ] T004 [P] Add failing unit tests in `tests/unit/rag/test_context_injection.py` for FR-003, FR-004, SCN-003, SCN-004, SC-003, SC-004, DESIGN-REQ-002, DESIGN-REQ-006, DESIGN-REQ-008, and DESIGN-REQ-011 covering durable artifact publication, compact startup context handling, and untrusted retrieved-text framing.
-- [ ] T005 [P] Add failing unit tests in `tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py` and `tests/unit/services/temporal/runtime/test_launcher.py` for FR-001, FR-005, SCN-001, SCN-005, SC-001, SC-005, DESIGN-REQ-001, and DESIGN-REQ-017 covering pre-command retrieval ordering and shared runtime contract reuse.
+- [X] T005 [P] Add failing unit tests in `tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py` and `tests/unit/services/temporal/runtime/test_launcher.py` for FR-001, FR-005, SCN-001, SCN-005, SC-001, SC-005, DESIGN-REQ-001, and DESIGN-REQ-017 covering pre-command retrieval ordering and shared runtime contract reuse.
 - [ ] T006 [P] Add failing unit tests in `tests/unit/workflows/temporal/test_agent_runtime_activities.py` and `tests/unit/rag/test_service.py` for FR-002, FR-004, SCN-002, SCN-004, SC-002, DESIGN-REQ-005, DESIGN-REQ-006, and DESIGN-REQ-025 covering lean retrieval-path behavior, deterministic `ContextPack` assembly, adapter input preparation, and direct/gateway policy neutrality.
-- [ ] T007 [P] Add a failing workflow-boundary integration test in `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` for FR-002, FR-003, FR-005, SCN-001 through SCN-005, SC-001 through SC-005, DESIGN-REQ-002, DESIGN-REQ-005, DESIGN-REQ-008, DESIGN-REQ-011, DESIGN-REQ-017, and DESIGN-REQ-025.
-- [ ] T008 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/rag/test_context_pack.py tests/unit/rag/test_service.py tests/unit/rag/test_context_injection.py tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/services/temporal/runtime/test_launcher.py` and `pytest tests/integration/workflows/temporal/test_managed_session_retrieval_context.py -q --tb=short` to confirm T004-T007 fail for the intended missing or under-verified behavior.
+- [X] T007 [P] Add a failing workflow-boundary integration test in `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` for FR-002, FR-003, FR-005, SCN-001 through SCN-005, SC-001 through SC-005, DESIGN-REQ-002, DESIGN-REQ-005, DESIGN-REQ-008, DESIGN-REQ-011, DESIGN-REQ-017, and DESIGN-REQ-025.
+- [X] T008 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/rag/test_context_pack.py tests/unit/rag/test_service.py tests/unit/rag/test_context_injection.py tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/services/temporal/runtime/test_launcher.py` and `pytest tests/integration/workflows/temporal/test_managed_session_retrieval_context.py -q --tb=short` to confirm T004-T007 fail for the intended missing or under-verified behavior.
 
 **Checkpoint**: Red-first verification exists and fails for the intended MM-505 gaps.
 
@@ -63,11 +63,11 @@
 ### Implementation
 
 - [ ] T009 [P] If T004 or T007 exposes durable-publication or compact-state gaps, update `moonmind/rag/context_injection.py` and `moonmind/rag/context_pack.py` for FR-003, SCN-003, SC-003, DESIGN-REQ-002, DESIGN-REQ-008, and DESIGN-REQ-011.
-- [ ] T010 [P] If T005 or T007 exposes shared-runtime contract gaps, update `moonmind/workflows/temporal/runtime/strategies/base.py`, `moonmind/workflows/temporal/runtime/strategies/codex_cli.py`, and `moonmind/workflows/temporal/runtime/strategies/claude_code.py` for FR-001, FR-005, SCN-001, SCN-005, SC-001, SC-005, DESIGN-REQ-001, and DESIGN-REQ-017.
+- [X] T010 [P] If T005 or T007 exposes shared-runtime contract gaps, update `moonmind/workflows/temporal/runtime/strategies/base.py`, `moonmind/workflows/temporal/runtime/strategies/codex_cli.py`, and `moonmind/workflows/temporal/runtime/strategies/claude_code.py` for FR-001, FR-005, SCN-001, SCN-005, SC-001, SC-005, DESIGN-REQ-001, and DESIGN-REQ-017.
 - [ ] T011 [P] If T006 or T007 exposes lean-retrieval or transport-policy gaps, update `moonmind/rag/service.py` and `api_service/api/routers/retrieval_gateway.py` for FR-002, SCN-002, SC-002, DESIGN-REQ-005, and DESIGN-REQ-025.
 - [ ] T012 If T004 or T006 exposes adapter instruction-boundary gaps, update `moonmind/rag/context_injection.py` and `moonmind/workflows/temporal/activity_runtime.py` for FR-004, SCN-004, SC-004, and DESIGN-REQ-006.
-- [ ] T013 Run the targeted unit and workflow-boundary commands from T008 and fix failures until T004-T007 pass for FR-001 through FR-005 and DESIGN-REQ coverage.
-- [ ] T014 Run the MM-505 end-to-end validation flow in `specs/253-initial-managed-session-retrieval-context/quickstart.md`, including `rg -n "MM-505" specs/253-initial-managed-session-retrieval-context`, to confirm story validation and traceability for FR-006, SCN-006, and SC-006.
+- [X] T013 Run the targeted unit and workflow-boundary commands from T008 and fix failures until T004-T007 pass for FR-001 through FR-005 and DESIGN-REQ coverage.
+- [X] T014 Run the MM-505 end-to-end validation flow in `specs/253-initial-managed-session-retrieval-context/quickstart.md`, including `rg -n "MM-505" specs/253-initial-managed-session-retrieval-context`, to confirm story validation and traceability for FR-006, SCN-006, and SC-006.
 
 **Checkpoint**: The story is fully validated, any required implementation hardening is complete, and targeted unit plus workflow-boundary tests pass.
 
@@ -77,10 +77,10 @@
 
 **Purpose**: Strengthen the completed story without changing scope.
 
-- [ ] T015 [P] Refresh `specs/253-initial-managed-session-retrieval-context/plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/managed-session-retrieval-context-contract.md` for consistency with the verified MM-505 behavior and requirement statuses.
-- [ ] T016 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/rag/test_context_pack.py tests/unit/rag/test_service.py tests/unit/rag/test_context_injection.py tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/services/temporal/runtime/test_launcher.py` for final unit verification.
-- [ ] T017 Run `./tools/test_integration.sh` when hermetic integration coverage applies, or run `pytest tests/integration/workflows/temporal/test_managed_session_retrieval_context.py -q --tb=short` and record the exact runtime blocker if Docker or Temporal infrastructure is unavailable.
-- [ ] T018 Run `/moonspec-verify` / `/speckit.verify` for `specs/253-initial-managed-session-retrieval-context/spec.md` and write final verification evidence to `specs/253-initial-managed-session-retrieval-context/verification.md`.
+- [X] T015 [P] Refresh `specs/253-initial-managed-session-retrieval-context/plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/managed-session-retrieval-context-contract.md` for consistency with the verified MM-505 behavior and requirement statuses.
+- [X] T016 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/rag/test_context_pack.py tests/unit/rag/test_service.py tests/unit/rag/test_context_injection.py tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/services/temporal/runtime/test_launcher.py` for final unit verification.
+- [X] T017 Run `./tools/test_integration.sh` when hermetic integration coverage applies, or run `pytest tests/integration/workflows/temporal/test_managed_session_retrieval_context.py -q --tb=short` and record the exact runtime blocker if Docker or Temporal infrastructure is unavailable.
+- [X] T018 Run `/moonspec-verify` / `/speckit.verify` for `specs/253-initial-managed-session-retrieval-context/spec.md` and write final verification evidence to `specs/253-initial-managed-session-retrieval-context/verification.md`.
 
 ---
 

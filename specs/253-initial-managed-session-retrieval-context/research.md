@@ -34,11 +34,11 @@ Test implications: unit only beyond final verify.
 
 ## FR-005 / DESIGN-REQ-017 / DESIGN-REQ-025 - Reusable runtime contract and MoonMind-owned policy
 
-Decision: partial; the shared retrieval primitives exist, but current startup verification is Codex-first and needs stronger evidence for reusable runtime contract boundaries.
-Evidence: `moonmind/rag/context_injection.py` and `moonmind/rag/context_pack.py` are shared primitives; `moonmind/workflows/temporal/runtime/strategies/codex_cli.py` actively uses them; `moonmind/workflows/temporal/runtime/strategies/claude_code.py` and `base.py` show the broader strategy surface; `api_service/api/routers/retrieval_gateway.py` preserves MoonMind-owned retrieval transport.
-Rationale: The architecture points toward runtime reuse, but the currently verified startup path is concentrated in the Codex strategy. Planning should keep implementation narrow and add shared-boundary tests before claiming reusable runtime coverage.
-Alternatives considered: Limit the story to Codex only. Rejected because `spec.md` intentionally preserves the shared-contract requirement from the source design.
-Test implications: unit coverage for shared primitives plus integration or workflow-boundary tests for runtime-neutral behavior where feasible.
+Decision: implemented_verified for shared Codex/Claude startup reuse; durable artifact/ref authority remains a separate partial concern under FR-003.
+Evidence: `moonmind/rag/context_injection.py` and `moonmind/rag/context_pack.py` remain shared primitives; `moonmind/workflows/temporal/runtime/strategies/codex_cli.py` and `moonmind/workflows/temporal/runtime/strategies/claude_code.py` now both call `ContextInjectionService.inject_context()` during workspace preparation; `tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py`, `tests/unit/services/temporal/runtime/test_launcher.py`, and `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` verify the Claude path uses the same shared startup contract; `api_service/api/routers/retrieval_gateway.py` preserves MoonMind-owned retrieval transport.
+Rationale: The previously under-verified runtime reuse gap was real. The narrow fix was to move Claude workspace preparation onto the same `ContextInjectionService` contract already used by Codex, then verify that behavior at strategy, launcher, and focused integration boundaries.
+Alternatives considered: Limit the story to Codex only. Rejected because `spec.md` intentionally preserves the shared-contract requirement from the source design. Leave Claude on bespoke `CLAUDE.md` handling. Rejected because that would keep DESIGN-REQ-017 only partially implemented.
+Test implications: keep the new unit and focused integration coverage for shared runtime startup behavior; continue treating durable artifact/ref authority and transport neutrality as separate verification work.
 
 ## FR-006 - Traceability and MM-505 preservation
 
