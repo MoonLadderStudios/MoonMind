@@ -1246,13 +1246,13 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 session_controller=session_controller,
                 workload_registry=workload_registry,
                 workload_launcher=workload_launcher,
-                workflow_docker_enabled=settings.workflow.workflow_docker_enabled,
+                workflow_docker_mode=settings.workflow.workflow_docker_mode,
             )
             register_workload_tool_handlers(
                 dispatcher,
                 registry=workload_registry,
                 launcher=workload_launcher,
-                workflow_docker_enabled=settings.workflow.workflow_docker_enabled,
+                workflow_docker_mode=settings.workflow.workflow_docker_mode,
             )
 
         bindings = build_worker_activity_bindings(

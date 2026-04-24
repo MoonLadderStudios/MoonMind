@@ -893,12 +893,12 @@ class WorkflowSettings(BaseSettings):
         description="Hard timeout for non-container worker stage commands.",
         ge=1,
     )
-    workflow_docker_enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices("MOONMIND_WORKFLOW_DOCKER_ENABLED"),
+    workflow_docker_mode: Literal["disabled", "profiles", "unrestricted"] = Field(
+        "profiles",
+        validation_alias=AliasChoices("MOONMIND_WORKFLOW_DOCKER_MODE"),
         description=(
-            "Allow workflow-requested Docker-backed workload tools to route "
-            "through the DooD worker/tool boundary."
+            "Deployment-owned workflow Docker access mode for Docker-backed "
+            "workload tools (disabled|profiles|unrestricted)."
         ),
     )
 
@@ -969,6 +969,18 @@ class WorkflowSettings(BaseSettings):
             allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
             raise ValueError(
                 f"workflow.proposal_moonmind_severity_floor must be one of: {allowed}"
+            )
+        return text
+
+    @field_validator("workflow_docker_mode", mode="before")
+    @classmethod
+    def _normalize_workflow_docker_mode(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return "profiles"
+        if text not in {"disabled", "profiles", "unrestricted"}:
+            raise ValueError(
+                "workflow_docker_mode must be one of: disabled, profiles, unrestricted"
             )
         return text
 

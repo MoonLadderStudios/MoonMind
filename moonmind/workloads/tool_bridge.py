@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable, Mapping
 
 from pydantic import ValidationError
 
-from moonmind.schemas.workload_models import WorkloadRequest, WorkloadResult
+from moonmind.schemas.workload_models import WorkloadResult, parse_workload_request
 from moonmind.workflows.skills.skill_plan_contracts import (
     SkillFailure as ToolFailure,
     SkillResult,
@@ -23,11 +23,13 @@ WorkloadToolHandler = Callable[
 CONTAINER_RUN_WORKLOAD_TOOL = "container.run_workload"
 CONTAINER_START_HELPER_TOOL = "container.start_helper"
 CONTAINER_STOP_HELPER_TOOL = "container.stop_helper"
+CONTAINER_RUN_CONTAINER_TOOL = "container.run_container"
+CONTAINER_RUN_DOCKER_TOOL = "container.run_docker"
 INTEGRATION_CI_TOOL = "moonmind.integration_ci"
 INTEGRATION_CI_PROFILE_ID = "moonmind-integration-ci"
 UNREAL_RUN_TESTS_TOOL = "unreal.run_tests"
 DEFAULT_UNREAL_PROFILE_ID = "unreal-5_3-linux"
-DOOD_TOOL_NAMES = frozenset(
+CURATED_DOOD_TOOL_NAMES = frozenset(
     {
         CONTAINER_RUN_WORKLOAD_TOOL,
         CONTAINER_START_HELPER_TOOL,
@@ -36,6 +38,32 @@ DOOD_TOOL_NAMES = frozenset(
         UNREAL_RUN_TESTS_TOOL,
     }
 )
+UNRESTRICTED_DOOD_TOOL_NAMES = frozenset(
+    {
+        CONTAINER_RUN_CONTAINER_TOOL,
+        CONTAINER_RUN_DOCKER_TOOL,
+    }
+)
+DOOD_TOOL_NAMES = frozenset({*CURATED_DOOD_TOOL_NAMES, *UNRESTRICTED_DOOD_TOOL_NAMES})
+
+
+def normalize_workflow_docker_mode(value: str | None) -> str:
+    normalized = str(value or "profiles").strip().lower() or "profiles"
+    if normalized not in {"disabled", "profiles", "unrestricted"}:
+        raise ValueError(
+            "workflow_docker_mode must be one of: disabled, profiles, unrestricted"
+        )
+    return normalized
+
+
+def tool_allowed_for_workflow_docker_mode(*, tool_name: str, workflow_docker_mode: str) -> bool:
+    normalized_mode = normalize_workflow_docker_mode(workflow_docker_mode)
+    normalized_tool = str(tool_name or "").strip()
+    if normalized_mode == "disabled":
+        return False
+    if normalized_mode == "profiles":
+        return normalized_tool in CURATED_DOOD_TOOL_NAMES
+    return normalized_tool in DOOD_TOOL_NAMES
 
 
 def is_dood_tool(name: str) -> bool:
@@ -170,6 +198,68 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
             "additionalProperties": False,
         }
         description = "Stop one policy-gated bounded helper container."
+    elif normalized == CONTAINER_RUN_CONTAINER_TOOL:
+        input_schema = {
+            "type": "object",
+            "required": ["image", "repoDir", "artifactsDir", "scratchDir", "command"],
+            "properties": {
+                "taskRunId": {"type": "string", "minLength": 1},
+                "stepId": {"type": "string", "minLength": 1},
+                "attempt": {"type": "integer", "minimum": 1},
+                "repoDir": {"type": "string", "minLength": 1},
+                "artifactsDir": {"type": "string", "minLength": 1},
+                "scratchDir": {"type": "string", "minLength": 1},
+                "image": {"type": "string", "minLength": 1},
+                "entrypoint": {"type": "array", "items": {"type": "string", "minLength": 1}},
+                "command": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+                "workdir": {"type": "string", "minLength": 1},
+                "envOverrides": {"type": "object", "additionalProperties": {"type": "string"}},
+                "cacheMounts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["source", "target"],
+                        "properties": {
+                            "source": {"type": "string", "minLength": 1},
+                            "target": {"type": "string", "minLength": 1},
+                            "readOnly": {"type": "boolean"},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "networkMode": {"type": "string", "enum": ["none", "bridge"]},
+                "timeoutSeconds": {"type": "integer", "minimum": 1},
+                "resources": _resources_schema(),
+                "declaredOutputs": _declared_outputs_schema(),
+                "sessionId": {"type": "string", "minLength": 1},
+                "sessionEpoch": {"type": "integer", "minimum": 1},
+                "sourceTurnId": {"type": "string", "minLength": 1},
+            },
+            "additionalProperties": False,
+        }
+        description = "Run one unrestricted runtime-selected container through MoonMind."
+    elif normalized == CONTAINER_RUN_DOCKER_TOOL:
+        input_schema = {
+            "type": "object",
+            "required": ["repoDir", "artifactsDir", "command"],
+            "properties": {
+                "taskRunId": {"type": "string", "minLength": 1},
+                "stepId": {"type": "string", "minLength": 1},
+                "attempt": {"type": "integer", "minimum": 1},
+                "repoDir": {"type": "string", "minLength": 1},
+                "artifactsDir": {"type": "string", "minLength": 1},
+                "command": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+                "envOverrides": {"type": "object", "additionalProperties": {"type": "string"}},
+                "timeoutSeconds": {"type": "integer", "minimum": 1},
+                "resources": _resources_schema(),
+                "declaredOutputs": _declared_outputs_schema(),
+                "sessionId": {"type": "string", "minLength": 1},
+                "sessionEpoch": {"type": "integer", "minimum": 1},
+                "sourceTurnId": {"type": "string", "minLength": 1},
+            },
+            "additionalProperties": False,
+        }
+        description = "Run one unrestricted Docker CLI command through MoonMind."
     elif normalized == UNREAL_RUN_TESTS_TOOL:
         input_schema = {
             "type": "object",
@@ -278,14 +368,20 @@ def register_workload_tool_handlers(
     *,
     registry: RunnerProfileRegistry,
     launcher: Any,
-    workflow_docker_enabled: bool = True,
+    workflow_docker_mode: str = "profiles",
 ) -> None:
+    normalized_mode = normalize_workflow_docker_mode(workflow_docker_mode)
     for tool_name in sorted(DOOD_TOOL_NAMES):
+        if not tool_allowed_for_workflow_docker_mode(
+            tool_name=tool_name,
+            workflow_docker_mode=normalized_mode,
+        ):
+            continue
         handler = build_workload_tool_handler(
             tool_name=tool_name,
             registry=registry,
             launcher=launcher,
-            workflow_docker_enabled=workflow_docker_enabled,
+            workflow_docker_mode=normalized_mode,
         )
         for version in ("1.0", "1.0.0"):
             dispatcher.register_skill(
@@ -300,9 +396,10 @@ def build_workload_tool_handler(
     tool_name: str,
     registry: RunnerProfileRegistry,
     launcher: Any,
-    workflow_docker_enabled: bool = True,
+    workflow_docker_mode: str = "profiles",
 ) -> WorkloadToolHandler:
     normalized = str(tool_name or "").strip()
+    normalized_mode = normalize_workflow_docker_mode(workflow_docker_mode)
     if not is_dood_tool(normalized):
         raise ValueError(f"unknown Docker workload tool: {tool_name}")
 
@@ -310,16 +407,34 @@ def build_workload_tool_handler(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None,
     ) -> SkillResult:
-        if not workflow_docker_enabled:
+        if not tool_allowed_for_workflow_docker_mode(
+            tool_name=normalized,
+            workflow_docker_mode=normalized_mode,
+        ):
+            if normalized_mode == "disabled":
+                raise ToolFailure(
+                    error_code="PERMISSION_DENIED",
+                    message=(
+                        "Docker-backed workflow tools are disabled by "
+                        "MOONMIND_WORKFLOW_DOCKER_MODE=disabled "
+                        "(docker_workflows_disabled)"
+                    ),
+                    retryable=False,
+                    details={"reason": "docker_workflows_disabled"},
+                )
             raise ToolFailure(
                 error_code="PERMISSION_DENIED",
                 message=(
-                    "Docker-backed workflow tools are disabled by "
-                    "MOONMIND_WORKFLOW_DOCKER_ENABLED=false "
-                    "(docker_workflows_disabled)"
+                    f"Docker-backed workflow tool {normalized} is not allowed when "
+                    f"MOONMIND_WORKFLOW_DOCKER_MODE={normalized_mode} "
+                    "(docker_workflow_mode_forbidden)"
                 ),
                 retryable=False,
-                details={"reason": "docker_workflows_disabled"},
+                details={
+                    "reason": "docker_workflow_mode_forbidden",
+                    "workflowDockerMode": normalized_mode,
+                    "toolName": normalized,
+                },
             )
         try:
             request = _build_workload_request(
@@ -365,7 +480,7 @@ def _build_workload_request(
     tool_name: str,
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
-) -> WorkloadRequest:
+) -> Any:
     if not isinstance(inputs, Mapping):
         raise ValueError("workload tool inputs must be an object")
     request_payload = dict(inputs)
@@ -417,7 +532,7 @@ def _build_workload_request(
         request_payload["profileId"] = INTEGRATION_CI_PROFILE_ID
         request_payload["command"] = ("./tools/test_integration.sh",)
 
-    return WorkloadRequest.model_validate(request_payload)
+    return parse_workload_request(request_payload)
 
 
 def _request_payload_reason(inputs: Mapping[str, Any]) -> str | None:
@@ -580,15 +695,20 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
 
 __all__ = [
     "CONTAINER_RUN_WORKLOAD_TOOL",
+    "CONTAINER_RUN_CONTAINER_TOOL",
+    "CONTAINER_RUN_DOCKER_TOOL",
     "CONTAINER_START_HELPER_TOOL",
     "CONTAINER_STOP_HELPER_TOOL",
     "DEFAULT_UNREAL_PROFILE_ID",
     "DOOD_TOOL_NAMES",
+    "CURATED_DOOD_TOOL_NAMES",
     "INTEGRATION_CI_PROFILE_ID",
     "INTEGRATION_CI_TOOL",
     "UNREAL_RUN_TESTS_TOOL",
     "build_dood_tool_definition_payload",
     "build_workload_tool_handler",
     "is_dood_tool",
+    "normalize_workflow_docker_mode",
     "register_workload_tool_handlers",
+    "tool_allowed_for_workflow_docker_mode",
 ]
