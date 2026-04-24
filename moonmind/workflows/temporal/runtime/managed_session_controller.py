@@ -558,6 +558,7 @@ class DockerCodexManagedSessionController:
             workspacePath=request.workspace_path,
             sessionWorkspacePath=request.session_workspace_path,
             artifactSpoolPath=request.artifact_spool_path,
+            metadata=dict(request.metadata),
             startedAt=now,
             updatedAt=now,
         )
@@ -1999,6 +2000,7 @@ class DockerCodexManagedSessionController:
             latestControlEventRef=record.latest_control_event_ref,
             latestResetBoundaryRef=record.latest_reset_boundary_ref,
             metadata={
+                **dict(record.metadata),
                 "status": record.status,
                 "stdoutArtifactRef": record.stdout_artifact_ref,
                 "stderrArtifactRef": record.stderr_artifact_ref,
@@ -2033,6 +2035,7 @@ class DockerCodexManagedSessionController:
             latestControlEventRef=record.latest_control_event_ref,
             latestResetBoundaryRef=record.latest_reset_boundary_ref,
             metadata={
+                **dict(record.metadata),
                 **dict(request.metadata),
                 "status": record.status,
                 "stdoutArtifactRef": record.stdout_artifact_ref,

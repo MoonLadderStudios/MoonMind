@@ -296,7 +296,19 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
         session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
     )
 
-    handle = await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+    request = _request(binding, workspace_path=str(workspace_path))
+    request.parameters["metadata"] = {
+        "moonmind": {
+            "latestContextPackRef": "artifacts/context/rag-context-abc123.json",
+            "retrievedContextArtifactPath": "artifacts/context/rag-context-abc123.json",
+            "retrievedContextTransport": "direct",
+            "retrievedContextItemCount": 2,
+            "retrievalDurabilityAuthority": "artifact_ref",
+            "sessionContinuityCacheStatus": "advisory_only",
+        }
+    }
+
+    handle = await adapter.start(request)
     status = await adapter.status(handle.run_id)
     result = await adapter.fetch_result(handle.run_id)
     persisted_record = run_store.load(binding.task_run_id)
@@ -318,6 +330,8 @@ async def test_start_launches_missing_task_scoped_session_and_persists_result(
         == DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS
     )
     assert launch_request["workspaceSpec"] == {"workspacePath": str(workspace_path)}
+    assert launch_request["metadata"]["latestContextPackRef"] == "artifacts/context/rag-context-abc123.json"
+    assert launch_request["metadata"]["retrievalDurabilityAuthority"] == "artifact_ref"
     assert send_turn_calls[0].instructions.startswith("artifact:instructions")
     assert "Managed Codex CLI note:" in send_turn_calls[0].instructions
 

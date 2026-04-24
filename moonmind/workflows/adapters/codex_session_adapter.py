@@ -20,6 +20,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
     ManagedRunRecord,
     ManagedRuntimeProfile,
+    extract_durable_retrieval_metadata,
 )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
@@ -923,6 +924,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             imageRef=self._session_image_ref,
             turnCompletionTimeoutSeconds=turn_completion_timeout_seconds,
             environment=environment,
+            metadata=extract_durable_retrieval_metadata(request.parameters),
             workspaceSpec=(
                 dict(request.workspace_spec)
                 if isinstance(request.workspace_spec, dict)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal, NoReturn, get_args
+from typing import Any, Literal, Mapping, NoReturn, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -79,6 +79,41 @@ _LEGACY_METADATA_MAP: tuple[tuple[str, str], ...] = (
     ("url", "externalUrl"),
 )
 _MAX_SUMMARY_CHARS = 4096
+_DURABLE_RETRIEVAL_METADATA_KEYS: tuple[str, ...] = (
+    "retrievedContextArtifactPath",
+    "latestContextPackRef",
+    "retrievedContextTransport",
+    "retrievedContextItemCount",
+    "retrievalDurabilityAuthority",
+    "sessionContinuityCacheStatus",
+)
+
+
+def extract_durable_retrieval_metadata(
+    parameters: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(parameters, Mapping):
+        return {}
+    metadata = parameters.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return {}
+    moonmind = metadata.get("moonmind")
+    if not isinstance(moonmind, Mapping):
+        return {}
+
+    compact: dict[str, Any] = {}
+    for key in _DURABLE_RETRIEVAL_METADATA_KEYS:
+        value = moonmind.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                compact[key] = normalized
+            continue
+        if isinstance(value, int) and not isinstance(value, bool):
+            compact[key] = value
+    return compact
 
 def validate_codex_oauth_profile_refs(
     *,

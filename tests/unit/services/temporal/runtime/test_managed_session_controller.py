@@ -2905,6 +2905,116 @@ async def test_controller_send_turn_tolerates_event_publication_failure(
     assert response.status == "completed"
 
 @pytest.mark.asyncio
+async def test_controller_clear_session_preserves_retrieval_metadata_in_durable_outputs(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            taskRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+            controlUrl="docker-exec://mm-codex-session-sess-1",
+            status="ready",
+            workspacePath="/work/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/work/agent_jobs/task-1/session",
+            artifactSpoolPath="/work/agent_jobs/task-1/artifacts",
+            metadata={
+                "latestContextPackRef": "artifacts/context/rag-context-abc123.json",
+                "retrievedContextArtifactPath": "artifacts/context/rag-context-abc123.json",
+                "retrievedContextTransport": "direct",
+                "retrievedContextItemCount": 2,
+                "retrievalDurabilityAuthority": "artifact_ref",
+                "sessionContinuityCacheStatus": "advisory_only",
+            },
+            startedAt=datetime(2026, 4, 7, 8, 0, tzinfo=UTC),
+        )
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if "clear_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 2,
+                    "containerId": "ctr-1",
+                    "threadId": "logical-thread-2",
+                },
+                "status": "ready",
+                "imageRef": "ghcr.io/moonladderstudios/moonmind:latest",
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=supervisor,
+        command_runner=_fake_runner,
+    )
+
+    await controller.clear_session(
+        CodexManagedSessionClearRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            newThreadId="logical-thread-2",
+            reason="reset stale context",
+        )
+    )
+
+    stored = store.load("sess-1")
+    assert stored is not None
+    assert stored.metadata["latestContextPackRef"] == "artifacts/context/rag-context-abc123.json"
+
+    summary = await controller.fetch_session_summary(
+        FetchCodexManagedSessionSummaryRequest(
+            sessionId="sess-1",
+            sessionEpoch=2,
+            containerId="ctr-1",
+            threadId="logical-thread-2",
+        )
+    )
+    publication = await controller.publish_session_artifacts(
+        PublishCodexManagedSessionArtifactsRequest(
+            sessionId="sess-1",
+            sessionEpoch=2,
+            containerId="ctr-1",
+            threadId="logical-thread-2",
+            taskRunId="task-1",
+        )
+    )
+
+    assert summary.metadata["latestContextPackRef"] == "artifacts/context/rag-context-abc123.json"
+    assert publication.metadata["latestContextPackRef"] == "artifacts/context/rag-context-abc123.json"
+
+    boundary_payload = json.loads(
+        artifact_storage.resolve_storage_path(stored.latest_reset_boundary_ref).read_text(encoding="utf-8")
+    )
+    assert boundary_payload["metadata"]["latestContextPackRef"] == "artifacts/context/rag-context-abc123.json"
+
+
+@pytest.mark.asyncio
 async def test_controller_clear_session_rejects_stale_durable_locator(
     tmp_path: Path,
 ) -> None:
