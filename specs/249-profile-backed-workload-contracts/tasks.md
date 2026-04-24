@@ -1,6 +1,6 @@
 # Tasks: Profile-Backed Workload Contracts
 
-**Input**: Design documents from `specs/249-profile-backed-workload-contracts/`  
+**Input**: Design documents from `specs/249-profile-backed-workload-contracts/`
 **Prerequisites**: `spec.md`, `plan.md`, `research.md`, `contracts/profile-backed-workload-contract.md`, `quickstart.md`
 
 **Tests**: Unit tests and hermetic integration verification are REQUIRED. For MM-500, the repository already contained most production behavior and unit coverage, so the story work is verification-first: preserve the canonical artifacts, add the missing dispatcher-boundary integration test, and verify the existing workload contract end to end.

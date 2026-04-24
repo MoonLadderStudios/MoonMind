@@ -25,15 +25,15 @@ MM-500 is a runtime verification-first story. The repository already contains th
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Pydantic v2, Temporal Python SDK, existing Docker workload launcher/registry stack, pytest  
-**Storage**: No new persistent storage; existing workload registry, launcher, and artifact-backed workload outputs only  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workloads/test_docker_workload_launcher.py`  
-**Integration Testing**: `./tools/test_integration.sh`  
-**Target Platform**: MoonMind worker runtime and Docker-backed workload tool path  
-**Project Type**: Backend runtime and verification story for Docker-backed workload contracts  
-**Performance Goals**: Preserve deterministic low-overhead request validation and workload dispatch with no additional runtime storage or orchestration layers  
-**Constraints**: Keep the workload and helper tool contracts profile-backed; do not widen `container.run_workload`; keep helper lifecycle explicitly bounded; preserve disabled-mode deterministic denial; keep curated tools aligned with the same runner-profile model; preserve MM-500 traceability  
+**Language/Version**: Python 3.12
+**Primary Dependencies**: Pydantic v2, Temporal Python SDK, existing Docker workload launcher/registry stack, pytest
+**Storage**: No new persistent storage; existing workload registry, launcher, and artifact-backed workload outputs only
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workloads/test_docker_workload_launcher.py`
+**Integration Testing**: `./tools/test_integration.sh`
+**Target Platform**: MoonMind worker runtime and Docker-backed workload tool path
+**Project Type**: Backend runtime and verification story for Docker-backed workload contracts
+**Performance Goals**: Preserve deterministic low-overhead request validation and workload dispatch with no additional runtime storage or orchestration layers
+**Constraints**: Keep the workload and helper tool contracts profile-backed; do not widen `container.run_workload`; keep helper lifecycle explicitly bounded; preserve disabled-mode deterministic denial; keep curated tools aligned with the same runner-profile model; preserve MM-500 traceability
 **Scale/Scope**: One story covering profile-backed one-shot workloads, bounded helpers, curated-tool alignment, disabled-mode denial, and MoonSpec traceability for MM-500
 
 ## Constitution Check

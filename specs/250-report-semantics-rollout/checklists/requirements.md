@@ -1,7 +1,7 @@
-# Specification Quality Checklist: Profile-Backed Workload Contracts
+# Specification Quality Checklist: Report Semantics Rollout
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: 2026-04-24
+**Purpose**: Validate specification completeness and quality before proceeding to planning  
+**Created**: 2026-04-24  
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -18,7 +18,7 @@
 - [X] Requirements are testable and unambiguous
 - [X] Runtime intent describes system behavior rather than docs-only changes, unless docs-only was explicitly requested
 - [X] Success criteria are measurable
-- [X] Success criteria are technology-agnostic (no implementation details)
+- [X] Success criteria are technology-agnostic
 - [X] All acceptance scenarios are defined
 - [X] Independent Test describes how the story can be validated end-to-end
 - [X] Acceptance scenarios are concrete enough to derive unit and integration tests
@@ -36,4 +36,6 @@
 
 ## Notes
 
-- Checklist validated against `specs/249-profile-backed-workload-contracts/spec.md` on 2026-04-24. The spec preserves the original MM-500 Jira preset brief, one story, mapped source requirements, measurable success criteria, and bounded runtime scope.
+- Runtime mode selected. Documentation-only mode was not requested.
+- The source design path input was empty, so the canonical Jira preset brief and its referenced `docs/Artifacts/ReportArtifacts.md` sections were treated as the runtime source requirements.
+- `Specify` was the first incomplete stage because no existing feature directory matched MM-497.
