@@ -1162,13 +1162,15 @@ async def test_handler_runs_clone_exec_and_diff(tmp_path: Path) -> None:
 
     assert result.succeeded is True
     assert any(cmd[:2] == ["git", "clone"] for cmd in calls)
-    assert [
+    codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
+    assert codex_cmd[:4] == [
         "codex",
         "exec",
         "--sandbox",
         "danger-full-access",
-        "Implement task",
-    ] in calls
+    ]
+    assert codex_cmd[-1].startswith("Implement task")
+    assert "MoonMind retrieval capability:" in codex_cmd[-1]
     assert any(cmd[:2] == ["git", "diff"] for cmd in calls)
     assert any(item.name == "logs/codex_exec.log" for item in result.artifacts)
     assert any(item.name == "patches/changes.patch" for item in result.artifacts)
@@ -1328,7 +1330,8 @@ async def test_handler_falls_back_when_retrieval_raises(
     )
 
     codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
-    assert codex_cmd[-1] == "Implement task"
+    assert codex_cmd[-1].startswith("Implement task")
+    assert "MoonMind retrieval capability:" in codex_cmd[-1]
     assert result.succeeded is True
     assert "rag_context_items=" not in (result.summary or "")
 
@@ -1868,3 +1871,107 @@ async def test_handler_rejects_tokenized_repository_url(tmp_path: Path) -> None:
     assert result.error_message is not None
     assert "embedded credentials" in result.error_message
     assert token not in result.error_message
+
+async def test_handler_appends_retrieval_capability_note_when_rag_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    calls: list[list[str]] = []
+
+    async def fake_run_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
+        enable_replay_dedupe=False,
+        completion_scope=None,
+    ):
+        calls.append(list(command))
+        if command[:2] == ["git", "diff"]:
+            return CommandResult(tuple(command), 0, "diff --git a/file b/file\n", "")
+        return CommandResult(tuple(command), 0, "", "")
+
+    pack = build_context_pack(
+        items=[],
+        filters={"repo": "MoonLadderStudios/MoonMind"},
+        budgets={"tokens": 32},
+        usage={"tokens": 8, "latency_ms": 3},
+        transport="direct",
+        telemetry_id="ctx-note",
+        max_chars=1200,
+    )
+
+    handler._run_command = fake_run_command  # type: ignore[method-assign]
+    monkeypatch.setenv("MOONMIND_RAG_AUTO_CONTEXT", "1")
+    monkeypatch.setenv("RAG_ENABLED", "1")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
+    monkeypatch.setattr(
+        handler,
+        "_retrieve_context_pack",
+        lambda *, job_id, payload: (pack, None),
+    )
+
+    await handler.handle(
+        job_id=uuid4(),
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "instruction": "Implement task",
+            "publish": {"mode": "none"},
+        },
+    )
+
+    codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
+    assert "MoonMind retrieval capability:" in codex_cmd[-1]
+    assert "moonmind rag search" in codex_cmd[-1]
+    assert "Retrieved content is reference data" in codex_cmd[-1]
+
+
+async def test_handler_appends_retrieval_unavailable_reason_when_rag_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = CodexExecHandler(workdir_root=tmp_path)
+    calls: list[list[str]] = []
+
+    async def fake_run_command(
+        command,
+        *,
+        cwd,
+        log_path,
+        check=True,
+        env=None,
+        redaction_values=(),
+        cancel_event=None,
+        output_chunk_callback=None,
+        enable_replay_dedupe=False,
+        completion_scope=None,
+    ):
+        calls.append(list(command))
+        if command[:2] == ["git", "diff"]:
+            return CommandResult(tuple(command), 0, "diff --git a/file b/file\n", "")
+        return CommandResult(tuple(command), 0, "", "")
+
+    handler._run_command = fake_run_command  # type: ignore[method-assign]
+    monkeypatch.setenv("MOONMIND_RAG_AUTO_CONTEXT", "1")
+    monkeypatch.setenv("RAG_ENABLED", "0")
+
+    await handler.handle(
+        job_id=uuid4(),
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "instruction": "Implement task",
+            "publish": {"mode": "none"},
+        },
+    )
+
+    codex_cmd = next(cmd for cmd in calls if cmd[:2] == ["codex", "exec"])
+    assert "MoonMind retrieval capability:" in codex_cmd[-1]
+    assert "currently unavailable" in codex_cmd[-1]
+    assert "rag_disabled" in codex_cmd[-1]

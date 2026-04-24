@@ -8,7 +8,7 @@ from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from api_service.auth_providers import get_current_user_optional
 from api_service.db.models import User
@@ -31,6 +31,17 @@ class RetrievalQuery(BaseModel):
     filters: Dict[str, str] = Field(default_factory=dict)
     overlay_policy: str = Field(default="include", pattern="^(include|skip)$")
     budgets: Dict[str, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_budget_keys(self) -> "RetrievalQuery":
+        allowed = {"tokens", "latency_ms"}
+        unsupported = sorted(set(self.budgets) - allowed)
+        if unsupported:
+            joined = ", ".join(unsupported)
+            raise ValueError(
+                f"Unsupported retrieval budget keys: {joined}. Allowed keys: latency_ms, tokens."
+            )
+        return self
 
 def get_retrieval_service(request: Request) -> ContextRetrievalService:
     cached = getattr(request.app.state, "retrieval_service", None)

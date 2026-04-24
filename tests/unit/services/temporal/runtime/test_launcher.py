@@ -310,6 +310,9 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     monkeypatch,
 ):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("RAG_ENABLED", "1")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
 
     store = ManagedRunStore(tmp_path)
@@ -369,10 +372,9 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     await process.wait()
 
     assert captured_args[:2] == ("codex", "exec")
-    assert any(
-        isinstance(arg, str) and "Managed Codex CLI note:" in arg
-        for arg in captured_args
-    )
+    prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
+    assert "MoonMind retrieval capability:" in prompt_arg
+    assert "moonmind rag search" in prompt_arg
 
 @pytest.mark.asyncio
 async def test_launch_resets_stale_live_log_spool(tmp_path, monkeypatch):
