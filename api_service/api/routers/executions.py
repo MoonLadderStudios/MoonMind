@@ -45,6 +45,7 @@ from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
 )
+from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
     ConfigureIntegrationMonitoringRequest,
@@ -58,6 +59,7 @@ from moonmind.schemas.temporal_models import (
     ExecutionListResponse,
     ExecutionModel,
     ExecutionProgressModel,
+    ExecutionReportProjectionModel,
     ExecutionRefreshEnvelope,
     ExecutionSkillLifecycleIntentModel,
     ExecutionSkillProvenanceModel,
@@ -83,6 +85,8 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
+from moonmind.workflows.temporal.artifacts import build_artifact_ref
+from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
 from moonmind.workflows.tasks.model_resolver import resolve_effective_model
@@ -1449,6 +1453,117 @@ async def _enrich_execution_merge_automation(
         )
 
     return execution.model_copy(update={"merge_automation": normalized})
+
+
+def _build_execution_artifact_ref_model(artifact: Any) -> ArtifactRefModel:
+    compact_ref = build_artifact_ref(artifact)
+    return ArtifactRefModel(
+        artifact_ref_v=compact_ref.artifact_ref_v,
+        artifact_id=compact_ref.artifact_id,
+        sha256=compact_ref.sha256,
+        size_bytes=compact_ref.size_bytes,
+        content_type=compact_ref.content_type,
+        encryption=compact_ref.encryption,
+        diagnostics=None,
+    )
+
+
+async def _hydrate_execution_report_projection(
+    execution: ExecutionModel,
+    *,
+    session: AsyncSession | None,
+    user: User,
+) -> ExecutionModel:
+    if session is None or execution.entry != "run" or not execution.run_id:
+        return execution
+
+    principal = str(getattr(user, "id", "") or "system")
+    try:
+        artifact_service = get_temporal_artifact_service(session)
+        primary_artifacts = await artifact_service.list_for_execution(
+            namespace=execution.namespace,
+            workflow_id=execution.workflow_id,
+            run_id=execution.run_id,
+            principal=principal,
+            link_type="report.primary",
+            latest_only=True,
+        )
+        primary_artifact = primary_artifacts[0] if primary_artifacts else None
+        if primary_artifact is None:
+            return execution.model_copy(
+                update={
+                    "report_projection": ExecutionReportProjectionModel(
+                        hasReport=False
+                    )
+                }
+            )
+
+        summary_artifacts = await artifact_service.list_for_execution(
+            namespace=execution.namespace,
+            workflow_id=execution.workflow_id,
+            run_id=execution.run_id,
+            principal=principal,
+            link_type="report.summary",
+            latest_only=True,
+        )
+        summary_artifact = summary_artifacts[0] if summary_artifacts else None
+
+        primary_ref_model = _build_execution_artifact_ref_model(primary_artifact)
+        summary_ref_model = (
+            _build_execution_artifact_ref_model(summary_artifact)
+            if summary_artifact is not None
+            else None
+        )
+        metadata_json = (
+            primary_artifact.metadata_json
+            if isinstance(getattr(primary_artifact, "metadata_json", None), Mapping)
+            else {}
+        )
+        projection_bundle: dict[str, Any] = {
+            "report_bundle_v": 1,
+            "evidence_refs": [],
+            "primary_report_ref": primary_ref_model.model_dump(
+                by_alias=True, exclude_none=False
+            ),
+        }
+        if summary_ref_model is not None:
+            projection_bundle["summary_ref"] = summary_ref_model.model_dump(
+                by_alias=True, exclude_none=False
+            )
+        report_type = metadata_json.get("report_type")
+        if report_type is not None:
+            projection_bundle["report_type"] = report_type
+        report_scope = metadata_json.get("report_scope")
+        if report_scope is not None:
+            projection_bundle["report_scope"] = report_scope
+
+        projection_metadata: dict[str, dict[str, int]] = {}
+        for key in ("finding_counts", "severity_counts"):
+            value = metadata_json.get(key)
+            if isinstance(value, Mapping):
+                projection_metadata[key] = dict(value)
+
+        projection_payload = build_report_projection_summary(
+            projection_bundle,
+            metadata=projection_metadata or None,
+        )
+        projection_payload["latest_report_ref"] = primary_ref_model.model_dump(
+            by_alias=True, exclude_none=False
+        )
+        if summary_ref_model is not None:
+            projection_payload[
+                "latest_report_summary_ref"
+            ] = summary_ref_model.model_dump(by_alias=True, exclude_none=False)
+        projection = ExecutionReportProjectionModel.model_validate(projection_payload)
+        return execution.model_copy(update={"report_projection": projection})
+    except Exception as exc:
+        logger.warning(
+            "Failed to hydrate report projection for execution %s: %s",
+            execution.workflow_id,
+            exc,
+            exc_info=True,
+        )
+        return execution
 
 
 async def _hydrate_provider_profile_metadata(
@@ -4146,6 +4261,11 @@ async def describe_execution(
             execution,
             temporal_client=temporal_client,
         )
+    execution = await _hydrate_execution_report_projection(
+        execution,
+        session=session,
+        user=user,
+    )
     if not execution.task_run_id:
         task_run_ids = await asyncio.to_thread(
             _resolve_task_run_ids_from_managed_store,

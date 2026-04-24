@@ -26,9 +26,9 @@
 
 **Purpose**: Confirm the planning artifacts and current implementation gaps for the single MM-496 story.
 
-- [ ] T001 Confirm `specs/248-report-aware-execution-projections/` contains `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/execution-report-projection-contract.md`, and `quickstart.md`
-- [ ] T002 Inspect current execution detail schema/materialization in `moonmind/schemas/temporal_models.py` and `api_service/api/routers/executions.py` before editing (FR-001 through FR-007)
-- [ ] T003 Inspect existing bounded projection helper coverage in `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, router coverage in `tests/unit/api/routers/test_executions.py`, and execution API contract coverage in `tests/contract/test_temporal_execution_api.py` before adding failures (FR-001 through FR-007)
+- [X] T001 Confirm `specs/248-report-aware-execution-projections/` contains `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/execution-report-projection-contract.md`, and `quickstart.md`
+- [X] T002 Inspect current execution detail schema/materialization in `moonmind/schemas/temporal_models.py` and `api_service/api/routers/executions.py` before editing (FR-001 through FR-007)
+- [X] T003 Inspect existing bounded projection helper coverage in `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, router coverage in `tests/unit/api/routers/test_executions.py`, and execution API contract coverage in `tests/contract/test_temporal_execution_api.py` before adding failures (FR-001 through FR-007)
 
 ---
 
@@ -38,9 +38,9 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T004 Confirm no database migration or new persistent storage is required because MM-496 remains a convenience read model over existing artifact links and execution detail materialization (FR-003, DESIGN-REQ-024)
-- [ ] T005 Confirm no new API route is required because MM-496 explicitly defers the dedicated report endpoint and only extends `/api/executions/{workflowId}` (FR-005, DESIGN-REQ-022)
-- [ ] T006 Confirm `build_report_projection_summary` in `moonmind/workflows/temporal/report_artifacts.py` remains the canonical projection helper to reuse from the execution detail path (FR-002, FR-007)
+- [X] T004 Confirm no database migration or new persistent storage is required because MM-496 remains a convenience read model over existing artifact links and execution detail materialization (FR-003, DESIGN-REQ-024)
+- [X] T005 Confirm no new API route is required because MM-496 explicitly defers the dedicated report endpoint and only extends `/api/executions/{workflowId}` (FR-005, DESIGN-REQ-022)
+- [X] T006 Confirm `build_report_projection_summary` in `moonmind/workflows/temporal/report_artifacts.py` remains the canonical projection helper to reuse from the execution detail path (FR-002, FR-007)
 
 **Checkpoint**: Foundation ready - focused verification and bounded execution-detail implementation can now begin.
 
@@ -66,33 +66,33 @@
 
 ### Unit Verification Tests (write first)
 
-- [ ] T007 [P] Add failing router unit coverage in `tests/unit/api/routers/test_executions.py` asserting `/api/executions/{workflowId}` returns `reportProjection.hasReport`, `latestReportRef`, `latestReportSummaryRef`, `reportType`, `reportStatus`, and bounded count maps when canonical report data exists (FR-001, FR-002, SC-001, SC-002)
-- [ ] T008 [P] Add failing router unit coverage in `tests/unit/api/routers/test_executions.py` asserting no-report executions omit fabricated refs and bounded counts while still degrading safely (FR-006, SC-001)
-- [ ] T009 [P] Tighten `tests/unit/workflows/temporal/test_report_workflow_rollout.py` only if needed to cover any MM-496-specific helper behavior for bounded `finding_counts` and `severity_counts` metadata (FR-007, SC-003)
+- [X] T007 [P] Add failing router unit coverage in `tests/unit/api/routers/test_executions.py` asserting `/api/executions/{workflowId}` returns `reportProjection.hasReport`, `latestReportRef`, `latestReportSummaryRef`, `reportType`, `reportStatus`, and bounded count maps when canonical report data exists (FR-001, FR-002, SC-001, SC-002)
+- [X] T008 [P] Add failing router unit coverage in `tests/unit/api/routers/test_executions.py` asserting no-report executions omit fabricated refs and bounded counts while still degrading safely (FR-006, SC-001)
+- [X] T009 [P] Tighten `tests/unit/workflows/temporal/test_report_workflow_rollout.py` only if needed to cover any MM-496-specific helper behavior for bounded `finding_counts` and `severity_counts` metadata (FR-007, SC-003)
 
 ### Integration-Style Boundary Tests (write first)
 
-- [ ] T010 [P] Add failing contract coverage in `tests/contract/test_temporal_execution_api.py` asserting the execution detail response surfaces the bounded `reportProjection` object and no raw report payloads (FR-001, FR-003, FR-004, SC-004)
-- [ ] T011 [P] Add contract coverage or traceability notes asserting MM-496 explicitly defers the dedicated `/report` endpoint in favor of execution-detail summary fields (FR-005, SC-006)
+- [X] T010 [P] Add failing contract coverage in `tests/contract/test_temporal_execution_api.py` asserting the execution detail response surfaces the bounded `reportProjection` object and no raw report payloads (FR-001, FR-003, FR-004, SC-004)
+- [X] T011 [P] Add contract coverage or traceability notes asserting MM-496 explicitly defers the dedicated `/report` endpoint in favor of execution-detail summary fields (FR-005, SC-006)
 
 ### Red-First Confirmation
 
-- [ ] T012 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_report_workflow_rollout.py` and confirm the new MM-496 coverage fails before production changes
-- [ ] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_execution_api.py` and confirm the new MM-496 execution-detail contract coverage fails before production changes
+- [X] T012 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/routers/test_executions.py tests/unit/workflows/temporal/test_report_workflow_rollout.py` and confirm the new MM-496 coverage fails before production changes
+- [X] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_execution_api.py` and confirm the new MM-496 execution-detail contract coverage fails before production changes
 
 ### Implementation Tasks
 
-- [ ] T014 Extend `moonmind/schemas/temporal_models.py` with the bounded `reportProjection` response model and camelCase fields required by MM-496 (FR-001, FR-003)
-- [ ] T015 Update `api_service/api/routers/executions.py` execution-detail materialization to derive the projection server-side from canonical report semantics using `build_report_projection_summary` (FR-001, FR-002, FR-006, FR-007)
-- [ ] T016 Ensure execution detail surfaces only compact artifact refs and bounded count metadata and does not bypass artifact authorization or preview/default-read behavior (FR-003, FR-004)
-- [ ] T017 Preserve the explicit dedicated-endpoint deferral decision in feature-local artifacts and avoid adding a new `/report` route in this story (FR-005)
+- [X] T014 Extend `moonmind/schemas/temporal_models.py` with the bounded `reportProjection` response model and camelCase fields required by MM-496 (FR-001, FR-003)
+- [X] T015 Update `api_service/api/routers/executions.py` execution-detail materialization to derive the projection server-side from canonical report semantics using `build_report_projection_summary` (FR-001, FR-002, FR-006, FR-007)
+- [X] T016 Ensure execution detail surfaces only compact artifact refs and bounded count metadata and does not bypass artifact authorization or preview/default-read behavior (FR-003, FR-004)
+- [X] T017 Preserve the explicit dedicated-endpoint deferral decision in feature-local artifacts and avoid adding a new `/report` route in this story (FR-005)
 
 ### Story Validation
 
-- [ ] T018 Rerun the focused unit command from T012 until MM-496 verification passes
-- [ ] T019 Rerun the execution API contract command from T013 until MM-496 verification passes
-- [ ] T020 Run `rg -n "MM-496|DESIGN-REQ-013|DESIGN-REQ-022|DESIGN-REQ-024" specs/248-report-aware-execution-projections docs/tmp/jira-orchestration-inputs/MM-496-moonspec-orchestration-input.md` to verify traceability (FR-008, SC-005)
-- [ ] T021 Escalate to `./tools/test_integration.sh` only if MM-496 implementation crosses the hermetic integration boundary
+- [X] T018 Rerun the focused unit command from T012 until MM-496 verification passes
+- [X] T019 Rerun the execution API contract command from T013 until MM-496 verification passes
+- [X] T020 Run `rg -n "MM-496|DESIGN-REQ-013|DESIGN-REQ-022|DESIGN-REQ-024" specs/248-report-aware-execution-projections docs/tmp/jira-orchestration-inputs/MM-496-moonspec-orchestration-input.md` to verify traceability (FR-008, SC-005)
+- [X] T021 Escalate to `./tools/test_integration.sh` only if MM-496 implementation crosses the hermetic integration boundary
 
 **Checkpoint**: MM-496 execution detail projection behavior is implemented and independently testable, while the dedicated `/report` endpoint remains explicitly deferred.
 
@@ -102,9 +102,9 @@
 
 **Purpose**: Complete final validation and preserve story-level evidence without adding hidden scope.
 
-- [ ] T022 Update `quickstart.md` only if the executed MM-496 verification commands differ from the current plan
-- [ ] T023 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` unless blocked by environment constraints
-- [ ] T024 Run `/moonspec-verify` equivalent for `specs/248-report-aware-execution-projections/` and produce the final verification artifact covering MM-496, FR-001 through FR-008, SC-001 through SC-006, and DESIGN-REQ-013, DESIGN-REQ-022, DESIGN-REQ-024
+- [X] T022 Update `quickstart.md` only if the executed MM-496 verification commands differ from the current plan
+- [X] T023 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` unless blocked by environment constraints
+- [X] T024 Run `/moonspec-verify` equivalent for `specs/248-report-aware-execution-projections/` and produce the final verification artifact covering MM-496, FR-001 through FR-008, SC-001 through SC-006, and DESIGN-REQ-013, DESIGN-REQ-022, DESIGN-REQ-024
 
 ---
 

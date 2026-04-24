@@ -5,8 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
+from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
 SUPPORTED_WORKFLOW_TYPES = (
@@ -1010,6 +1018,27 @@ class StepLedgerSnapshotModel(BaseModel):
     steps: list[StepLedgerRowModel] = Field(default_factory=list, alias="steps")
 
 
+class ExecutionReportProjectionModel(BaseModel):
+    """Bounded report summary surfaced on execution detail responses."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    has_report: bool = Field(..., alias="hasReport")
+    latest_report_ref: ArtifactRefModel | None = Field(None, alias="latestReportRef")
+    latest_report_summary_ref: ArtifactRefModel | None = Field(
+        None, alias="latestReportSummaryRef"
+    )
+    report_type: str | None = Field(None, alias="reportType")
+    report_status: str | None = Field(None, alias="reportStatus")
+    finding_counts: dict[str, int] | None = Field(None, alias="findingCounts")
+    severity_counts: dict[str, int] | None = Field(None, alias="severityCounts")
+
+    @model_serializer(mode="wrap")
+    def _serialize_without_nulls(self, handler):
+        payload = handler(self)
+        return {key: value for key, value in payload.items() if value is not None}
+
+
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
 
@@ -1102,6 +1131,9 @@ class ExecutionModel(BaseModel):
         None, alias="skillRuntime"
     )
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
+    report_projection: ExecutionReportProjectionModel | None = Field(
+        None, alias="reportProjection"
+    )
     actions: ExecutionActionCapabilityModel = Field(
         default_factory=ExecutionActionCapabilityModel, alias="actions"
     )
