@@ -1091,7 +1091,7 @@ async def test_launcher_exposes_explicit_mode_access_and_report_publication_meta
         concurrency_limiter=DockerWorkloadConcurrencyLimiter(fleet_limit=2)
     ).run(validated)
 
-    assert result.metadata["workload"]["dockerMode"] == "unrestricted"
+    assert result.metadata["workload"]["workflowDockerMode"] == "unrestricted"
     assert result.metadata["workload"]["workloadAccess"] == "unrestricted_docker_cli"
     assert result.metadata["workload"]["unrestrictedContainer"] is False
     assert result.metadata["workload"]["unrestrictedDocker"] is True

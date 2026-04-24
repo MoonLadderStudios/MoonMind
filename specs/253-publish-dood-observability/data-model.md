@@ -43,7 +43,7 @@ Validation rules:
 Represents the metadata attached to a Docker-backed workload result for audit and observability.
 
 Fields:
-- `dockerMode`
+- `workflowDockerMode`
 - `workloadAccess`
 - optional `unrestrictedContainer`
 - optional `unrestrictedDocker`

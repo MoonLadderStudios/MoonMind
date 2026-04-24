@@ -1,27 +1,22 @@
 [
   {
-    "id": 3135645849,
+    "id": 3136037593,
     "disposition": "addressed",
-    "rationale": "Updated the task-list test to assert the control deck no longer carries the panel--controls class instead of relying on JSDOM computed-style defaults."
+    "rationale": "Simplified _report_publication_metadata with declared-key comprehensions and guarded declared_outputs access in the MM-504 follow-up commit."
   },
   {
-    "id": 3135645854,
-    "disposition": "addressed",
-    "rationale": "Removed panel--controls from the task-list control-deck markup and deleted the CSS reset block that had only been undoing that shared card treatment."
-  },
-  {
-    "id": 4168083355,
-    "disposition": "addressed",
-    "rationale": "Applied the review’s requested direction by moving the fix into markup and test semantics rather than maintaining CSS overrides."
-  },
-  {
-    "id": 3135664728,
-    "disposition": "addressed",
-    "rationale": "Replaced the hardcoded 38% midpoint with calc(50% + var(--mm-executing-sweep-layer-offset)) in frontend/src/styles/mission-control.css and verified the frontend/unit suites pass."
-  },
-  {
-    "id": 4168107533,
+    "id": 4168576905,
     "disposition": "not-applicable",
-    "rationale": "This top-level review is only a summary of the inline feedback thread; the actionable CSS comment was addressed directly."
+    "rationale": "Top-level review summary only; no separate actionable request beyond the inline comment already addressed."
+  },
+  {
+    "id": 3136058092,
+    "disposition": "addressed",
+    "rationale": "Removed the duplicate dockerMode alias so workflowDockerMode remains the single canonical mode field across launcher metadata, tests, and MM-504 spec artifacts."
+  },
+  {
+    "id": 4168605098,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Codex review wrapper only; the actionable inline feedback was handled separately."
   }
 ]

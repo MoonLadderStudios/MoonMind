@@ -64,7 +64,7 @@ As an operator, I can inspect durable logs, diagnostics, summaries, reports, and
 Acceptance Criteria
 - Given any DooD invocation, when it completes or fails, then MoonMind persists invocation summary, stdout, stderr, diagnostics, exit metadata, and declared outputs as durable artifacts.
 - Given report publication is requested, when the run completes, then declared primary reports follow the shared artifact publication contract.
-- Given unrestricted execution is used, when audit metadata is published, then dockerMode and workloadAccess clearly identify it while dockerHost and secret-looking values remain normalized or redacted.
+- Given unrestricted execution is used, when audit metadata is published, then workflowDockerMode and workloadAccess clearly identify it while dockerHost and secret-looking values remain normalized or redacted.
 - Given operators inspect results, then daemon state, container-local history, and terminal scrollback are not required as the source of truth.
 
 Requirements

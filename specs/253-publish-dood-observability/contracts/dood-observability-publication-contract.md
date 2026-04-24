@@ -38,7 +38,7 @@ Rules:
 ## Audit Metadata Contract
 
 Published workload metadata must provide a bounded operator-facing record that can include:
-- `dockerMode`
+- `workflowDockerMode`
 - `workloadAccess`
 - explicit unrestricted indicators when relevant
 - `profileId`

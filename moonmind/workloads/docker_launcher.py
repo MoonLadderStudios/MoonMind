@@ -279,7 +279,6 @@ def _workload_metadata(
         "toolName": request.request.tool_name,
         "profileId": profile_id,
         "workflowDockerMode": request.ownership.workflow_docker_mode,
-        "dockerMode": request.ownership.workflow_docker_mode,
         "workloadAccess": workload_access,
         "unrestrictedContainer": workload_access == "unrestricted_container",
         "unrestrictedDocker": workload_access == "unrestricted_docker_cli",
@@ -316,7 +315,6 @@ def _helper_metadata(
         "toolName": request.request.tool_name,
         "profileId": request.profile.id,
         "workflowDockerMode": request.ownership.workflow_docker_mode,
-        "dockerMode": request.ownership.workflow_docker_mode,
         "workloadAccess": workload_access,
         "unrestrictedContainer": workload_access == "unrestricted_container",
         "unrestrictedDocker": workload_access == "unrestricted_docker_cli",
@@ -341,27 +339,29 @@ def _report_publication_metadata(
     declared_output_refs: Mapping[str, str],
     missing_declared_outputs: Mapping[str, str],
 ) -> dict[str, object]:
-    primary_declared = "output.primary" in request.request.declared_outputs
-    summary_declared = "output.summary" in request.request.declared_outputs
-    if not primary_declared and not summary_declared:
+    report_keys = {"output.primary", "output.summary"}
+    declared_outputs = request.request.declared_outputs or {}
+    declared_keys = report_keys.intersection(declared_outputs)
+    if not declared_keys:
         return {"status": "not_requested"}
-    published_refs: dict[str, str] = {}
-    if primary_declared and "output.primary" in declared_output_refs:
-        published_refs["output.primary"] = declared_output_refs["output.primary"]
-    if summary_declared and "output.summary" in declared_output_refs:
-        published_refs["output.summary"] = declared_output_refs["output.summary"]
-    missing_outputs: dict[str, str] = {}
-    if primary_declared and "output.primary" in missing_declared_outputs:
-        missing_outputs["output.primary"] = missing_declared_outputs["output.primary"]
-    if summary_declared and "output.summary" in missing_declared_outputs:
-        missing_outputs["output.summary"] = missing_declared_outputs["output.summary"]
+
     metadata: dict[str, object] = {
         "status": "configured",
-        "primaryDeclared": primary_declared,
-        "summaryDeclared": summary_declared,
+        "primaryDeclared": "output.primary" in declared_keys,
+        "summaryDeclared": "output.summary" in declared_keys,
+    }
+    published_refs = {
+        key: declared_output_refs[key]
+        for key in declared_keys
+        if key in declared_output_refs
     }
     if published_refs:
         metadata["publishedRefs"] = published_refs
+    missing_outputs = {
+        key: missing_declared_outputs[key]
+        for key in declared_keys
+        if key in missing_declared_outputs
+    }
     if missing_outputs:
         metadata["missingOutputs"] = missing_outputs
     return metadata
