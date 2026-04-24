@@ -1047,6 +1047,100 @@ async def test_launcher_runs_unrestricted_requests_without_profile_concurrency_m
     )
 
 @pytest.mark.asyncio
+async def test_launcher_exposes_explicit_mode_access_and_report_publication_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-unrestricted-artifacts" / "artifacts" / "docker-cli"
+    primary_report = artifact_dir / "reports" / "result.json"
+    summary_report = artifact_dir / "reports" / "summary.json"
+    primary_report.parent.mkdir(parents=True, exist_ok=True)
+    primary_report.write_text('{\"ok\":true}\n', encoding='utf-8')
+    summary_report.write_text('{\"summary\":true}\n', encoding='utf-8')
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "ps":
+            return _Process(returncode=0, stdout=b"CONTAINER ID\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    registry = _registry(tmp_path, workspace_root=workspace_root)
+    validated = registry.validate_request(
+        UnrestrictedDockerRequest.model_validate(
+            {
+                "toolName": "container.run_docker",
+                "taskRunId": "task-unrestricted-artifacts",
+                "stepId": "docker-cli",
+                "attempt": 1,
+                "repoDir": str(workspace_root / "task-unrestricted-artifacts" / "repo"),
+                "artifactsDir": str(artifact_dir),
+                "command": ["docker", "ps"],
+                "declaredOutputs": {
+                    "output.primary": "reports/result.json",
+                    "output.summary": "reports/summary.json",
+                },
+            }
+        )
+    )
+
+    result = await DockerWorkloadLauncher(
+        concurrency_limiter=DockerWorkloadConcurrencyLimiter(fleet_limit=2)
+    ).run(validated)
+
+    assert result.metadata["workload"]["workflowDockerMode"] == "unrestricted"
+    assert result.metadata["workload"]["workloadAccess"] == "unrestricted_docker_cli"
+    assert result.metadata["workload"]["unrestrictedContainer"] is False
+    assert result.metadata["workload"]["unrestrictedDocker"] is True
+    assert result.metadata["reportPublication"] == {
+        "status": "configured",
+        "primaryDeclared": True,
+        "summaryDeclared": True,
+        "publishedRefs": {
+            "output.primary": str(primary_report.resolve()),
+            "output.summary": str(summary_report.resolve()),
+        },
+    }
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert diagnostics["reportPublication"] == result.metadata["reportPublication"]
+
+
+@pytest.mark.asyncio
+async def test_launcher_redacts_helper_metadata_and_docker_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    docker_host = "tcp://docker.example:2375?token=ghp_helper_secret_value"
+    helper_secret = "token=ghp_helper_stdout_secret"
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=f"{helper_secret}\n".encode("utf-8"))
+        if args[1] == "exec":
+            return _Process(returncode=0, stdout=b"PONG\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setenv("DOCKER_HOST", docker_host)
+
+    result = await DockerWorkloadLauncher().start_helper(
+        _validated_helper_request(tmp_path)
+    )
+
+    metadata_text = json.dumps(result.metadata, sort_keys=True)
+    assert helper_secret not in metadata_text
+    assert docker_host not in metadata_text
+    assert "ghp_helper_secret_value" not in metadata_text
+    assert "[REDACTED]" in result.metadata["stdout"]
+
+
+@pytest.mark.asyncio
 async def test_launcher_enforces_profile_concurrency_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

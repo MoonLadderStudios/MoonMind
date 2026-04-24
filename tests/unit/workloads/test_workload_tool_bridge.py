@@ -340,6 +340,51 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
     }
     assert "session.summary" not in result.outputs["outputRefs"]
 
+@pytest.mark.asyncio
+async def test_workload_tool_handler_preserves_report_publication_metadata() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+
+    class _ReportLauncher(_FakeLauncher):
+        async def run(self, validated: Any) -> WorkloadResult:
+            result = await super().run(validated)
+            result.metadata["workload"]["workloadAccess"] = validated.ownership.workload_access
+            result.metadata["reportPublication"] = {
+                "status": "configured",
+                "primaryDeclared": True,
+            }
+            return result
+
+    launcher = _ReportLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="container.run_workload",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    result = await handler(
+        {
+            "profileId": "local-python",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+            "command": ["python", "-V"],
+        },
+        {"workflow_id": "task-1", "node_id": "step-test"},
+    )
+
+    assert result.outputs["workloadMetadata"]["workloadAccess"] == "profile"
+    assert result.outputs["workloadMetadata"]["reportPublication"] == {
+        "status": "configured",
+        "primaryDeclared": True,
+    }
+    assert result.progress["workloadMetadata"]["reportPublication"] == {
+        "status": "configured",
+        "primaryDeclared": True,
+    }
+
+
 def test_integration_ci_tool_definition_routes_to_docker_workload() -> None:
     definition = build_dood_tool_definition_payload(
         name=INTEGRATION_CI_TOOL,
