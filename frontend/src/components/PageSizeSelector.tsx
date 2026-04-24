@@ -18,7 +18,7 @@ interface PageSizeSelectorProps {
 
 export function PageSizeSelector({ pageSize, onPageSizeChange, disabled }: PageSizeSelectorProps): JSX.Element {
   return (
-    <label className="queue-inline-filter">
+    <label className="queue-page-size-selector">
       Show
       <select
         value={pageSize}

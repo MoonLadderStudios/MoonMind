@@ -314,6 +314,10 @@ describe('Tasks List Entrypoint', () => {
     expect(screen.getByText('Showing all task executions.')).toBeTruthy();
     expect(dataSlab).toBeTruthy();
     expect(dataSlab?.querySelector('.queue-results-toolbar')).toBeTruthy();
+    const pageSizeSelect = screen.getByLabelText('Show');
+    const pageSizeLabel = pageSizeSelect.closest('label');
+    expect(pageSizeLabel?.classList.contains('queue-page-size-selector')).toBe(true);
+    expect(pageSizeLabel?.classList.contains('queue-inline-filter')).toBe(false);
     expect(tableWrapper).toBeTruthy();
     expect(getComputedStyle(tableWrapper as HTMLElement).overflow).toBe('auto');
     expect(getComputedStyle(scheduledHeader as HTMLElement).position).toBe('sticky');
