@@ -21,6 +21,7 @@ type MockTerminal = {
   dispose: ReturnType<typeof vi.fn>;
   getSelection: ReturnType<typeof vi.fn>;
   onData: ReturnType<typeof vi.fn>;
+  focus: ReturnType<typeof vi.fn>;
 };
 
 const { terminalInstances } = vi.hoisted(() => ({
@@ -159,12 +160,13 @@ afterEach(() => {
 });
 
 describe('OAuthTerminalPage clipboard behavior', () => {
-  it('forwards browser paste events from the xterm helper textarea to the terminal bridge', async () => {
+  it('forwards browser paste events from the xterm helper textarea to the terminal bridge once', async () => {
     renderPage();
     const socket = await waitForSocket();
     const terminalSurface = document.querySelector('.oauth-terminal-xterm') as HTMLElement;
     const helperTextarea = terminalSurface.querySelector('textarea') as HTMLTextAreaElement;
     const pasteEvent = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
+    const inputFrame = JSON.stringify({ type: 'input', data: 'oauth-code-123' });
     Object.defineProperty(pasteEvent, 'clipboardData', {
       value: {
         getData: vi.fn(() => 'oauth-code-123'),
@@ -174,9 +176,8 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     helperTextarea.dispatchEvent(pasteEvent);
 
     expect(pasteEvent.defaultPrevented).toBe(true);
-    expect(socket.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'input', data: 'oauth-code-123' }),
-    );
+    expect(socket.send).toHaveBeenCalledWith(inputFrame);
+    expect(socket.send.mock.calls.filter(([payload]) => payload === inputFrame)).toHaveLength(1);
   });
 
   it('leaves Ctrl+V available for the browser paste event', async () => {
@@ -267,5 +268,34 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     expect(
       (screen.getByLabelText('Paste authentication code') as HTMLTextAreaElement).value,
     ).toBe('');
+  });
+
+  it('focuses the xterm instance when the terminal surface is clicked', async () => {
+    renderPage();
+    await waitForSocket();
+    const terminal = currentTerminal();
+    const terminalSurface = document.querySelector('.oauth-terminal-xterm') as HTMLElement;
+
+    fireEvent.click(terminalSurface);
+
+    expect(terminal.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the manually pasted authentication code when the terminal socket is not open', async () => {
+    renderPage();
+    const socket = await waitForSocket();
+    socket.readyState = 0;
+
+    fireEvent.change(screen.getByLabelText('Paste authentication code'), {
+      target: { value: 'manual-auth-code' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send to terminal' }));
+
+    expect(socket.send).not.toHaveBeenCalledWith(
+      JSON.stringify({ type: 'input', data: 'manual-auth-code\n' }),
+    );
+    expect(
+      (screen.getByLabelText('Paste authentication code') as HTMLTextAreaElement).value,
+    ).toBe('manual-auth-code');
   });
 });

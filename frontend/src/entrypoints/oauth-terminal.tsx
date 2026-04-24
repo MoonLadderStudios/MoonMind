@@ -200,6 +200,10 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       pastedInputRef.current?.focus();
       return;
     }
+    if (socketRef.current?.readyState !== WebSocket.OPEN) {
+      pastedInputRef.current?.focus();
+      return;
+    }
     const input = pastedInput.endsWith('\n') ? pastedInput : `${pastedInput}\n`;
     sendTerminalInput(input);
     setPastedInput('');
@@ -261,19 +265,6 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
     fitAddon.fit();
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
-    const terminalInputElement = terminalElement.querySelector(
-      '.xterm-helper-textarea, textarea',
-    ) as HTMLElement | null;
-    const focusTerminalInput = () => {
-      if (
-        terminalInputElement &&
-        typeof (terminalInputElement as HTMLTextAreaElement).focus === 'function'
-      ) {
-        (terminalInputElement as HTMLTextAreaElement).focus();
-        return;
-      }
-      terminal.focus();
-    };
 
     const copySelectionListener = (event: ClipboardEvent) => {
       const selectedText = terminal.getSelection();
@@ -293,7 +284,6 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       sendTerminalInput(pastedText);
     };
     terminalElement.addEventListener('paste', pasteListener, true);
-    terminalInputElement?.addEventListener('paste', pasteListener, true);
     const keydownListener = (event: KeyboardEvent) => {
       const usesShortcutModifier = event.metaKey || event.ctrlKey;
       if (!usesShortcutModifier) {
@@ -311,9 +301,8 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       }
     };
     terminalElement.addEventListener('keydown', keydownListener);
-    terminalInputElement?.addEventListener('keydown', keydownListener);
     const clickListener = () => {
-      focusTerminalInput();
+      terminal.focus();
     };
     terminalElement.addEventListener('click', clickListener);
     const contextMenuListener = (event: MouseEvent) => {
@@ -353,9 +342,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         window.removeEventListener('resize', resizeListener);
         terminalElement.removeEventListener('copy', copySelectionListener);
         terminalElement.removeEventListener('paste', pasteListener, true);
-        terminalInputElement?.removeEventListener('paste', pasteListener, true);
         terminalElement.removeEventListener('keydown', keydownListener);
-        terminalInputElement?.removeEventListener('keydown', keydownListener);
         terminalElement.removeEventListener('click', clickListener);
         terminalElement.removeEventListener('contextmenu', contextMenuListener);
         terminal.dispose();
@@ -462,9 +449,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       window.removeEventListener('resize', resizeListener);
       terminalElement.removeEventListener('copy', copySelectionListener);
       terminalElement.removeEventListener('paste', pasteListener, true);
-      terminalInputElement?.removeEventListener('paste', pasteListener, true);
       terminalElement.removeEventListener('keydown', keydownListener);
-      terminalInputElement?.removeEventListener('keydown', keydownListener);
       terminalElement.removeEventListener('click', clickListener);
       terminalElement.removeEventListener('contextmenu', contextMenuListener);
       inputDisposable.dispose();
