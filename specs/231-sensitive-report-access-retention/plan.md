@@ -20,7 +20,7 @@ Resume the existing runtime story in `specs/231-sensitive-report-access-retentio
 | FR-007 | verified | `TemporalArtifactService.unpin` restores report-derived retention. | Preserve MM-495 traceability in artifacts. | unit |
 | FR-008 | verified | Existing artifact lifecycle path performs soft/hard deletion. | Preserve MM-495 traceability in artifacts. | integration_ci |
 | FR-009 | verified | Integration coverage proves report deletion does not mutate unrelated observability artifacts. | Preserve MM-495 traceability in artifacts. | integration_ci |
-| FR-010 | partial | MM-495 is preserved in the new orchestration input, but stale downstream artifacts still referenced MM-463 before this alignment pass. | Update spec, plan, tasks, quickstart, checklist, and verification artifacts. | traceability |
+| FR-010 | verified | MM-495 is preserved across the orchestration input and aligned downstream MoonSpec artifacts. | Keep traceability verification current. | traceability |
 | DESIGN-REQ-011 | verified | Report metadata validation and bounded metadata tests. | Keep mapped evidence in verification. | unit |
 | DESIGN-REQ-017 | verified | Existing authorization plus preview/default-read behavior. | Keep mapped evidence in verification. | unit |
 | DESIGN-REQ-018 | verified | Existing retention, pin/unpin, and lifecycle coverage. | Keep mapped evidence in verification. | unit + integration_ci |
