@@ -586,6 +586,7 @@ describe('Mission Control shared entry', () => {
     expect(pageSizeSelectorBlock).toContain('background: transparent');
     expect(pageSizeSelectorBlock).toContain('border: 0');
     expect(pageSizeSelectorBlock).toContain('box-shadow: none');
+    expect(pageSizeSelectorBlock).toContain('transition: var(--mm-control-transition)');
 
     const filterChipBlock = cssRuleBlock(missionControlCss, '.task-list-filter-chip {');
     expect(filterChipBlock).toContain('background: var(--mm-control-shell)');

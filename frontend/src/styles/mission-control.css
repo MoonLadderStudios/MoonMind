@@ -3065,6 +3065,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   border: 0;
   background: transparent;
   box-shadow: none;
+  transition: var(--mm-control-transition);
 }
 
 .queue-page-size-selector:has(select:disabled) {
