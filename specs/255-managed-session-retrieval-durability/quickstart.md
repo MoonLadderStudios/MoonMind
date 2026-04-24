@@ -40,7 +40,7 @@ Preferred hermetic path when compatible with the final implementation:
 If MM-507 requires focused workflow/runtime-boundary proof that is intentionally outside `integration_ci`, run targeted Temporal integration tests such as:
 
 ```bash
-pytest tests/integration/workflows/temporal/test_managed_session_retrieval_context.py -q --tb=short
+pytest tests/integration/workflows/temporal/test_managed_session_retrieval_durability.py -q --tb=short
 ```
 
 Expected use:

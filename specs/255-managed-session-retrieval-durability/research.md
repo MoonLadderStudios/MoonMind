@@ -11,7 +11,7 @@ Test implications: add unit and integration verification that durable artifact/r
 ## FR-002 / DESIGN-REQ-011 - Large retrieved bodies remain behind artifact/ref publication surfaces
 
 Decision: implemented_unverified; verify the existing compact-metadata behavior first, then change code only if reset-era tests show payload discipline regresses across continuity boundaries.
-Evidence: `moonmind/rag/context_injection.py` stores the full `ContextPack` JSON under `artifacts/context/` and records only relative artifact path, transport, and item count in request metadata; `tests/unit/rag/test_context_injection.py` and `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` already assert compact artifact refs at startup.
+Evidence: `moonmind/rag/context_injection.py` stores the full `ContextPack` JSON under `artifacts/context/` and records only relative artifact path, transport, and item count in request metadata; `tests/unit/rag/test_context_injection.py` and `tests/integration/workflows/temporal/test_managed_session_retrieval_durability.py` already assert compact artifact refs at startup.
 Rationale: Startup proof exists, but MM-507 needs explicit confirmation that the same compactness discipline still holds when a session is reset or reattached.
 Alternatives considered: Redesign metadata publication immediately. Rejected because the current structure already looks correct and should be verified before it is changed.
 Test implications: add reset-aware unit or integration assertions that durable workflow/runtime metadata stays compact while large retrieved bodies remain in artifacts.
@@ -35,7 +35,7 @@ Test implications: add verification-first tests for the selected recovery path a
 ## FR-005 / DESIGN-REQ-023 - Runtime-neutral durability contract across runtimes
 
 Decision: partial; keep the durability contract shared across Codex and future runtimes and verify it at the managed-runtime boundary rather than encoding runtime-specific persistence rules.
-Evidence: Codex and Claude already share `ContextInjectionService` at startup through `moonmind/workflows/temporal/runtime/strategies/codex_cli.py` and `moonmind/workflows/temporal/runtime/strategies/claude_code.py`; `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` verifies shared startup publication but not shared reset-era semantics.
+Evidence: Codex and Claude already share `ContextInjectionService` at startup through `moonmind/workflows/temporal/runtime/strategies/codex_cli.py` and `moonmind/workflows/temporal/runtime/strategies/claude_code.py`; `tests/integration/workflows/temporal/test_managed_session_retrieval_durability.py` verifies shared startup publication but not shared reset-era semantics.
 Rationale: The startup contract is already shared, so MM-507 should preserve that shape while extending continuity semantics without introducing a Codex-only recovery model.
 Alternatives considered: Solve durability only for Codex. Rejected because the source design and managed-session architecture explicitly treat durability truth as a shared MoonMind concern.
 Test implications: add boundary tests or contract assertions that avoid runtime-specific persistence behavior in externally visible semantics.
@@ -56,7 +56,7 @@ Rationale: Much of MM-507 is already partially implemented as infrastructure. Th
 Alternatives considered: implementation-first planning. Rejected because it risks altering already-correct artifact publication and startup code without proving the real continuity gap.
 Test implications:
 - Unit: extend `tests/unit/rag/test_context_injection.py`, `tests/unit/services/temporal/runtime/test_managed_session_controller.py`, `tests/unit/services/temporal/runtime/test_launcher.py`, `tests/unit/workflows/temporal/runtime/strategies/test_remaining_strategies.py`, and `tests/unit/workflows/temporal/test_agent_runtime_activities.py`.
-- Integration: extend `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` or add a dedicated reset-continuity scenario under `tests/integration/workflows/temporal/` to prove recovery behavior and compact durable-state handling.
+- Integration: extend `tests/integration/workflows/temporal/test_managed_session_retrieval_durability.py` or add a dedicated reset-continuity scenario under `tests/integration/workflows/temporal/` to prove recovery behavior and compact durable-state handling.
 
 ## Planning Tooling Constraint
 
