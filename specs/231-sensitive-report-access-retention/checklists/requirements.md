@@ -1,7 +1,7 @@
-# Specification Quality Checklist: Sensitive Report Access and Retention
+# Specification Quality Checklist: Apply Report Access and Lifecycle Policy
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
-**Created**: 2026-04-22  
+**Created**: 2026-04-24  
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -16,9 +16,9 @@
 - [X] No [NEEDS CLARIFICATION] markers remain
 - [X] Exactly one user story is defined
 - [X] Requirements are testable and unambiguous
-- [X] Runtime intent describes system behavior rather than docs-only changes, unless docs-only was explicitly requested
+- [X] Runtime intent describes system behavior rather than docs-only changes
 - [X] Success criteria are measurable
-- [X] Success criteria are technology-agnostic (no implementation details)
+- [X] Success criteria are technology-agnostic
 - [X] All acceptance scenarios are defined
 - [X] Independent Test describes how the story can be validated end-to-end
 - [X] Acceptance scenarios are concrete enough to derive unit and integration tests
@@ -36,5 +36,6 @@
 
 ## Notes
 
-- PASS: MM-463 is classified as a single-story runtime feature request.
-- PASS: DESIGN-REQ-015, DESIGN-REQ-016, and DESIGN-REQ-022 are mapped to functional requirements and success criteria.
+- PASS: MM-495 is preserved as the canonical Jira input for this single-story runtime feature request.
+- PASS: DESIGN-REQ-011, DESIGN-REQ-017, and DESIGN-REQ-018 are mapped to functional requirements and success criteria.
+- PASS: Resume behavior is explicit: existing implementation artifacts were reused and only stale MoonSpec traceability was realigned.

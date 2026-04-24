@@ -1,4 +1,4 @@
-# Tasks: Sensitive Report Access and Retention
+# Tasks: Apply Report Access and Lifecycle Policy
 
 **Input**: `specs/231-sensitive-report-access-retention/spec.md`  
 **Plan**: `specs/231-sensitive-report-access-retention/plan.md`  
@@ -9,64 +9,56 @@
 
 ## Source Traceability
 
-- Jira: MM-463
-- Story: Preserve sensitive report access and retention.
+- Jira: MM-495
+- Story: Apply report access and lifecycle policy.
 - Story count: exactly one independently testable story from `spec.md`.
-- Independent test: create sensitive report artifacts and validate preview/default-read behavior, report-aware retention defaults, pin/unpin restoration, and no deletion cascade to observability artifacts.
-- Requirements: FR-001 through FR-010; SC-001 through SC-006.
-- Source design coverage: DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-022.
-- Requirement statuses from plan: FR-004 and FR-005 are missing; FR-007 is partial; FR-001, FR-002, FR-003, FR-006, FR-008, FR-009, FR-010, DESIGN-REQ-015, and DESIGN-REQ-022 are implemented_unverified; DESIGN-REQ-016 is partial.
+- Independent test: create sensitive report artifacts and validate preview/default-read behavior, bounded report metadata, report-aware retention defaults, pin/unpin restoration, and no deletion cascade to observability artifacts.
+- Requirements: FR-001 through FR-010; SC-001 through SC-007.
+- Source design coverage: DESIGN-REQ-011, DESIGN-REQ-017, DESIGN-REQ-018.
+- Resume note: Existing implementation and tests were already complete; this pass updated the MoonSpec artifacts so the canonical source input and downstream traceability preserve MM-495.
 
-## Phase 1: Setup
+## Phase 1: Resume And Context
 
-- [X] T001 Confirm active feature context points to `specs/231-sensitive-report-access-retention` in `.specify/feature.json` (MM-463).
-- [X] T002 Inspect existing artifact service retention, preview/default-read, pin/unpin, and deletion behavior in `moonmind/workflows/temporal/artifacts.py` (FR-001 through FR-009).
-- [X] T003 Inspect existing report contract helpers in `moonmind/workflows/temporal/report_artifacts.py` and artifact tests in `tests/unit/workflows/temporal/test_artifacts.py`, `tests/unit/workflows/temporal/test_artifact_authorization.py`, and `tests/integration/temporal/test_temporal_artifact_lifecycle.py` (DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-022).
+- [X] T001 Confirm the canonical Jira brief is `docs/tmp/jira-orchestration-inputs/MM-495-moonspec-orchestration-input.md` and the active feature directory is `specs/231-sensitive-report-access-retention`.
+- [X] T002 Inspect existing artifact service behavior in `moonmind/workflows/temporal/artifacts.py` and `moonmind/workflows/temporal/report_artifacts.py` for authorization, metadata validation, retention, pin/unpin, and deletion boundaries.
+- [X] T003 Inspect existing evidence in `tests/unit/workflows/temporal/test_artifacts.py`, `tests/unit/workflows/temporal/test_artifact_authorization.py`, and `tests/integration/temporal/test_temporal_artifact_lifecycle.py`.
 
-## Phase 2: Foundational Tests
+## Phase 2: Existing Validation Evidence
 
-Unit test plan: focused artifact service tests cover report retention defaults, pin/unpin restoration, restricted raw denial, and preview/default-read policy.
+Unit test evidence covers report metadata validation, restricted preview/default-read behavior, retention defaults, and unpin restoration.
+Integration evidence covers report deletion without cascade to observability artifacts.
 
-Integration test plan: a compose-compatible lifecycle regression covers report deletion with unrelated observability artifacts linked to the same execution.
+- [X] T004 Confirm unit coverage for bounded and safe report metadata validation (FR-003, SC-002, DESIGN-REQ-011).
+- [X] T005 Confirm unit coverage for restricted report metadata/default-read behavior and raw presign denial (FR-001, FR-002, FR-004, SC-001, DESIGN-REQ-017).
+- [X] T006 Confirm unit coverage for `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, and `report.export` long retention plus `report.structured`/`report.evidence` non-observability retention defaults (FR-005, FR-006, SC-003, SC-004, DESIGN-REQ-018).
+- [X] T007 Confirm unit coverage for pin then unpin restoring report-derived retention (FR-007, SC-005, DESIGN-REQ-018).
+- [X] T008 Confirm integration coverage for deleting a report artifact without mutating unrelated observability artifacts (FR-008, FR-009, SC-006, DESIGN-REQ-018).
 
-- [X] T004 [P] Add failing unit test in `tests/unit/workflows/temporal/test_artifacts.py` proving `report.primary` and `report.summary` default to `long` retention without explicit override (FR-004, FR-005, SC-002, DESIGN-REQ-016).
-- [X] T005 [P] Add unit regression in `tests/unit/workflows/temporal/test_artifacts.py` proving `report.structured` and `report.evidence` default to `standard` and explicit `long` retention is honored (FR-006, SC-003, DESIGN-REQ-016).
-- [X] T006 [P] Add failing unit test in `tests/unit/workflows/temporal/test_artifacts.py` proving pin then unpin of `report.primary` restores report-derived `long` retention (FR-007, SC-004, DESIGN-REQ-016).
-- [X] T007 [P] Add unit test in `tests/unit/workflows/temporal/test_artifact_authorization.py` proving restricted report metadata uses preview `default_read_ref` for a metadata-readable caller without raw access and raw presign remains denied (FR-001, FR-002, FR-003, SC-001, DESIGN-REQ-015).
-- [X] T008 [P] Add integration regression in `tests/integration/temporal/test_temporal_artifact_lifecycle.py` proving deleting a report artifact does not delete unrelated runtime observability artifacts for the same execution (FR-008, FR-009, SC-005, DESIGN-REQ-022).
-- [X] T009 Run focused tests for T004-T008 and capture red-first evidence before production changes. Red-first evidence: `pytest tests/unit/workflows/temporal/test_artifacts.py tests/unit/workflows/temporal/test_artifact_authorization.py tests/integration/temporal/test_temporal_artifact_lifecycle.py -q --tb=short` failed before production changes with `report.primary`/`report.summary` retaining `standard` instead of `long`.
+## Phase 3: Artifact Alignment
 
-## Phase 3: Implementation
-
-- [X] T010 Update `_derive_retention` in `moonmind/workflows/temporal/artifacts.py` so `report.primary` and `report.summary` default to `long`, while `report.structured` and `report.evidence` default to `standard` unless explicitly overridden (FR-004, FR-005, FR-006).
-- [X] T011 Update `TemporalArtifactService.unpin` in `moonmind/workflows/temporal/artifacts.py` to restore retention from existing artifact link types when a pinned report artifact is unpinned (FR-007).
-- [X] T012 Keep deletion code artifact-native in `moonmind/workflows/temporal/artifacts.py`; only change deletion code if T008 exposes a report-specific cascade defect (FR-008, FR-009).
+- [X] T009 Update `spec.md` to use the MM-495 Jira preset brief as the canonical input, preserve runtime mode, classify the request correctly, and record resume-from-existing-artifacts behavior.
+- [X] T010 Update `plan.md`, `research.md`, `contracts/`, `quickstart.md`, and the requirements checklist so downstream artifacts map to MM-495 and DESIGN-REQ-011/017/018.
+- [X] T011 Update `tasks.md` and `verification.md` so traceability, requirement mapping, and final evidence preserve MM-495 instead of MM-463.
+- [X] T012 Update `.specify/feature.json` to point the active feature context at `specs/231-sensitive-report-access-retention` for this resumed story.
 
 ## Phase 4: Validation
 
-- [X] T013 Run `./tools/test_unit.sh tests/unit/workflows/temporal/test_artifacts.py tests/unit/workflows/temporal/test_artifact_authorization.py` and fix failures (FR-001 through FR-007). Evidence: 46 Python tests passed; the unit runner also completed 367 frontend tests.
-- [X] T014 Run `pytest tests/integration/temporal/test_temporal_artifact_lifecycle.py -m integration_ci -q --tb=short` and fix failures, or run `./tools/test_integration.sh` when Docker Compose is required and available (FR-008, FR-009). Evidence: included in focused pytest command; final post-fix result was 48 passed.
-- [X] T015 Run traceability check `rg -n "MM-463|DESIGN-REQ-015|DESIGN-REQ-016|DESIGN-REQ-022" specs/231-sensitive-report-access-retention docs/tmp/jira-orchestration-inputs/MM-463-moonspec-orchestration-input.md` (FR-010, SC-006).
-- [X] T016 Run final `./tools/test_unit.sh` unless blocked by environment constraints. Evidence: 3,766 Python tests passed, 1 xpassed, 16 subtests passed; 367 frontend tests passed.
+- [X] T013 Run traceability check `rg -n "MM-495|DESIGN-REQ-011|DESIGN-REQ-017|DESIGN-REQ-018" specs/231-sensitive-report-access-retention docs/tmp/jira-orchestration-inputs/MM-495-moonspec-orchestration-input.md` and confirm the updated artifact set preserves the new Jira key and source design IDs.
+- [X] T014 Reuse existing focused unit and integration evidence because production code did not change during this alignment pass; record that decision in `verification.md`.
 
 ## Phase 5: Verify
 
-- [X] T017 Run `/speckit.verify` equivalent through `moonspec-verify` for `specs/231-sensitive-report-access-retention/spec.md` and record verdict in `specs/231-sensitive-report-access-retention/verification.md`.
-- [X] T018 Mark completed tasks `[X]` only after implementation and verification evidence exists.
+- [X] T015 Update the final verification report for `specs/231-sensitive-report-access-retention/spec.md` so the verdict and evidence reference MM-495.
+- [X] T016 Keep all completed tasks marked `[X]` only where evidence exists in tests or aligned artifacts.
 
 ## Dependencies And Order
 
-1. Setup tasks T001-T003.
-2. Failing tests T004-T009.
-3. Implementation T010-T012.
-4. Focused and final validation T013-T016.
-5. Final verification T017-T018.
-
-## Parallel Work
-
-- T004-T008 can be authored in parallel because they touch different test cases.
-- T010 and T011 can be implemented after red-first evidence exists.
+1. Resume and inspect the existing feature artifacts and evidence.
+2. Confirm the implementation already satisfies MM-495 runtime behavior.
+3. Realign spec/plan/tasks/verification artifacts to MM-495.
+4. Run the updated traceability check.
+5. Record the final verification state.
 
 ## Implementation Strategy
 
-Start with service-boundary tests. Keep authorization, preview, pin, and deletion APIs unchanged unless tests expose a defect. The expected production change is limited to retention derivation and unpin restoration; deletion should remain artifact-native.
+Do not regenerate completed implementation work. Reuse the existing `specs/231-sensitive-report-access-retention` feature directory, preserve the validated code and test evidence, and realign the MoonSpec artifacts so MM-495 is the canonical input for this story.
