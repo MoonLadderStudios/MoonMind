@@ -33,6 +33,7 @@ _CODEX_CREDENTIAL_PATHS = (
 )
 
 _CLAUDE_CREDENTIAL_PATHS = (
+    ".credentials.json",
     "credentials.json",
     "settings.json",
 )
@@ -86,6 +87,7 @@ def _build_credential_check_command(
         )
 
     if runtime_id == "claude_code":
+        dot_credentials_path = shlex.quote(f"{mount_path}/.credentials.json")
         credentials_path = shlex.quote(f"{mount_path}/credentials.json")
         settings_path = shlex.quote(f"{mount_path}/settings.json")
         settings_evidence_pattern = (
@@ -97,6 +99,11 @@ def _build_credential_check_command(
         )
         return " && ".join(
             (
+                (
+                    f"( test -s {dot_credentials_path} "
+                    '&& echo "FOUND:.credentials.json" ) '
+                    '|| echo "MISSING:.credentials.json"'
+                ),
                 (
                     f"( test -s {credentials_path} "
                     '&& echo "FOUND:credentials.json" ) '
