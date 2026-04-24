@@ -40,7 +40,7 @@ Preferred hermetic path when compatible with the final implementation:
 If MM-505 requires a focused workflow-boundary scenario that is intentionally outside `integration_ci`, run a targeted Temporal integration test such as:
 
 ```bash
-pytest tests/integration/workflows/temporal -k managed_session_retrieval_context -q --tb=short
+pytest tests/integration/workflows/temporal/test_managed_session_retrieval_context.py -q --tb=short
 ```
 
 Expected use:
