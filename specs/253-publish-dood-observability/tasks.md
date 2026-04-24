@@ -21,8 +21,8 @@
 
 **Purpose**: Confirm the MM-504 source brief, planning artifacts, and runtime surfaces before verification work begins.
 
-- [ ] T001 Confirm `spec.md` (Input), `specs/253-publish-dood-observability/spec.md`, `specs/253-publish-dood-observability/plan.md`, `specs/253-publish-dood-observability/research.md`, `specs/253-publish-dood-observability/data-model.md`, `specs/253-publish-dood-observability/contracts/dood-observability-publication-contract.md`, and `specs/253-publish-dood-observability/quickstart.md` remain the canonical MM-504 artifact set for FR-007 and SC-007
-- [ ] T002 Confirm the MM-504 runtime touchpoints in `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workloads/registry.py`, `moonmind/workflows/temporal/artifacts.py`, `moonmind/workflows/temporal/report_artifacts.py`, `moonmind/workflows/temporal/activity_runtime.py`, `moonmind/workflows/temporal/workflows/run.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/unit/api/routers/test_task_runs.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py`
+- [X] T001 Confirm `spec.md` (Input), `specs/253-publish-dood-observability/spec.md`, `specs/253-publish-dood-observability/plan.md`, `specs/253-publish-dood-observability/research.md`, `specs/253-publish-dood-observability/data-model.md`, `specs/253-publish-dood-observability/contracts/dood-observability-publication-contract.md`, and `specs/253-publish-dood-observability/quickstart.md` remain the canonical MM-504 artifact set for FR-007 and SC-007
+- [X] T002 Confirm the MM-504 runtime touchpoints in `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workloads/registry.py`, `moonmind/workflows/temporal/artifacts.py`, `moonmind/workflows/temporal/report_artifacts.py`, `moonmind/workflows/temporal/activity_runtime.py`, `moonmind/workflows/temporal/workflows/run.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/unit/api/routers/test_task_runs.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py`
 
 ---
 
@@ -30,8 +30,8 @@
 
 **Purpose**: Lock the verification scope and prerequisites before story execution.
 
-- [ ] T003 Confirm `specs/253-publish-dood-observability/` needs no migration or new persistent storage because MM-504 is a runtime publication and verification story bounded to existing artifact-backed outputs
-- [ ] T004 Confirm `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/unit/api/routers/test_task_runs.py`, `tests/integration/temporal/test_profile_backed_workload_contract.py`, `tests/integration/temporal/test_integration_ci_tool_contract.py`, and `tests/integration/temporal/test_temporal_artifact_lifecycle.py` are the correct validation surfaces for FR-001 through FR-006 and DESIGN-REQ-021/022
+- [X] T003 Confirm `specs/253-publish-dood-observability/` needs no migration or new persistent storage because MM-504 is a runtime publication and verification story bounded to existing artifact-backed outputs
+- [X] T004 Confirm `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/unit/api/routers/test_task_runs.py`, `tests/integration/temporal/test_profile_backed_workload_contract.py`, `tests/integration/temporal/test_integration_ci_tool_contract.py`, and `tests/integration/temporal/test_temporal_artifact_lifecycle.py` are the correct validation surfaces for FR-001 through FR-006 and DESIGN-REQ-021/022
 
 **Checkpoint**: Foundation ready - story verification work can now begin.
 
@@ -55,15 +55,15 @@
 
 ### Unit Tests (write first) ⚠️
 
-- [ ] T005 [P] Add failing unit tests for FR-001, FR-005, SC-001, SC-004, DESIGN-REQ-021, and DESIGN-REQ-022 in `tests/unit/workloads/test_docker_workload_launcher.py` covering durable stdout/stderr/diagnostics publication, partial publication failure metadata, docker-host normalization, and redaction of secret-like values in published outputs
-- [ ] T006 [P] Add failing unit tests for FR-002, FR-004, SC-002, SC-003, DESIGN-REQ-021, and DESIGN-REQ-022 in `tests/unit/workloads/test_workload_tool_bridge.py` covering declared primary report publication semantics, bounded workload access metadata, and explicit unrestricted markers for representative Docker-backed tools
+- [X] T005 [P] Add failing unit tests for FR-001, FR-005, SC-001, SC-004, DESIGN-REQ-021, and DESIGN-REQ-022 in `tests/unit/workloads/test_docker_workload_launcher.py` covering durable stdout/stderr/diagnostics publication, partial publication failure metadata, docker-host normalization, and redaction of secret-like values in published outputs
+- [X] T006 [P] Add failing unit tests for FR-002, FR-004, SC-002, SC-003, DESIGN-REQ-021, and DESIGN-REQ-022 in `tests/unit/workloads/test_workload_tool_bridge.py` covering declared primary report publication semantics, bounded workload access metadata, and explicit unrestricted markers for representative Docker-backed tools
 - [ ] T007 [P] Add failing unit tests for FR-003, FR-006, SC-005, SC-006, and DESIGN-REQ-021 in `tests/unit/api/routers/test_task_runs.py` and `tests/unit/workflows/temporal/test_report_workflow_rollout.py` covering operator-visible artifact inspection and artifact-class consistency across supported Docker-backed publication paths
 - [ ] T008 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/api/routers/test_task_runs.py` to confirm T005-T007 fail for the expected MM-504 reason before any production changes
 
 ### Integration Tests (write first) ⚠️
 
 - [ ] T009 Add a failing hermetic integration test for FR-001, FR-003, SC-001, SC-005, and DESIGN-REQ-021 in `tests/integration/temporal/test_profile_backed_workload_contract.py` covering durable workload artifact publication and operator-inspectable results for profile-backed Docker-backed execution
-- [ ] T010 Add a failing hermetic integration test for FR-002, FR-004, FR-005, FR-006, SC-002, SC-003, SC-004, SC-006, DESIGN-REQ-021, and DESIGN-REQ-022 in `tests/integration/temporal/test_integration_ci_tool_contract.py` and `tests/integration/temporal/test_temporal_artifact_lifecycle.py` covering shared report publication semantics, bounded workload metadata, redaction behavior, and artifact-class consistency through the trusted workload plane
+- [X] T010 Add a failing hermetic integration test for FR-002, FR-004, FR-005, FR-006, SC-002, SC-003, SC-004, SC-006, DESIGN-REQ-021, and DESIGN-REQ-022 in `tests/integration/temporal/test_integration_ci_tool_contract.py` and `tests/integration/temporal/test_temporal_artifact_lifecycle.py` covering shared report publication semantics, bounded workload metadata, redaction behavior, and artifact-class consistency through the trusted workload plane
 - [ ] T011 Run `./tools/test_integration.sh` and record the MM-504-specific failure surface from T009-T010 before any production changes
 
 ### Red-First Confirmation
@@ -72,15 +72,15 @@
 
 ### Conditional Fallback Implementation (only if verification fails) ⚠️
 
-- [ ] T013 Conditionally update `moonmind/workloads/docker_launcher.py` for FR-001, FR-004, FR-005, DESIGN-REQ-021, and DESIGN-REQ-022 only if T008-T012 show gaps in durable artifact publication, workload metadata, or redaction behavior
-- [ ] T014 Conditionally update `moonmind/workloads/tool_bridge.py` and `moonmind/workloads/registry.py` for FR-002, FR-004, SC-002, SC-003, and DESIGN-REQ-021/022 only if T008-T012 show missing declared-report publication semantics or incomplete workload access / unrestricted metadata
+- [X] T013 Conditionally update `moonmind/workloads/docker_launcher.py` for FR-001, FR-004, FR-005, DESIGN-REQ-021, and DESIGN-REQ-022 only if T008-T012 show gaps in durable artifact publication, workload metadata, or redaction behavior
+- [X] T014 Conditionally update `moonmind/workloads/tool_bridge.py` and `moonmind/workloads/registry.py` for FR-002, FR-004, SC-002, SC-003, and DESIGN-REQ-021/022 only if T008-T012 show missing declared-report publication semantics or incomplete workload access / unrestricted metadata
 - [ ] T015 Conditionally update `moonmind/workflows/temporal/artifacts.py`, `moonmind/workflows/temporal/report_artifacts.py`, `moonmind/workflows/temporal/activity_runtime.py`, and `moonmind/workflows/temporal/workflows/run.py` for FR-003, FR-006, SC-005, SC-006, and DESIGN-REQ-021 only if T008-T012 show artifact-class or operator-inspection drift at the Temporal boundary
 
 ### Story Validation
 
-- [ ] T016 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/api/routers/test_task_runs.py` and confirm MM-504 unit evidence passes together
-- [ ] T017 Run `./tools/test_integration.sh`, record any exact environment blocker, and confirm MM-504 artifact publication and inspection evidence is green or narrowed to a precise remaining gap
-- [ ] T018 Review `specs/253-publish-dood-observability/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/dood-observability-publication-contract.md`, `quickstart.md`, and `spec.md` (Input) to confirm FR-007 and SC-007 preserve MM-504 and the original Jira preset brief across downstream artifacts
+- [X] T016 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/api/routers/test_task_runs.py` and confirm MM-504 unit evidence passes together
+- [X] T017 Run `./tools/test_integration.sh`, record any exact environment blocker, and confirm MM-504 artifact publication and inspection evidence is green or narrowed to a precise remaining gap
+- [X] T018 Review `specs/253-publish-dood-observability/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/dood-observability-publication-contract.md`, `quickstart.md`, and `spec.md` (Input) to confirm FR-007 and SC-007 preserve MM-504 and the original Jira preset brief across downstream artifacts
 
 **Checkpoint**: MM-504 is complete when Docker-backed workloads publish durable observability evidence, shared report semantics, and redacted audit metadata through existing runtime boundaries, the focused unit and hermetic integration evidence is green, and the canonical artifact set preserves the Jira source brief.
 

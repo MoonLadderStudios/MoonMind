@@ -271,6 +271,7 @@ def _workload_metadata(
 ) -> dict[str, object]:
     image_ref = request.profile.image if request.profile is not None else getattr(request.request, "image", None)
     profile_id = request.profile.id if request.profile is not None else None
+    workload_access = request.ownership.workload_access
     return {
         "taskRunId": request.request.task_run_id,
         "stepId": request.request.step_id,
@@ -278,6 +279,10 @@ def _workload_metadata(
         "toolName": request.request.tool_name,
         "profileId": profile_id,
         "workflowDockerMode": request.ownership.workflow_docker_mode,
+        "dockerMode": request.ownership.workflow_docker_mode,
+        "workloadAccess": workload_access,
+        "unrestrictedContainer": workload_access == "unrestricted_container",
+        "unrestrictedDocker": workload_access == "unrestricted_docker_cli",
         "imageRef": image_ref,
         "containerName": request.container_name,
         "identityKind": request.ownership.kind,
@@ -303,6 +308,7 @@ def _helper_metadata(
     teardown: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     ttl_seconds = request.request.ttl_seconds or request.profile.helper_ttl_seconds
+    workload_access = request.ownership.workload_access
     return {
         "taskRunId": request.request.task_run_id,
         "stepId": request.request.step_id,
@@ -310,6 +316,10 @@ def _helper_metadata(
         "toolName": request.request.tool_name,
         "profileId": request.profile.id,
         "workflowDockerMode": request.ownership.workflow_docker_mode,
+        "dockerMode": request.ownership.workflow_docker_mode,
+        "workloadAccess": workload_access,
+        "unrestrictedContainer": workload_access == "unrestricted_container",
+        "unrestrictedDocker": workload_access == "unrestricted_docker_cli",
         "imageRef": request.profile.image,
         "containerName": request.container_name,
         "identityKind": request.ownership.kind,
@@ -324,6 +334,38 @@ def _helper_metadata(
         "readiness": dict(readiness or {}),
         "teardown": dict(teardown or {}),
     }
+
+def _report_publication_metadata(
+    request: ValidatedWorkloadRequest,
+    *,
+    declared_output_refs: Mapping[str, str],
+    missing_declared_outputs: Mapping[str, str],
+) -> dict[str, object]:
+    primary_declared = "output.primary" in request.request.declared_outputs
+    summary_declared = "output.summary" in request.request.declared_outputs
+    if not primary_declared and not summary_declared:
+        return {"status": "not_requested"}
+    published_refs: dict[str, str] = {}
+    if primary_declared and "output.primary" in declared_output_refs:
+        published_refs["output.primary"] = declared_output_refs["output.primary"]
+    if summary_declared and "output.summary" in declared_output_refs:
+        published_refs["output.summary"] = declared_output_refs["output.summary"]
+    missing_outputs: dict[str, str] = {}
+    if primary_declared and "output.primary" in missing_declared_outputs:
+        missing_outputs["output.primary"] = missing_declared_outputs["output.primary"]
+    if summary_declared and "output.summary" in missing_declared_outputs:
+        missing_outputs["output.summary"] = missing_declared_outputs["output.summary"]
+    metadata: dict[str, object] = {
+        "status": "configured",
+        "primaryDeclared": primary_declared,
+        "summaryDeclared": summary_declared,
+    }
+    if published_refs:
+        metadata["publishedRefs"] = published_refs
+    if missing_outputs:
+        metadata["missingOutputs"] = missing_outputs
+    return metadata
+
 
 def _write_text_artifact(path: Path, payload: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -833,8 +875,14 @@ class DockerWorkloadLauncher:
             "cleanup": (request.profile.cleanup.model_dump(mode="json", by_alias=True) if request.profile is not None else {"removeContainerOnExit": False, "killGraceSeconds": _DEFAULT_KILL_GRACE_SECONDS}),
         }
         declared_refs, missing_declared_outputs = _declared_output_refs(request)
+        report_publication = _report_publication_metadata(
+            request,
+            declared_output_refs=declared_refs,
+            missing_declared_outputs=missing_declared_outputs,
+        )
         diagnostics["declaredOutputRefs"] = dict(declared_refs)
         diagnostics["missingDeclaredOutputs"] = dict(missing_declared_outputs)
+        diagnostics["reportPublication"] = report_publication
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
                 request,
@@ -845,6 +893,7 @@ class DockerWorkloadLauncher:
             )
         )
         workload_metadata["artifactPublication"] = artifact_publication
+        workload_metadata["reportPublication"] = report_publication
         metadata = redact_sensitive_payload({
             "containerName": request.container_name,
             "image": request.profile.image if request.profile is not None else getattr(request.request, "image", None),
@@ -855,6 +904,7 @@ class DockerWorkloadLauncher:
             "stderr": stderr,
             "workload": workload_metadata,
             "artifactPublication": artifact_publication,
+            "reportPublication": report_publication,
         })
         return WorkloadResult(
             requestId=request.container_name,
@@ -1049,8 +1099,14 @@ class DockerWorkloadLauncher:
             "cleanup": (request.profile.cleanup.model_dump(mode="json", by_alias=True) if request.profile is not None else {"removeContainerOnExit": False, "killGraceSeconds": 30}),
         }
         declared_refs, missing_declared_outputs = _declared_output_refs(request)
+        report_publication = _report_publication_metadata(
+            request,
+            declared_output_refs=declared_refs,
+            missing_declared_outputs=missing_declared_outputs,
+        )
         diagnostics["declaredOutputRefs"] = dict(declared_refs)
         diagnostics["missingDeclaredOutputs"] = dict(missing_declared_outputs)
+        diagnostics["reportPublication"] = report_publication
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
                 request,
@@ -1061,7 +1117,8 @@ class DockerWorkloadLauncher:
             )
         )
         helper_metadata["artifactPublication"] = artifact_publication
-        metadata = {
+        helper_metadata["reportPublication"] = report_publication
+        metadata = redact_sensitive_payload({
             "containerName": request.container_name,
             "image": request.profile.image if request.profile is not None else getattr(request.request, "image", None),
             "imageRef": request.profile.image if request.profile is not None else getattr(request.request, "image", None),
@@ -1071,7 +1128,8 @@ class DockerWorkloadLauncher:
             "stderr": stderr,
             "helper": helper_metadata,
             "artifactPublication": artifact_publication,
-        }
+            "reportPublication": report_publication,
+        })
         return WorkloadResult(
             requestId=request.container_name,
             profileId=request.profile.id if request.profile is not None else request.request.tool_name,
