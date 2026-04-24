@@ -334,7 +334,7 @@ export function TasksListPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack">
-      <section className="task-list-control-deck panel--controls" aria-labelledby="task-list-title">
+      <section className="task-list-control-deck" aria-labelledby="task-list-title">
         <div className="toolbar">
           <div>
             <h2 className="page-title" id="task-list-title">Tasks List</h2>

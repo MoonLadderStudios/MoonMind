@@ -5781,7 +5781,7 @@ describe("Task Create Entrypoint", () => {
     );
 
     expect(missionControlCss).toMatch(
-      /\.queue-floating-bar\s*\{[^}]*width:\s*min\(100% - 1\.5rem,\s*84rem\)[^}]*justify-content:\s*stretch/s,
+      /\.queue-floating-bar\s*\{[^}]*width:\s*min\(100% - 2rem,\s*70rem\)[^}]*justify-content:\s*stretch/s,
     );
     expect(missionControlCss).toMatch(
       /\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(12rem,\s*1\.65fr\)\s*minmax\(10rem,\s*1\.45fr\)\s*minmax\(8rem,\s*1fr\)\s*auto/s,

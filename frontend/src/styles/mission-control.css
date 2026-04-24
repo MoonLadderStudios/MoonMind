@@ -659,8 +659,7 @@ h1 {
 .task-list-control-deck {
   display: grid;
   gap: 0.85rem;
-  border-color: rgb(var(--mm-border) / 0.55);
-  box-shadow: 0 14px 34px -24px rgb(0 0 0 / 0.35);
+  padding: 0;
 }
 
 .task-list-control-grid {
@@ -2567,7 +2566,7 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   bottom: 1.1rem;
   transform: translateX(-50%);
   z-index: 40;
-  width: min(100% - 1.5rem, 84rem);
+  width: min(100% - 2rem, 70rem);
   padding: 0.55rem 0.7rem;
   border-radius: 1.5rem;
   background: var(--mm-glass-fill);
