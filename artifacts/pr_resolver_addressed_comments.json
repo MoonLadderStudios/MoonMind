@@ -1,47 +1,52 @@
 [
   {
-    "id": 4167329002,
+    "id": 3135051899,
+    "disposition": "addressed",
+    "rationale": "Hydration now fetches primary and summary report artifacts concurrently with asyncio.gather."
+  },
+  {
+    "id": 3135051901,
+    "disposition": "addressed",
+    "rationale": "Execution report projections now preserve compact artifact refs end to end instead of re-injecting full artifact metadata."
+  },
+  {
+    "id": 4167397793,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; the actionable line comments below were evaluated and resolved individually."
+    "rationale": "Top-level Gemini review summary only restated the inline comments and required no separate change."
   },
   {
-    "id": 3134994540,
+    "id": 3135074437,
     "disposition": "addressed",
-    "rationale": "Unrestricted Docker CLI execution now replaces the leading docker token with the configured runtime binary so commands no longer become 'docker docker ...'."
+    "rationale": "Report hydration now ignores incomplete report.primary and report.summary artifacts and only projects COMPLETE artifacts."
   },
   {
-    "id": 3134994545,
-    "disposition": "addressed",
-    "rationale": "The helper-side unrestricted Docker path now reuses the same normalized command builder and handles unrestricted requests before profile-only validation."
+    "id": 4167425940,
+    "disposition": "not-applicable",
+    "rationale": "Top-level Codex review wrapper contained no standalone actionable feedback beyond the inline comment already addressed."
   },
   {
-    "id": 3134994548,
+    "id": 3135097062,
     "disposition": "addressed",
-    "rationale": "The unrestricted fallback runner profile is now a module-level constant instead of being revalidated from a hardcoded dict on every invocation."
+    "rationale": "Removed the unused user binding from _client_with_service while preserving dependency override side effects."
   },
   {
-    "id": 3134994551,
+    "id": 3135097068,
     "disposition": "addressed",
-    "rationale": "The helper path now shares the module-level unrestricted runner profile and unrestricted arg builder instead of repeating inline model validation."
+    "rationale": "Removed the unused admin test user binding in test_list_executions_passes_temporal_filters_for_admin."
   },
   {
-    "id": 3134994554,
+    "id": 3135097076,
     "disposition": "addressed",
-    "rationale": "Default timeout and kill-grace values are now centralized as module-level constants and reused across labels, diagnostics, and timeout handling."
+    "rationale": "Removed an unused user binding in the send-message signal test setup."
   },
   {
-    "id": 3134994556,
+    "id": 3135097078,
     "disposition": "addressed",
-    "rationale": "Workflow Docker mode normalization is now centralized in a shared module used by both settings and the tool bridge, removing the duplicated implementation."
+    "rationale": "Removed an unused user binding in the skip-dependency signal test setup."
   },
   {
-    "id": 3134997019,
+    "id": 3135097081,
     "disposition": "addressed",
-    "rationale": "Removed the unused CONTAINER_RUN_CONTAINER_TOOL import from the Temporal worker runtime unit test."
-  },
-  {
-    "id": 3135008658,
-    "disposition": "addressed",
-    "rationale": "Unrestricted workload requests no longer dereference profile-only concurrency metadata; the launcher now skips per-profile concurrency caps when profile=None and covers the path with a regression test."
+    "rationale": "Dropped the unused ArtifactRefModel import after switching execution report projections to CompactArtifactRefModel."
   }
 ]

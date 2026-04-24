@@ -3059,6 +3059,19 @@ export interface components {
          */
         CodexWorkerShardStatus: "active" | "draining" | "offline";
         /**
+         * CompactArtifactRefModel
+         * @description Bounded artifact reference for execution-level convenience projections.
+         */
+        CompactArtifactRefModel: {
+            /**
+             * Artifact Ref V
+             * @default 1
+             */
+            artifact_ref_v: number;
+            /** Artifact Id */
+            artifact_id: string;
+        };
+        /**
          * CompleteArtifactPartModel
          * @description Multipart completion part descriptor (reserved for compatibility).
          */
@@ -3756,6 +3769,7 @@ export interface components {
             skillRuntime?: components["schemas"]["ExecutionSkillRuntimeModel"] | null;
             /** Artifactrefs */
             artifactRefs?: string[];
+            reportProjection?: components["schemas"]["ExecutionReportProjectionModel"] | null;
             actions?: components["schemas"]["ExecutionActionCapabilityModel"];
             debugFields?: components["schemas"]["ExecutionDebugFieldsModel"] | null;
             /** Redirectpath */
@@ -3954,6 +3968,28 @@ export interface components {
              * Format: date-time
              */
             refreshedAt: string;
+        };
+        /**
+         * ExecutionReportProjectionModel
+         * @description Bounded report summary surfaced on execution detail responses.
+         */
+        ExecutionReportProjectionModel: {
+            /** Hasreport */
+            hasReport: boolean;
+            latestReportRef?: components["schemas"]["CompactArtifactRefModel"] | null;
+            latestReportSummaryRef?: components["schemas"]["CompactArtifactRefModel"] | null;
+            /** Reporttype */
+            reportType?: string | null;
+            /** Reportstatus */
+            reportStatus?: string | null;
+            /** Findingcounts */
+            findingCounts?: {
+                [key: string]: number;
+            } | null;
+            /** Severitycounts */
+            severityCounts?: {
+                [key: string]: number;
+            } | null;
         };
         /**
          * ExecutionSkillLifecycleIntentModel
