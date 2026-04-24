@@ -1,12 +1,17 @@
 [
   {
-    "id": 3135509592,
+    "id": 3135645849,
     "disposition": "addressed",
-    "rationale": "Simplified helper ownership metadata initialization to reuse the already-resolved workflowDockerMode value."
+    "rationale": "Updated the task-list test to assert the control deck no longer carries the panel--controls class instead of relying on JSDOM computed-style defaults."
   },
   {
-    "id": 3135514158,
+    "id": 3135645854,
     "disposition": "addressed",
-    "rationale": "Propagated the active workflow_docker_mode through Temporal workload_run validation and added a regression test so unrestricted runs preserve accurate ownership labels."
+    "rationale": "Removed panel--controls from the task-list control-deck markup and deleted the CSS reset block that had only been undoing that shared card treatment."
+  },
+  {
+    "id": 4168083355,
+    "disposition": "addressed",
+    "rationale": "Applied the review’s requested direction by moving the fix into markup and test semantics rather than maintaining CSS overrides."
   }
 ]

@@ -299,13 +299,15 @@ describe('Tasks List Entrypoint', () => {
 
     await screen.findAllByText('Example task');
 
-    const controlDeck = document.querySelector<HTMLElement>('.task-list-control-deck.panel--controls');
+    const controlDeck = document.querySelector<HTMLElement>('.task-list-control-deck');
     const dataSlab = document.querySelector<HTMLElement>('.task-list-data-slab.panel--data');
     const tableWrapper = dataSlab?.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
     const scheduledHeader = tableWrapper?.querySelector<HTMLElement>('th');
 
     expect(controlDeck).toBeTruthy();
     expect(controlDeck?.querySelector('form.task-list-control-grid')).toBeTruthy();
+
+    expect(controlDeck?.classList.contains('panel--controls')).toBe(false);
     expect(
       controlDeck?.querySelector('.task-list-utility-cluster')?.contains(screen.getByLabelText('Live updates')),
     ).toBe(true);
@@ -327,7 +329,7 @@ describe('Tasks List Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     const shellPanel = document.querySelector<HTMLElement>('.panel');
-    const controlDecks = document.querySelectorAll<HTMLElement>('.task-list-control-deck.panel--controls');
+    const controlDecks = document.querySelectorAll<HTMLElement>('.task-list-control-deck');
     const dataSlabs = document.querySelectorAll<HTMLElement>('.task-list-data-slab.panel--data');
 
     expect(controlDecks).toHaveLength(1);
