@@ -1,141 +1,120 @@
-# Feature Specification: Mission Control Report Presentation
+# Feature Specification: Surface Canonical Reports in Mission Control
 
 **Feature Branch**: `230-mission-control-report-presentation`
 **Created**: 2026-04-22
 **Status**: Draft
-**Input**:
+**Input**: User description: "Use the Jira preset brief for MM-494 as the canonical Moon Spec orchestration input.
+
+Additional constraints:
+
+
+Selected mode: runtime.
+Default to runtime mode and only use docs mode when explicitly requested.
+If the brief points at an implementation document, treat it as runtime source requirements.
+Source design path (optional): .
+
+Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
+Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts."
+
+Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md`.
+Classification: single-story runtime feature request.
+Resume decision: existing feature directory `specs/230-mission-control-report-presentation` already matched the MM-494 story scope, so this run resumed from the completed artifact set and aligned source traceability instead of regenerating later-stage artifacts.
+
+## Original Preset Brief
 
 ```text
-Jira issue: MM-462 from MM project
-Summary: Mission Control Report Presentation
+# MM-494 MoonSpec Orchestration Input
+
+## Source
+
+- Jira issue: MM-494
+- Jira project key: MM
+- Issue type: Story
+- Current status at fetch time: In Progress
+- Summary: Surface canonical reports in Mission Control
+- Labels:
+  - `moonmind-workflow-mm-1f7a8be1-a624-482c-bcb5-4a86e5ab4b1b`
+- Trusted fetch tool: `jira.get_issue`
+- Canonical source: normalized Jira preset brief synthesized from trusted Jira tool response fields because the MCP issue response did not expose `recommendedImports.presetInstructions`, `normalizedPresetBrief`, `presetBrief`, or `presetInstructions`.
+
+## Canonical MoonSpec Feature Request
+
+Jira issue: MM-494 from MM project
+Summary: Surface canonical reports in Mission Control
 Issue type: Story
 Current Jira status: In Progress
 Jira project key: MM
 
-Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-462 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-494 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
 
-MM-462: Mission Control Report Presentation
-
-Short Name
-mission-control-report-presentation
+MM-494: Surface canonical reports in Mission Control
 
 Source Reference
 - Source document: `docs/Artifacts/ReportArtifacts.md`
 - Source title: Report Artifacts
-- Source sections: 11.4 Latest report semantics, 12. Presentation rules, 12.1 Primary UI surfaces, 12.2 Default read behavior, 12.3 Recommended renderer behavior, 12.4 Report-first UX rule, 12.5 Evidence presentation, 18. Suggested API/UI extensions
-- Coverage IDs: DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-020, DESIGN-REQ-022
+- Source sections:
+  - 12 Presentation rules
+  - 13 Relationship to observability and diagnostics
+- Coverage IDs:
+  - DESIGN-REQ-005
+  - DESIGN-REQ-014
+  - DESIGN-REQ-015
+  - DESIGN-REQ-016
 
 User Story
-As an operator, I can open an execution with a final report and see the canonical report, related evidence, and normal observability surfaces without guessing which generic artifact matters.
+As a Mission Control user, I want executions with canonical reports to show a report-first surface with related evidence so I can inspect the deliverable without hunting through raw artifacts or logs.
 
 Acceptance Criteria
-- Given an execution has a canonical `report.primary` artifact, then Mission Control shows a report panel or top-level report card before requiring inspection of the generic artifact list.
-- Given linked `report.summary`, `report.structured`, or `report.evidence` artifacts exist, then they are shown as related report content and remain individually openable where access permits.
-- Given no `report.primary` artifact exists, then the UI falls back to the normal artifact list without fabricating report status from local heuristics.
-- Viewer selection uses `default_read_ref`, `render_hint`, `content_type`, `metadata.name`, and `metadata.title`, including appropriate markdown, JSON, text, diff, image, PDF, and binary handling.
-- Latest report selection comes from server query behavior or a projection field, not browser-side sorting of arbitrary artifacts.
+- Executions with a canonical `report.primary` show a Report panel or top-level report card before the generic artifact list.
+- The report surface shows summary metadata and an open action for the default read target.
+- Linked `report.summary`, `report.structured`, and `report.evidence` artifacts appear as related report content.
+- Artifacts, stdout, stderr, diagnostics, and other observability surfaces remain accessible outside the report panel.
+- Viewer choice uses `default_read_ref`, `render_hint`, `content_type`, and `metadata.name` or `metadata.title`.
+- Markdown, JSON, plain text, diff, image, PDF, and unknown binary report artifacts follow the documented renderer behavior.
+- Evidence artifacts remain individually addressable and viewable rather than being collapsed into the primary report by default.
+- When no `report.primary` exists, Mission Control falls back to the existing artifact list behavior.
 
 Requirements
-- Expose report-first presentation for canonical final reports in execution detail surfaces.
-- Display related report summary, structured, and evidence artifacts separately from generic artifacts and observability surfaces.
-- Use artifact presentation contract fields for read target and renderer selection.
-- Treat optional execution convenience fields and any report projection endpoint as read models over normal artifacts.
+- Add report-first execution detail presentation.
+- Use existing artifact presentation contracts for default reads and viewer selection.
+- Present related evidence separately from operational logs and diagnostics.
 
 Relevant Implementation Notes
-- Keep report presentation layered on the existing artifact presentation contract and execution detail surfaces.
-- Prioritize canonical final reports linked as `report.primary` before generic artifact list inspection.
-- Present `report.summary`, `report.structured`, and `report.evidence` artifacts as related report content while preserving individual artifact access controls and open/read behavior.
-- Preserve the normal artifact list and observability surfaces; report presentation must not hide logs, diagnostics, provider snapshots, or other non-report artifacts.
-- Use server-provided latest report query behavior or projection fields for latest report selection instead of browser-side sorting over arbitrary artifacts.
-- Choose viewers from artifact presentation fields, including `default_read_ref`, `render_hint`, `content_type`, `metadata.name`, and `metadata.title`.
+- Preserve MM-494 in downstream MoonSpec artifacts, implementation notes, verification output, commit text, and pull request metadata.
+- Use `docs/Artifacts/ReportArtifacts.md` as the design reference for report presentation rules and the relationship between reports, observability, and diagnostics.
+- Prioritize a report-first execution detail surface when canonical report artifacts are present.
+- Keep the generic artifact list and observability surfaces accessible outside the report panel rather than replacing them.
+- Use existing artifact presentation contracts to choose the default read target and renderer behavior.
+- Show related `report.summary`, `report.structured`, and `report.evidence` artifacts as associated report content without collapsing evidence into the primary report by default.
+- Support documented renderer behavior across markdown, JSON, plain text, diff, image, PDF, and unknown binary report artifacts.
+- Fall back cleanly to the existing artifact-list behavior when no canonical `report.primary` artifact exists.
 
-Non-Goals
-- Creating report status from local UI heuristics when no `report.primary` artifact exists.
-- Replacing generic artifact list behavior for executions without canonical reports.
-- Reworking artifact storage, authorization, lifecycle, or preview contracts.
-- Treating observability outputs such as stdout, stderr, diagnostics, provider snapshots, or session continuity artifacts as canonical report content.
+Dependencies
+- Trusted Jira link metadata at fetch time shows MM-494 is blocked by MM-495, whose embedded status is Backlog.
+- Trusted Jira link metadata at fetch time shows MM-494 is related to MM-493 via a Blocks link where MM-494 blocks MM-493; MM-493 is not a blocker for this story.
 
 Validation
-- Verify an execution with a canonical `report.primary` artifact shows report-first presentation in Mission Control before generic artifact list inspection.
-- Verify linked `report.summary`, `report.structured`, and `report.evidence` artifacts appear as related report content and remain individually openable where access permits.
-- Verify executions without `report.primary` fall back to the normal artifact list without fabricated report status.
-- Verify viewer selection honors `default_read_ref`, `render_hint`, `content_type`, `metadata.name`, and `metadata.title` for markdown, JSON, text, diff, image, PDF, and binary artifacts.
-- Verify latest report selection uses server query behavior or a projection field, not browser-side sorting over arbitrary artifacts.
+- Verify executions with canonical `report.primary` artifacts surface a report panel or top-level report card before the generic artifact list.
+- Verify the report surface shows summary metadata and an open action for the default read target.
+- Verify linked `report.summary`, `report.structured`, and `report.evidence` artifacts appear as related report content.
+- Verify artifacts, stdout, stderr, diagnostics, and other observability surfaces remain accessible outside the report panel.
+- Verify viewer choice follows `default_read_ref`, `render_hint`, `content_type`, and `metadata.name` or `metadata.title`.
+- Verify markdown, JSON, plain text, diff, image, PDF, and unknown binary report artifacts follow the documented renderer behavior.
+- Verify evidence artifacts remain individually addressable and are not collapsed into the primary report by default.
+- Verify execution detail falls back to the existing artifact list behavior when no canonical `report.primary` exists.
 
 Needs Clarification
 - None
 ```
 
-**Canonical Jira Brief**: `docs/tmp/jira-orchestration-inputs/MM-462-moonspec-orchestration-input.md`
-
-## Original Jira Preset Brief
-
-Jira issue: MM-462 from MM project
-Summary: Mission Control Report Presentation
-Issue type: Story
-Current Jira status: In Progress
-Jira project key: MM
-
-Use this Jira preset brief as the canonical MoonSpec orchestration input. Preserve the Jira issue key MM-462 in spec artifacts, implementation notes, verification output, commit text, and pull request metadata.
-
-MM-462: Mission Control Report Presentation
-
-Short Name
-mission-control-report-presentation
-
-Source Reference
-- Source document: `docs/Artifacts/ReportArtifacts.md`
-- Source title: Report Artifacts
-- Source sections: 11.4 Latest report semantics, 12. Presentation rules, 12.1 Primary UI surfaces, 12.2 Default read behavior, 12.3 Recommended renderer behavior, 12.4 Report-first UX rule, 12.5 Evidence presentation, 18. Suggested API/UI extensions
-- Coverage IDs: DESIGN-REQ-011, DESIGN-REQ-012, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-020, DESIGN-REQ-022
-
-User Story
-As an operator, I can open an execution with a final report and see the canonical report, related evidence, and normal observability surfaces without guessing which generic artifact matters.
-
-Acceptance Criteria
-- Given an execution has a canonical `report.primary` artifact, then Mission Control shows a report panel or top-level report card before requiring inspection of the generic artifact list.
-- Given linked `report.summary`, `report.structured`, or `report.evidence` artifacts exist, then they are shown as related report content and remain individually openable where access permits.
-- Given no `report.primary` artifact exists, then the UI falls back to the normal artifact list without fabricating report status from local heuristics.
-- Viewer selection uses `default_read_ref`, `render_hint`, `content_type`, `metadata.name`, and `metadata.title`, including appropriate markdown, JSON, text, diff, image, PDF, and binary handling.
-- Latest report selection comes from server query behavior or a projection field, not browser-side sorting of arbitrary artifacts.
-
-Requirements
-- Expose report-first presentation for canonical final reports in execution detail surfaces.
-- Display related report summary, structured, and evidence artifacts separately from generic artifacts and observability surfaces.
-- Use artifact presentation contract fields for read target and renderer selection.
-- Treat optional execution convenience fields and any report projection endpoint as read models over normal artifacts.
-
-Relevant Implementation Notes
-- Keep report presentation layered on the existing artifact presentation contract and execution detail surfaces.
-- Prioritize canonical final reports linked as `report.primary` before generic artifact list inspection.
-- Present `report.summary`, `report.structured`, and `report.evidence` artifacts as related report content while preserving individual artifact access controls and open/read behavior.
-- Preserve the normal artifact list and observability surfaces; report presentation must not hide logs, diagnostics, provider snapshots, or other non-report artifacts.
-- Use server-provided latest report query behavior or projection fields for latest report selection instead of browser-side sorting over arbitrary artifacts.
-- Choose viewers from artifact presentation fields, including `default_read_ref`, `render_hint`, `content_type`, `metadata.name`, and `metadata.title`.
-
-Non-Goals
-- Creating report status from local UI heuristics when no `report.primary` artifact exists.
-- Replacing generic artifact list behavior for executions without canonical reports.
-- Reworking artifact storage, authorization, lifecycle, or preview contracts.
-- Treating observability outputs such as stdout, stderr, diagnostics, provider snapshots, or session continuity artifacts as canonical report content.
-
-Validation
-- Verify an execution with a canonical `report.primary` artifact shows report-first presentation in Mission Control before generic artifact list inspection.
-- Verify linked `report.summary`, `report.structured`, and `report.evidence` artifacts appear as related report content and remain individually openable where access permits.
-- Verify executions without `report.primary` fall back to the normal artifact list without fabricated report status.
-- Verify viewer selection honors `default_read_ref`, `render_hint`, `content_type`, `metadata.name`, and `metadata.title` for markdown, JSON, text, diff, image, PDF, and binary artifacts.
-- Verify latest report selection uses server query behavior or a projection field, not browser-side sorting over arbitrary artifacts.
-
-Needs Clarification
-- None
-
 ## Classification
 
 - Input type: Single-story feature request.
-- Breakdown decision: `moonspec-breakdown` was not run because the Jira preset brief defines one independently testable operator story and does not require processing multiple specs.
+- Breakdown decision: `moonspec-breakdown` was not run because the MM-494 Jira preset brief defines one independently testable Mission Control runtime story.
 - Selected mode: Runtime.
 - Source design: `docs/Artifacts/ReportArtifacts.md` is treated as runtime source requirements because the Jira brief points at implementation behavior, not documentation-only work.
-- Resume decision: No existing Moon Spec artifacts for MM-462 were found under `specs/`; specification is the first incomplete stage.
+- Resume decision: Existing Moon Spec artifacts in `specs/230-mission-control-report-presentation` already cover this report-presentation story, and the implementation plus verification evidence were already complete.
+- Alignment decision: This run updated the preserved source brief, Jira traceability, and active feature pointer to MM-494 while reusing the existing completed runtime story artifacts.
 
 ## User Story - Present Canonical Reports In Mission Control
 
@@ -163,7 +142,7 @@ Needs Clarification
 
 ## Assumptions
 
-- The report artifact contract from MM-460 and report bundle publication behavior from MM-461 provide canonical `report.*` links and bounded presentation metadata for this UI story.
+- The narrower MM-494 Jira brief targets the same already-implemented runtime story already captured by this feature directory, so the existing report-presentation implementation and tests remain the concrete execution evidence for this aligned spec.
 - Mission Control already has an execution detail surface with generic artifact and observability sections that can be extended without replacing those surfaces.
 - Server-side latest-report query behavior or an execution/report projection is the source of truth for report identity.
 
@@ -171,12 +150,10 @@ Needs Clarification
 
 | ID | Source | Requirement | Scope | Mapped Requirements |
 | --- | --- | --- | --- | --- |
-| DESIGN-REQ-011 | `docs/Artifacts/ReportArtifacts.md` §11.4 | Latest-report selection is server query behavior or an explicit projection; clients must not infer the canonical report by sorting arbitrary artifacts in the browser. | In scope | FR-001, FR-007 |
-| DESIGN-REQ-012 | `docs/Artifacts/ReportArtifacts.md` §12.1 | Report-producing executions expose a Report panel or top-level report card, a Related Evidence section, and continued access to artifacts and observability surfaces. | In scope | FR-002, FR-003, FR-004 |
-| DESIGN-REQ-013 | `docs/Artifacts/ReportArtifacts.md` §12.2-§12.3 | Primary report rendering uses `default_read_ref`, `render_hint`, `content_type`, and metadata name/title to choose an appropriate viewer and raw access behavior. | In scope | FR-005 |
-| DESIGN-REQ-014 | `docs/Artifacts/ReportArtifacts.md` §12.4 | If an execution has a canonical `report.primary`, Mission Control presents that artifact before generic artifact list inspection and shows related report content. | In scope | FR-002, FR-003 |
-| DESIGN-REQ-020 | `docs/Artifacts/ReportArtifacts.md` §12.5, §13 | Evidence artifacts remain individually addressable and viewable, and curated reports remain separate from stdout, stderr, diagnostics, provider snapshots, and other observability outputs. | In scope | FR-003, FR-004 |
-| DESIGN-REQ-022 | `docs/Artifacts/ReportArtifacts.md` §18 | Optional execution summary fields and report projection endpoints are read models over normal artifacts, not a separate report storage or mutation path. | In scope | FR-001, FR-006 |
+| DESIGN-REQ-005 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Canonical report presentation MUST remain server-driven through existing `report.primary` artifact selection and must not rely on browser-side inference. | In scope | FR-001, FR-007 |
+| DESIGN-REQ-014 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Executions with a canonical report MUST surface a report-first panel with related report content before generic artifact inspection. | In scope | FR-002, FR-003 |
+| DESIGN-REQ-015 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Viewer selection MUST honor `default_read_ref`, `render_hint`, `content_type`, and `metadata.name` or `metadata.title` for the report surface. | In scope | FR-005 |
+| DESIGN-REQ-016 | `docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` | Related evidence MUST remain individually addressable, observability surfaces MUST remain accessible outside the report panel, and the implementation MUST stay on the existing artifact read model. | In scope | FR-003, FR-004, FR-006 |
 
 ## Requirements *(mandatory)*
 
@@ -189,7 +166,7 @@ Needs Clarification
 - **FR-005**: Mission Control MUST select report viewers from artifact presentation fields including `default_read_ref`, `render_hint`, `content_type`, `metadata.name`, and `metadata.title`.
 - **FR-006**: Mission Control MUST treat optional execution summary fields and any report projection endpoint as read models over normal artifacts rather than as a separate report storage or mutation surface.
 - **FR-007**: Mission Control MUST NOT fabricate report status or canonical report identity through browser-side sorting or local heuristics when no `report.primary` artifact is available.
-- **FR-008**: Moon Spec artifacts, verification evidence, commit text, and pull request metadata for this work MUST preserve Jira issue key MM-462.
+- **FR-008**: Moon Spec artifacts, verification evidence, commit text, and pull request metadata for this work MUST preserve Jira issue key MM-494.
 
 ### Key Entities
 
@@ -207,4 +184,4 @@ Needs Clarification
 - **SC-003**: Fallback tests verify executions without `report.primary` show the normal artifact list and no fabricated report status.
 - **SC-004**: Viewer selection tests cover markdown, JSON, text, diff, image, PDF or unknown binary behavior using artifact presentation fields.
 - **SC-005**: Latest report selection tests verify Mission Control consumes server query/projection data and does not sort arbitrary artifacts in the browser to infer a canonical report.
-- **SC-006**: MM-462 appears in the spec, plan, tasks, verification evidence, and publish metadata for traceability.
+- **SC-006**: MM-494 appears in the spec, plan, tasks, verification evidence, and publish metadata for traceability.

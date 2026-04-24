@@ -395,6 +395,38 @@ describe('Mission Control shared entry', () => {
     }
   });
 
+
+  it('defines the shared MM-488 executing shimmer modifier contract', async () => {
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*1670ms/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-core-width-multiplier:\s*9\.1667/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-start-x:\s*-135%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-end-x:\s*135%/);
+    expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset:\s*15%/);
+
+    const shimmerBlock = cssRuleBlocks(
+      missionControlCss,
+      '.status-running[data-state="executing"][data-effect="shimmer-sweep"], .status-running.is-executing',
+    ).join('\n');
+    expect(shimmerBlock).toContain('animation: mm-status-pill-shimmer');
+    expect(shimmerBlock).toContain('background-image:');
+    expect(shimmerBlock).toContain('overflow: hidden');
+    expect(shimmerBlock).not.toContain('animation-delay:');
+    expect(shimmerBlock).toContain('var(--mm-executing-sweep-cycle-duration)');
+    expect(shimmerBlock).toMatch(
+      /background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*100%,\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*100%/,
+    );
+    expect(shimmerBlock).toMatch(
+      /background-position:\s*var\(--mm-executing-sweep-start-x\)\s*0,\s*calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset\)\)\s*0/,
+    );
+
+    expect(missionControlCss).toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?65%\s*\{[\s\S]*?background-size:[\s\S]*?86\.83%\s*\{[\s\S]*?100%\s*\{/);
+    expect(missionControlCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,
+    );
+  });
+
   it('enforces MM-430 additive shared styling modifiers', async () => {
     for (const selector of [
       '.panel--controls',

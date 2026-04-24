@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
+import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
 import {
   expandRouteTemplate,
   getSessionProjectionRefetchInterval,
@@ -349,6 +350,66 @@ describe('Task Detail Entrypoint', () => {
       expect(stepsIndex).toBeGreaterThan(detailIndex);
       expect(artifactsIndex).toBeGreaterThan(stepsIndex);
     });
+  });
+
+
+  it('renders executing detail pills with the shared shimmer selector contract and keeps dependency pills non-executing when appropriate', async () => {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.Run',
+      title: 'Executing detail task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      dependents: [
+        {
+          workflowId: 'dep-1',
+          title: 'Waiting dependent',
+          state: 'waiting_on_dependencies',
+          summary: 'Waiting summary',
+          closeStatus: null,
+        },
+      ],
+      prerequisites: [],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<TaskDetailPage payload={mockPayload} />);
+
+    await screen.findByText('Executing detail task');
+    const toolbarStatus = document.querySelector<HTMLElement>('.toolbar-identity-row [data-effect="shimmer-sweep"]');
+    expect(toolbarStatus?.dataset.state).toBe('executing');
+    expect(toolbarStatus?.dataset.effect).toBe('shimmer-sweep');
+    expect(toolbarStatus?.className).toContain('is-executing');
+    expect(toolbarStatus?.className).toContain('status-running');
+    expect(toolbarStatus?.childElementCount).toBe(0);
+    expect(toolbarStatus?.textContent).toBe('executing');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
+
+    const waitingPill = await screen.findByText('waiting_on_dependencies');
+    expect(waitingPill.closest('span')?.dataset.effect).toBeUndefined();
   });
 
   it('renders workload metadata and artifact refs on a workload-producing step', async () => {

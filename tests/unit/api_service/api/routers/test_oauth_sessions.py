@@ -25,6 +25,7 @@ from api_service.main import app
 from api_service.api.routers.oauth_sessions import (
     _handle_oauth_terminal_ws_message,
     _make_terminal_output_sender,
+    oauth_terminal_websocket,
 )
 from moonmind.workflows.temporal.runtime.terminal_bridge import (
     InMemoryPtyAdapter,
@@ -1163,3 +1164,212 @@ async def test_finalize_oauth_session_rejects_other_users_claude_session_before_
             ManagedAgentProviderProfile, "claude_anthropic_other_user"
         )
         assert profile is None
+
+
+@pytest.mark.asyncio
+async def test_create_claude_oauth_session_rejects_other_users_profile_id(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "claude_anthropic_owned_elsewhere"
+    owner_id = uuid.uuid4()
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="claude_code",
+                provider_id="anthropic",
+                provider_label="Anthropic",
+                owner_user_id=owner_id,
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                enabled=True,
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_start(_session_model):
+        raise AssertionError("unauthorized create must not start workflow")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _unexpected_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json={
+                "runtime_id": "claude_code",
+                "profile_id": profile_id,
+                "account_label": "Claude Anthropic OAuth",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Not authorized to use this profile ID."
+
+    async with db_base.async_session_maker() as session:
+        query = await session.execute(
+            select(ManagedAgentOAuthSession).where(
+                ManagedAgentOAuthSession.profile_id == profile_id
+            )
+        )
+        assert query.scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_oauth_session_rejects_other_users_claude_session(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_claudecancelother1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_cancel_other_user",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="different-user",
+                account_label="Claude Anthropic OAuth",
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_cancel(_session_id: str) -> None:
+        raise AssertionError("unauthorized cancel must not signal workflow")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.cancel_oauth_session_workflow",
+        _unexpected_cancel,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/cancel")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Session not found"
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.status == OAuthSessionStatus.AWAITING_USER
+
+
+@pytest.mark.asyncio
+async def test_reconnect_oauth_session_rejects_other_users_claude_session(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_claudereconnectother1"
+    profile_id = "claude_anthropic_reconnect_other_user"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id=profile_id,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.FAILED,
+                requested_by_user_id="different-user",
+                account_label="Claude Anthropic OAuth",
+                metadata_json={"provider_id": "anthropic", "provider_label": "Anthropic"},
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_start(_session_model) -> None:
+        raise AssertionError("unauthorized reconnect must not start workflow")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _unexpected_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/reconnect")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Session not found"
+
+    async with db_base.async_session_maker() as session:
+        query = await session.execute(
+            select(ManagedAgentOAuthSession).where(
+                ManagedAgentOAuthSession.profile_id == profile_id
+            )
+        )
+        rows = query.scalars().all()
+        assert len(rows) == 1
+        assert rows[0].session_id == session_id
+
+
+@pytest.mark.asyncio
+async def test_claude_oauth_terminal_websocket_rejects_replayed_attach_token(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_claudewsreplay1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_ws_replay",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_claudewsreplay1",
+                terminal_bridge_id="br_oas_claudewsreplay1",
+                container_name="moonmind_auth_oas_claudewsreplay1",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._oauth_terminal_pty_adapter_factory",
+        lambda **_kwargs: InMemoryPtyAdapter(),
+    )
+
+    async with client_app as client:
+        attach_response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert attach_response.status_code == 200
+    token = attach_response.json()["attach_token"]
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.metadata_json is not None
+        row.metadata_json = {
+            **row.metadata_json,
+            "terminal_attach_token_used": True,
+        }
+        await session.commit()
+
+    class _CloseOnlyWebSocket:
+        def __init__(self) -> None:
+            self.closed: list[int] = []
+            self.accepted = False
+
+        async def close(self, code: int) -> None:
+            self.closed.append(code)
+
+        async def accept(self) -> None:
+            self.accepted = True
+            raise AssertionError("replayed tokens must fail before websocket accept")
+
+    websocket = _CloseOnlyWebSocket()
+    await oauth_terminal_websocket(websocket, session_id, token)
+
+    assert websocket.closed == [4403]
+    assert websocket.accepted is False

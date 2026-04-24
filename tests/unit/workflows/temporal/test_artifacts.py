@@ -274,7 +274,7 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
 
 
 async def test_report_artifact_contract_accepts_supported_link_types() -> None:
-    """MM-460: Report artifact link types should be explicit and stable."""
+    """MM-492: Report artifact link types should be explicit and stable."""
 
     assert REPORT_ARTIFACT_LINK_TYPES == frozenset(
         {
@@ -395,7 +395,7 @@ async def test_report_primary_and_summary_default_to_long_retention(
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
 
-            for link_type in ("report.primary", "report.summary"):
+            for link_type in ("report.primary", "report.summary", "report.appendix", "report.findings_index", "report.export"):
                 artifact, _upload = await service.create(
                     principal="workflow-producer",
                     content_type="text/markdown",
@@ -741,6 +741,88 @@ async def test_latest_report_primary_uses_existing_execution_linkage(
                 second.artifact_id
             ]
             assert first.artifact_id != second.artifact_id
+
+
+async def test_latest_report_primary_coexists_with_intermediate_report_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """MM-493: Later intermediate reports must not mutate prior final report artifacts."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            final_bundle = await service.publish_report_bundle(
+                principal="workflow-producer",
+                namespace="moonmind",
+                workflow_id="wf-report",
+                run_id="run-report",
+                report_type="unit_test_report",
+                report_scope="final",
+                primary={
+                    "payload": "# Final report",
+                    "content_type": "text/markdown",
+                    "label": "Final report",
+                },
+            )
+
+            intermediate_bundle = await service.publish_report_bundle(
+                principal="workflow-producer",
+                namespace="moonmind",
+                workflow_id="wf-report",
+                run_id="run-report",
+                report_type="unit_test_report",
+                report_scope="intermediate",
+                primary={
+                    "payload": "# Intermediate report",
+                    "content_type": "text/markdown",
+                    "label": "Intermediate report",
+                },
+            )
+
+            assert (
+                final_bundle["primary_report_ref"]["artifact_id"]
+                != intermediate_bundle["primary_report_ref"]["artifact_id"]
+            )
+
+            final_artifact = await repo.get_artifact(
+                final_bundle["primary_report_ref"]["artifact_id"]
+            )
+            intermediate_artifact = await repo.get_artifact(
+                intermediate_bundle["primary_report_ref"]["artifact_id"]
+            )
+            assert final_artifact.metadata_json["is_final_report"] is True
+            assert final_artifact.metadata_json["report_scope"] == "final"
+            assert intermediate_artifact.metadata_json["report_scope"] == "intermediate"
+            assert (
+                intermediate_artifact.metadata_json.get("is_final_report") is None
+                or intermediate_artifact.metadata_json.get("is_final_report") is False
+            )
+
+            latest = await service.list_for_execution(
+                namespace="moonmind",
+                workflow_id="wf-report",
+                run_id="run-report",
+                principal="workflow-producer",
+                link_type="report.primary",
+                latest_only=True,
+            )
+
+            assert [artifact.artifact_id for artifact in latest] == [
+                intermediate_bundle["primary_report_ref"]["artifact_id"]
+            ]
+
+            final_payload_artifact, final_payload = await service.read(
+                artifact_id=final_bundle["primary_report_ref"]["artifact_id"],
+                principal="workflow-producer",
+                allow_restricted_raw=True,
+            )
+            assert final_payload_artifact.artifact_id == final_bundle["primary_report_ref"]["artifact_id"]
+            assert final_payload == b"# Final report"
 
 
 async def test_report_bundle_result_is_compact_and_rejects_inline_payloads() -> None:

@@ -192,7 +192,13 @@ def _derive_retention(
     if explicit is not None:
         return explicit
     link = (link_type or "").strip().lower()
-    if link in {"report.primary", "report.summary"}:
+    if link in {
+        "report.primary",
+        "report.summary",
+        "report.appendix",
+        "report.findings_index",
+        "report.export",
+    }:
         return db_models.TemporalArtifactRetentionClass.LONG
     if link in {"report.structured", "report.evidence"}:
         return db_models.TemporalArtifactRetentionClass.STANDARD

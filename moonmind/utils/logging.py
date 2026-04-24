@@ -26,7 +26,7 @@ _PRIVATE_KEY_PATTERN = re.compile(
     re.DOTALL,
 )
 _AUTH_PATH_PATTERN = re.compile(
-    r"(?i)(?:/[^\s\"']*)?(?:\.codex|codex-auth|claude-auth|gemini-auth|auth-volume)[^\s\"']*"
+    r"(?i)(?:/[^\s\"']*)?(?:\.codex|\.claude|codex-auth|claude-auth|gemini-auth|auth-volume)[^\s\"']*"
 )
 _NON_SECRET_SENTINEL_VALUES = frozenset(
     {"true", "false", "none", "null", "yes", "no", "on", "off"}
