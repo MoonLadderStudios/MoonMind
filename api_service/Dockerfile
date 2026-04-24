@@ -314,25 +314,23 @@ COPY --chown=root:app --chmod=0640 api_service/config.template.toml /etc/codex/c
 
 COPY --from=python-requirements /deps/requirements-main.txt /tmp/requirements-main.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check -r /tmp/requirements-main.txt watchfiles \
+    pip install --disable-pip-version-check -r /tmp/requirements-main.txt \
     && rm -f /tmp/requirements-main.txt
 
 COPY pyproject.toml /app/pyproject.toml
 COPY poetry.lock /app/poetry.lock
 COPY README.md /app/README.md
 
-# Keep test runners available in all worker images (codex/gemini/claude).
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps \
-    && pip install --disable-pip-version-check pytest pytest-xdist pytest-timeout
+    pip install --disable-pip-version-check readmeai~=0.6.3 --no-deps
 
 # Copy source code AFTER installing locked dependencies so code changes only
-# invalidate the lightweight editable project install.
+# invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
 COPY api_service /app/api_service/
 COPY config /app/config/
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check --no-deps -e .
+    pip install --disable-pip-version-check --no-deps .
 
 # Copy pre-built frontend assets from the frontend-builder stage
 COPY --from=frontend-builder /build/api_service/static/task_dashboard/ /app/api_service/static/task_dashboard/
