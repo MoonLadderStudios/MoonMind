@@ -27,7 +27,11 @@ from api_service.db.models import (
 )
 from api_service.main import app
 from moonmind.config.settings import settings
-from moonmind.workflows import get_temporal_artifact_service
+from moonmind.workflows.temporal import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 CURRENT_USER_DEP = get_current_user()
@@ -49,6 +53,17 @@ class _QueryClient:
 
     def get_workflow_handle(self, workflow_id: str) -> _QueryHandle:
         return _QueryHandle(self._state, workflow_id)
+
+
+def _build_local_artifact_service(
+    session: AsyncSession,
+    *,
+    root_path: str,
+) -> TemporalArtifactService:
+    return TemporalArtifactService(
+        TemporalArtifactRepository(session),
+        store=LocalTemporalArtifactStore(root_path),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -94,7 +109,7 @@ async def _create_uploaded_artifact(
 
 
 @pytest.mark.asyncio
-async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state):
+async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, monkeypatch):
     original_db_url = db_base.DATABASE_URL
     original_engine = db_base.engine
     original_session_maker = db_base.async_session_maker
@@ -108,6 +123,13 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state):
 
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        settings.workflow,
+        "temporal_artifact_root",
+        str(tmp_path / "artifacts"),
+    )
 
     shared_user_id = uuid4()
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
@@ -158,6 +180,99 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state):
             assert describe_body["state"] == "initializing"
             assert describe_body["temporalStatus"] == "running"
             assert describe_body["artifactRefs"] == ["artifact://input/123"]
+
+            async with db_base.async_session_maker() as session:
+                artifact_service = _build_local_artifact_service(
+                    session, root_path=str(tmp_path / "artifacts")
+                )
+                primary_artifact, _primary_upload = await artifact_service.create(
+                    principal=str(shared_user_id),
+                    content_type='text/markdown',
+                    size_bytes=len(b'# report'),
+                    link={
+                        'namespace': execution['namespace'],
+                        'workflow_id': workflow_id,
+                        'run_id': execution['runId'],
+                        'link_type': 'report.primary',
+                        'label': 'Primary report',
+                    },
+                    metadata_json={
+                        'report_type': 'security_pentest_report',
+                        'report_scope': 'final',
+                        'finding_counts': {'total': 3},
+                        'severity_counts': {'high': 1},
+                    },
+                )
+                await artifact_service.write_complete(
+                    artifact_id=primary_artifact.artifact_id,
+                    principal=str(shared_user_id),
+                    payload=b'# report',
+                    content_type='text/markdown',
+                )
+                summary_artifact, _summary_upload = await artifact_service.create(
+                    principal=str(shared_user_id),
+                    content_type='application/json',
+                    size_bytes=len(b'{"summary":true}'),
+                    link={
+                        'namespace': execution['namespace'],
+                        'workflow_id': workflow_id,
+                        'run_id': execution['runId'],
+                        'link_type': 'report.summary',
+                        'label': 'Summary report',
+                    },
+                    metadata_json={
+                        'report_type': 'security_pentest_report',
+                        'report_scope': 'final',
+                    },
+                )
+                await artifact_service.write_complete(
+                    artifact_id=summary_artifact.artifact_id,
+                    principal=str(shared_user_id),
+                    payload=b'{"summary":true}',
+                    content_type='application/json',
+                )
+
+            report_describe_response = await client.get(f"/api/executions/{workflow_id}")
+            assert report_describe_response.status_code == 200
+            report_describe_body = report_describe_response.json()
+            report_projection = report_describe_body['reportProjection']
+            assert report_projection['hasReport'] is True
+            assert report_projection['reportType'] == 'security_pentest_report'
+            assert report_projection['reportStatus'] == 'final'
+            assert report_projection['findingCounts'] == {'total': 3}
+            assert report_projection['severityCounts'] == {'high': 1}
+            assert 'reportBody' not in report_projection
+
+            latest_report_ref = report_projection['latestReportRef']
+            assert latest_report_ref['artifact_ref_v'] == 1
+            assert latest_report_ref['artifact_id'] == primary_artifact.artifact_id
+
+            latest_summary_ref = report_projection['latestReportSummaryRef']
+            assert latest_summary_ref['artifact_ref_v'] == 1
+            assert latest_summary_ref['artifact_id'] == summary_artifact.artifact_id
+
+            pending_primary_artifact, _pending_primary_upload = await artifact_service.create(
+                principal=str(shared_user_id),
+                content_type='text/markdown',
+                size_bytes=len(b'# pending report'),
+                link={
+                    'namespace': execution['namespace'],
+                    'workflow_id': workflow_id,
+                    'run_id': execution['runId'],
+                    'link_type': 'report.primary',
+                    'label': 'Pending primary report',
+                },
+                metadata_json={
+                    'report_type': 'security_pentest_report',
+                    'report_scope': 'final',
+                },
+            )
+
+            pending_report_describe_response = await client.get(f"/api/executions/{workflow_id}")
+            assert pending_report_describe_response.status_code == 200
+            pending_report_projection = pending_report_describe_response.json()['reportProjection']
+            assert pending_primary_artifact.status is TemporalArtifactStatus.PENDING_UPLOAD
+            assert pending_report_projection == {'hasReport': False}
             query_state[workflow_id] = {
                 "get_progress": {
                     "runId": "run-query-latest",
@@ -869,7 +984,9 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                     == snapshot["artifactRef"]
                 )
                 assert snapshot["artifactRef"] in canonical.artifact_refs
-                artifact_service = get_temporal_artifact_service(session)
+                artifact_service = _build_local_artifact_service(
+                    session, root_path=str(tmp_path / "artifacts")
+                )
                 _, stored = await artifact_service.read(
                     artifact_id=snapshot["artifactRef"],
                     principal=str(shared_user_id),

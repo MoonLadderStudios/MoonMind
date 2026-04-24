@@ -33,6 +33,15 @@ class ArtifactRefModel(BaseModel):
     diagnostics: Optional[dict[str, Any]] = None
 
 
+class CompactArtifactRefModel(BaseModel):
+    """Bounded artifact reference for execution-level convenience projections."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    artifact_ref_v: int = Field(1, alias="artifact_ref_v")
+    artifact_id: str = Field(..., alias="artifact_id")
+
+
 class ArtifactExecutionLinkModel(BaseModel):
     """Execution linkage metadata associated with an artifact."""
 
