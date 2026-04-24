@@ -3,7 +3,7 @@
 ## Story Classification
 
 Decision: Treat MM-497 as a single-story runtime feature request and a verification-first planning story.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md`; `specs/249-report-semantics-rollout/spec.md`.
+Evidence: `docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md`; `specs/250-report-semantics-rollout/spec.md`.
 Rationale: The brief defines one independently testable outcome: preserve generic-output compatibility while newer report workflows adopt explicit report semantics with bounded migration and representative mappings.
 Alternatives considered: Broad design breakdown was rejected because the Jira brief already selects one story and does not require processing multiple specs.
 Test implications: Focused unit, contract, and UI verification are required, with hermetic integration escalation only if verification reveals runtime drift.
@@ -59,7 +59,7 @@ Test implications: Traceability review in planning, tasks, and final verificatio
 ## FR-007 Traceability
 
 Decision: partial.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md` and `specs/249-report-semantics-rollout/spec.md` preserve MM-497, but `plan.md`, `tasks.md`, and `verification.md` were missing at planning start.
+Evidence: `docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md` and `specs/250-report-semantics-rollout/spec.md` preserve MM-497, but `plan.md`, `tasks.md`, and `verification.md` were missing at planning start.
 Rationale: The story is verification-first, but downstream artifacts still need to preserve the Jira issue key and original preset brief.
 Alternatives considered: Treat spec-only traceability as enough. Rejected because final verification must compare against the Jira source brief.
 Test implications: Traceability review is mandatory in tasks and final verification.

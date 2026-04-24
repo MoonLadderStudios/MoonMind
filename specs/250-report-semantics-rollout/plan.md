@@ -1,7 +1,7 @@
 # Implementation Plan: Report Semantics Rollout
 
-**Branch**: `249-report-semantics-rollout` | **Date**: 2026-04-24 | **Spec**: [spec.md](spec.md)
-**Input**: Single-story feature specification from `specs/249-report-semantics-rollout/spec.md`
+**Branch**: `250-report-semantics-rollout` | **Date**: 2026-04-24 | **Spec**: [spec.md](spec.md)
+**Input**: Single-story feature specification from `specs/250-report-semantics-rollout/spec.md`
 
 ## Summary
 
@@ -50,7 +50,7 @@ Plan MM-497 as a verification-first runtime alignment story for the existing rep
 - IX. Resilient by Default: PASS - rollout behavior remains bounded, artifact-backed, and deterministic.
 - X. Facilitate Continuous Improvement: PASS - planning preserves deferred questions and verification contingencies explicitly.
 - XI. Spec-Driven Development: PASS - MM-497 is preserved from Jira brief through `spec.md` and this plan.
-- XII. Canonical Documentation Separation: PASS - source design remains under `docs/`, while feature-local planning artifacts stay in `specs/249-report-semantics-rollout`.
+- XII. Canonical Documentation Separation: PASS - source design remains under `docs/`, while feature-local planning artifacts stay in `specs/250-report-semantics-rollout`.
 - XIII. Pre-release Compatibility Policy: PASS - no compatibility alias or hidden semantic transform is introduced.
 
 ## Project Structure
@@ -58,7 +58,7 @@ Plan MM-497 as a verification-first runtime alignment story for the existing rep
 ### Documentation (this feature)
 
 ```text
-specs/249-report-semantics-rollout/
+specs/250-report-semantics-rollout/
 ├── spec.md
 ├── plan.md
 ├── research.md

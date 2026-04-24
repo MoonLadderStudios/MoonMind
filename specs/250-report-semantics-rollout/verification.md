@@ -1,9 +1,9 @@
 # MoonSpec Verification Report
 
-**Feature**: Report Semantics Rollout  
-**Spec**: `specs/249-report-semantics-rollout/spec.md`  
-**Original Request Source**: `spec.md` `Input` and `docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md`  
-**Verdict**: FULLY_IMPLEMENTED  
+**Feature**: Report Semantics Rollout
+**Spec**: `specs/250-report-semantics-rollout/spec.md`
+**Original Request Source**: `spec.md` `Input` and `docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md`
+**Verdict**: FULLY_IMPLEMENTED
 **Confidence**: HIGH
 
 ## Test Results
@@ -14,19 +14,19 @@
 | Focused contract | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_execution_api.py` | PASS | Existing MM-497 contract verification remained green; 8 Python contract tests passed and the wrapped frontend Vitest suite passed 14 files / 415 tests. |
 | Full unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 3956 Python tests passed, 1 xpassed, 104 warnings, and 16 subtests passed; the wrapped frontend Vitest suite passed 14 files / 415 tests. |
 | Hermetic integration | `./tools/test_integration.sh` | NOT RUN | MM-497 stayed within existing rollout/runtime, API, and UI verification boundaries. No production-code fallback implementation crossed the hermetic integration boundary. |
-| Traceability audit | `rg -n "MM-497|DESIGN-REQ-021|DESIGN-REQ-023|DESIGN-REQ-024|report\.primary|output\.primary|report_type|auto-pinning|projection timing|export semantics|evidence grouping|multi-step" specs/249-report-semantics-rollout docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md docs/Artifacts/ReportArtifacts.md` | PASS | Confirmed MM-497, source design IDs, canonical report semantics, and deferred questions remain explicit across the source design and feature-local artifacts. |
+| Traceability audit | `rg -n "MM-497|DESIGN-REQ-021|DESIGN-REQ-023|DESIGN-REQ-024|report\.primary|output\.primary|report_type|auto-pinning|projection timing|export semantics|evidence grouping|multi-step" specs/250-report-semantics-rollout docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md docs/Artifacts/ReportArtifacts.md` | PASS | Confirmed MM-497, source design IDs, canonical report semantics, and deferred questions remain explicit across the source design and feature-local artifacts. |
 
 ## Requirement Coverage
 
 | Requirement | Evidence | Status | Notes |
 |-------------|----------|--------|-------|
 | FR-001 | `docs/Artifacts/ReportArtifacts.md` §5, §17, §19, §21; `tests/unit/workflows/temporal/test_report_workflow_rollout.py` | VERIFIED | Generic `output.primary` workflows remain valid and are not reclassified as reports by default. |
-| FR-002 | `moonmind/workflows/temporal/report_artifacts.py`; `tests/unit/workflows/temporal/test_report_workflow_rollout.py`; `specs/249-report-semantics-rollout/contracts/report-rollout-semantics-contract.md` | VERIFIED | Report-producing workflows still require explicit `report.*` semantics and representative report metadata. |
+| FR-002 | `moonmind/workflows/temporal/report_artifacts.py`; `tests/unit/workflows/temporal/test_report_workflow_rollout.py`; `specs/250-report-semantics-rollout/contracts/report-rollout-semantics-contract.md` | VERIFIED | Report-producing workflows still require explicit `report.*` semantics and representative report metadata. |
 | FR-003 | `api_service/api/routers/executions.py`; `tests/unit/api/routers/test_executions.py`; `tests/contract/test_temporal_execution_api.py`; `frontend/src/entrypoints/task-detail.test.tsx` | VERIFIED | The staged rollout remains incremental and artifact-backed, without implying a flag-day migration of generic outputs. |
 | FR-004 | `docs/Artifacts/ReportArtifacts.md` §2, §5, §19, §20; `tests/unit/workflows/temporal/test_artifacts.py` | VERIFIED | Out-of-scope capabilities remain explicit non-goals and are not required for the rollout to function. |
 | FR-005 | `docs/Artifacts/ReportArtifacts.md` §17; `moonmind/workflows/temporal/report_artifacts.py`; `tests/unit/workflows/temporal/test_report_workflow_rollout.py` | VERIFIED | Representative unit-test, coverage, pentest/security, and benchmark report mappings remain preserved. |
-| FR-006 | `docs/Artifacts/ReportArtifacts.md` §20; `specs/249-report-semantics-rollout/quickstart.md`; `specs/249-report-semantics-rollout/tasks.md`; `specs/249-report-semantics-rollout/verification.md` | VERIFIED | Deferred questions around `report_type`, auto-pinning, projection timing, export semantics, evidence grouping, and multi-step projections remain explicit rather than silently decided here. |
-| FR-007 | `docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md`; `specs/249-report-semantics-rollout/spec.md`; `specs/249-report-semantics-rollout/plan.md`; `specs/249-report-semantics-rollout/tasks.md`; `specs/249-report-semantics-rollout/verification.md` | VERIFIED | MM-497 remains preserved across the feature-local MoonSpec artifacts and final verification output. |
+| FR-006 | `docs/Artifacts/ReportArtifacts.md` §20; `specs/250-report-semantics-rollout/quickstart.md`; `specs/250-report-semantics-rollout/tasks.md`; `specs/250-report-semantics-rollout/verification.md` | VERIFIED | Deferred questions around `report_type`, auto-pinning, projection timing, export semantics, evidence grouping, and multi-step projections remain explicit rather than silently decided here. |
+| FR-007 | `docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md`; `specs/250-report-semantics-rollout/spec.md`; `specs/250-report-semantics-rollout/plan.md`; `specs/250-report-semantics-rollout/tasks.md`; `specs/250-report-semantics-rollout/verification.md` | VERIFIED | MM-497 remains preserved across the feature-local MoonSpec artifacts and final verification output. |
 
 ## Acceptance Scenario Coverage
 
@@ -37,8 +37,8 @@
 | 3 | `tests/unit/api/routers/test_executions.py`; `tests/contract/test_temporal_execution_api.py` | VERIFIED | Execution detail and API boundary behavior still support incremental rollout without flag-day migration. |
 | 4 | `docs/Artifacts/ReportArtifacts.md` §2, §5, §19, §20; `tests/unit/workflows/temporal/test_artifacts.py` | VERIFIED | Out-of-scope capabilities remain explicitly deferred and are not implied by the current implementation. |
 | 5 | `docs/Artifacts/ReportArtifacts.md` §17; `tests/unit/workflows/temporal/test_report_workflow_rollout.py` | VERIFIED | Representative workflow mappings remain present and verifiable. |
-| 6 | `specs/249-report-semantics-rollout/quickstart.md`; `specs/249-report-semantics-rollout/tasks.md`; `specs/249-report-semantics-rollout/verification.md`; `docs/Artifacts/ReportArtifacts.md` §20 | VERIFIED | Deferred product decisions remain preserved in the feature-local artifacts. |
-| 7 | `docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md`; `specs/249-report-semantics-rollout/spec.md`; `specs/249-report-semantics-rollout/plan.md`; `specs/249-report-semantics-rollout/tasks.md`; `specs/249-report-semantics-rollout/verification.md` | VERIFIED | MM-497 and the mapped design requirements remain traceable through the completed feature directory. |
+| 6 | `specs/250-report-semantics-rollout/quickstart.md`; `specs/250-report-semantics-rollout/tasks.md`; `specs/250-report-semantics-rollout/verification.md`; `docs/Artifacts/ReportArtifacts.md` §20 | VERIFIED | Deferred product decisions remain preserved in the feature-local artifacts. |
+| 7 | `docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md`; `specs/250-report-semantics-rollout/spec.md`; `specs/250-report-semantics-rollout/plan.md`; `specs/250-report-semantics-rollout/tasks.md`; `specs/250-report-semantics-rollout/verification.md` | VERIFIED | MM-497 and the mapped design requirements remain traceable through the completed feature directory. |
 
 ## Source Design Coverage
 

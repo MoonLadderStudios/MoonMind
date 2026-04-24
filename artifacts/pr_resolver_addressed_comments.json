@@ -48,5 +48,25 @@
     "id": 3135097081,
     "disposition": "addressed",
     "rationale": "Dropped the unused ArtifactRefModel import after switching execution report projections to CompactArtifactRefModel."
+  },
+  {
+    "id": 3135151857,
+    "disposition": "addressed",
+    "rationale": "Switched the new test to the canonical skill wrapper imports and removed the duplicated tool-module imports."
+  },
+  {
+    "id": 3135151861,
+    "disposition": "addressed",
+    "rationale": "Added the explicit SkillRegistrySnapshot return type to _snapshot for clearer typing."
+  },
+  {
+    "id": 3135151866,
+    "disposition": "addressed",
+    "rationale": "Pinned both helper calls to the same explicit stepId so the stop path targets the same deterministic helper container name."
+  },
+  {
+    "id": 3135151868,
+    "disposition": "addressed",
+    "rationale": "Updated the disabled-mode test to assert the dispatcher omits handlers and fails with the missing-handler message that matches current disabled-mode behavior."
   }
 ]

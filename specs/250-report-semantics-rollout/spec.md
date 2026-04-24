@@ -1,6 +1,6 @@
 # Feature Specification: Report Semantics Rollout
 
-**Feature Branch**: `249-report-semantics-rollout`
+**Feature Branch**: `250-report-semantics-rollout`
 **Created**: 2026-04-24
 **Status**: Draft
 **Input**: User description: "Use the Jira preset brief for MM-497 as the canonical Moon Spec orchestration input.
