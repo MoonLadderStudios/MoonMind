@@ -1,72 +1,12 @@
 [
   {
-    "id": 3135051899,
-    "disposition": "addressed",
-    "rationale": "Hydration now fetches primary and summary report artifacts concurrently with asyncio.gather."
-  },
-  {
-    "id": 3135051901,
-    "disposition": "addressed",
-    "rationale": "Execution report projections now preserve compact artifact refs end to end instead of re-injecting full artifact metadata."
-  },
-  {
-    "id": 4167397793,
+    "id": 4167635630,
     "disposition": "not-applicable",
-    "rationale": "Top-level Gemini review summary only restated the inline comments and required no separate change."
+    "rationale": "Top-level review summary only; no independent action required beyond the linked inline comment disposition."
   },
   {
-    "id": 3135074437,
+    "id": 3135262955,
     "disposition": "addressed",
-    "rationale": "Report hydration now ignores incomplete report.primary and report.summary artifacts and only projects COMPLETE artifacts."
-  },
-  {
-    "id": 4167425940,
-    "disposition": "not-applicable",
-    "rationale": "Top-level Codex review wrapper contained no standalone actionable feedback beyond the inline comment already addressed."
-  },
-  {
-    "id": 3135097062,
-    "disposition": "addressed",
-    "rationale": "Removed the unused user binding from _client_with_service while preserving dependency override side effects."
-  },
-  {
-    "id": 3135097068,
-    "disposition": "addressed",
-    "rationale": "Removed the unused admin test user binding in test_list_executions_passes_temporal_filters_for_admin."
-  },
-  {
-    "id": 3135097076,
-    "disposition": "addressed",
-    "rationale": "Removed an unused user binding in the send-message signal test setup."
-  },
-  {
-    "id": 3135097078,
-    "disposition": "addressed",
-    "rationale": "Removed an unused user binding in the skip-dependency signal test setup."
-  },
-  {
-    "id": 3135097081,
-    "disposition": "addressed",
-    "rationale": "Dropped the unused ArtifactRefModel import after switching execution report projections to CompactArtifactRefModel."
-  },
-  {
-    "id": 3135151857,
-    "disposition": "addressed",
-    "rationale": "Switched the new test to the canonical skill wrapper imports and removed the duplicated tool-module imports."
-  },
-  {
-    "id": 3135151861,
-    "disposition": "addressed",
-    "rationale": "Added the explicit SkillRegistrySnapshot return type to _snapshot for clearer typing."
-  },
-  {
-    "id": 3135151866,
-    "disposition": "addressed",
-    "rationale": "Pinned both helper calls to the same explicit stepId so the stop path targets the same deterministic helper container name."
-  },
-  {
-    "id": 3135151868,
-    "disposition": "addressed",
-    "rationale": "Updated the disabled-mode test to assert the dispatcher omits handlers and fails with the missing-handler message that matches current disabled-mode behavior."
+    "rationale": "Replaced the absolute workspace path in specs/250-unrestricted-container-and-docker-cli-contracts/checklists/requirements.md with the relative link ../spec.md."
   }
 ]
