@@ -19,6 +19,7 @@ Inspect existing Moon Spec artifacts and resume from the first incomplete stage 
 Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-496-moonspec-orchestration-input.md`.
 Classification: single-story runtime feature request.
 Resume decision: existing report-related feature directories in `specs/` map to different Jira stories (`MM-492`, `MM-493`, `MM-494`), so no active Moon Spec feature directory matched MM-496 and `Specify` is the first incomplete stage.
+Breakdown decision: `moonspec-breakdown` was not run because the MM-496 Jira preset brief already defines one independently testable runtime story and does not require processing multiple specs.
 
 ## Original Preset Brief
 
@@ -126,8 +127,6 @@ Needs Clarification
 - An execution has report artifacts, but no canonical `report.primary` for the relevant scope.
 - Projection metadata includes unsupported keys or oversized values that would violate bounded report metadata rules.
 - Clients attempt to infer report recency from artifact ordering instead of the server projection.
-
-- Breakdown decision: `moonspec-breakdown` was not run because the MM-496 Jira preset brief already defines one independently testable runtime story and does not require processing multiple specs.
 
 ## Assumptions
 
