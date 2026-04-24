@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable, Mapping
 from pydantic import ValidationError
 
 from moonmind.schemas.workload_models import WorkloadResult, parse_workload_request
+from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 from moonmind.workflows.skills.skill_plan_contracts import (
     SkillFailure as ToolFailure,
     SkillResult,
@@ -45,15 +46,6 @@ UNRESTRICTED_DOOD_TOOL_NAMES = frozenset(
     }
 )
 DOOD_TOOL_NAMES = frozenset({*CURATED_DOOD_TOOL_NAMES, *UNRESTRICTED_DOOD_TOOL_NAMES})
-
-
-def normalize_workflow_docker_mode(value: str | None) -> str:
-    normalized = str(value or "profiles").strip().lower() or "profiles"
-    if normalized not in {"disabled", "profiles", "unrestricted"}:
-        raise ValueError(
-            "workflow_docker_mode must be one of: disabled, profiles, unrestricted"
-        )
-    return normalized
 
 
 def tool_allowed_for_workflow_docker_mode(*, tool_name: str, workflow_docker_mode: str) -> bool:

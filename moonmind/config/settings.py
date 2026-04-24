@@ -16,6 +16,7 @@ from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
+from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
@@ -975,14 +976,7 @@ class WorkflowSettings(BaseSettings):
     @field_validator("workflow_docker_mode", mode="before")
     @classmethod
     def _normalize_workflow_docker_mode(cls, value: object) -> str:
-        text = str(value or "").strip().lower()
-        if not text:
-            return "profiles"
-        if text not in {"disabled", "profiles", "unrestricted"}:
-            raise ValueError(
-                "workflow_docker_mode must be one of: disabled, profiles, unrestricted"
-            )
-        return text
+        return normalize_workflow_docker_mode(value)
 
     @field_validator("moonmind_ci_repository", mode="before")
     @classmethod

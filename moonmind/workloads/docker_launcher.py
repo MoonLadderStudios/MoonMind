@@ -25,6 +25,27 @@ from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_te
 
 _MAX_CAPTURED_STREAM_CHARS = 64_000
 _MAX_CAPTURED_STREAM_BYTES = 64_000
+_DEFAULT_TIMEOUT_SECONDS = 300
+_DEFAULT_KILL_GRACE_SECONDS = 30
+_UNRESTRICTED_RUNNER_PROFILE = RunnerProfile.model_validate(
+    {
+        "id": "unrestricted",
+        "kind": "one_shot",
+        "image": "busybox:1.0",
+        "workdirTemplate": "/tmp",
+        "requiredMounts": [
+            {
+                "type": "volume",
+                "source": "tmp",
+                "target": "/tmp",
+            }
+        ],
+        "envAllowlist": [],
+        "networkPolicy": "none",
+        "resources": {},
+        "timeoutSeconds": _DEFAULT_TIMEOUT_SECONDS,
+    }
+)
 
 
 class DockerWorkloadLauncherError(RuntimeError):
@@ -246,8 +267,8 @@ def _operational_labels(request: ValidatedWorkloadRequest) -> dict[str, str]:
             "moonmind.expires_at": _isoformat(expires_at) or "",
             "moonmind.helper_ttl_seconds": str(ttl_seconds),
         }
-    timeout_seconds = request.request.timeout_seconds or (request.profile.timeout_seconds if request.profile is not None else 300)
-    kill_grace_seconds = request.profile.cleanup.kill_grace_seconds if request.profile is not None else 30
+    timeout_seconds = _request_timeout_seconds(request)
+    kill_grace_seconds = _request_kill_grace_seconds(request)
     expires_at = datetime.now(UTC) + timedelta(seconds=timeout_seconds + kill_grace_seconds)
     return {
         **request.ownership.labels,
@@ -414,6 +435,71 @@ def _publish_workload_artifacts(
     return stdout_ref, stderr_ref, diagnostics_ref, output_refs, publication
 
 
+def _request_timeout_seconds(request: ValidatedWorkloadRequest) -> int | float:
+    return request.request.timeout_seconds or (
+        request.profile.timeout_seconds
+        if request.profile is not None
+        else _DEFAULT_TIMEOUT_SECONDS
+    )
+
+
+def _request_kill_grace_seconds(request: ValidatedWorkloadRequest) -> int:
+    return (
+        request.profile.cleanup.kill_grace_seconds
+        if request.profile is not None
+        else _DEFAULT_KILL_GRACE_SECONDS
+    )
+
+
+def _build_unrestricted_run_args(
+    *,
+    docker_binary: str,
+    request: ValidatedWorkloadRequest,
+) -> list[str]:
+    workload = request.request
+    if isinstance(workload, UnrestrictedDockerRequest):
+        return [docker_binary, *workload.command[1:]]
+    if not isinstance(workload, UnrestrictedContainerRequest):
+        raise DockerWorkloadLauncherError("unsupported unrestricted workload request")
+    args = [
+        docker_binary,
+        "run",
+        "--name",
+        request.container_name,
+        "--workdir",
+        workload.workdir or workload.repo_dir,
+        "--network",
+        workload.network_mode,
+        "--privileged=false",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+    ]
+    for key, value in _operational_labels(request).items():
+        args.extend(["--label", f"{key}={value}"])
+    args.extend(["--mount", f"type=bind,source={workload.repo_dir},target={workload.repo_dir}"])
+    args.extend(["--mount", f"type=bind,source={workload.artifacts_dir},target={workload.artifacts_dir}"])
+    args.extend(["--mount", f"type=bind,source={workload.scratch_dir},target={workload.scratch_dir}"])
+    for mount in workload.cache_mounts:
+        suffix = ",readonly" if mount.read_only else ""
+        args.extend(["--mount", f"type=volume,source={mount.source},target={mount.target}{suffix}"])
+    for key, value in workload.env_overrides.items():
+        args.extend(["--env", f"{key}={value}"])
+    for flag, value in _effective_resources(
+        profile=_UNRESTRICTED_RUNNER_PROFILE,
+        overrides=workload.resources,
+    ).items():
+        args.extend([flag, value])
+    if workload.entrypoint:
+        args.extend(["--entrypoint", workload.entrypoint[0]])
+    args.append(workload.image)
+    if workload.entrypoint[1:]:
+        args.extend(workload.entrypoint[1:])
+    args.extend(workload.command)
+    return args
+
+
 def _ensure_paths_are_mounted(request: ValidatedWorkloadRequest) -> None:
     if request.profile is None:
         return
@@ -559,44 +645,10 @@ class DockerWorkloadLauncher:
         profile = request.profile
         workload = request.request
         if profile is None:
-            if isinstance(workload, UnrestrictedDockerRequest):
-                return [self._docker_binary, *workload.command]
-            if not isinstance(workload, UnrestrictedContainerRequest):
-                raise DockerWorkloadLauncherError("unsupported unrestricted workload request")
-            args = [
-                self._docker_binary,
-                "run",
-                "--name",
-                request.container_name,
-                "--workdir",
-                workload.workdir or workload.repo_dir,
-                "--network",
-                workload.network_mode,
-                "--privileged=false",
-                "--cap-drop",
-                "ALL",
-                "--security-opt",
-                "no-new-privileges",
-            ]
-            for key, value in _operational_labels(request).items():
-                args.extend(["--label", f"{key}={value}"])
-            args.extend(["--mount", f"type=bind,source={workload.repo_dir},target={workload.repo_dir}"])
-            args.extend(["--mount", f"type=bind,source={workload.artifacts_dir},target={workload.artifacts_dir}"])
-            args.extend(["--mount", f"type=bind,source={workload.scratch_dir},target={workload.scratch_dir}"])
-            for mount in workload.cache_mounts:
-                suffix = ",readonly" if mount.read_only else ""
-                args.extend(["--mount", f"type=volume,source={mount.source},target={mount.target}{suffix}"])
-            for key, value in workload.env_overrides.items():
-                args.extend(["--env", f"{key}={value}"])
-            for flag, value in _effective_resources(profile=RunnerProfile.model_validate({"id":"unrestricted","kind":"one_shot","image":"busybox:1.0","workdirTemplate":"/tmp","requiredMounts":[{"type":"volume","source":"tmp","target":"/tmp"}],"envAllowlist":[],"networkPolicy":"none","resources":{},"timeoutSeconds":300}), overrides=workload.resources).items():
-                args.extend([flag, value])
-            if workload.entrypoint:
-                args.extend(["--entrypoint", workload.entrypoint[0]])
-            args.append(workload.image)
-            if workload.entrypoint[1:]:
-                args.extend(workload.entrypoint[1:])
-            args.extend(workload.command)
-            return args
+            return _build_unrestricted_run_args(
+                docker_binary=self._docker_binary,
+                request=request,
+            )
         args = [
             self._docker_binary,
             "run",
@@ -642,52 +694,18 @@ class DockerWorkloadLauncher:
         return args
 
     def build_helper_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
-        if request.profile.kind != "bounded_service":
+        profile = request.profile
+        workload = request.request
+        if profile is None:
+            return _build_unrestricted_run_args(
+                docker_binary=self._docker_binary,
+                request=request,
+            )
+        if profile.kind != "bounded_service":
             raise DockerWorkloadLauncherError(
                 "start_helper requires a bounded_service runner profile"
             )
         _ensure_paths_are_mounted(request)
-        profile = request.profile
-        workload = request.request
-        if profile is None:
-            if isinstance(workload, UnrestrictedDockerRequest):
-                return [self._docker_binary, *workload.command]
-            if not isinstance(workload, UnrestrictedContainerRequest):
-                raise DockerWorkloadLauncherError("unsupported unrestricted workload request")
-            args = [
-                self._docker_binary,
-                "run",
-                "--name",
-                request.container_name,
-                "--workdir",
-                workload.workdir or workload.repo_dir,
-                "--network",
-                workload.network_mode,
-                "--privileged=false",
-                "--cap-drop",
-                "ALL",
-                "--security-opt",
-                "no-new-privileges",
-            ]
-            for key, value in _operational_labels(request).items():
-                args.extend(["--label", f"{key}={value}"])
-            args.extend(["--mount", f"type=bind,source={workload.repo_dir},target={workload.repo_dir}"])
-            args.extend(["--mount", f"type=bind,source={workload.artifacts_dir},target={workload.artifacts_dir}"])
-            args.extend(["--mount", f"type=bind,source={workload.scratch_dir},target={workload.scratch_dir}"])
-            for mount in workload.cache_mounts:
-                suffix = ",readonly" if mount.read_only else ""
-                args.extend(["--mount", f"type=volume,source={mount.source},target={mount.target}{suffix}"])
-            for key, value in workload.env_overrides.items():
-                args.extend(["--env", f"{key}={value}"])
-            for flag, value in _effective_resources(profile=RunnerProfile.model_validate({"id":"unrestricted","kind":"one_shot","image":"busybox:1.0","workdirTemplate":"/tmp","requiredMounts":[{"type":"volume","source":"tmp","target":"/tmp"}],"envAllowlist":[],"networkPolicy":"none","resources":{},"timeoutSeconds":300}), overrides=workload.resources).items():
-                args.extend([flag, value])
-            if workload.entrypoint:
-                args.extend(["--entrypoint", workload.entrypoint[0]])
-            args.append(workload.image)
-            if workload.entrypoint[1:]:
-                args.extend(workload.entrypoint[1:])
-            args.extend(workload.command)
-            return args
         args = [
             self._docker_binary,
             "run",
@@ -745,7 +763,7 @@ class DockerWorkloadLauncher:
         configured_timeout = (
             timeout_seconds
             if timeout_seconds is not None
-            else request.request.timeout_seconds or (request.profile.timeout_seconds if request.profile is not None else 300)
+            else _request_timeout_seconds(request)
         )
         lease = await self._concurrency_limiter.acquire(request)
 
@@ -777,7 +795,7 @@ class DockerWorkloadLauncher:
                             stdout_buffer=stdout_buffer,
                             stderr_buffer=stderr_buffer,
                         ),
-                        timeout=max(1, request.profile.cleanup.kill_grace_seconds if request.profile is not None else 30),
+                        timeout=max(1, _request_kill_grace_seconds(request)),
                     )
                 except asyncio.TimeoutError:
                     process.kill()
@@ -798,7 +816,7 @@ class DockerWorkloadLauncher:
                                 stdout_buffer=stdout_buffer,
                                 stderr_buffer=stderr_buffer,
                             ),
-                            timeout=max(1, request.profile.cleanup.kill_grace_seconds if request.profile is not None else 30),
+                            timeout=max(1, _request_kill_grace_seconds(request)),
                         )
                     except asyncio.TimeoutError:
                         process.kill()
@@ -837,7 +855,7 @@ class DockerWorkloadLauncher:
                 by_alias=True,
                 exclude_none=True,
             ),
-            "cleanup": (request.profile.cleanup.model_dump(mode="json", by_alias=True) if request.profile is not None else {"removeContainerOnExit": False, "killGraceSeconds": 30}),
+            "cleanup": (request.profile.cleanup.model_dump(mode="json", by_alias=True) if request.profile is not None else {"removeContainerOnExit": False, "killGraceSeconds": _DEFAULT_KILL_GRACE_SECONDS}),
         }
         declared_refs, missing_declared_outputs = _declared_output_refs(request)
         diagnostics["declaredOutputRefs"] = dict(declared_refs)

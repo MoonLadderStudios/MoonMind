@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from moonmind.schemas.workload_models import WorkloadRequest
+from moonmind.schemas.workload_models import UnrestrictedDockerRequest, WorkloadRequest
 from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
     DockerWorkloadConcurrencyLimiter,
@@ -310,6 +310,52 @@ def test_launcher_wraps_multi_part_shell_command_as_single_arg(
     )
 
     assert run_args[-3:] == ["python:3.12-slim", "-lc", "python -V"]
+
+
+def test_unrestricted_docker_request_replaces_leading_docker_binary(
+    tmp_path: Path,
+) -> None:
+    request = UnrestrictedDockerRequest.model_validate(
+        {
+            "toolName": "container.run_docker",
+            "taskRunId": "task-1",
+            "stepId": "docker-cli",
+            "attempt": 1,
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/docker-cli",
+            "command": ["docker", "ps"],
+        }
+    )
+    registry = _registry(tmp_path)
+    validated = registry.validate_request(request)
+
+    args = DockerWorkloadLauncher(docker_binary="podman").build_run_args(validated)
+
+    assert args == ["podman", "ps"]
+
+
+def test_unrestricted_helper_request_reuses_unrestricted_arg_builder(
+    tmp_path: Path,
+) -> None:
+    request = UnrestrictedDockerRequest.model_validate(
+        {
+            "toolName": "container.run_docker",
+            "taskRunId": "task-1",
+            "stepId": "docker-helper",
+            "attempt": 1,
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/docker-helper",
+            "command": ["docker", "images"],
+        }
+    )
+    registry = _registry(tmp_path)
+    validated = registry.validate_request(request)
+
+    args = DockerWorkloadLauncher(docker_binary="podman").build_helper_run_args(validated)
+
+    assert args == ["podman", "images"]
+
+
 
 
 def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> None:
