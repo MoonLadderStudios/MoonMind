@@ -30,7 +30,7 @@ Integration evidence covers report deletion without cascade to observability art
 
 - [X] T004 Confirm unit coverage for bounded and safe report metadata validation (FR-003, SC-002, DESIGN-REQ-011).
 - [X] T005 Confirm unit coverage for restricted report metadata/default-read behavior and raw presign denial (FR-001, FR-002, FR-004, SC-001, DESIGN-REQ-017).
-- [X] T006 Confirm unit coverage for `report.primary`/`report.summary` long retention plus `report.structured`/`report.evidence` non-observability retention defaults (FR-005, FR-006, SC-003, SC-004, DESIGN-REQ-018).
+- [X] T006 Confirm unit coverage for `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, and `report.export` long retention plus `report.structured`/`report.evidence` non-observability retention defaults (FR-005, FR-006, SC-003, SC-004, DESIGN-REQ-018).
 - [X] T007 Confirm unit coverage for pin then unpin restoring report-derived retention (FR-007, SC-005, DESIGN-REQ-018).
 - [X] T008 Confirm integration coverage for deleting a report artifact without mutating unrelated observability artifacts (FR-008, FR-009, SC-006, DESIGN-REQ-018).
 

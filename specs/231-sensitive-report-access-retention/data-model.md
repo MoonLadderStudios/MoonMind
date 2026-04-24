@@ -21,6 +21,9 @@
 - Report link types in scope:
   - `report.primary`
   - `report.summary`
+  - `report.appendix`
+  - `report.findings_index`
+  - `report.export`
   - `report.structured`
   - `report.evidence`
 - Observability link types must remain independent:
@@ -49,7 +52,7 @@
 
 ## State Transitions
 
-1. Create `report.primary` or `report.summary` without explicit retention -> `retention_class=long`.
+1. Create `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, or `report.export` without explicit retention -> `retention_class=long`.
 2. Create `report.structured` or `report.evidence` without explicit retention -> `retention_class=standard` unless policy or producer explicitly chooses `long`.
 3. Validate report metadata -> unsupported or unsafe metadata fails before report publication.
 4. Pin report artifact -> `retention_class=pinned`, `expires_at=None`.

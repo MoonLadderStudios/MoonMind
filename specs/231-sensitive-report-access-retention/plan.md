@@ -15,7 +15,7 @@ Resume the existing runtime story in `specs/231-sensitive-report-access-retentio
 | FR-002 | verified | `get_read_policy` preview/default-read behavior plus restricted report tests. | Preserve MM-495 traceability in artifacts. | unit |
 | FR-003 | verified | `validate_report_artifact_contract` and report metadata validation tests reject unsafe or oversized metadata. | Preserve MM-495 traceability in artifacts. | unit |
 | FR-004 | verified | Raw presign/read paths enforce restricted raw access. | Preserve MM-495 traceability in artifacts. | unit |
-| FR-005 | verified | `_derive_retention` maps `report.primary` and `report.summary` to `long`. | Preserve MM-495 traceability in artifacts. | unit |
+| FR-005 | verified | `_derive_retention` maps `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, and `report.export` to `long`. | Preserve MM-495 traceability in artifacts. | unit |
 | FR-006 | verified | `_derive_retention` keeps `report.structured` and `report.evidence` non-observability retention and honors explicit overrides. | Preserve MM-495 traceability in artifacts. | unit |
 | FR-007 | verified | `TemporalArtifactService.unpin` restores report-derived retention. | Preserve MM-495 traceability in artifacts. | unit |
 | FR-008 | verified | Existing artifact lifecycle path performs soft/hard deletion. | Preserve MM-495 traceability in artifacts. | integration_ci |

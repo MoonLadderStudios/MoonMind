@@ -18,8 +18,8 @@ Test implications: Unit tests should prove safe bounded metadata is accepted and
 
 ## FR-005/FR-006/DESIGN-REQ-018 - Report-Aware Retention Defaults
 
-Decision: Derive `long` retention for `report.primary` and `report.summary`; keep `report.structured` and `report.evidence` at `standard` unless explicitly overridden.
-Evidence: `_derive_retention` maps primary and summary reports to `long`, while structured/evidence remain non-observability retention with explicit override support.
+Decision: Derive `long` retention for `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, and `report.export`; keep `report.structured` and `report.evidence` at `standard` unless explicitly overridden.
+Evidence: `_derive_retention` maps those report publication link types to `long`, while structured/evidence remain non-observability retention with explicit override support.
 Rationale: MM-495 requires report-specific retention recommendations without introducing a separate lifecycle model.
 Alternatives considered: Require producers to pass explicit retention for all report artifacts. Rejected because the story requires default mappings.
 Test implications: Unit tests should cover report default retention and explicit `long` overrides.

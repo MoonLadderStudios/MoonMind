@@ -47,7 +47,7 @@ Acceptance Criteria
 - Report artifacts use the existing artifact authorization model for preview and raw reads.
 - Restricted `report.primary`, `report.structured`, and `report.evidence` artifacts can point `default_read_ref` to preview artifacts when raw access is disallowed.
 - Report metadata does not expose secrets, raw access grants, cookies, session tokens, or large inline payloads.
-- Default retention policy can map `report.primary` and `report.summary` to long retention, `report.structured` to long or standard, and `report.evidence` to standard or long by product policy.
+- Default retention policy can map `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, and `report.export` to long retention, `report.structured` to long or standard, and `report.evidence` to standard or long by product policy.
 - Final reports can be explicitly pinned and unpinned through the existing artifact API.
 - Deleting a report artifact uses existing soft-delete/hard-delete behavior and does not implicitly delete unrelated observability artifacts.
 
@@ -73,7 +73,7 @@ Non-Goals
 Validation
 - Verify sensitive report presentation uses preview/default-read behavior where available and does not require raw download access.
 - Verify report metadata remains bounded and safe for display.
-- Verify `report.primary` and `report.summary` artifacts default to long retention unless policy overrides them.
+- Verify `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, and `report.export` artifacts default to long retention unless policy overrides them.
 - Verify `report.structured` and `report.evidence` artifacts follow standard or long retention based on report family and audit needs.
 - Verify final report artifacts can be pinned and unpinned through existing artifact APIs.
 - Verify report artifact deletion uses artifact-system-native soft/hard deletion without implicitly deleting unrelated runtime observability artifacts.
@@ -101,7 +101,7 @@ Needs Clarification
 
 1. **Given** a sensitive report artifact has restricted raw access and a preview artifact, **When** a caller can read metadata but cannot access the raw artifact, **Then** the artifact metadata exposes the preview as `default_read_ref` and raw download remains denied.
 2. **Given** report metadata includes unsupported keys, secret-like values, cookies, session tokens, raw access grants, or oversized inline payloads, **When** the report artifact contract is validated, **Then** creation or report-link publication fails.
-3. **Given** a `report.primary` or `report.summary` artifact is created without an explicit retention override, **When** it is linked to an execution, **Then** its default retention class is `long`.
+3. **Given** a `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, or `report.export` artifact is created without an explicit retention override, **When** it is linked to an execution, **Then** its default retention class is `long`.
 4. **Given** a `report.structured` or `report.evidence` artifact is created without an explicit retention override, **When** it is linked to an execution, **Then** its default retention class is `standard` or `long` according to product policy and remains distinct from observability retention.
 5. **Given** a final report artifact is pinned and later unpinned, **When** the existing artifact API completes both mutations, **Then** the artifact returns to its report-derived retention class rather than a generic default.
 6. **Given** a report artifact and unrelated runtime observability artifacts are linked to the same execution, **When** the report artifact is deleted, **Then** only the report artifact enters deleted state and unrelated stdout, stderr, diagnostics, or log artifacts remain intact.
@@ -119,7 +119,7 @@ Needs Clarification
 
 - Existing authorization rules determine which principals can read metadata and which principals can read raw artifact bytes.
 - Product policy may still explicitly override retention at artifact creation time.
-- `report.structured` and `report.evidence` default to `standard` unless producers or policy choose `long`; `report.primary` and `report.summary` default to `long`.
+- `report.structured` and `report.evidence` default to `standard` unless producers or policy choose `long`; `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, and `report.export` default to `long`.
 - Report metadata validation already exists at the report artifact contract boundary and remains the correct enforcement point for metadata safety.
 
 ## Source Design Requirements
@@ -138,7 +138,7 @@ Needs Clarification
 - **FR-002**: The system MUST expose a preview artifact as `default_read_ref` when a caller can read report metadata but cannot access restricted raw report bytes and a preview is available.
 - **FR-003**: The system MUST reject report metadata that contains unsupported keys, secret-like values, raw access grants, cookies, session tokens, or oversized inline payloads.
 - **FR-004**: The system MUST deny raw report download or presign operations when the caller lacks restricted raw access.
-- **FR-005**: The system MUST derive `long` retention for `report.primary` and `report.summary` artifacts when no explicit retention override is provided.
+- **FR-005**: The system MUST derive `long` retention for `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, and `report.export` artifacts when no explicit retention override is provided.
 - **FR-006**: The system MUST derive a non-observability retention class of `standard` or `long` for `report.structured` and `report.evidence` artifacts when no explicit retention override is provided.
 - **FR-007**: The system MUST allow final report artifacts to be pinned and unpinned through the existing artifact API while restoring report-derived retention after unpin.
 - **FR-008**: The system MUST soft-delete and hard-delete report artifacts through the existing artifact lifecycle path.
@@ -159,7 +159,7 @@ Needs Clarification
 
 - **SC-001**: A restricted report artifact with a preview returns a `default_read_ref` pointing at that preview for a metadata-readable caller without raw access.
 - **SC-002**: Report metadata validation rejects unsupported keys, secret-like values, cookies, session tokens, raw access grants, and oversized inline payloads before report publication.
-- **SC-003**: 100% of newly created `report.primary` and `report.summary` artifacts without explicit retention overrides receive `long` retention.
+- **SC-003**: 100% of newly created `report.primary`, `report.summary`, `report.appendix`, `report.findings_index`, and `report.export` artifacts without explicit retention overrides receive `long` retention.
 - **SC-004**: `report.structured` and `report.evidence` artifacts without explicit retention overrides receive `standard` or `long` retention and never inherit observability-style retention.
 - **SC-005**: Pinning then unpinning a report-primary artifact restores the report-derived retention class.
 - **SC-006**: Deleting one report artifact changes only that artifact's status and leaves unrelated observability artifacts for the same execution readable and undeleted.
