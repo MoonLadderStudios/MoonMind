@@ -310,6 +310,7 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     monkeypatch,
 ):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
 
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
@@ -1966,6 +1967,7 @@ async def test_launch_builds_claude_command_after_workspace_preparation(
     monkeypatch,
 ):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
 
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
