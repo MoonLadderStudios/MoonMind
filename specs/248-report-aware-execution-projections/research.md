@@ -6,6 +6,7 @@ Decision: Treat MM-496 as a single-story runtime feature request.
 Evidence: `docs/tmp/jira-orchestration-inputs/MM-496-moonspec-orchestration-input.md`; `specs/248-report-aware-execution-projections/spec.md`.
 Rationale: The brief defines one independently testable runtime outcome: expose bounded report-aware summary data on execution detail without introducing a second report storage model.
 Alternatives considered: Broad design breakdown was rejected because the Jira brief already selects one story and does not require processing multiple specs.
+Breakdown decision: `moonspec-breakdown` was not run because the MM-496 Jira preset brief already defines one independently testable runtime story and does not require processing multiple specs.
 Test implications: Unit and execution-API contract tests are both required.
 
 ## Execution Detail Summary Fields First, Endpoint Deferred

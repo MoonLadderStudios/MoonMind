@@ -127,6 +127,8 @@ Needs Clarification
 - Projection metadata includes unsupported keys or oversized values that would violate bounded report metadata rules.
 - Clients attempt to infer report recency from artifact ordering instead of the server projection.
 
+- Breakdown decision: `moonspec-breakdown` was not run because the MM-496 Jira preset brief already defines one independently testable runtime story and does not require processing multiple specs.
+
 ## Assumptions
 
 - MM-492 established the canonical report artifact contract and MM-493 established immutable report bundle publication, so MM-496 can reuse existing helper logic rather than inventing a new projection model.
