@@ -423,7 +423,7 @@ describe('Mission Control shared entry', () => {
 
     expect(missionControlCss).toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?65%\s*\{[\s\S]*?background-size:[\s\S]*?86\.83%\s*\{[\s\S]*?100%\s*\{/);
     expect(missionControlCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-state=\"executing\"\]\[data-effect=\"shimmer-sweep\"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,
     );
   });
 
