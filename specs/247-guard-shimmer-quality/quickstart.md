@@ -25,6 +25,7 @@ Expected coverage:
 - Theme-aware assertions confirm the executing shimmer still reads as an intentional active treatment.
 - Reduced-motion conditions still present executing as active without animation.
 - Layout-focused assertions confirm activating the shimmer does not shift pill or surrounding surface layout.
+- Regression assertions confirm MM-491 still validates the existing shimmer treatment rather than accepting an unrelated replacement effect family.
 
 ## Final Unit Suite
 
@@ -40,4 +41,4 @@ This story does not require a compose-backed `integration_ci` suite because it i
 
 ## Independent Story Verification
 
-Render supported Mission Control status-pill surfaces in executing, every listed non-executing state, light and dark themes, and reduced-motion conditions. The story passes when executing pills remain readable, bounded, and layout-stable, non-executing pills remain plain, reduced motion preserves an active fallback without animation, and MM-491 traceability appears in runtime-adjacent verification evidence.
+Render supported Mission Control status-pill surfaces in executing, every listed non-executing state, light and dark themes, and reduced-motion conditions. The story passes when executing pills remain readable, bounded, and layout-stable, non-executing pills remain plain, reduced motion preserves an active fallback without animation, the shared shimmer model remains the effect under test, and MM-491 traceability appears in runtime-adjacent verification evidence.
