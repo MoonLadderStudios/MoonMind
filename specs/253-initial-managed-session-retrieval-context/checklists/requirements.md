@@ -39,3 +39,4 @@
 - The spec preserves the trusted Jira preset brief for `MM-505` verbatim in `## Original Preset Brief` for downstream verification.
 - Runtime mode was selected explicitly and the source document `docs/Rag/WorkflowRag.md` is treated as runtime source requirements.
 - Resume inspection found no existing `MM-505` feature directory under `specs/`, so `Specify` was the first incomplete stage.
+- `moonspec-breakdown` is not applicable because `MM-505` is not a broad technical or declarative design with multiple independently testable stories; multi-spec dependency ordering is therefore not currently in play.

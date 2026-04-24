@@ -97,6 +97,7 @@ Needs Clarification
 - Source design: `docs/Rag/WorkflowRag.md` is treated as runtime source requirements because the brief describes system behavior, not documentation-only work.
 - Source design path input: `.`
 - Resume decision: No existing Moon Spec artifacts for `MM-505` were found under `specs/`; specification is the first incomplete stage.
+- Multi-spec ordering: Not applicable for `MM-505` because the trusted Jira preset brief defines one independently testable story; if a future upstream breakdown produces multiple isolated specs, they must be processed in dependency order.
 
 ## User Story - Publish Initial Retrieval Context For Managed Sessions
 
