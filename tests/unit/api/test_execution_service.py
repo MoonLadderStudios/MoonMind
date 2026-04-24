@@ -13,7 +13,6 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionValidationError,
 )
 
-
 @pytest.fixture
 def mock_session():
     session = MagicMock()
@@ -24,12 +23,10 @@ def mock_session():
     session.get = AsyncMock()
     return session
 
-
 @pytest.fixture
 def mock_client_adapter():
     adapter = AsyncMock()
     return adapter
-
 
 @pytest.fixture
 def service(mock_session, mock_client_adapter, monkeypatch):
@@ -37,7 +34,6 @@ def service(mock_session, mock_client_adapter, monkeypatch):
     # Monkeypatch the internal client adapter
     svc._client_adapter = mock_client_adapter
     return svc
-
 
 @pytest.mark.asyncio
 async def test_describe_execution_syncs_from_temporal(
@@ -63,7 +59,6 @@ async def test_describe_execution_syncs_from_temporal(
 
     mock_client_adapter.describe_workflow.assert_called_once_with("mm:123")
     assert result == record
-
 
 @pytest.mark.asyncio
 async def test_list_executions_sourced_from_temporal(
@@ -98,7 +93,6 @@ async def test_list_executions_sourced_from_temporal(
     assert len(res.items) == 1
     assert res.count == 1
 
-
 @pytest.mark.asyncio
 async def test_cancel_action_routes_to_temporal(
     service, mock_session, mock_client_adapter
@@ -123,7 +117,6 @@ async def test_cancel_action_routes_to_temporal(
     mock_client_adapter.cancel_workflow.assert_called_once_with("mm:123")
     mock_client_adapter.terminate_workflow.assert_not_called()
 
-
 @pytest.mark.asyncio
 async def test_force_terminate_routes_to_temporal_terminate(
     service, mock_session, mock_client_adapter
@@ -147,7 +140,6 @@ async def test_force_terminate_routes_to_temporal_terminate(
         "mm:123", reason="force stop"
     )
     mock_client_adapter.cancel_workflow.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_action_validation_relies_on_temporal(

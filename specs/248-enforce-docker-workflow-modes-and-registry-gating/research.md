@@ -3,7 +3,7 @@
 ## Story Classification
 
 Decision: Treat MM-499 as a single-story runtime implementation request, not a breakdown candidate.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-499-moonspec-orchestration-input.md`; `specs/248-enforce-docker-workflow-modes-and-registry-gating/spec.md`.
+Evidence: `spec.md` (Input); `specs/248-enforce-docker-workflow-modes-and-registry-gating/spec.md`.
 Rationale: The Jira preset brief defines one independently testable runtime outcome: one deployment-owned workflow Docker mode governs tool exposure and runtime denial behavior.
 Alternatives considered: Broad design breakdown was rejected because the Jira brief already selects one story and does not require processing multiple specs.
 Test implications: Unit tests plus at least one hermetic integration boundary are required because the story changes worker/runtime policy wiring.
@@ -59,7 +59,7 @@ Test implications: Add unit tests around registration + handler wiring, and an i
 ## FR-008 Traceability
 
 Decision: partial.
-Evidence: `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-499-moonspec-orchestration-input.md` preserve MM-499 and the original Jira brief.
+Evidence: `spec.md` and `spec.md` (Input) preserve MM-499 and the original Jira brief.
 Rationale: Planning artifacts now need to preserve MM-499, and downstream tasks/verification still need the same traceability.
 Alternatives considered: Treat spec-only preservation as sufficient. Rejected because the story explicitly requires downstream traceability for final verification.
 Test implications: Final traceability review only.

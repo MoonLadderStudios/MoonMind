@@ -6,10 +6,10 @@
 > Route examples below are historical references only; `/api/task-runs/{id}/live-session*` is not a supported managed-run log API surface after the Phase 6 cutoff.
 > Please see [`docs/ManagedAgents/LiveLogs.md`](../ManagedAgents/LiveLogs.md) for the active architecture.
 
-**Implementation tracking:** [`docs/tmp/050-TmatePlan.md`](../tmp/050-TmatePlan.md) · [`specs/024-live-task-handoff`](../../specs/024-live-task-handoff/)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
-Status: Deprecated (Replaced by Phase 6 Live Logs)  
-Owners: MoonMind Engineering  
+Status: Deprecated (Replaced by Phase 6 Live Logs) 
+Owners: MoonMind Engineering 
 Last Updated: 2026-03-28
 
 ---
@@ -115,9 +115,9 @@ Response (when `status = READY`):
 
 ```json
 {
-  "status": "READY",
-  "webRo": "https://example.invalid/readonly-view",
-  "attachRo": "ssh -o … user@worker"
+ "status": "READY",
+ "webRo": "https://example.invalid/readonly-view",
+ "attachRo": "ssh -o … user@worker"
 }
 ```
 
@@ -215,8 +215,8 @@ Pauses and takeovers use standard **Temporal Signals**:
 - RO endpoint is shown to authorized viewers by default. RW endpoint is withheld until an operator with permission explicitly requests it.
 - RW grants are time-bound (default: 15 minutes) and logged in `system_control_events` with actor identity and TTL metadata.
 - Revocation options:
-  - **Revoke write**: Stop revealing RW; optionally restart session to rotate credentials.
-  - **Revoke session**: Tear down the live session record and revoke worker-advertised endpoints.
+ - **Revoke write**: Stop revealing RW; optionally restart session to rotate credentials.
+ - **Revoke session**: Tear down the live session record and revoke worker-advertised endpoints.
 
 ---
 
@@ -233,17 +233,17 @@ The task detail page (`/tasks/:taskId`) should include two live-session UI eleme
 
 ```json
 {
-  "features": {
-    "liveTaskManagement": {
-      "logStreamingEnabled": true,
-      "handoffEnabled": false,
-      "operatorMessagesEnabled": false
-    }
-  }
+ "features": {
+ "liveTaskManagement": {
+ "logStreamingEnabled": true,
+ "handoffEnabled": false,
+ "operatorMessagesEnabled": false
+ }
+ }
 }
 ```
 
-**Desired experience:** operators get artifact-backed log tailing in the task detail UI, optional live handoff controls (RO/RW, pause/resume, operator messages) when session metadata exists, and post-session artifacts such as **`transcript.log`**. Sequencing of UI/backend pieces is tracked in [`docs/tmp/remaining-work/Temporal-LiveTaskManagement.md`](../tmp/remaining-work/Temporal-LiveTaskManagement.md).
+**Desired experience:** operators get artifact-backed log tailing in the task detail UI, optional live handoff controls (RO/RW, pause/resume, operator messages) when session metadata exists, and post-session artifacts such as **`transcript.log`**. Sequencing of UI/backend pieces is tracked in MoonSpec feature artifacts or local planning notes when needed.
 
 ---
 

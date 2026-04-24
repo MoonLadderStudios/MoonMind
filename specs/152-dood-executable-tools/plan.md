@@ -28,7 +28,7 @@ Expose Phase 2 Docker workload launching through MoonMind's existing executable 
 | IX. Resilient by Default | PASS | Uses validated workload requests and existing timeout/cleanup launcher behavior. |
 | X. Continuous Improvement | PASS | Tool results include structured workload status metadata. |
 | XI. Spec-Driven Development | PASS | Spec, plan, and tasks trace the implementation. |
-| XII. Canonical Docs vs tmp | PASS | Completion notes live in `docs/tmp/remaining-work/`. |
+| XII. Canonical Docs vs tmp | PASS | Completion notes live in `docs/ManagedAgents/DockerOutOfDocker.md`. |
 | XIII. Delete, Don't Deprecate | PASS | No compatibility alias or old workload path is introduced. |
 
 ## Project Structure

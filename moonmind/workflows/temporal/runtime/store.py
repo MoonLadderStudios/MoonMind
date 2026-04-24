@@ -16,7 +16,6 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
 )
 
-
 class ManagedRunStore:
     """Persists ManagedRunRecord as individual JSON files under a store root."""
 

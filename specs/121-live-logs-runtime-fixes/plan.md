@@ -50,7 +50,7 @@ Repair the backend/runtime contracts that the Phase 4 UI depends on by persistin
 - Update merged-log API behavior in `api_service/api/routers/task_runs.py`.
 - Update dashboard runtime config in `api_service/api/routers/task_dashboard_view_model.py` and the task detail entrypoint.
 - Add/extend unit coverage in `tests/unit/api/routers/`, `tests/unit/observability/`, and runtime-focused tests where needed.
-- Update `docs/ManagedAgents/LiveLogs.md` and `docs/tmp/009-LiveLogsPlan.md` to match the corrected implementation state and contracts.
+- Update `docs/ManagedAgents/LiveLogs.md` and `docs/ManagedAgents/LiveLogs.md` to match the corrected implementation state and contracts.
 
 ## Verification Plan
 

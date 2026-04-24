@@ -2,7 +2,6 @@ from datetime import datetime
 from enum import Enum
 from pydantic import BaseModel, Field
 
-
 class LogStreamType(str, Enum):
     stdout = "stdout"
     stderr = "stderr"

@@ -16,7 +16,6 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
     ManagedSessionSupervisor,
 )
 
-
 class _LocalArtifactStorage:
     def __init__(self, root: Path) -> None:
         self._root = root
@@ -32,7 +31,6 @@ class _LocalArtifactStorage:
 
     def resolve_storage_path(self, ref: str) -> Path:
         return self._root / ref
-
 
 def _record(tmp_path: Path) -> CodexManagedSessionRecord:
     workspace = tmp_path / "repo"
@@ -56,7 +54,6 @@ def _record(tmp_path: Path) -> CodexManagedSessionRecord:
         artifactSpoolPath=str(spool),
         startedAt=datetime(2026, 4, 6, 12, 0, tzinfo=UTC),
     )
-
 
 @pytest.mark.asyncio
 async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path) -> None:
@@ -99,7 +96,6 @@ async def test_session_supervisor_publishes_artifacts_and_offsets(tmp_path: Path
     assert artifact_storage.resolve_storage_path("sess-1/stderr.log").read_text(encoding="utf-8") == "warning: none\n"
     assert artifact_storage.resolve_storage_path("sess-1/session.summary.json").exists()
     assert artifact_storage.resolve_storage_path("sess-1/session.step_checkpoint.json").exists()
-
 
 @pytest.mark.asyncio
 async def test_session_supervisor_publishes_output_chunks_to_live_spool(
@@ -157,7 +153,6 @@ async def test_session_supervisor_publishes_output_chunks_to_live_spool(
     assert '"kind":"stderr_chunk"' in journal_text
 
     await supervisor.finalize("sess-1", status="terminated")
-
 
 @pytest.mark.asyncio
 async def test_session_supervisor_syncs_active_turn_from_runtime_state(
@@ -229,7 +224,6 @@ async def test_session_supervisor_syncs_active_turn_from_runtime_state(
 
     await supervisor.finalize("sess-1", status="terminated")
 
-
 @pytest.mark.asyncio
 async def test_session_supervisor_ignores_terminal_runtime_active_turn(
     tmp_path: Path,
@@ -272,7 +266,6 @@ async def test_session_supervisor_ignores_terminal_runtime_active_turn(
     assert not (Path(record.workspace_path) / "live_streams.spool").exists()
 
     await supervisor.finalize("sess-1", status="terminated")
-
 
 @pytest.mark.asyncio
 async def test_session_supervisor_resumes_from_persisted_stream_offsets(
@@ -327,7 +320,6 @@ async def test_session_supervisor_resumes_from_persisted_stream_offsets(
 
     await supervisor.finalize("sess-1", status="terminated")
 
-
 @pytest.mark.asyncio
 async def test_session_supervisor_conservatively_replays_without_stream_offsets(
     tmp_path: Path,
@@ -359,7 +351,6 @@ async def test_session_supervisor_conservatively_replays_without_stream_offsets(
     ]
 
     await supervisor.finalize("sess-1", status="terminated")
-
 
 @pytest.mark.asyncio
 async def test_session_supervisor_waits_for_complete_utf8_sequences(
@@ -401,7 +392,6 @@ async def test_session_supervisor_waits_for_complete_utf8_sequences(
 
     await supervisor.finalize("sess-1", status="terminated")
 
-
 @pytest.mark.asyncio
 async def test_publish_snapshot_keeps_watch_task_running(tmp_path: Path) -> None:
     store = ManagedSessionStore(tmp_path / "store")
@@ -433,7 +423,6 @@ async def test_publish_snapshot_keeps_watch_task_running(tmp_path: Path) -> None
     assert watched.last_log_offset == len("first\nsecond\n")
 
     await supervisor.finalize("sess-1", status="terminated")
-
 
 @pytest.mark.asyncio
 async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path) -> None:
@@ -481,7 +470,6 @@ async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path
     assert '"kind":"summary_published"' in journal_text
     assert '"kind":"checkpoint_published"' in journal_text
     assert log_streamer.consume_observability_events(record.task_run_id) == []
-
 
 @pytest.mark.asyncio
 async def test_publish_reset_artifacts_writes_epoch_specific_control_and_boundary_refs(
@@ -564,7 +552,6 @@ async def test_publish_reset_artifacts_writes_epoch_specific_control_and_boundar
         "sess-1/session.reset_boundary.epoch-2.json"
     ).exists()
 
-
 @pytest.mark.asyncio
 async def test_publish_reset_artifacts_preserves_newer_store_fields(tmp_path: Path) -> None:
     store = ManagedSessionStore(tmp_path / "store")
@@ -604,7 +591,6 @@ async def test_publish_reset_artifacts_preserves_newer_store_fields(tmp_path: Pa
     assert published.last_log_at == datetime(2026, 4, 7, 8, 1, tzinfo=UTC)
     assert published.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
     assert published.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
-
 
 @pytest.mark.asyncio
 async def test_publish_reset_artifacts_tolerates_event_publication_failure(

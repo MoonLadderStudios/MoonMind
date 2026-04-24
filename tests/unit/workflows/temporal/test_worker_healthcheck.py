@@ -15,7 +15,6 @@ from moonmind.workflows.temporal.worker_healthcheck import (
     start_healthcheck_server,
 )
 
-
 def test_build_response_body_returns_valid_json(monkeypatch):
     """Response body should be valid JSON with required keys."""
     monkeypatch.setenv("TEMPORAL_WORKER_FLEET", "sandbox")
@@ -25,13 +24,11 @@ def test_build_response_body_returns_valid_json(monkeypatch):
     assert "uptime_seconds" in body
     assert isinstance(body["uptime_seconds"], int)
 
-
 def test_build_response_body_defaults_fleet(monkeypatch):
     """Fleet should default to 'unknown' when env var is missing."""
     monkeypatch.delenv("TEMPORAL_WORKER_FLEET", raising=False)
     body = json.loads(_build_response_body())
     assert body["fleet"] == "unknown"
-
 
 @pytest.mark.parametrize(
     "env_value,expected",
@@ -51,30 +48,25 @@ def test_is_enabled_respects_env(monkeypatch, env_value, expected):
     monkeypatch.setenv("WORKER_HEALTHCHECK_ENABLED", env_value)
     assert _is_enabled() is expected
 
-
 def test_is_enabled_defaults_to_true(monkeypatch):
     """When no env var is set, healthcheck should be enabled."""
     monkeypatch.delenv("WORKER_HEALTHCHECK_ENABLED", raising=False)
     assert _is_enabled() is True
-
 
 def test_port_defaults_to_8080(monkeypatch):
     """Default port should be 8080."""
     monkeypatch.delenv("WORKER_HEALTHCHECK_PORT", raising=False)
     assert _port() == 8080
 
-
 def test_port_reads_env(monkeypatch):
     """Port should be configurable via WORKER_HEALTHCHECK_PORT."""
     monkeypatch.setenv("WORKER_HEALTHCHECK_PORT", "9090")
     assert _port() == 9090
 
-
 def test_port_ignores_non_numeric(monkeypatch):
     """Non-numeric port values should fall back to default."""
     monkeypatch.setenv("WORKER_HEALTHCHECK_PORT", "abc")
     assert _port() == 8080
-
 
 @pytest.mark.asyncio
 async def test_start_healthcheck_server_disabled(monkeypatch):
@@ -82,7 +74,6 @@ async def test_start_healthcheck_server_disabled(monkeypatch):
     monkeypatch.setenv("WORKER_HEALTHCHECK_ENABLED", "false")
     server = await start_healthcheck_server()
     assert server is None
-
 
 @pytest.mark.asyncio
 async def test_start_healthcheck_server_responds(monkeypatch):

@@ -36,7 +36,6 @@ from moonmind.schemas.chat_models import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
 def format_context_for_prompt(retrieved_nodes: List[NodeWithScore]) -> str:
     """Format retrieved RAG context for injection into prompts."""
     if not retrieved_nodes:
@@ -55,7 +54,6 @@ def format_context_for_prompt(retrieved_nodes: List[NodeWithScore]) -> str:
         context_str += f"{text_content}\n"
     context_str += "--- End of Retrieved Context ---\n"
     return context_str
-
 
 def inject_rag_context(
     messages: List, retrieved_context_str: str, user_query: str
@@ -104,7 +102,6 @@ def inject_rag_context(
 
     return processed_messages
 
-
 async def get_rag_context(
     user_query: str,
     vector_index: Optional[VectorStoreIndex],
@@ -146,7 +143,6 @@ async def get_rag_context(
     logger.debug(f"Formatted context for prompt:\n{retrieved_context_str[:500]}...")
     return retrieved_context_str
 
-
 async def get_user_api_key(
     user: User,
     provider: str,
@@ -182,7 +178,6 @@ async def get_user_api_key(
         logger.warning("Unable to load user API key from DB: %s", exc)
 
     return env_api_key
-
 
 @router.post("/completions", response_model=ChatCompletionResponse)
 async def chat_completions(
@@ -291,7 +286,6 @@ async def chat_completions(
             status_code=500, detail=f"An internal server error occurred: {str(e)}"
         )
 
-
 async def handle_openai_request(
     request: ChatCompletionRequest, messages: List, model_to_use: str, api_key: str
 ) -> ChatCompletionResponse:
@@ -382,7 +376,6 @@ async def handle_openai_request(
             ),
         ),
     )
-
 
 async def handle_google_request(
     request: ChatCompletionRequest, messages: List, model_to_use: str, api_key: str
@@ -496,7 +489,6 @@ async def handle_google_request(
             total_tokens=prompt_tokens_estimate + completion_tokens_estimate,
         ),
     )
-
 
 async def handle_anthropic_request(
     request: ChatCompletionRequest, messages: List, model_to_use: str, api_key: str
@@ -650,7 +642,6 @@ async def handle_anthropic_request(
             total_tokens=prompt_tokens_estimate + completion_tokens_estimate,
         ),
     )
-
 
 async def handle_ollama_request(
     request: ChatCompletionRequest, messages: List, model_to_use: str

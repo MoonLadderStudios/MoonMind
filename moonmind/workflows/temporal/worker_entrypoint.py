@@ -29,7 +29,6 @@ from moonmind.workflows.temporal.workflows.merge_automation import (
     MoonMindMergeAutomationWorkflow,
 )
 
-
 async def main():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
@@ -82,7 +81,6 @@ async def main():
         f"Starting Temporal worker for fleet '{topology.fleet}' on queue '{topology.task_queues[0]}'"
     )
     await worker.run()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

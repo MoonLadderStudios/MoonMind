@@ -16,7 +16,6 @@ from moonmind.workflows.skills.workspace_links import (
 
 logger = logging.getLogger(__name__)
 
-
 class AgentSkillMaterializer:
     """Materializes a ResolvedSkillSet into a run-scoped directory."""
 

@@ -35,11 +35,9 @@ from moonmind.workflows.temporal.artifacts import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 # ---------------------------------------------------------------------------
 # DB fixture
 # ---------------------------------------------------------------------------
-
 
 @asynccontextmanager
 async def _in_memory_db(tmp_path: Path):
@@ -55,32 +53,26 @@ async def _in_memory_db(tmp_path: Path):
     finally:
         await engine.dispose()
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 @asynccontextmanager
 async def _patched_session_context(session_factory):
     async with session_factory() as session:
         yield session
 
-
 def _fake_profiles(profiles: list[dict[str, Any]]):
     async def _fetcher(*, runtime_id: str):
         return {"profiles": profiles}
     return _fetcher
 
-
 async def _async_noop(**_kwargs):
     pass
-
 
 # ---------------------------------------------------------------------------
 # T006-1: Two distinct OpenRouter profiles independently resolvable
 # ---------------------------------------------------------------------------
-
 
 async def test_two_openrouter_profiles_independently_resolvable(tmp_path: Path) -> None:
     """Create two OpenRouter profiles with different default_model; verify
@@ -157,11 +149,9 @@ async def test_two_openrouter_profiles_independently_resolvable(tmp_path: Path) 
                 assert p["credential_source"] == "secret_ref"
                 assert p["runtime_materialization_mode"] == "composite"
 
-
 # ---------------------------------------------------------------------------
 # T006-2: Priority-based selection among two OpenRouter profiles (FR-009)
 # ---------------------------------------------------------------------------
-
 
 async def test_priority_based_selection_selects_higher_priority() -> None:
     """When two profiles match provider_id selector, the higher-priority one wins."""
@@ -211,7 +201,6 @@ async def test_priority_based_selection_selects_higher_priority() -> None:
     assert handle.metadata["profile_id"] == "or-high"
     assert handle.metadata["credential_source"] == "secret_ref"
 
-
 async def test_priority_based_selection_falls_back_when_higher_disabled() -> None:
     """When higher-priority profile is disabled, lower-priority one is selected."""
 
@@ -260,11 +249,9 @@ async def test_priority_based_selection_falls_back_when_higher_disabled() -> Non
     handle = await adapter.start(request)
     assert handle.metadata["profile_id"] == "or-low"
 
-
 # ---------------------------------------------------------------------------
 # T006-3: Profile data round-trip through provider_profile_list
 # ---------------------------------------------------------------------------
-
 
 async def test_profile_roundtrip_via_provider_profile_list(tmp_path: Path) -> None:
     """Verify that a full OpenRouter profile with rich fields round-trips

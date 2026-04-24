@@ -35,14 +35,14 @@ Source Reference
 - Source Document: docs/Tasks/PresetComposability.md
 - Source Title: Preset Composability
 - Source Sections:
-  - 6. docs/Tasks/TaskProposalSystem.md
-  - 8. Cross-document invariants
+ - 6. docs/Tasks/TaskProposalSystem.md
+ - 8. Cross-document invariants
 - Coverage IDs:
-  - DESIGN-REQ-023
-  - DESIGN-REQ-015
-  - DESIGN-REQ-019
-  - DESIGN-REQ-025
-  - DESIGN-REQ-026
+ - DESIGN-REQ-023
+ - DESIGN-REQ-015
+ - DESIGN-REQ-019
+ - DESIGN-REQ-025
+ - DESIGN-REQ-026
 
 User Story
 As a proposal reviewer, I want task proposals to preserve reliable preset metadata when available while promoting the reviewed flat task payload without live re-expansion drift.
@@ -65,7 +65,7 @@ Requirements
 Relevant Implementation Notes
 - The canonical active documentation target is `docs/Tasks/TaskProposalSystem.md`.
 - The issue references `docs/Tasks/PresetComposability.md`; preserve the reference as Jira traceability even if the source document is unavailable in the current checkout.
-- Preserve desired-state documentation under canonical `docs/` files and keep volatile migration or implementation tracking under `docs/tmp/`.
+- Preserve desired-state documentation under canonical `docs/` files and keep volatile migration or implementation tracking under `local-only handoffs`.
 - Preset-derived metadata in proposals is advisory UX and reconstruction metadata, not a runtime dependency.
 - Proposal promotion must validate and submit the reviewed flat task payload without requiring live preset catalog lookup or live preset re-expansion.
 - Canonical proposal payload examples may include `task.authoredPresets` and per-step `source` provenance alongside execution-ready flat steps.

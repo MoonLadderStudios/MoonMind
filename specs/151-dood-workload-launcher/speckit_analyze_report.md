@@ -23,12 +23,12 @@
 
 ## Constitution Alignment Issues
 
-None. The plan includes the required Constitution Check and Post-Design Recheck, keeps implementation tracking in `docs/tmp/remaining-work/`, and preserves the managed-session/workload boundary.
+None. The plan includes the required Constitution Check and Post-Design Recheck, keeps implementation tracking in `docs/ManagedAgents/DockerOutOfDocker.md`, and preserves the managed-session/workload boundary.
 
 ## Unmapped Tasks
 
 - T003: Setup review task for quickstart acceptance commands; appropriate setup work without a direct functional requirement.
-- T031: Documentation tracking update under `docs/tmp/remaining-work/`; maps to Constitution XII rather than a feature runtime requirement.
+- T031: Documentation tracking update under `docs/ManagedAgents/DockerOutOfDocker.md`; maps to Constitution XII rather than a feature runtime requirement.
 - T034 and T035: Scope validation commands; map to workflow quality gates rather than a single functional requirement.
 
 ## Metrics

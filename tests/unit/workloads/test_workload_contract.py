@@ -18,9 +18,7 @@ from moonmind.workloads.registry import (
     WorkloadPolicyError,
 )
 
-
 WORKSPACE_ROOT = Path("/work/agent_jobs")
-
 
 def _profile_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -64,7 +62,6 @@ def _profile_payload(**overrides: object) -> dict[str, object]:
     payload.update(overrides)
     return payload
 
-
 def _registry(tmp_path: Path, *profiles: dict[str, object]) -> RunnerProfileRegistry:
     registry_path = tmp_path / "profiles.json"
     registry_path.write_text(
@@ -75,7 +72,6 @@ def _registry(tmp_path: Path, *profiles: dict[str, object]) -> RunnerProfileRegi
         registry_path,
         workspace_root=WORKSPACE_ROOT,
     )
-
 
 def _request(**overrides: object) -> WorkloadRequest:
     payload: dict[str, object] = {
@@ -97,7 +93,6 @@ def _request(**overrides: object) -> WorkloadRequest:
     payload.update(overrides)
     return WorkloadRequest.model_validate(payload)
 
-
 def test_registry_validates_request_and_derives_required_labels(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
@@ -117,7 +112,6 @@ def test_registry_validates_request_and_derives_required_labels(tmp_path: Path) 
         "moonmind.workflow_docker_mode": "profiles",
     }
     assert validated.container_name == "mm-workload-task-1-step-test-1"
-
 
 def test_registry_loads_yaml_profiles(tmp_path: Path) -> None:
     registry_path = tmp_path / "profiles.yaml"
@@ -156,7 +150,6 @@ profiles:
 
     assert registry.profile_ids == ("local-python",)
 
-
 def test_registry_loads_profile_mapping_keyed_by_profile_id(tmp_path: Path) -> None:
     profile = _profile_payload()
     profile.pop("id")
@@ -173,7 +166,6 @@ def test_registry_loads_profile_mapping_keyed_by_profile_id(tmp_path: Path) -> N
 
     assert registry.profile_ids == ("local-python",)
 
-
 def test_size_parser_uses_docker_binary_units() -> None:
     assert parse_size_bytes("512m") == 512 * 1024**2
     assert parse_size_bytes("2gb") == 2 * 1024**3
@@ -182,11 +174,9 @@ def test_size_parser_uses_docker_binary_units() -> None:
     with pytest.raises(ValueError, match="invalid size"):
         parse_size_bytes("1p")
 
-
 def test_request_rejects_empty_command() -> None:
     with pytest.raises(ValidationError, match="command"):
         _request(command=[])
-
 
 def test_registry_rejects_unknown_profile(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
@@ -195,7 +185,6 @@ def test_registry_rejects_unknown_profile(tmp_path: Path) -> None:
         registry.validate_request(_request(profileId="missing-profile"))
     assert exc_info.value.reason == "unknown_profile"
     assert exc_info.value.details == {"profileId": "missing-profile"}
-
 
 def test_registry_rejects_env_key_outside_profile_allowlist(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
@@ -207,7 +196,6 @@ def test_registry_rejects_env_key_outside_profile_allowlist(tmp_path: Path) -> N
         "envKey": "SECRET_TOKEN",
         "profileId": "local-python",
     }
-
 
 def test_registry_rejects_auth_like_profile_mounts_even_when_read_only(
     tmp_path: Path,
@@ -227,7 +215,6 @@ def test_registry_rejects_auth_like_profile_mounts_even_when_read_only(
 
     with pytest.raises(ValidationError, match="explicit workload credential declaration"):
         RunnerProfileRegistry.load_file(registry_path, workspace_root=WORKSPACE_ROOT)
-
 
 def test_registry_allows_mount_names_with_auth_words_as_substrings(
     tmp_path: Path,
@@ -262,7 +249,6 @@ def test_registry_allows_mount_names_with_auth_words_as_substrings(
         "credentialed_tools_cache",
     ]
 
-
 def test_registry_allows_explicit_credential_mount_declarations(
     tmp_path: Path,
 ) -> None:
@@ -288,7 +274,6 @@ def test_registry_allows_explicit_credential_mount_declarations(
     )
     assert validated.profile.credential_mounts[0].approval_ref == "MM-318"
 
-
 def test_registry_rejects_credential_mount_without_justification(
     tmp_path: Path,
 ) -> None:
@@ -310,7 +295,6 @@ def test_registry_rejects_credential_mount_without_justification(
     with pytest.raises(ValidationError, match="justification"):
         RunnerProfileRegistry.load_file(registry_path, workspace_root=WORKSPACE_ROOT)
 
-
 def test_registry_rejects_workspace_paths_outside_workspace_root(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
@@ -321,7 +305,6 @@ def test_registry_rejects_workspace_paths_outside_workspace_root(tmp_path: Path)
         registry.validate_request(
             _request(artifactsDir="/work/agent_jobs/../outside/artifacts")
         )
-
 
 def test_registry_rejects_resource_overrides_above_profile_maximum(
     tmp_path: Path,
@@ -335,7 +318,6 @@ def test_registry_rejects_resource_overrides_above_profile_maximum(
 
     with pytest.raises(WorkloadPolicyError, match="cpu"):
         registry.validate_request(_request(resources={"cpu": "8"}))
-
 
 def test_registry_enforces_image_registry_allowlist(tmp_path: Path) -> None:
     registry_path = tmp_path / "profiles.json"
@@ -357,7 +339,6 @@ def test_registry_enforces_image_registry_allowlist(tmp_path: Path) -> None:
         "imageRegistry": "docker.io",
     }
 
-
 def test_registry_allows_profiles_from_approved_registry(tmp_path: Path) -> None:
     registry_path = tmp_path / "profiles.json"
     registry_path.write_text(
@@ -374,7 +355,6 @@ def test_registry_allows_profiles_from_approved_registry(tmp_path: Path) -> None
     )
 
     assert registry.profile_ids == ("local-python",)
-
 
 def test_default_registry_contains_unreal_pilot_profile() -> None:
     registry = RunnerProfileRegistry.load_file(
@@ -408,7 +388,6 @@ def test_default_registry_contains_unreal_pilot_profile() -> None:
         "UE_SUMMARY_PATH",
         "UE_JUNIT_PATH",
     }
-
 
 @pytest.mark.parametrize(
     ("overrides", "message"),
@@ -498,7 +477,6 @@ def test_registry_rejects_unsafe_profile_policy(
             workspace_root=WORKSPACE_ROOT,
         )
 
-
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
@@ -523,7 +501,6 @@ def test_registry_rejects_helper_ttl_policy_on_non_helper_profiles(
             workspace_root=WORKSPACE_ROOT,
         )
 
-
 def test_registry_rejects_unsupported_registry_extension(tmp_path: Path) -> None:
     registry_path = tmp_path / "profiles.toml"
     registry_path.write_text("profiles = []", encoding="utf-8")
@@ -533,7 +510,6 @@ def test_registry_rejects_unsupported_registry_extension(tmp_path: Path) -> None
             registry_path,
             workspace_root=WORKSPACE_ROOT,
         )
-
 
 def test_registry_wraps_yaml_parse_errors(tmp_path: Path) -> None:
     registry_path = tmp_path / "profiles.yaml"
@@ -548,7 +524,6 @@ def test_registry_wraps_yaml_parse_errors(tmp_path: Path) -> None:
             workspace_root=WORKSPACE_ROOT,
         )
 
-
 def test_registry_rejects_duplicate_profile_ids(tmp_path: Path) -> None:
     registry_path = tmp_path / "profiles.json"
     registry_path.write_text(
@@ -562,7 +537,6 @@ def test_registry_rejects_duplicate_profile_ids(tmp_path: Path) -> None:
             workspace_root=WORKSPACE_ROOT,
         )
 
-
 def test_missing_registry_returns_empty_fail_closed_registry(tmp_path: Path) -> None:
     registry = RunnerProfileRegistry.load_optional_file(
         tmp_path / "missing.json",
@@ -572,7 +546,6 @@ def test_missing_registry_returns_empty_fail_closed_registry(tmp_path: Path) -> 
     assert registry.profile_ids == ()
     with pytest.raises(WorkloadPolicyError, match="unknown runner profile"):
         registry.validate_request(_request())
-
 
 def test_workload_result_serializes_bounded_metadata() -> None:
     result = WorkloadResult.model_validate(
@@ -599,7 +572,6 @@ def test_workload_result_serializes_bounded_metadata() -> None:
     assert dumped["stderrRef"] == "artifact:stderr"
     assert dumped["metadata"] == {"summary": "pytest failed"}
 
-
 def test_workload_request_rejects_declared_output_paths_outside_artifacts_dir() -> None:
     with pytest.raises(ValueError, match="declaredOutputs"):
         _request(declaredOutputs={"output.primary": "../outside.txt"})
@@ -607,11 +579,9 @@ def test_workload_request_rejects_declared_output_paths_outside_artifacts_dir() 
     with pytest.raises(ValueError, match="declaredOutputs"):
         _request(declaredOutputs={"output.primary": "/tmp/outside.txt"})
 
-
 def test_workload_request_rejects_session_continuity_declared_outputs() -> None:
     with pytest.raises(ValueError, match="session continuity"):
         _request(declaredOutputs={"session.summary": "summary.json"})
-
 
 @pytest.mark.parametrize("artifact_class", ["runtime.stdout", "output.logs"])
 def test_workload_request_rejects_runtime_reserved_declared_outputs(
@@ -619,7 +589,6 @@ def test_workload_request_rejects_runtime_reserved_declared_outputs(
 ) -> None:
     with pytest.raises(ValueError, match="runtime artifact classes"):
         _request(declaredOutputs={artifact_class: "logs.txt"})
-
 
 def test_registry_validates_bounded_helper_contract(tmp_path: Path) -> None:
     registry = _registry(
@@ -667,7 +636,6 @@ def test_registry_validates_bounded_helper_contract(tmp_path: Path) -> None:
     assert validated.profile.readiness_probe is not None
     assert validated.profile.readiness_probe.command == ("redis-cli", "ping")
 
-
 def test_registry_rejects_bounded_helper_without_readiness_contract(
     tmp_path: Path,
 ) -> None:
@@ -682,7 +650,6 @@ def test_registry_rejects_bounded_helper_without_readiness_contract(
                 max_helper_ttl_seconds=900,
             ),
         )
-
 
 def test_registry_rejects_bounded_helper_request_without_ttl(
     tmp_path: Path,
@@ -718,7 +685,6 @@ def test_registry_rejects_bounded_helper_request_without_ttl(
         )
     assert exc_info.value.reason == "missing_helper_ttl"
     assert exc_info.value.details == {"profileId": "redis-helper"}
-
 
 def test_registry_rejects_bounded_helper_ttl_above_profile_limit(
     tmp_path: Path,
@@ -759,7 +725,6 @@ def test_registry_rejects_bounded_helper_ttl_above_profile_limit(
         "profileId": "redis-helper",
     }
 
-
 def test_unrestricted_container_request_accepts_runtime_container_shape() -> None:
     request = UnrestrictedContainerRequest.model_validate(
         {
@@ -792,7 +757,6 @@ def test_unrestricted_container_request_accepts_runtime_container_shape() -> Non
     assert request.command == ("pytest", "-q")
     assert request.cache_mounts[0].source == "build_cache"
 
-
 def test_unrestricted_docker_request_requires_docker_cli_prefix() -> None:
     with pytest.raises(ValidationError, match="docker"):
         UnrestrictedDockerRequest.model_validate(
@@ -806,7 +770,6 @@ def test_unrestricted_docker_request_requires_docker_cli_prefix() -> None:
                 "command": ["bash", "-lc", "docker ps"],
             }
         )
-
 
 def test_registry_accepts_unrestricted_requests_without_runner_profile(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
@@ -831,7 +794,6 @@ def test_registry_accepts_unrestricted_requests_without_runner_profile(tmp_path:
     assert validated.ownership.labels["moonmind.workload_access"] == "unrestricted_container"
     assert validated.ownership.labels["moonmind.tool_name"] == "container.run_container"
 
-
 def test_registry_accepts_workflow_docker_mode_for_unrestricted_requests(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
@@ -853,7 +815,6 @@ def test_registry_accepts_workflow_docker_mode_for_unrestricted_requests(tmp_pat
     )
 
     assert validated.ownership.labels["moonmind.workflow_docker_mode"] == "unrestricted"
-
 
 def test_registry_rejects_unrestricted_request_outside_workspace_root(tmp_path: Path) -> None:
     registry = _registry(tmp_path)

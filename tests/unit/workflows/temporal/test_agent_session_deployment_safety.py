@@ -12,7 +12,6 @@ from moonmind.workflows.temporal.deployment_safety import (
 )
 from tools import validate_agent_session_deployment_safety as cli
 
-
 PLAYBOOK_TEXT = """
 ## Shared Prerequisites
 - replay-safe rollout gates are in place.
@@ -31,7 +30,6 @@ Use CancelSession and TerminateSession rollout gates.
 Register Search Attributes first.
 """
 
-
 def test_agent_session_sensitive_path_detection_normalizes_paths() -> None:
     assert changed_agent_session_sensitive_paths(
         [
@@ -39,7 +37,6 @@ def test_agent_session_sensitive_path_detection_normalizes_paths() -> None:
             "README.md",
         ]
     ) == ("moonmind/workflows/temporal/workflows/agent_session.py",)
-
 
 def test_validate_cli_changed_paths_uses_explicit_base_ref(monkeypatch) -> None:
     calls: list[tuple[str, ...]] = []
@@ -55,19 +52,18 @@ def test_validate_cli_changed_paths_uses_explicit_base_ref(monkeypatch) -> None:
         if args == ["diff", "--name-only"]:
             return ["tools/validate_agent_session_deployment_safety.py"]
         if args == ["ls-files", "--others", "--exclude-standard"]:
-            return ["docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md"]
+            return [AGENT_SESSION_CUTOVER_PLAYBOOK_PATH]
         raise AssertionError(f"unexpected git args: {args}")
 
     monkeypatch.setattr(cli, "_run_git", fake_run_git)
 
     assert cli._changed_paths("origin/main") == [
-        "docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md",
+        AGENT_SESSION_CUTOVER_PLAYBOOK_PATH,
         "moonmind/workflows/temporal/workflows/agent_session.py",
         "tests/unit/workflows/temporal/test_agent_session_replayer.py",
         "tools/validate_agent_session_deployment_safety.py",
     ]
     assert calls[0] == ("merge-base", "origin/main", "HEAD")
-
 
 def test_validate_cli_run_git_executes_from_repo_root(monkeypatch) -> None:
     captured: dict[str, object] = {}
@@ -85,7 +81,6 @@ def test_validate_cli_run_git_executes_from_repo_root(monkeypatch) -> None:
 
     assert cli._run_git(["ls-files"]) == ["README.md"]
     assert captured["kwargs"]["cwd"] == cli.REPO_ROOT
-
 
 def test_validate_cli_main_includes_git_stderr_in_failure(monkeypatch, capsys) -> None:
     def fail_run_git(args: list[str]) -> list[str]:
@@ -108,7 +103,6 @@ def test_validate_cli_main_includes_git_stderr_in_failure(monkeypatch, capsys) -
     assert "fatal: bad revision" in captured.err
     assert "merge-base failed" in captured.err
 
-
 def test_active_feature_override_resolves_spec_number(tmp_path) -> None:
     feature_dir = tmp_path / "specs" / "165-agent-session-deployment-safety"
     feature_dir.mkdir(parents=True)
@@ -122,7 +116,6 @@ def test_active_feature_override_resolves_spec_number(tmp_path) -> None:
         )
         == "specs/165-agent-session-deployment-safety"
     )
-
 
 def test_active_feature_override_rejects_parent_traversal(tmp_path) -> None:
     feature_dir = tmp_path / "somewhere"
@@ -139,7 +132,6 @@ def test_active_feature_override_rejects_parent_traversal(tmp_path) -> None:
             active_feature="specs/../somewhere",
         )
 
-
 def test_active_feature_override_rejects_absolute_path(tmp_path) -> None:
     feature_dir = tmp_path / "specs" / "165-agent-session-deployment-safety"
     feature_dir.mkdir(parents=True)
@@ -155,7 +147,6 @@ def test_active_feature_override_rejects_absolute_path(tmp_path) -> None:
             active_feature=feature_dir,
         )
 
-
 def test_active_feature_override_requires_complete_artifact_set(tmp_path) -> None:
     feature_dir = tmp_path / "specs" / "165-agent-session-deployment-safety"
     feature_dir.mkdir(parents=True)
@@ -170,7 +161,6 @@ def test_active_feature_override_requires_complete_artifact_set(tmp_path) -> Non
             active_feature="specs/165-agent-session-deployment-safety",
         )
 
-
 def test_agent_session_deployment_safety_gate_passes_for_non_sensitive_changes() -> None:
     report = validate_agent_session_deployment_safety(
         changed_paths=["docs/ManagedAgents/CodexCliManagedSessions.md"],
@@ -179,7 +169,6 @@ def test_agent_session_deployment_safety_gate_passes_for_non_sensitive_changes()
     )
 
     assert report.required is False
-
 
 def test_agent_session_deployment_safety_gate_requires_replay_coverage() -> None:
     with pytest.raises(
@@ -191,7 +180,6 @@ def test_agent_session_deployment_safety_gate_requires_replay_coverage() -> None
             repo_paths=[AGENT_SESSION_CUTOVER_PLAYBOOK_PATH],
             cutover_playbook_text=PLAYBOOK_TEXT,
         )
-
 
 def test_agent_session_deployment_safety_gate_requires_cutover_topics() -> None:
     with pytest.raises(
@@ -207,7 +195,6 @@ def test_agent_session_deployment_safety_gate_requires_cutover_topics() -> None:
             cutover_playbook_text="replay only",
         )
 
-
 def test_agent_session_deployment_safety_gate_accepts_full_gate_set() -> None:
     report = validate_agent_session_deployment_safety(
         changed_paths=["moonmind/workflows/temporal/workflows/agent_session.py"],
@@ -220,7 +207,6 @@ def test_agent_session_deployment_safety_gate_accepts_full_gate_set() -> None:
 
     assert report.required is True
     assert report.replay_gate_path == AGENT_SESSION_REPLAYER_TEST_PATH
-
 
 def test_agent_session_deployment_safety_report_includes_active_feature() -> None:
     report = validate_agent_session_deployment_safety(

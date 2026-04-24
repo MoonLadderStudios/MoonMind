@@ -2,13 +2,11 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-
 class Message(BaseModel):
     role: str = Field(
         ..., description="The role of the message (system, user, assistant)"
     )
     content: str = Field(..., description="The content of the message")
-
 
 class ChatCompletionRequest(BaseModel):
     model: Optional[str] = Field(
@@ -25,23 +23,19 @@ class ChatCompletionRequest(BaseModel):
         None, description="The maximum number of tokens to generate."
     )
 
-
 class ChoiceMessage(BaseModel):
     role: str = "assistant"
     content: str
-
 
 class Choice(BaseModel):
     index: int = 0
     message: ChoiceMessage
     finish_reason: str = "stop"
 
-
 class Usage(BaseModel):
     prompt_tokens: Optional[int] = None  # Made fields optional as per original
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None  # Made field optional
-
 
 class ChatCompletionResponse(BaseModel):
     id: str = "cmpl-xxxxxxxxxxxxxxxxxxxxxxx"
@@ -51,9 +45,7 @@ class ChatCompletionResponse(BaseModel):
     choices: List[Choice]
     usage: Optional[Usage] = None
 
-
 from enum import Enum
-
 
 class ModelProvider(Enum):
     GOOGLE = "google"

@@ -3,7 +3,7 @@
 ## Story Classification
 
 Decision: Treat MM-493 as a single-story runtime feature request and a verification-first planning story.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-493-moonspec-orchestration-input.md`; `specs/245-publish-report-bundles/spec.md`.
+Evidence: `spec.md` (Input); `specs/245-publish-report-bundles/spec.md`.
 Rationale: The brief defines one independently testable runtime outcome: immutable report bundle publication through activity boundaries with compact workflow refs and server-driven final/latest report behavior.
 Alternatives considered: Broad design breakdown was rejected because the Jira brief already selects one story and does not require processing multiple specs.
 Test implications: Explicit unit, contract/frontend, and hermetic integration escalation paths are required.
@@ -67,7 +67,7 @@ Test implications: Focused unit rerun plus the existing contract/frontend verifi
 ## FR-009 Traceability
 
 Decision: partial.
-Evidence: `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-493-moonspec-orchestration-input.md` preserve MM-493 and the original brief.
+Evidence: `spec.md` and `spec.md` (Input) preserve MM-493 and the original brief.
 Rationale: Downstream plan, tasks, and verification artifacts still need to preserve the Jira issue key for final verification.
 Alternatives considered: Treat spec-only preservation as sufficient. Rejected because the story explicitly requires downstream traceability.
 Test implications: Final traceability review in later tasks and verification.

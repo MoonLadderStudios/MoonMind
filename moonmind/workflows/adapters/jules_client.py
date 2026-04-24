@@ -42,7 +42,6 @@ _QUESTION_TEXT_KEYS = (
     "body",
 )
 
-
 class JulesClientError(RuntimeError):
     """Raised when Jules API requests fail.
 
@@ -73,7 +72,6 @@ class JulesClientError(RuntimeError):
         if self.ambiguous:
             parts.append("ambiguous")
         return ": ".join(parts)
-
 
 class JulesClient:
     """HTTP wrapper for Jules task management endpoints."""
@@ -514,14 +512,12 @@ class JulesClient:
             request_path=path,
         ) from last_error
 
-
 def _is_agent_originated_activity(activity: JulesActivity) -> bool:
     originator = str(activity.originator or "").strip().lower()
     if originator in {"agent", "assistant", "jules"}:
         return True
     activity_name = str(activity.name or "").strip().lower()
     return "agent" in activity_name or "assistant" in activity_name
-
 
 def _extract_activity_question(activity: JulesActivity) -> str | None:
     direct_message = (
@@ -541,7 +537,6 @@ def _extract_activity_question(activity: JulesActivity) -> str | None:
             return normalized
     return None
 
-
 def _iter_activity_text_candidates(activity: JulesActivity) -> list[str]:
     candidates: list[str] = []
     for key in _QUESTION_TEXT_KEYS:
@@ -555,7 +550,6 @@ def _iter_activity_text_candidates(activity: JulesActivity) -> list[str]:
                 )
             )
     return candidates
-
 
 def _extract_nested_values(payload: Any, target_key: str) -> list[str]:
     values: list[str] = []
@@ -573,7 +567,6 @@ def _extract_nested_values(payload: Any, target_key: str) -> list[str]:
         for item in payload:
             values.extend(_extract_nested_values(item, target_key))
     return values
-
 
 def _stringify_candidate(value: Any) -> str | None:
     if value is None:
@@ -597,7 +590,6 @@ def _stringify_candidate(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
-
 
 __all__ = [
     "JulesClient",

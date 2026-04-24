@@ -5,7 +5,6 @@ import pytest
 from moonmind.config.settings import AppSettings
 from moonmind.factories.embed_model_factory import build_embed_model
 
-
 @pytest.fixture
 def mock_settings():
     placeholder_api_key = "placeholder-openai-token"
@@ -17,7 +16,6 @@ def mock_settings():
     settings.openai.openai_embedding_model = "text-embedding-3-small"
     settings.openai.openai_embedding_dimensions = 1536
     return settings
-
 
 def test_build_embed_model_openai(mock_settings):
     """Test that build_embed_model correctly initializes OpenAIEmbedding."""
@@ -39,7 +37,6 @@ def test_build_embed_model_openai(mock_settings):
         assert embed_model == mock_instance
         assert dimensions == 1536
 
-
 def test_build_embed_model_openai_with_explicit_key(mock_settings):
     """Test that build_embed_model uses explicitly provided OpenAI API key."""
     with patch(
@@ -54,7 +51,6 @@ def test_build_embed_model_openai_with_explicit_key(mock_settings):
             api_key=explicit_key,
             dimensions=1536,
         )
-
 
 def test_build_embed_model_openai_missing_key(mock_settings):
     """Test that build_embed_model raises ValueError when OpenAI API key is missing."""

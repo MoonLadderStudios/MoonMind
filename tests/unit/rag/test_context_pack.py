@@ -9,7 +9,6 @@ from moonmind.rag.context_pack import (
     build_context_text,
 )
 
-
 def _make_item(**overrides: object) -> ContextItem:
     defaults = {
         "score": 0.82,
@@ -23,7 +22,6 @@ def _make_item(**overrides: object) -> ContextItem:
     defaults.update(overrides)
     return ContextItem(**defaults)
 
-
 def test_context_item_to_dict_contains_all_fields() -> None:
     item = _make_item()
     data = item.to_dict()
@@ -35,7 +33,6 @@ def test_context_item_to_dict_contains_all_fields() -> None:
     assert data["offset_end"] == 200
     assert data["trust_class"] == "canonical"
     assert data["chunk_hash"] == "sha256:abc123"
-
 
 def test_context_pack_to_json_roundtrips() -> None:
     item = _make_item()
@@ -61,7 +58,6 @@ def test_context_pack_to_json_roundtrips() -> None:
     assert data["budgets"]["tokens"] == 500
     assert data["telemetry_id"] == "abc123"
 
-
 def test_build_context_text_formats_markdown_with_citations() -> None:
     items = [
         _make_item(score=0.9, source="a.py", text="line a"),
@@ -76,7 +72,6 @@ def test_build_context_text_formats_markdown_with_citations() -> None:
     assert "line a" in text
     assert "line b" in text
 
-
 def test_build_context_text_truncates_when_exceeding_max_chars() -> None:
     items = [
         _make_item(source=f"file_{i}.py", text="x" * 500)
@@ -87,12 +82,10 @@ def test_build_context_text_truncates_when_exceeding_max_chars() -> None:
 
     assert "[Context truncated]" in text
 
-
 def test_build_context_text_reports_empty_when_no_items() -> None:
     text = build_context_text([], max_chars=1000)
 
     assert "No context retrieved" in text
-
 
 def test_build_context_pack_populates_all_fields() -> None:
     item = _make_item()

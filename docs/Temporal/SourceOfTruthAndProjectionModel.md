@@ -128,7 +128,6 @@ For **Temporal-managed work**, MoonMind should treat systems of record as follow
 | user auth / ownership policy | MoonMind control plane |
 | task-oriented compatibility payloads | MoonMind adapters over canonical sources |
 
-
 ---
 
 ## 6. Source layering model
@@ -224,7 +223,6 @@ The lifecycle truth behind these fields comes from Temporal, not from a local st
 | ownership filter (`mm_owner_type` + `mm_owner_id`) | MoonMind auth policy mirrored into Temporal | cached copy | MoonMind owns auth; Temporal stores the searchable mirror; projection rows now mirror explicit owner type and owner id values |
 | create/update idempotency behavior | MoonMind API contract | local helper state allowed | dedupe is an API concern, not a Temporal history replacement |
 | page tokens / count semantics for Temporal list APIs | Temporal Visibility read path | local fallback only | avoid baking DB-offset assumptions into final Temporal-backed APIs |
-
 
 ---
 
@@ -342,7 +340,6 @@ Behavior:
 2. Send cancel/terminate request to Temporal.
 3. Let Temporal terminal status become authoritative.
 4. Refresh projection from the resulting close state.
-
 
 ---
 
@@ -463,7 +460,6 @@ If the projection store is unavailable but Temporal is healthy:
 - direct Temporal-backed reads/writes may continue where the route supports them
 - compatibility surfaces depending on projections may degrade or return partial results
 - projection repair must backfill missed rows once the DB recovers
-
 
 ---
 

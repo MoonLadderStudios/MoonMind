@@ -46,10 +46,8 @@ LOCAL_ONLY_EXECUTION_FIELDS = (
     "last_update_response",
 )
 
-
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
 
 def _sanitize_for_json(obj: Any) -> Any:
     """Recursively convert non-JSON-serializable objects (e.g. datetime) to JSON-safe types."""
@@ -60,7 +58,6 @@ def _sanitize_for_json(obj: Any) -> Any:
     if isinstance(obj, (list, tuple)):
         return [_sanitize_for_json(item) for item in obj]
     return obj
-
 
 def _coerce_temporal_scalar(value: Any) -> str | None:
     if isinstance(value, list):
@@ -73,7 +70,6 @@ def _coerce_temporal_scalar(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
-
 
 def _parse_temporal_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
@@ -90,7 +86,6 @@ def _parse_temporal_datetime(value: Any) -> datetime | None:
         logger.warning("Invalid datetime search attribute value: %r", value)
         return None
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
-
 
 def merged_parameters_for_projection(
     payload: dict[str, Any],
@@ -110,7 +105,6 @@ def merged_parameters_for_projection(
         return dict(synced_params)
     canonical_params = canonical.parameters or {}
     return {**canonical_params, **synced_params}
-
 
 def merged_memo_for_projection(
     payload: dict[str, Any],
@@ -135,7 +129,6 @@ def merged_memo_for_projection(
     # DB-only keys supplement; Temporal keys take precedence.
     return {**canonical_memo, **temporal_memo}
 
-
 def preserve_local_only_fields(payload: dict[str, Any], *records: Any) -> None:
     """Keep DB-managed helpers when Temporal payloads omit them."""
     for field in LOCAL_ONLY_EXECUTION_FIELDS:
@@ -148,7 +141,6 @@ def preserve_local_only_fields(payload: dict[str, Any], *records: Any) -> None:
             if preserved is not None:
                 payload[field] = preserved
                 break
-
 
 async def map_temporal_state_to_projection(
     desc: WorkflowExecutionDescription,
@@ -306,7 +298,6 @@ async def map_temporal_state_to_projection(
         "_temporal_memo_loaded": memo_loaded,
     }
 
-
 async def sync_execution_projection(
     session: AsyncSession,
     desc: WorkflowExecutionDescription,
@@ -405,7 +396,6 @@ async def sync_execution_projection(
 
     return projection
 
-
 async def fetch_and_sync_execution(
     session: AsyncSession,
     workflow_id: str,
@@ -416,7 +406,6 @@ async def fetch_and_sync_execution(
 
     desc = await fetch_workflow_execution(client, workflow_id)
     return await sync_execution_projection(session, desc)
-
 
 async def sync_temporal_executions_safely(
     session: AsyncSession,
@@ -446,7 +435,6 @@ async def sync_temporal_executions_safely(
         except Exception:
             pass  # fallback to potentially stale but accessible attributes
     return updated_items
-
 
 async def sync_single_temporal_execution_safely(
     session: AsyncSession,

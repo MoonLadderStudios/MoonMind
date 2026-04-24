@@ -15,7 +15,7 @@ Source design path (optional): .
 Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
 Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts.
 
-Canonical Jira brief: docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md
+Canonical Jira brief:
 
 # MM-406 MoonSpec Orchestration Input
 

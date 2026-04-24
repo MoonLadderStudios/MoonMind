@@ -32,7 +32,6 @@ from pr_resolve_contract import (  # noqa: E402
     remediation_next_step,
 )
 
-
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -41,7 +40,6 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     if isinstance(payload, dict):
         return payload
     return None
-
 
 def _normalize_status(payload: dict[str, Any]) -> str:
     status = normalize_text(payload.get("status")).lower()
@@ -56,7 +54,6 @@ def _normalize_status(payload: dict[str, Any]) -> str:
         return "attempts_exhausted"
     return "blocked"
 
-
 def _normalize_full_status(payload: dict[str, Any]) -> str:
     status = normalize_text(payload.get("status")).lower()
     if status in {"ready_for_finalize", "needs_remediation", "blocked", "failed"}:
@@ -65,7 +62,6 @@ def _normalize_full_status(payload: dict[str, Any]) -> str:
     if merge_outcome == "failed":
         return "failed"
     return "blocked"
-
 
 def _is_safe_reason_transition(previous: str, current: str) -> bool:
     prev = normalize_text(previous)
@@ -87,7 +83,6 @@ def _is_safe_reason_transition(previous: str, current: str) -> bool:
     if curr == "merge_not_ready" and prev in FINALIZE_ONLY_RETRY_REASONS:
         return True
     return False
-
 
 def _build_result(
     *,
@@ -127,7 +122,6 @@ def _build_result(
         ],
     }
     return payload
-
 
 def run_orchestration(
     *,
@@ -375,7 +369,6 @@ def run_orchestration(
     )
     return result, EXIT_CODE_ATTEMPTS_EXHAUSTED
 
-
 def _run_command_and_read_result(
     cmd: list[str],
     *,
@@ -400,7 +393,6 @@ def _run_command_and_read_result(
     }
     return payload
 
-
 def _build_full_command_from_template(
     *,
     template: str,
@@ -422,7 +414,6 @@ def _build_full_command_from_template(
         full_script=str(Path(__file__).with_name("pr_resolve_full.py")),
     )
     return shlex.split(rendered)
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -575,7 +566,6 @@ def main() -> None:
     )
     print(json.dumps(result_payload, indent=2))
     raise SystemExit(exit_code)
-
 
 if __name__ == "__main__":
     main()

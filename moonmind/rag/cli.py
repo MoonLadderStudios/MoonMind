@@ -13,10 +13,8 @@ from moonmind.rag.overlay_cleanup import clean_overlay_run
 from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 
-
 class CliError(RuntimeError):
     """Raised for CLI usage errors."""
-
 
 def parse_filters(filter_args: Sequence[str]) -> dict[str, str]:
     filters: dict[str, str] = {}
@@ -30,7 +28,6 @@ def parse_filters(filter_args: Sequence[str]) -> dict[str, str]:
             raise CliError(f"Invalid filter '{arg}'. Both key and value required.")
         filters[key] = value
     return filters
-
 
 def parse_budget_args(budget_args: Sequence[str]) -> dict[str, int]:
     budgets: dict[str, int] = {}
@@ -47,7 +44,6 @@ def parse_budget_args(budget_args: Sequence[str]) -> dict[str, int]:
         except ValueError as exc:
             raise CliError(f"Budget '{arg}' must use an integer value") from exc
     return budgets
-
 
 def run_search(
     *,
@@ -81,7 +77,6 @@ def run_search(
         output_file.write_text(pack.to_json(), encoding="utf-8")
     return pack
 
-
 def run_overlay_upsert(
     *,
     paths: Sequence[str],
@@ -107,7 +102,6 @@ def run_overlay_upsert(
     )
     return count
 
-
 def run_overlay_clean(*, run_id: str | None) -> None:
     settings = RagRuntimeSettings.from_env(os.environ)
     resolved_run_id = run_id or settings.run_id
@@ -119,7 +113,6 @@ def run_overlay_clean(*, run_id: str | None) -> None:
         settings=settings,
         qdrant=service.qdrant_client,
     )
-
 
 def _build_budget_config(
     cli_budgets: Mapping[str, int] | None = None,
@@ -139,10 +132,8 @@ def _build_budget_config(
             raise CliError("RAG_LATENCY_BUDGET_MS must be an integer") from exc
     return budget
 
-
 def format_json(data: Mapping[str, object]) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
-
 
 def run_sync_embedding(*, collection: str | None, force: bool) -> tuple[str, int, str]:
     settings = RagRuntimeSettings.from_env(os.environ)

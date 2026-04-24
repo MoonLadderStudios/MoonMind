@@ -21,16 +21,13 @@ from moonmind.schemas.jules_models import (
 )
 from moonmind.workflows.adapters.jules_client import JulesClient
 
-
 @dataclass(frozen=True, slots=True)
 class JulesToolExecutionContext:
     """Dependencies available to Jules tool handlers."""
 
     client: JulesClient
 
-
 JulesToolHandler = Callable[[BaseModel, JulesToolExecutionContext], Awaitable[Any]]
-
 
 class JulesToolRegistry:
     """Registry for Jules-related MCP tools."""
@@ -146,7 +143,6 @@ class JulesToolRegistry:
             )
         result: JulesTaskResponse = await context.client.get_task(args)
         return result.model_dump(by_alias=True, mode="json")
-
 
 __all__ = [
     "JulesToolExecutionContext",

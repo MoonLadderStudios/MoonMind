@@ -20,7 +20,6 @@ from api_service.db.models import (
 
 _LOOKBACK_DAYS = 30
 
-
 def _extract_applied_templates(payload: dict[str, Any]) -> list[dict[str, Any]]:
     task = payload.get("task")
     if not isinstance(task, dict):
@@ -40,7 +39,6 @@ def _extract_applied_templates(payload: dict[str, Any]) -> list[dict[str, Any]]:
             {"slug": slug, "version": version, "appliedAt": raw.get("appliedAt")}
         )
     return result
-
 
 async def backfill_recents(*, lookback_days: int = _LOOKBACK_DAYS) -> int:
     threshold = datetime.now(UTC) - timedelta(days=lookback_days)
@@ -113,12 +111,10 @@ async def backfill_recents(*, lookback_days: int = _LOOKBACK_DAYS) -> int:
         await session.commit()
         return inserted
 
-
 async def _main() -> int:
     inserted = await backfill_recents()
     print(f"Inserted {inserted} template recent rows.")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(asyncio.run(_main()))

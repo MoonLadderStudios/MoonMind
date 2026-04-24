@@ -11,13 +11,11 @@ import pytest
 from moonmind.agents.codex_worker import cli
 from moonmind.utils.cli import CliVerificationError
 
-
 @pytest.fixture(autouse=True)
 def _disable_rag_preflight_checks(monkeypatch) -> None:
     """Prevent preflight tests from performing slow external RAG readiness checks."""
 
     monkeypatch.setattr(cli, "ensure_rag_ready", lambda _settings: None)
-
 
 def test_run_preflight_missing_codex_raises(monkeypatch) -> None:
     """Preflight should fail when codex binary is unavailable."""
@@ -29,7 +27,6 @@ def test_run_preflight_missing_codex_raises(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError):
         cli.run_preflight()
-
 
 def test_run_preflight_missing_rg_raises_clear_diagnostic(monkeypatch) -> None:
     """Codex-capable startup should fail fast with one rg diagnostic."""
@@ -54,7 +51,6 @@ def test_run_preflight_missing_rg_raises_clear_diagnostic(monkeypatch) -> None:
         cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
 
     assert calls == []
-
 
 def test_run_preflight_login_failure_raises(monkeypatch) -> None:
     """Preflight should fail when `codex login status` exits non-zero."""
@@ -84,7 +80,6 @@ def test_run_preflight_login_failure_raises(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError):
         cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
-
 
 def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> None:
     """Token-present startup should run gh auth login/setup/status in order."""
@@ -147,7 +142,6 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
         assert "GITHUB_TOKEN" not in env
         assert "GH_TOKEN" not in env
 
-
 def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
     """No token should preserve existing codex-only preflight behavior."""
 
@@ -174,7 +168,6 @@ def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
     ]
-
 
 def test_run_preflight_skips_non_matching_stage_skills(monkeypatch) -> None:
     """Non-matching stage skill configuration should not require Workflow preflight."""
@@ -211,7 +204,6 @@ def test_run_preflight_skips_non_matching_stage_skills(monkeypatch) -> None:
         ["/usr/bin/codex", "login", "status"],
     ]
 
-
 def test_run_preflight_uses_workflow_skill_aliases(monkeypatch) -> None:
     """Canonical WORKFLOW_* aliases should drive speckit dependency checks."""
 
@@ -247,7 +239,6 @@ def test_run_preflight_uses_workflow_skill_aliases(monkeypatch) -> None:
         ["/usr/bin/codex", "login", "status"],
     ]
 
-
 def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
     """WORKFLOW_USE_SKILLS=false should skip Workflow checks."""
 
@@ -281,7 +272,6 @@ def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
         ["/usr/bin/codex", "login", "status"],
     ]
 
-
 def test_run_preflight_missing_gh_raises_when_token_present(monkeypatch) -> None:
     """Token-present startup should fail fast when gh is unavailable."""
 
@@ -309,7 +299,6 @@ def test_run_preflight_missing_gh_raises_when_token_present(monkeypatch) -> None
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             }
         )
-
 
 def test_run_preflight_redacts_token_in_error_output(monkeypatch) -> None:
     """Auth failures should never surface raw token values."""
@@ -345,7 +334,6 @@ def test_run_preflight_redacts_token_in_error_output(monkeypatch) -> None:
     assert token not in str(exc_info.value)
     assert "[REDACTED]" in str(exc_info.value)
 
-
 def test_run_checked_command_merges_environment_overrides(monkeypatch) -> None:
     """Subprocess env overrides should preserve base vars while removing keys."""
 
@@ -373,7 +361,6 @@ def test_run_checked_command_merges_environment_overrides(monkeypatch) -> None:
     assert "MM_REMOVE_VAR" not in observed_env
     assert observed_env["MM_NEW_VAR"] == "new"
 
-
 def test_run_checked_command_error_message_includes_return_code_and_tail(
     monkeypatch,
 ) -> None:
@@ -397,7 +384,6 @@ def test_run_checked_command_error_message_includes_return_code_and_tail(
     message = str(exc_info.value)
     assert "warn: step 1" not in message
     assert "fatal: bad request" in message
-
 
 def test_run_checked_command_truncates_after_redaction(monkeypatch) -> None:
     """Tokenized output should be redacted before truncating diagnostic text."""
@@ -423,7 +409,6 @@ def test_run_checked_command_truncates_after_redaction(monkeypatch) -> None:
     assert "[REDACTED]" in message
     assert len(message) <= 1024
 
-
 def test_run_checked_command_error_message_without_detail_uses_compact_hint(
     monkeypatch,
 ) -> None:
@@ -448,9 +433,6 @@ def test_run_checked_command_error_message_without_detail_uses_compact_hint(
     message = str(exc_info.value)
     assert "run now" not in message
 
-
-
-
 def test_run_preflight_google_embedding_requires_credential(monkeypatch) -> None:
     """Google embedding profiles should fail fast when key material is absent."""
 
@@ -467,7 +449,6 @@ def test_run_preflight_google_embedding_requires_credential(monkeypatch) -> None
                 "GOOGLE_EMBEDDING_MODEL": "gemini-embedding-2-preview",
             }
         )
-
 
 def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> None:
     """Gemini worker runtime should check Gemini CLI without Codex login."""
@@ -500,7 +481,6 @@ def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> 
         ["/usr/bin/gemini_cli", "--version"],
     ]
 
-
 def test_run_preflight_claude_runtime_requires_api_key(monkeypatch) -> None:
     """Claude runtime should fail fast when no Claude API credential env is set."""
 
@@ -511,7 +491,6 @@ def test_run_preflight_claude_runtime_requires_api_key(monkeypatch) -> None:
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             }
         )
-
 
 def test_run_preflight_claude_runtime_verifies_version_with_key(monkeypatch) -> None:
     """Claude runtime should validate CLI version when API key is configured."""
@@ -545,7 +524,6 @@ def test_run_preflight_claude_runtime_verifies_version_with_key(monkeypatch) -> 
         ["/usr/bin/claude", "--version"],
     ]
 
-
 def test_run_preflight_claude_runtime_accepts_anthropic_auth_token(monkeypatch) -> None:
     """Claude Code third-party (e.g. MiniMax) may use ANTHROPIC_AUTH_TOKEN only."""
 
@@ -578,7 +556,6 @@ def test_run_preflight_claude_runtime_accepts_anthropic_auth_token(monkeypatch) 
         ["/usr/bin/claude", "--version"],
     ]
 
-
 def test_run_preflight_jules_runtime_requires_configuration(monkeypatch) -> None:
     """Jules runtime should fail fast when Jules API settings are missing."""
 
@@ -589,7 +566,6 @@ def test_run_preflight_jules_runtime_requires_configuration(monkeypatch) -> None
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             }
         )
-
 
 def test_run_preflight_jules_runtime_succeeds_with_configuration(monkeypatch) -> None:
     """Jules runtime should pass preflight when Jules API settings are present."""
@@ -622,7 +598,6 @@ def test_run_preflight_jules_runtime_succeeds_with_configuration(monkeypatch) ->
 
     assert verifications == []
     assert calls == []
-
 
 def test_run_preflight_universal_without_claude_capability_skips_checks(
     monkeypatch,
@@ -659,7 +634,6 @@ def test_run_preflight_universal_without_claude_capability_skips_checks(
         ["/usr/bin/gemini_cli", "--version"],
     ]
 
-
 def test_run_preflight_universal_with_claude_capability_requires_key(
     monkeypatch,
 ) -> None:
@@ -678,7 +652,6 @@ def test_run_preflight_universal_with_claude_capability_requires_key(
             }
         )
 
-
 def test_run_preflight_universal_without_capabilities_requires_claude_key(
     monkeypatch,
 ) -> None:
@@ -695,7 +668,6 @@ def test_run_preflight_universal_without_capabilities_requires_claude_key(
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             }
         )
-
 
 def test_run_preflight_universal_with_claude_capability_runs_checks(
     monkeypatch,
@@ -735,7 +707,6 @@ def test_run_preflight_universal_with_claude_capability_runs_checks(
         ["/usr/bin/claude", "--version"],
     ]
 
-
 def test_run_preflight_gemini_oauth_requires_gemini_home(monkeypatch) -> None:
     """Gemini oauth mode should fail fast when GEMINI_HOME is unset."""
 
@@ -767,7 +738,6 @@ def test_run_preflight_gemini_oauth_requires_gemini_home(monkeypatch) -> None:
             }
         )
 
-
 def test_run_preflight_gemini_invalid_auth_mode_redacts_value(monkeypatch) -> None:
     """Invalid auth mode should fail with a redacted diagnostic."""
 
@@ -795,7 +765,6 @@ def test_run_preflight_gemini_invalid_auth_mode_redacts_value(monkeypatch) -> No
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             }
         )
-
 
 def test_run_preflight_gemini_oauth_requires_writable_gemini_home(monkeypatch) -> None:
     """Gemini oauth mode should enforce writable GEMINI_HOME directories."""
@@ -835,7 +804,6 @@ def test_run_preflight_gemini_oauth_requires_writable_gemini_home(monkeypatch) -
             }
         )
 
-
 def test_run_preflight_claude_oauth_with_valid_home_succeeds(monkeypatch) -> None:
     """Claude oauth mode with a valid writable CLAUDE_HOME should pass preflight."""
 
@@ -868,7 +836,6 @@ def test_run_preflight_claude_oauth_with_valid_home_succeeds(monkeypatch) -> Non
 
     assert "claude" in verifications
 
-
 def test_run_preflight_claude_oauth_missing_home_raises(monkeypatch) -> None:
     """Claude oauth mode with no CLAUDE_HOME should fail with a clear error."""
 
@@ -884,7 +851,6 @@ def test_run_preflight_claude_oauth_missing_home_raises(monkeypatch) -> None:
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             }
         )
-
 
 def test_run_preflight_claude_oauth_non_directory_home_raises(monkeypatch) -> None:
     """Claude oauth mode with a non-existent CLAUDE_HOME directory should fail."""
@@ -904,7 +870,6 @@ def test_run_preflight_claude_oauth_non_directory_home_raises(monkeypatch) -> No
             }
         )
 
-
 def test_run_preflight_claude_invalid_auth_mode_redacts_value(monkeypatch) -> None:
     """Invalid Claude auth mode should fail with a redacted diagnostic."""
 
@@ -921,7 +886,6 @@ def test_run_preflight_claude_invalid_auth_mode_redacts_value(monkeypatch) -> No
             }
         )
 
-
 def test_main_returns_error_when_run_fails(monkeypatch) -> None:
     """CLI main should exit 1 when async runtime fails."""
 
@@ -935,7 +899,6 @@ def test_main_returns_error_when_run_fails(monkeypatch) -> None:
 
     assert exc_info.value.code == 1
 
-
 def test_main_success_path(monkeypatch) -> None:
     """CLI main should return 0 when runtime succeeds."""
 
@@ -945,7 +908,6 @@ def test_main_success_path(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_run", _ok)
 
     assert cli.main(["--once"]) == 0
-
 
 def test_run_preflight_claude_oauth_with_configured_mount_path_succeeds(monkeypatch) -> None:
     """Claude oauth mode should accept the documented Claude auth mount path."""

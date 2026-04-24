@@ -19,13 +19,11 @@ from moonmind.rag.retriever import QdrantRAG
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
 # Model Context Protocol Schema Definitions
 class ContextMessage(BaseModel):
     role: str
     content: str
     name: Optional[str] = None
-
 
 class ContextRequest(BaseModel):
     messages: List[ContextMessage]
@@ -35,14 +33,12 @@ class ContextRequest(BaseModel):
     stream: Optional[bool] = False
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
-
 class ContextResponse(BaseModel):
     id: str
     content: str
     model: str
     created_at: int
     metadata: Dict[str, Any] = Field(default_factory=dict)
-
 
 def format_context_for_prompt(retrieved_nodes: List[NodeWithScore]) -> str:
     if not retrieved_nodes:
@@ -61,7 +57,6 @@ def format_context_for_prompt(retrieved_nodes: List[NodeWithScore]) -> str:
         context_str += f"{text_content}\n"
     context_str += "--- End of Retrieved Context ---\n"
     return context_str
-
 
 @router.post("/context", response_model=ContextResponse)
 async def process_context(

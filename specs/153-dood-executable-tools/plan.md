@@ -36,7 +36,7 @@ Expose Phase 3 Docker-out-of-Docker workloads through MoonMind's existing execut
 | IX. Resilient by Default | PASS | Uses existing validated workload request, timeout, cancellation, and cleanup semantics; adds workflow-boundary tests. |
 | X. Continuous Improvement | PASS | Normal tool results expose structured workload status metadata suitable for run summaries. |
 | XI. Spec-Driven Development | PASS | Spec, plan, research, data model, contracts, and quickstart trace runtime requirements. |
-| XII. Canonical Docs vs tmp | PASS | Canonical docs remain desired-state references; implementation tracking stays in `docs/tmp/remaining-work/`. |
+| XII. Canonical Docs vs tmp | PASS | Canonical docs remain desired-state references; implementation tracking stays in `docs/ManagedAgents/DockerOutOfDocker.md`. |
 | XIII. Delete, Don't Deprecate | PASS | No compatibility alias or legacy Docker workload path is introduced. |
 
 **Post-Design Recheck**: PASS. The design artifacts preserve the same boundaries: `tool.type = "skill"` for Docker-backed workloads, existing `agent_runtime` fleet for Docker authority, and no managed-session verb overload.

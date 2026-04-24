@@ -41,7 +41,6 @@ from moonmind.workflows.codex_session_timeouts import (
     DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
 
-
 _STATE_FILENAME = ".moonmind-codex-session-state.json"
 _READY_LOOP_SECONDS = 3600.0
 _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
@@ -55,14 +54,12 @@ _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
 _LOG_RECOVERY_MAX_ROWS = 200
 _LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS = 1.0
 
-
 @dataclass(frozen=True)
 class _RolloutTurnScan:
     references_turn: bool = False
     assistant_text: str = ""
     saw_task_complete: bool = False
     error_text: str | None = None
-
 
 @dataclass
 class _RolloutLiveMirror:
@@ -71,7 +68,6 @@ class _RolloutLiveMirror:
     turn_started_at: float | None = None
     emitted_assistant_texts: set[str] = field(default_factory=set)
     emitted_live_keys: set[str] = field(default_factory=set)
-
 
 class CodexSessionRuntimeState(BaseModel):
     """Persisted logical-to-vendor session mapping for one container session."""
@@ -92,7 +88,6 @@ class CodexSessionRuntimeState(BaseModel):
     last_turn_id: str | None = Field(None, alias="lastTurnId")
     last_turn_status: str | None = Field(None, alias="lastTurnStatus")
     last_turn_error: str | None = Field(None, alias="lastTurnError")
-
 
 class CodexAppServerRpcClient:
     """Minimal JSON-RPC stdio client for ``codex app-server``."""
@@ -328,7 +323,6 @@ class CodexAppServerRpcClient:
         if self._stderr_capture is not None:
             self._stderr_capture.close()
             self._stderr_capture = None
-
 
 class CodexManagedSessionRuntime:
     """Local runtime implementation invoked inside the session container."""
@@ -1836,13 +1830,11 @@ class CodexManagedSessionRuntime:
             metadata=dict(request.metadata),
         )
 
-
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
         raise RuntimeError(f"{name} is required")
     return value
-
 
 def _require_writable_directory(
     path_value: str,
@@ -1862,7 +1854,6 @@ def _require_writable_directory(
     if not os.access(path, os.W_OK):
         raise RuntimeError(f"{env_name} must be writable: {path}")
     return str(path)
-
 
 def _validated_runtime_environment() -> dict[str, str]:
     if shutil.which("codex") is None:
@@ -1897,7 +1888,6 @@ def _validated_runtime_environment() -> dict[str, str]:
         "codex_home_path": codex_home_path,
         "image_ref": image_ref,
     }
-
 
 def _runtime_from_environment() -> CodexManagedSessionRuntime:
     env = _validated_runtime_environment()
@@ -1939,7 +1929,6 @@ def _runtime_from_environment() -> CodexManagedSessionRuntime:
         turn_completion_timeout_seconds=timeout_seconds,
     )
 
-
 def _emit_json(payload: BaseModel | Mapping[str, Any], *, exit_code: int = 0) -> int:
     if isinstance(payload, BaseModel):
         text = payload.model_dump_json(by_alias=True, exclude_none=True)
@@ -1949,11 +1938,9 @@ def _emit_json(payload: BaseModel | Mapping[str, Any], *, exit_code: int = 0) ->
     sys.stdout.flush()
     return exit_code
 
-
 def _run_ready() -> int:
     _validated_runtime_environment()
     return _emit_json({"ready": True})
-
 
 def _run_serve() -> int:
     _validated_runtime_environment()
@@ -1968,7 +1955,6 @@ def _run_serve() -> int:
     while not stopping:
         time.sleep(_READY_LOOP_SECONDS)
     return 0
-
 
 def _invoke_action(action: str, payload: Mapping[str, Any]) -> BaseModel:
     runtime = _runtime_from_environment()
@@ -2013,7 +1999,6 @@ def _invoke_action(action: str, payload: Mapping[str, Any]) -> BaseModel:
     finally:
         runtime.close()
 
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="codex_session_runtime")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2035,7 +2020,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError(f"unsupported command: {args.command}")
     except Exception as exc:
         return _emit_json({"error": str(exc), "ready": False}, exit_code=1)
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

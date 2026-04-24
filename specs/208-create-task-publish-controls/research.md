@@ -5,7 +5,7 @@ This research records the pre-implementation repository inspection and decisions
 ## Input Classification
 
 Decision: Single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-412-moonspec-orchestration-input.md`, `specs/208-create-task-publish-controls/spec.md`.
+Evidence: `spec.md` (Input), `specs/208-create-task-publish-controls/spec.md`.
 Rationale: The brief asks for one independently testable Create-page authoring change: represent merge automation as a PR-specific Publish Mode choice in the Steps card while preserving existing runtime contracts.
 Alternatives considered: Broad design classification was rejected because the brief identifies one primary UI/runtime behavior story and explicit file targets.
 Test implications: Unit and integration-style UI tests are required.

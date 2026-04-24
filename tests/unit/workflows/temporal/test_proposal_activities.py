@@ -20,7 +20,6 @@ from moonmind.workflows.task_proposals.models import (
 )
 from moonmind.workflows.task_proposals.service import TaskProposalService
 
-
 class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
     async def test_returns_empty_list_stub(self) -> None:
         activities = TemporalProposalActivities()
@@ -177,8 +176,6 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, [])
-
-
 
 class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
     async def test_empty_candidates_returns_zeroes(self) -> None:
@@ -453,7 +450,6 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 0)
         self.assertEqual(len(result["errors"]), 1)
         self.assertIn("DB down", result["errors"][0])
-
 
 class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
     async def test_default_runtime_stamped_into_candidate(self) -> None:

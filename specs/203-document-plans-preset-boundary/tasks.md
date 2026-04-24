@@ -7,9 +7,9 @@
 
 **Test Commands**:
 
-- Focused documentation contract check: `rg -n "control plane|PlanDefinition|flattened execution graphs|TaskPresetsSystem|SkillAndPlanContracts" docs/tmp/101-PlansOverview.md`
-- No canonical migration checklist check: `! rg -n "MM-389|Document plans overview preset boundary|preset boundary" docs --glob '!docs/tmp/**'`
-- Source traceability check: `rg -n "MM-389|DESIGN-REQ-001|DESIGN-REQ-020|DESIGN-REQ-024|DESIGN-REQ-025|DESIGN-REQ-026" specs/203-document-plans-preset-boundary docs/tmp/jira-orchestration-inputs/MM-389-moonspec-orchestration-input.md`
+- Focused documentation contract check: `rg -n "control plane|PlanDefinition|flattened execution graphs|TaskPresetsSystem|SkillAndPlanContracts" docs/MoonMindRoadmap.md`
+- No canonical migration checklist check: `! rg -n "MM-389|Document plans overview preset boundary|preset boundary" docs --glob '!artifacts/**'`
+- Source traceability check: `rg -n "MM-389|DESIGN-REQ-001|DESIGN-REQ-020|DESIGN-REQ-024|DESIGN-REQ-025|DESIGN-REQ-026" specs/203-document-plans-preset-boundary`
 - Full unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - Hermetic integration tests: `./tools/test_integration.sh`
 - Final verification: `/moonspec-verify`
@@ -27,12 +27,12 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm active MM-389 feature directory and source input in `.specify/feature.json`, `docs/tmp/jira-orchestration-inputs/MM-389-moonspec-orchestration-input.md`, and `specs/203-document-plans-preset-boundary/spec.md` (FR-009, SC-007).
-- [X] T002 Confirm `docs/tmp/101-PlansOverview.md` is the repository-current plans overview target and `docs/Tasks/PresetComposability.md` is absent in the current checkout in `specs/203-document-plans-preset-boundary/research.md` (FR-001, FR-008).
+- [X] T001 Confirm active MM-389 feature directory and source input in `.specify/feature.json`, `spec.md` (Input), and `specs/203-document-plans-preset-boundary/spec.md` (FR-009, SC-007).
+- [X] T002 Confirm `docs/MoonMindRoadmap.md` is the repository-current plans overview target and `docs/Tasks/PresetComposability.md` is absent in the current checkout in `specs/203-document-plans-preset-boundary/research.md` (FR-001, FR-008).
 
 ## Phase 2: Foundational
 
-- [X] T003 Inspect existing preset and plan semantics in `docs/Tasks/TaskPresetsSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`, and `docs/tmp/101-PlansOverview.md` before test authoring (FR-003 through FR-007).
+- [X] T003 Inspect existing preset and plan semantics in `docs/Tasks/TaskPresetsSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`, and `docs/MoonMindRoadmap.md` before test authoring (FR-003 through FR-007).
 
 ## Phase 3: Story - Plans Overview Preset Boundary
 
@@ -55,16 +55,16 @@
 
 ### Red-First Confirmation
 
-- [X] T009 Run `rg -n "control plane|PlanDefinition|flattened execution graphs|TaskPresetsSystem|SkillAndPlanContracts" docs/tmp/101-PlansOverview.md` and confirm it is incomplete before documentation edits (FR-001 through FR-007, SC-001 through SC-005).
+- [X] T009 Run `rg -n "control plane|PlanDefinition|flattened execution graphs|TaskPresetsSystem|SkillAndPlanContracts" docs/MoonMindRoadmap.md` and confirm it is incomplete before documentation edits (FR-001 through FR-007, SC-001 through SC-005).
 - [X] T010 Run source traceability check before artifact completion and confirm only the preserved Jira input exists before generated MoonSpec artifacts (FR-009, SC-007).
 
 ### Implementation
 
-- [X] T011 Update `docs/tmp/101-PlansOverview.md` with one concise paragraph near tasks, skills, presets, and plans that states preset composition is control-plane work resolved before `PlanDefinition` creation, runtime plans are flattened execution graphs of concrete nodes and edges, and links to `TaskPresetsSystem` and `SkillAndPlanContracts` (FR-001 through FR-007, SC-001 through SC-005, DESIGN-REQ-001, DESIGN-REQ-020, DESIGN-REQ-024, DESIGN-REQ-025).
+- [X] T011 Update `docs/MoonMindRoadmap.md` with one concise paragraph near tasks, skills, presets, and plans that states preset composition is control-plane work resolved before `PlanDefinition` creation, runtime plans are flattened execution graphs of concrete nodes and edges, and links to `TaskPresetsSystem` and `SkillAndPlanContracts` (FR-001 through FR-007, SC-001 through SC-005, DESIGN-REQ-001, DESIGN-REQ-020, DESIGN-REQ-024, DESIGN-REQ-025).
 
 ### Story Validation
 
-- [X] T012 Run focused documentation contract, no-canonical-migration-checklist, and source traceability checks from `specs/203-document-plans-preset-boundary/quickstart.md`, then fix `docs/tmp/101-PlansOverview.md` or MoonSpec artifacts as needed (FR-001 through FR-009, SC-001 through SC-007).
+- [X] T012 Run focused documentation contract, no-canonical-migration-checklist, and source traceability checks from `specs/203-document-plans-preset-boundary/quickstart.md`, then fix `docs/MoonMindRoadmap.md` or MoonSpec artifacts as needed (FR-001 through FR-009, SC-001 through SC-007).
 
 ## Phase 4: Polish And Verification
 
@@ -77,7 +77,7 @@
 - T001-T003 must complete before story test authoring.
 - T004-T008 define the validation surface before implementation.
 - T009-T010 must run before T011.
-- T011 edits `docs/tmp/101-PlansOverview.md`.
+- T011 edits `docs/MoonMindRoadmap.md`.
 - T012 validates the story before full unit, integration, and final verification tasks.
 - T013-T015 complete final evidence after story validation passes or blockers are recorded.
 
@@ -92,7 +92,7 @@
 1. Complete setup and source inspection.
 2. Define unit-style documentation checks and integration-style review checks.
 3. Run red-first checks and capture missing boundary language before editing.
-4. Update only `docs/tmp/101-PlansOverview.md` unless validation discovers artifact drift.
+4. Update only `docs/MoonMindRoadmap.md` unless validation discovers artifact drift.
 5. Rerun focused checks and traceability checks.
 6. Run full unit and hermetic integration suites when available.
 7. Run `/moonspec-verify` against the preserved MM-389 Jira preset brief.

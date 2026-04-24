@@ -1,6 +1,6 @@
 # Managed and External Agent Execution Model
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-ManagedAndExternalAgentExecutionModel.md`](../tmp/remaining-work/Temporal-ManagedAndExternalAgentExecutionModel.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Status: **Implemented** (runtime live; contract hardening in progress)
 Last updated: 2026-04-09
@@ -76,10 +76,10 @@ Parent/child ownership rule:
 ```text
 Task (MoonMind.Run workflow)
  └─ Plan (generated or provided)
-     ├─ Step 1: sandbox.run_command        (activity)
-     ├─ Step 2: MoonMind.AgentRun          (child workflow) → e.g. Gemini CLI
-     ├─ Step 3: MoonMind.AgentRun          (child workflow) → e.g. Jules
-     └─ Step 4: sandbox.run_tests          (activity)
+ ├─ Step 1: sandbox.run_command (activity)
+ ├─ Step 2: MoonMind.AgentRun (child workflow) → e.g. Gemini CLI
+ ├─ Step 3: MoonMind.AgentRun (child workflow) → e.g. Jules
+ └─ Step 4: sandbox.run_tests (activity)
 ````
 
 This hierarchy allows a single task to mix:
@@ -98,25 +98,25 @@ This hierarchy allows a single task to mix:
 Both managed and external agents follow the same lifecycle shape:
 
 1. **Prepare context**
-   Materialize execution inputs, workspace context, runtime parameters, and any resolved skill snapshot references needed for the run.
+ Materialize execution inputs, workspace context, runtime parameters, and any resolved skill snapshot references needed for the run.
 
 2. **Start run**
-   Launch the agent asynchronously and receive an `AgentRunHandle`.
+ Launch the agent asynchronously and receive an `AgentRunHandle`.
 
 3. **Wait**
-   Suspend workflow progress while waiting for completion, approval, intervention, timeout, or cancellation. Waiting is modeled with Signals, Updates, and durable timers rather than long-blocking activities.
+ Suspend workflow progress while waiting for completion, approval, intervention, timeout, or cancellation. Waiting is modeled with Signals, Updates, and durable timers rather than long-blocking activities.
 
 4. **Read status**
-   Poll or consume callback-driven state transitions using canonical `AgentRunStatus` payloads.
+ Poll or consume callback-driven state transitions using canonical `AgentRunStatus` payloads.
 
 5. **Fetch result**
-   Retrieve final outputs, diagnostics, and logs as a canonical `AgentRunResult`.
+ Retrieve final outputs, diagnostics, and logs as a canonical `AgentRunResult`.
 
 6. **Publish outputs**
-   Persist output artifacts and register any enriched artifact references without placing large payloads into workflow history.
+ Persist output artifacts and register any enriched artifact references without placing large payloads into workflow history.
 
 7. **Cancel or intervene**
-   On cancellation or operator intervention, invoke the adapter/runtime cancel surface and allow best-effort cleanup.
+ On cancellation or operator intervention, invoke the adapter/runtime cancel surface and allow best-effort cleanup.
 
 ### 2.2 Design intent
 
@@ -137,10 +137,10 @@ Agent dispatch happens **per step**, not per task.
 The plan execution loop in `MoonMind.Run._run_execution_stage()` iterates ordered plan nodes and chooses one of two paths:
 
 * **Agent step**
-  `MoonMind.Run` starts `MoonMind.AgentRun` as a child workflow, constructing an `AgentExecutionRequest` from the node inputs.
+ `MoonMind.Run` starts `MoonMind.AgentRun` as a child workflow, constructing an `AgentExecutionRequest` from the node inputs.
 
 * **Activity step**
-  `MoonMind.Run` executes a standard Temporal activity directly.
+ `MoonMind.Run` executes a standard Temporal activity directly.
 
 This preserves one consistent task model while allowing each step to use the correct execution primitive.
 
@@ -321,8 +321,8 @@ Metadata may include values such as:
 
 ```json
 {
-  "awaitingReason": "provider_profile_slot",
-  "profileManager": "provider-profile-manager:gemini_cli"
+ "awaitingReason": "provider_profile_slot",
+ "profileManager": "provider-profile-manager:gemini_cli"
 }
 ```
 
@@ -572,7 +572,7 @@ Therefore:
 * live log publication must target a shared MoonMind observability transport (e.g. Redis pub/sub, shared append-only spool, DB-backed tailing), not an API-local memory singleton
 * the runtime model does not assume same-process UI/API delivery of live events
 * a process-local replay buffer may exist as a performance optimization, but it is not the architecture boundary
-* the shared transport mechanism must be documented and agreed before the live-emit path is implemented (see `docs/tmp/009-LiveLogsPlan.md` Phase 3 pre-step)
+* the shared transport mechanism must be documented and agreed before the live-emit path is implemented (see `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` Phase 3 pre-step)
 
 This is the key constraint for live log delivery. An API-local in-memory publisher is not sufficient.
 
@@ -719,13 +719,13 @@ MoonMind keeps execution responsibilities separated by capability and latency bo
 ### 11.1 Relevant fleets
 
 * `mm.workflow`
-  Workflow code
+ Workflow code
 
 * `mm.activity.integrations`
-  External provider communication and provider adapters
+ External provider communication and provider adapters
 
 * `mm.activity.agent_runtime`
-  Managed runtime supervision, status, result collection, artifact publication, and cancellation
+ Managed runtime supervision, status, result collection, artifact publication, and cancellation
 
 ### 11.2 Why `agent_runtime` is separate
 

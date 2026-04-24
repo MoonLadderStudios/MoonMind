@@ -3,7 +3,7 @@
 **Feature Branch**: `110-provider-profiles-p2`  
 **Created**: 2026-03-28  
 **Status**: Draft  
-**Input**: User description: "Implement docs/tmp/005-ProviderProfilesPlan.md Phase 2"
+**Input**: User description: "Implement docs/Tasks/SkillAndPlanContracts.md Phase 2"
 
 ## Source Document Requirements
 

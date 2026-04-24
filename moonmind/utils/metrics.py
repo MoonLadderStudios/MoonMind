@@ -11,7 +11,6 @@ from typing import Any, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-
 class _MetricsEmitter:
     """Best-effort StatsD emitter used for workflow task instrumentation."""
 
@@ -135,9 +134,7 @@ class _MetricsEmitter:
         payload = f"{self._prefix}.{metric}:{value * 1000:.6f}|ms{formatted_tags}"
         self._send(payload)
 
-
 _metrics_singleton: _MetricsEmitter | None = None
-
 
 def get_metrics_emitter() -> _MetricsEmitter:
     """Return the process-wide StatsD emitter (lazy singleton).
@@ -150,6 +147,5 @@ def get_metrics_emitter() -> _MetricsEmitter:
     if _metrics_singleton is None:
         _metrics_singleton = _MetricsEmitter()
     return _metrics_singleton
-
 
 __all__ = ["_MetricsEmitter", "get_metrics_emitter"]

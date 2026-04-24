@@ -35,18 +35,15 @@ _ACCEPTANCE_HEADING_RE = re.compile(
     r"(?im)^\s*(acceptance\s+criteria|acceptance|ac)\s*:?\s*$"
 )
 
-
 @dataclass(frozen=True)
 class _JiraProjectScope:
     keys: frozenset[str]
     ids: frozenset[str]
 
-
 class JiraBrowserModel(BaseModel):
     """Base model for Jira browser responses."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
 
 class JiraConnectionVerification(JiraBrowserModel):
     ok: bool
@@ -54,7 +51,6 @@ class JiraConnectionVerification(JiraBrowserModel):
     display_name: str | None = Field(None, alias="displayName")
     project_key: str | None = Field(None, alias="projectKey")
     project_name: str | None = Field(None, alias="projectName")
-
 
 class JiraProject(JiraBrowserModel):
     project_key: str = Field(..., alias="projectKey")
@@ -73,7 +69,6 @@ class JiraProject(JiraBrowserModel):
     @classmethod
     def _normalize_name(cls, value: object) -> str:
         return str(value or "").strip()
-
 
 class JiraBoard(JiraBrowserModel):
     id: str
@@ -99,7 +94,6 @@ class JiraBoard(JiraBrowserModel):
             raise ValueError("projectKey must match a Jira project-key pattern")
         return normalized
 
-
 class JiraColumn(JiraBrowserModel):
     id: str
     name: str
@@ -107,11 +101,9 @@ class JiraColumn(JiraBrowserModel):
     count: int = 0
     status_ids: list[str] = Field(default_factory=list, alias="statusIds")
 
-
 class JiraBoardColumns(JiraBrowserModel):
     board: JiraBoard
     columns: list[JiraColumn]
-
 
 class JiraIssueSummary(JiraBrowserModel):
     issue_key: str = Field(..., alias="issueKey")
@@ -131,7 +123,6 @@ class JiraIssueSummary(JiraBrowserModel):
             raise ValueError("issueKey must match a Jira issue-key pattern")
         return normalized
 
-
 class JiraBoardIssues(JiraBrowserModel):
     board_id: str = Field(..., alias="boardId")
     columns: list[JiraColumn]
@@ -144,21 +135,17 @@ class JiraBoardIssues(JiraBrowserModel):
         alias="unmappedItems",
     )
 
-
 class JiraIssueColumn(JiraBrowserModel):
     id: str
     name: str
-
 
 class JiraIssueStatus(JiraBrowserModel):
     id: str | None = None
     name: str | None = None
 
-
 class JiraIssueRecommendations(JiraBrowserModel):
     preset_instructions: str = Field(..., alias="presetInstructions")
     step_instructions: str = Field(..., alias="stepInstructions")
-
 
 class JiraIssueAttachment(JiraBrowserModel):
     id: str
@@ -166,7 +153,6 @@ class JiraIssueAttachment(JiraBrowserModel):
     content_type: str = Field(..., alias="contentType")
     size_bytes: int | None = Field(None, alias="sizeBytes")
     download_url: str = Field(..., alias="downloadUrl")
-
 
 class JiraIssueDetail(JiraBrowserModel):
     issue_key: str = Field(..., alias="issueKey")
@@ -180,11 +166,9 @@ class JiraIssueDetail(JiraBrowserModel):
     attachments: list[JiraIssueAttachment] = Field(default_factory=list)
     recommended_imports: JiraIssueRecommendations = Field(..., alias="recommendedImports")
 
-
 class JiraListResponse(JiraBrowserModel, Generic[T]):
     items: list[T]
     project_key: str | None = Field(None, alias="projectKey")
-
 
 class JiraBrowserService:
     """Trusted read-only Jira browser service used by Mission Control."""
@@ -1217,7 +1201,6 @@ class JiraBrowserService:
         used_ids.add(candidate)
         return candidate
 
-
 def _normalize_jira_text(value: Any) -> str:
     if value is None:
         return ""
@@ -1230,7 +1213,6 @@ def _normalize_jira_text(value: Any) -> str:
         parts = [_normalize_jira_text(item) for item in value]
         return _collapse_text("\n".join(part for part in parts if part))
     return _collapse_text(str(value))
-
 
 def _collect_adf_text(node: Any) -> list[str]:
     if not isinstance(node, Mapping):
@@ -1256,7 +1238,6 @@ def _collect_adf_text(node: Any) -> list[str]:
     if inline:
         return [_collapse_text("".join(parts))]
     return parts
-
 
 def _collapse_text(value: str) -> str:
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in value.splitlines()]

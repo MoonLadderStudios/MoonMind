@@ -3,7 +3,7 @@
 **Feature Branch**: `095-queue-substrate-removal`
 **Created**: 2026-03-21
 **Status**: Draft
-**Input**: User description: "Implement Phase 1 of docs/tmp/SingleSubstrateMigration.md — ensure every queue-backed submission and feature has a Temporal equivalent so the legacy queue execution substrate can be deprecated"
+**Input**: User description: "Implement Phase 1 of docs/MoonMindRoadmap.md — ensure every queue-backed submission and feature has a Temporal equivalent so the legacy queue execution substrate can be deprecated"
 
 ## Source Document Requirements
 

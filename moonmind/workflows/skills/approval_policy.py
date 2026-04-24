@@ -18,7 +18,6 @@ from moonmind.workflows.skills.tool_plan_contracts import (
     REVIEW_VERDICTS,
 )
 
-
 @dataclass(frozen=True, slots=True)
 class ReviewRequest:
     """Input envelope for the ``step.review`` activity."""
@@ -68,7 +67,6 @@ class ReviewRequest:
             "previous_feedback": self.previous_feedback,
         }
 
-
 @dataclass(frozen=True, slots=True)
 class ReviewVerdict:
     """Structured output from the ``step.review`` activity."""
@@ -97,7 +95,6 @@ class ReviewVerdict:
             "feedback": self.feedback,
             "issues": [dict(issue) for issue in self.issues],
         }
-
 
 def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
     """Parse an LLM response payload into a ``ReviewVerdict``."""
@@ -132,7 +129,6 @@ def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
         issues=issues,
     )
 
-
 def build_feedback_input(
     original_inputs: Mapping[str, Any],
     attempt: int,
@@ -148,7 +144,6 @@ def build_feedback_input(
     }
     return merged
 
-
 def build_feedback_instruction(
     original_instruction: str,
     attempt: int,
@@ -163,7 +158,6 @@ def build_feedback_instruction(
         f"Please address the above issues in this attempt."
     )
     return original_instruction + feedback_block
-
 
 _REVIEW_PROMPT_TEMPLATE = """\
 You are a code review agent for MoonMind. Your job is to evaluate whether a \
@@ -194,7 +188,6 @@ Respond with JSON:
 }}
 """
 
-
 def build_review_prompt(request: ReviewRequest) -> str:
     """Construct the LLM review prompt from a ``ReviewRequest``."""
 
@@ -214,7 +207,6 @@ def build_review_prompt(request: ReviewRequest) -> str:
         ),
         previous_feedback=request.previous_feedback or "N/A",
     )
-
 
 __all__ = [
     "ReviewRequest",

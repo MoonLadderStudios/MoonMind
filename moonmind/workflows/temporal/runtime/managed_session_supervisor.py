@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 _LOG_READ_CHUNK_BYTES = 64 * 1024
 _SESSION_STATE_FILENAME = ".moonmind-codex-session-state.json"
 
-
 class ArtifactStorageWriter(Protocol):
     def write_artifact(
         self,
@@ -30,7 +29,6 @@ class ArtifactStorageWriter(Protocol):
         data: bytes,
     ) -> tuple[Path, str]:
         pass
-
 
 class ManagedSessionSupervisor:
     """Track session spool progress and publish durable observability artifacts."""

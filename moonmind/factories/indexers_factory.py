@@ -6,7 +6,6 @@ from moonmind.indexers.jira_indexer import JiraIndexer  # New import
 
 logger = logging.getLogger(__name__)
 
-
 def build_indexers(settings: AppSettings):
     indexers = {}
 

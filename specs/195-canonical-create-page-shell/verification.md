@@ -1,9 +1,9 @@
 # MoonSpec Verification Report
 
-**Feature**: Canonical Create Page Shell  
-**Spec**: `/work/agent_jobs/mm:8d79e9ee-c046-49f3-9168-b0300bb4f9ee/repo/specs/195-canonical-create-page-shell/spec.md`  
-**Original Request Source**: `spec.md` `Input`, sourced from Jira issue MM-376  
-**Verdict**: FULLY_IMPLEMENTED  
+**Feature**: Canonical Create Page Shell 
+**Spec**: `/work/agent_jobs/mm:8d79e9ee-c046-49f3-9168-b0300bb4f9ee/repo/specs/195-canonical-create-page-shell/spec.md` 
+**Original Request Source**: `spec.md` `Input`, sourced from Jira issue MM-376 
+**Verdict**: FULLY_IMPLEMENTED 
 **Confidence**: HIGH
 
 ## Test Results
@@ -50,7 +50,7 @@
 | DESIGN-REQ-003 | `api_service/api/routers/task_dashboard.py:403`; `api_service/api/routers/task_dashboard.py:418`; `tests/unit/api/routers/test_task_dashboard.py:183` | VERIFIED | Canonical route, redirect alias, boot payload, and REST boundary are validated. |
 | DESIGN-REQ-004 | `frontend/src/entrypoints/task-create.tsx:4291`; `frontend/src/entrypoints/task-create.test.tsx:3649` | VERIFIED | Canonical section model is explicit and ordered. |
 | Constitution XI | `specs/195-canonical-create-page-shell/spec.md`, `plan.md`, `tasks.md`, and this verification report | VERIFIED | Spec-driven artifacts exist for one story and map to tests. |
-| Constitution XII | `docs/UI/CreatePage.md` remains canonical; implementation notes are under `specs/195-canonical-create-page-shell/` and `docs/tmp/` | VERIFIED | Desired-state docs were not converted into migration backlog. |
+| Constitution XII | `docs/UI/CreatePage.md` remains canonical; implementation notes are under `specs/195-canonical-create-page-shell/` and `local-only handoffs` | VERIFIED | Desired-state docs were not converted into migration backlog. |
 
 ## Original Request Alignment
 

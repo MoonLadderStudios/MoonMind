@@ -11,7 +11,6 @@ from moonmind.utils.metrics import get_metrics_emitter
 
 logger = logging.getLogger(__name__)
 
-
 class VectorTelemetry:
     """Best-effort telemetry tracker that emits StatsD metrics and structured logs."""
 

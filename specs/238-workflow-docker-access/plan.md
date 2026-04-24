@@ -1,6 +1,6 @@
 # Implementation Plan: Workflow Docker Access Setting
 
-**Branch**: `238-workflow-docker-access` | **Date**: 2026-04-22 | **Spec**: `specs/238-workflow-docker-access/spec.md`  
+**Branch**: `238-workflow-docker-access` | **Date**: 2026-04-22 | **Spec**: `specs/238-workflow-docker-access/spec.md` 
 **Input**: Single-story feature specification from `specs/238-workflow-docker-access/spec.md`
 
 ## Summary
@@ -31,15 +31,15 @@ Implement MM-476 by adding a workflow-level Docker access setting, enforcing it 
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Pydantic v2 settings, Temporal Python SDK activity boundaries, existing Docker workload contracts  
-**Storage**: No new persistent storage  
-**Unit Testing**: pytest through `./tools/test_unit.sh`  
-**Integration Testing**: pytest workflow/activity-boundary tests through `./tools/test_unit.sh`; full hermetic integration runner is `./tools/test_integration.sh` when Docker is available  
-**Target Platform**: MoonMind API/worker containers and Docker-capable agent-runtime fleet  
-**Project Type**: Python service/runtime contracts  
-**Performance Goals**: Policy gate is in-memory and runs before workload validation or launch  
-**Constraints**: Fail fast when disabled; no raw Docker socket for normal agents/sessions; preserve existing DooD runner-profile policy; no new storage; keep `./tools/test_integration.sh` behavior unchanged  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: Pydantic v2 settings, Temporal Python SDK activity boundaries, existing Docker workload contracts 
+**Storage**: No new persistent storage 
+**Unit Testing**: pytest through `./tools/test_unit.sh` 
+**Integration Testing**: pytest workflow/activity-boundary tests through `./tools/test_unit.sh`; full hermetic integration runner is `./tools/test_integration.sh` when Docker is available 
+**Target Platform**: MoonMind API/worker containers and Docker-capable agent-runtime fleet 
+**Project Type**: Python service/runtime contracts 
+**Performance Goals**: Policy gate is in-memory and runs before workload validation or launch 
+**Constraints**: Fail fast when disabled; no raw Docker socket for normal agents/sessions; preserve existing DooD runner-profile policy; no new storage; keep `./tools/test_integration.sh` behavior unchanged 
 **Scale/Scope**: One workflow setting, generic DooD/tool activity gate, and one curated integration-CI tool/profile
 
 ## Constitution Check
@@ -55,7 +55,7 @@ Implement MM-476 by adding a workflow-level Docker access setting, enforcing it 
 - IX Resilient by Default: PASS - disabled state fails before side effects and returns deterministic policy denial.
 - X Continuous Improvement: PASS - tests and verification provide evidence.
 - XI Spec-Driven Development: PASS - spec, plan, tasks, code, and verification preserve MM-476.
-- XII Canonical Docs vs Tmp: PASS - orchestration input stays under `docs/tmp`; no canonical docs migration narrative is added.
+- XII Canonical Docs vs Tmp: PASS - orchestration input stays under `local-only handoffs`; no canonical docs migration narrative is added.
 - XIII Pre-release Compatibility: PASS - no compatibility alias or fallback semantics are introduced.
 
 ## Project Structure
@@ -70,9 +70,9 @@ specs/238-workflow-docker-access/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── workflow-docker-access-tool-contract.md
+│ └── workflow-docker-access-tool-contract.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 
@@ -81,30 +81,30 @@ specs/238-workflow-docker-access/
 ```text
 moonmind/
 ├── config/
-│   └── settings.py
+│ └── settings.py
 ├── workflows/
-│   └── temporal/
-│       ├── activity_runtime.py
-│       └── worker_runtime.py
+│ └── temporal/
+│ ├── activity_runtime.py
+│ └── worker_runtime.py
 └── workloads/
-    └── tool_bridge.py
+ └── tool_bridge.py
 
 config/
 └── workloads/
-    └── default-runner-profiles.yaml
+ └── default-runner-profiles.yaml
 
 tests/
 ├── integration/
-│   └── temporal/
-│       └── test_integration_ci_tool_contract.py
+│ └── temporal/
+│ └── test_integration_ci_tool_contract.py
 └── unit/
-    ├── config/
-    │   └── test_settings.py
-    ├── workloads/
-    │   └── test_workload_tool_bridge.py
-    └── workflows/
-        └── temporal/
-            └── test_workload_run_activity.py
+ ├── config/
+ │ └── test_settings.py
+ ├── workloads/
+ │ └── test_workload_tool_bridge.py
+ └── workflows/
+ └── temporal/
+ └── test_workload_run_activity.py
 ```
 
 **Structure Decision**: Extend the existing Docker workload plane instead of adding a new execution substrate. `moonmind.integration_ci` is a curated tool wrapper in `moonmind.workloads.tool_bridge`, while direct `workload.run` activity requests are gated in `TemporalAgentRuntimeActivities`.

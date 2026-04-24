@@ -21,7 +21,6 @@ from moonmind.workflows.temporal.service import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @asynccontextmanager
 async def _db(tmp_path: Path):
     url = f"sqlite+aiosqlite:///{tmp_path}/integrations_monitoring.db"
@@ -33,7 +32,6 @@ async def _db(tmp_path: Path):
         yield maker
     finally:
         await engine.dispose()
-
 
 async def test_callback_first_completion_uses_single_terminal_path(
     tmp_path: Path, monkeypatch
@@ -91,7 +89,6 @@ async def test_callback_first_completion_uses_single_terminal_path(
             assert completed.awaiting_external is False
             assert completed.integration_state["normalized_status"] == "completed"
             assert "art_callback" in completed.artifact_refs
-
 
 async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity(
     tmp_path: Path, monkeypatch
@@ -162,7 +159,6 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
             assert waiting.integration_state["external_operation_id"] == "task-poll"
             assert finished.integration_state["normalized_status"] == "completed"
             assert "art_result" in finished.artifact_refs
-
 
 async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
     tmp_path: Path, monkeypatch
@@ -255,7 +251,6 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
                     payload={"event_type": "completed"},
                     payload_artifact_ref=None,
                 )
-
 
 async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
     tmp_path: Path, monkeypatch

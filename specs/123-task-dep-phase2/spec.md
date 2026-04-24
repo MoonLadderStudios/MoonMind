@@ -3,23 +3,23 @@
 **Feature Branch**: `123-task-dep-phase2`  
 **Created**: 2026-04-01  
 **Status**: Draft  
-**Input**: User description: "Implement Phase 2 of docs/tmp/011-TaskDependenciesPlan.md using test-driven development"
+**Input**: User description: "Implement Phase 2 of docs/Tasks/TaskDependencies.md using test-driven development"
 
 ## Source Document Requirements
 
-Extracted from `docs/tmp/011-TaskDependenciesPlan.md` Phase 2 and `docs/Tasks/TaskDependencies.md` section 5.
+Extracted from `docs/Tasks/TaskDependencies.md` Phase 2 and `docs/Tasks/TaskDependencies.md` section 5.
 
 | Requirement ID | Source Citation | Requirement Summary |
 |----------------|----------------|---------------------|
-| DOC-REQ-001 | `docs/tmp/011-TaskDependenciesPlan.md` Phase 2 bullet 1 | `MoonMindRunWorkflow.run()` MUST parse `initialParameters.task.dependsOn` after `_initialize_from_payload()` and before entering `planning`. |
-| DOC-REQ-002 | `docs/tmp/011-TaskDependenciesPlan.md` Phase 2 bullet 2 | When dependencies are present, the workflow MUST set `mm_state` to `waiting_on_dependencies` and expose dependency IDs in memo/search metadata. |
-| DOC-REQ-003 | `docs/tmp/011-TaskDependenciesPlan.md` Phase 2 bullet 3 and `docs/Tasks/TaskDependencies.md` §5.2 | The workflow MUST wait on each prerequisite using Temporal external workflow handles and block until all prerequisites complete successfully. |
-| DOC-REQ-004 | `docs/tmp/011-TaskDependenciesPlan.md` Phase 2 bullet 4 | Dependency waiting MUST be wrapped in a Temporal `CancellationScope` so cancellation interrupts the wait cleanly. |
-| DOC-REQ-005 | `docs/tmp/011-TaskDependenciesPlan.md` Phase 2 bullet 5 | The dependency gate MUST be guarded by `workflow.patched("dependency-gate-v1")` for replay safety. |
-| DOC-REQ-006 | `docs/tmp/011-TaskDependenciesPlan.md` Phase 2 bullet 6 and `docs/Tasks/TaskDependencies.md` §5.1 | If `dependsOn` is absent or empty, the workflow MUST proceed directly from `initializing` to `planning`. |
-| DOC-REQ-007 | `docs/tmp/011-TaskDependenciesPlan.md` Phase 2 bullet 7 and `docs/Tasks/TaskDependencies.md` §5.4 | If a prerequisite fails, is canceled, or is terminated, the dependent run MUST fail with a dependency-specific message. |
-| DOC-REQ-008 | `docs/tmp/011-TaskDependenciesPlan.md` Phase 2 bullet 8 and `docs/Tasks/TaskDependencies.md` §5.3 | Canceling the dependent run during dependency wait MUST cancel only the dependent run, not prerequisite runs. |
-| DOC-REQ-009 | `docs/tmp/011-TaskDependenciesPlan.md` Phase 2 bullet 9 | After dependency wait resolves, the workflow MUST re-check `self._paused` before entering planning, consistent with the existing pause gate. |
+| DOC-REQ-001 | `docs/Tasks/TaskDependencies.md` Phase 2 bullet 1 | `MoonMindRunWorkflow.run()` MUST parse `initialParameters.task.dependsOn` after `_initialize_from_payload()` and before entering `planning`. |
+| DOC-REQ-002 | `docs/Tasks/TaskDependencies.md` Phase 2 bullet 2 | When dependencies are present, the workflow MUST set `mm_state` to `waiting_on_dependencies` and expose dependency IDs in memo/search metadata. |
+| DOC-REQ-003 | `docs/Tasks/TaskDependencies.md` Phase 2 bullet 3 and `docs/Tasks/TaskDependencies.md` §5.2 | The workflow MUST wait on each prerequisite using Temporal external workflow handles and block until all prerequisites complete successfully. |
+| DOC-REQ-004 | `docs/Tasks/TaskDependencies.md` Phase 2 bullet 4 | Dependency waiting MUST be wrapped in a Temporal `CancellationScope` so cancellation interrupts the wait cleanly. |
+| DOC-REQ-005 | `docs/Tasks/TaskDependencies.md` Phase 2 bullet 5 | The dependency gate MUST be guarded by `workflow.patched("dependency-gate-v1")` for replay safety. |
+| DOC-REQ-006 | `docs/Tasks/TaskDependencies.md` Phase 2 bullet 6 and `docs/Tasks/TaskDependencies.md` §5.1 | If `dependsOn` is absent or empty, the workflow MUST proceed directly from `initializing` to `planning`. |
+| DOC-REQ-007 | `docs/Tasks/TaskDependencies.md` Phase 2 bullet 7 and `docs/Tasks/TaskDependencies.md` §5.4 | If a prerequisite fails, is canceled, or is terminated, the dependent run MUST fail with a dependency-specific message. |
+| DOC-REQ-008 | `docs/Tasks/TaskDependencies.md` Phase 2 bullet 8 and `docs/Tasks/TaskDependencies.md` §5.3 | Canceling the dependent run during dependency wait MUST cancel only the dependent run, not prerequisite runs. |
+| DOC-REQ-009 | `docs/Tasks/TaskDependencies.md` Phase 2 bullet 9 | After dependency wait resolves, the workflow MUST re-check `self._paused` before entering planning, consistent with the existing pause gate. |
 
 ## User Scenarios & Testing *(mandatory)*
 

@@ -3,7 +3,7 @@
 **Feature Branch**: `106-secrets-ui-api`  
 **Created**: 2026-03-28  
 **Status**: Draft  
-**Input**: User description: "Implement Phase 4 of docs/tmp/010-SecretsSystemPlan.md: UI and API Surfaces"
+**Input**: User description: "Implement Phase 4 of docs/Security/SecretsSystem.md: UI and API Surfaces"
 
 ## Source Document Requirements
 

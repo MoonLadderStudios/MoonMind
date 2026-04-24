@@ -38,11 +38,9 @@ _JULES_TO_AGENT_RUN_STATUS: dict[str, str] = {
     "unknown": "awaiting_callback",
 }
 
-
 def _to_agent_status(raw_status: str | None) -> str:
     normalized = normalize_jules_status(raw_status)
     return _JULES_TO_AGENT_RUN_STATUS[normalized]
-
 
 def _normalize_jules_task(response: JulesTaskResponse) -> str:
     """Determine normalized status, treating PR creation as success."""
@@ -51,14 +49,12 @@ def _normalize_jules_task(response: JulesTaskResponse) -> str:
         return "completed"
     return normalized
 
-
 def _preferred_external_url(response: JulesTaskResponse) -> str | None:
     """Prefer the PR URL once available; otherwise fall back to session URL."""
     pull_request_url = str(response.pull_request_url or "").strip() or None
     if pull_request_url:
         return pull_request_url
     return str(response.url or "").strip() or None
-
 
 _JULES_CAPABILITY = ProviderCapabilityDescriptor(
     providerName="jules",
@@ -67,7 +63,6 @@ _JULES_CAPABILITY = ProviderCapabilityDescriptor(
     supportsResultFetch=True,
     defaultPollHintSeconds=15,
 )
-
 
 class JulesAgentAdapter(BaseExternalAgentAdapter):
     """Normalize Jules provider interactions into canonical agent contracts.
@@ -252,6 +247,5 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
 
     async def _get_task(self, run_id: str) -> JulesTaskResponse:
         return await self._client.get_task(JulesGetTaskRequest(taskId=run_id))
-
 
 __all__ = ["JulesAgentAdapter"]

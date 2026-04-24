@@ -11,7 +11,6 @@ from moonmind.mcp.tool_registry import ToolArgumentsValidationError, ToolNotFoun
 
 pytestmark = [pytest.mark.asyncio]
 
-
 class _FakeJiraService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
@@ -32,10 +31,8 @@ class _FakeJiraService:
         self.calls.append(("list_create_issue_types", request))
         return {"projectKey": request.project_key, "issueTypes": []}
 
-
 def _build_context(service: _FakeJiraService | None = None) -> JiraToolExecutionContext:
     return JiraToolExecutionContext(service=service or _FakeJiraService())  # type: ignore[arg-type]
-
 
 async def test_list_tools_filters_by_enabled_actions() -> None:
     registry = JiraToolRegistry(enabled_actions={"get_issue", "transition_issue"})
@@ -43,7 +40,6 @@ async def test_list_tools_filters_by_enabled_actions() -> None:
     names = [tool.name for tool in registry.list_tools()]
 
     assert names == ["jira.get_issue", "jira.transition_issue"]
-
 
 @pytest.mark.parametrize(
     ("tool", "arguments", "expected_call"),
@@ -80,7 +76,6 @@ async def test_call_tool_dispatches_expected_method(
     assert result
     assert service.calls[0][0] == expected_call
 
-
 async def test_call_tool_rejects_invalid_arguments() -> None:
     registry = JiraToolRegistry(enabled_actions={"get_issue"})
 
@@ -90,7 +85,6 @@ async def test_call_tool_rejects_invalid_arguments() -> None:
             arguments={},
             context=_build_context(),
         )
-
 
 async def test_call_unknown_tool_raises() -> None:
     registry = JiraToolRegistry(enabled_actions={"get_issue"})

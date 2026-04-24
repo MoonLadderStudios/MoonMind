@@ -14,7 +14,6 @@ from moonmind.workflows.task_proposals.models import (
     TaskProposalStatus,
 )
 
-
 class TaskProposalOriginModel(BaseModel):
     """Origin metadata for a proposal."""
 
@@ -23,7 +22,6 @@ class TaskProposalOriginModel(BaseModel):
     source: TaskProposalOriginSource = Field(..., alias="source")
     id: Optional[UUID] = Field(None, alias="id")
     metadata: dict[str, Any] | None = Field(None, alias="metadata")
-
 
 class TaskProposalTaskPreview(BaseModel):
     """Derived summary of the canonical task payload."""
@@ -41,7 +39,6 @@ class TaskProposalTaskPreview(BaseModel):
     preset_provenance: Optional[str] = Field(None, alias="presetProvenance")
     authored_preset_count: int = Field(0, alias="authoredPresetCount")
     step_source_kinds: list[str] = Field(default_factory=list, alias="stepSourceKinds")
-
 
 class TaskProposalModel(BaseModel):
     """Serialized proposal model."""
@@ -78,7 +75,6 @@ class TaskProposalModel(BaseModel):
         default_factory=list, alias="similar"
     )
 
-
 class TaskProposalSimilarModel(BaseModel):
     """Slim representation of similar proposals."""
 
@@ -89,7 +85,6 @@ class TaskProposalSimilarModel(BaseModel):
     category: Optional[str] = Field(None, alias="category")
     repository: str = Field(..., alias="repository")
     created_at: datetime = Field(..., alias="createdAt")
-
 
 class TaskProposalCreateRequest(BaseModel):
     """Request payload for creating a task proposal."""
@@ -104,7 +99,6 @@ class TaskProposalCreateRequest(BaseModel):
     task_create_request: dict[str, Any] = Field(..., alias="taskCreateRequest")
     review_priority: Optional[str] = Field(None, alias="reviewPriority")
 
-
 class TaskProposalListResponse(BaseModel):
     """Response payload for listing proposals."""
 
@@ -112,7 +106,6 @@ class TaskProposalListResponse(BaseModel):
 
     items: list[TaskProposalModel] = Field(default_factory=list, alias="items")
     next_cursor: Optional[str] = Field(None, alias="nextCursor")
-
 
 class TaskProposalPromoteRequest(BaseModel):
     """Optional overrides supplied during promotion."""
@@ -134,14 +127,12 @@ class TaskProposalPromoteRequest(BaseModel):
         None, alias="taskCreateRequestOverride"
     )
 
-
 class TaskProposalDismissRequest(BaseModel):
     """Dismissal note payload."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     note: Optional[str] = Field(None, alias="note")
-
 
 class TaskProposalPromoteResponse(BaseModel):
     """Promotion response containing proposal + queue job."""
@@ -152,7 +143,6 @@ class TaskProposalPromoteResponse(BaseModel):
     promoted_execution_id: str = Field(
         ..., alias="promotedExecutionId", title="PromotedExecutionId"
     )
-
 
 class TaskProposalPriorityRequest(BaseModel):
     """Reviewer priority update request."""

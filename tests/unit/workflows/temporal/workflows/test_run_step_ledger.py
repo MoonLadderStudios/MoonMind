@@ -10,7 +10,6 @@ import pytest
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
-
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     workflow_info = SimpleNamespace(
         namespace="default",
@@ -43,7 +42,6 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     )
     return memo_updates
 
-
 def _ordered_nodes() -> list[dict]:
     return [
         {
@@ -58,10 +56,8 @@ def _ordered_nodes() -> list[dict]:
         },
     ]
 
-
 def _dependency_map() -> dict[str, list[str]]:
     return {"prepare": [], "run-tests": ["prepare"]}
-
 
 def _approval_policy_plan_payload() -> dict[str, Any]:
     return {
@@ -100,7 +96,6 @@ def _approval_policy_plan_payload() -> dict[str, Any]:
         "edges": [],
     }
 
-
 def _registry_payload() -> dict[str, Any]:
     return {
         "skills": [
@@ -125,7 +120,6 @@ def _registry_payload() -> dict[str, Any]:
             }
         ]
     }
-
 
 def test_run_initializes_latest_run_step_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -154,7 +148,6 @@ def test_run_initializes_latest_run_step_ledger(monkeypatch: pytest.MonkeyPatch)
     assert progress["ready"] == 1
     assert progress["pending"] == 1
 
-
 def test_run_progress_query_exposes_current_run_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -172,7 +165,6 @@ def test_run_progress_query_exposes_current_run_id(
 
     assert progress["runId"] == "run-1"
     assert progress["total"] == 2
-
 
 def test_run_tracks_status_transitions_and_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure_workflow_runtime(monkeypatch)
@@ -233,7 +225,6 @@ def test_run_tracks_status_transitions_and_attempts(monkeypatch: pytest.MonkeyPa
     assert progress["succeeded"] == 1
     assert progress["canceled"] == 1
 
-
 def test_run_terminal_success_clears_previous_last_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -268,7 +259,6 @@ def test_run_terminal_success_clears_previous_last_error(
     assert step["status"] == "succeeded"
     assert step["lastError"] is None
 
-
 def test_run_missing_step_ledger_updates_do_not_raise(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -302,7 +292,6 @@ def test_run_missing_step_ledger_updates_do_not_raise(
     assert progress["ready"] == 1
     assert progress["pending"] == 1
     assert progress["running"] == 0
-
 
 def test_plan_dependency_map_rewrites_bundled_dependencies(
     monkeypatch: pytest.MonkeyPatch,
@@ -340,7 +329,6 @@ def test_plan_dependency_map_rewrites_bundled_dependencies(
         "publish": [bundle_id],
     }
 
-
 def test_run_queries_remain_available_after_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -365,7 +353,6 @@ def test_run_queries_remain_available_after_completion(
     assert workflow.get_progress()["skipped"] == 1
     assert workflow.get_step_ledger()["steps"][0]["status"] == "skipped"
 
-
 def test_run_memo_updates_remain_compact(monkeypatch: pytest.MonkeyPatch) -> None:
     memo_updates = _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
@@ -387,7 +374,6 @@ def test_run_memo_updates_remain_compact(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "steps" not in latest_memo
     assert "progress" not in latest_memo
     assert "checks" not in latest_memo
-
 
 def test_run_groups_child_lineage_and_evidence_into_step_row(
     monkeypatch: pytest.MonkeyPatch,
@@ -455,7 +441,6 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
         "providerSnapshot": "art_provider_1",
     }
 
-
 def test_run_waiting_state_captures_child_workflow_lineage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -496,7 +481,6 @@ def test_run_waiting_state_captures_child_workflow_lineage(
         "childRunId": None,
         "taskRunId": None,
     }
-
 
 def test_run_uses_deterministic_output_primary_fallback_for_generic_results(
     monkeypatch: pytest.MonkeyPatch,
@@ -539,7 +523,6 @@ def test_run_uses_deterministic_output_primary_fallback_for_generic_results(
     assert step["artifacts"]["outputPrimary"] == "art_primary_1"
     assert step["artifacts"]["runtimeStdout"] == "art_stdout_1"
     assert step["artifacts"]["runtimeDiagnostics"] == "art_diag_1"
-
 
 def test_run_projects_workload_artifacts_and_metadata_from_tool_result(
     monkeypatch: pytest.MonkeyPatch,
@@ -613,7 +596,6 @@ def test_run_projects_workload_artifacts_and_metadata_from_tool_result(
         "sessionEpoch": 3,
     }
 
-
 def test_run_accepts_tuple_output_refs_and_ignores_string_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -654,7 +636,6 @@ def test_run_accepts_tuple_output_refs_and_ignores_string_values(
 
     assert step["artifacts"]["outputPrimary"] == "art_primary_1"
     assert step["artifacts"]["runtimeStdout"] == "art_stdout_1"
-
 
 def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
     monkeypatch: pytest.MonkeyPatch,
@@ -701,7 +682,6 @@ def test_run_reads_nested_workload_metadata_from_legacy_workload_result(
     assert step["workload"]["stepId"] == "workload-step"
     assert step["workload"]["profileId"] == "local-python"
     assert "stdout" not in step["workload"]
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check(
@@ -810,7 +790,6 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
         }
     ]
     assert written_review_payloads[0]["verdict"]["verdict"] == "PASS"
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retry_count(
@@ -940,7 +919,6 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     ]
     assert written_review_payloads[0]["verdict"]["verdict"] == "FAIL"
     assert written_review_payloads[1]["verdict"]["verdict"] == "PASS"
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_in_instruction_ref(

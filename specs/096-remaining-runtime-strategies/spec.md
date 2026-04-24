@@ -1,7 +1,7 @@
 # Spec: Remaining Runtime Strategies — Phase 2
 
 **Feature ID**: 096-remaining-runtime-strategies
-**Source**: `docs/tmp/SharedManagedAgentAbstractions.md` Phase 2
+**Source**: `spec.md (Input)` Phase 2
 **Branch**: `096-remaining-runtime-strategies`
 
 ## Overview

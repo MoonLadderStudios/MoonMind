@@ -86,7 +86,7 @@
 
 **Purpose**: Strengthen completed story without changing core scope.
 
-- [X] T020 Run traceability check `rg -n "MM-375|DESIGN-REQ-019" specs/203-expose-image-diagnostics docs/tmp/jira-orchestration-inputs/MM-375-moonspec-orchestration-input.md`
+- [X] T020 Run traceability check `rg -n "MM-375|DESIGN-REQ-019" specs/203-expose-image-diagnostics`
 - [X] T021 Run final unit validation `./tools/test_unit.sh`
 - [X] T022 Add failing unit tests for attachment upload started/completed diagnostics with target metadata in `tests/unit/api/routers/test_temporal_artifacts.py` covering FR-001, FR-002, SC-001, DESIGN-REQ-019
 - [X] T023 Add failing unit tests for attachment validation failed diagnostics with target metadata and failure detail in `tests/unit/workflows/tasks/test_task_contract.py` covering FR-003, SC-002, DESIGN-REQ-019

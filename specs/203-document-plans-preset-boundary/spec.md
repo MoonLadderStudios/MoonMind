@@ -35,14 +35,14 @@ Source Reference
 - Source Document: docs/Tasks/PresetComposability.md
 - Source Title: Preset Composability
 - Source Sections:
-  - 7. docs/Temporal/101-PlansOverview.md
-  - 8. Cross-document invariants
+ - 7. docs/Temporal/101-PlansOverview.md
+ - 8. Cross-document invariants
 - Coverage IDs:
-  - DESIGN-REQ-024
-  - DESIGN-REQ-001
-  - DESIGN-REQ-020
-  - DESIGN-REQ-025
-  - DESIGN-REQ-026
+ - DESIGN-REQ-024
+ - DESIGN-REQ-001
+ - DESIGN-REQ-020
+ - DESIGN-REQ-025
+ - DESIGN-REQ-026
 
 User Story
 As a documentation reader, I want the plans overview to link authoring-time preset composition to TaskPresetsSystem and runtime plan semantics to SkillAndPlanContracts so the boundary is discoverable.
@@ -60,12 +60,12 @@ Requirements
 
 Relevant Implementation Notes
 - The Jira source references `docs/Tasks/PresetComposability.md`; preserve that source reference as Jira traceability even if the source document is unavailable in the current checkout.
-- The Jira source references `docs/Temporal/101-PlansOverview.md`; the current checkout exposes the plans overview at `docs/tmp/101-PlansOverview.md`, so use the repository-current equivalent when implementing unless a canonical replacement is identified.
+- The Jira source references `docs/Temporal/101-PlansOverview.md`; the current checkout exposes the plans overview at `docs/MoonMindRoadmap.md`, so use the repository-current equivalent when implementing unless a canonical replacement is identified.
 - Link authoring-time preset composition semantics to `docs/Tasks/TaskPresetsSystem.md`.
 - Link runtime plan semantics to `docs/Tasks/SkillAndPlanContracts.md`.
 - State that preset composition is a control-plane concern resolved before `PlanDefinition` creation.
 - State that runtime plans remain flattened execution graphs of concrete nodes and edges.
-- Keep canonical documentation desired-state focused. Do not add migration checklists or implementation backlog content outside `docs/tmp/`.
+- Keep canonical documentation desired-state focused. Do not add migration checklists or implementation backlog content outside `local-only handoffs`.
 - Preserve MM-389 anywhere downstream artifacts summarize, implement, verify, commit, or open a pull request for this work.
 
 Verification
@@ -101,14 +101,14 @@ Dependencies
 ### Edge Cases
 
 - The Jira brief references `docs/Tasks/PresetComposability.md`, but that file is absent in the current checkout; the preserved MM-389 brief, `docs/Tasks/TaskPresetsSystem.md`, and `docs/Tasks/SkillAndPlanContracts.md` are the active sources.
-- The Jira brief references `docs/Temporal/101-PlansOverview.md`, while the repository-current overview is `docs/tmp/101-PlansOverview.md`; the current file is treated as the equivalent target.
-- The plans overview is itself under `docs/tmp/`; the change must stay concise and must not move migration backlog into canonical docs.
+- The Jira brief references `docs/Temporal/101-PlansOverview.md`, while the repository-current overview is `docs/MoonMindRoadmap.md`; the current file is treated as the equivalent target.
+- The plans overview is itself under `local-only handoffs`; the change must stay concise and must not move migration backlog into canonical docs.
 - Existing table entries already link the two target documents separately; the new clarification must explain the boundary between them instead of duplicating table rows.
 
 ## Assumptions
 
 - The selected runtime mode means the documentation target is treated as runtime source requirements for product behavior, even though the implementation change is a documentation contract update.
-- `docs/tmp/101-PlansOverview.md` is the repository-current equivalent of the Jira-referenced plans overview.
+- `docs/MoonMindRoadmap.md` is the repository-current equivalent of the Jira-referenced plans overview.
 - This story does not require executable code changes unless planning discovers implementation drift from the documented runtime contract.
 
 ## Source Design Requirements

@@ -3,7 +3,7 @@
 ## Story Classification
 
 Decision: Treat MM-461 as a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-461-moonspec-orchestration-input.md`; `specs/227-report-bundle-workflow-publishing/spec.md`.
+Evidence: `spec.md` (Input); `specs/227-report-bundle-workflow-publishing/spec.md`.
 Rationale: The brief names one actor, one activity-side publication outcome, one compact bundle shape, and one bounded acceptance set.
 Alternatives considered: Broad design breakdown was rejected because the Jira brief already selects one independently testable story.
 Test implications: Unit and activity-boundary integration tests are required.

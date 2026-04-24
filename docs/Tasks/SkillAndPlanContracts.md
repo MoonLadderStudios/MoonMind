@@ -1,6 +1,6 @@
 # Execution Tool and Plan Contracts
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Tasks-SkillAndPlanContracts.md`](../tmp/remaining-work/Tasks-SkillAndPlanContracts.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 MoonMind system design (Temporal-first)
 
@@ -18,10 +18,10 @@ Define what **execution** means in MoonMind using **Temporal’s** core model:
 * **Activities** perform side effects (LLM calls, filesystem, network, integrations).
 * MoonMind adds only what Temporal does not provide:
 
-  * **Tool** (capability contract)
-  * **Plan** (structured sequence/graph of tool invocations)
-  * **Artifact** (large inputs/outputs stored outside workflow history)
-  * **Agent Skill / Skill Set** (instruction bundles)
+ * **Tool** (capability contract)
+ * **Plan** (structured sequence/graph of tool invocations)
+ * **Artifact** (large inputs/outputs stored outside workflow history)
+ * **Agent Skill / Skill Set** (instruction bundles)
 
 This document explicitly covers executable MoonMind tools, plan structure, plan execution semantics, artifact-backed execution context, and deterministic workflow orchestration. 
 It establishes:
@@ -109,22 +109,22 @@ Compatibility rule:
 ## 2) Design principles
 
 1. **Workflow code orchestrates only.**
-   No nondeterministic behavior in workflow code. All external I/O and LLM calls are Activities.
+ No nondeterministic behavior in workflow code. All external I/O and LLM calls are Activities.
 
 2. **Everything executable is a Tool invocation.**
-   “Planning” is a Tool that outputs a Plan.
+ “Planning” is a Tool that outputs a Plan.
 
 3. **Plans are data, not code.**
-   Plans are validated, stored as artifacts, and interpreted deterministically.
+ Plans are validated, stored as artifacts, and interpreted deterministically.
 
 4. **DAG-first plan model.**
-   Linear plans are DAGs with a simple chain of dependencies.
+ Linear plans are DAGs with a simple chain of dependencies.
 
 5. **Payload discipline.**
-   Workflow history stays small: large content always lives in Artifacts.
+ Workflow history stays small: large content always lives in Artifacts.
 
 6. **Observable progress.**
-   Execution progress is structured and retrievable without parsing logs.
+ Execution progress is structured and retrievable without parsing logs.
 
 ---
 
@@ -136,15 +136,15 @@ Large inputs/outputs (plans, manifests, patches, logs, model transcripts) are st
 
 ```json
 {
-  "artifact_ref": "art:sha256:BASE16…",
-  "content_type": "application/json",
-  "bytes": 12345,
-  "created_at": "2026-03-05T00:00:00Z",
-  "metadata": {
-    "name": "plan.json",
-    "producer": "skill:plan.generate",
-    "labels": ["plan"]
-  }
+ "artifact_ref": "art:sha256:BASE16…",
+ "content_type": "application/json",
+ "bytes": 12345,
+ "created_at": "2026-03-05T00:00:00Z",
+ "metadata": {
+ "name": "plan.json",
+ "producer": "skill:plan.generate",
+ "labels": ["plan"]
+ }
 }
 ```
 
@@ -192,41 +192,41 @@ version: "2.1.0"
 type: "skill"
 description: "Apply a patch artifact to a repo ref and optionally format."
 inputs:
-  schema:
-    type: object
-    required: [repo_ref, patch_artifact]
-    properties:
-      repo_ref: { type: string }
-      patch_artifact: { type: string }      # ArtifactRef.artifact_ref
-      format: { type: boolean, default: true }
+ schema:
+ type: object
+ required: [repo_ref, patch_artifact]
+ properties:
+ repo_ref: { type: string }
+ patch_artifact: { type: string } # ArtifactRef.artifact_ref
+ format: { type: boolean, default: true }
 outputs:
-  schema:
-    type: object
-    required: [files_changed]
-    properties:
-      files_changed: { type: integer }
-      commit_sha: { type: string }
-      diff_artifact: { type: string }       # artifact_ref (optional)
+ schema:
+ type: object
+ required: [files_changed]
+ properties:
+ files_changed: { type: integer }
+ commit_sha: { type: string }
+ diff_artifact: { type: string } # artifact_ref (optional)
 executor:
-  # See §11 decision: hybrid model
-  activity_type: "mm.tool.execute"
-  selector:
-    mode: "by_capability"
+ # See §11 decision: hybrid model
+ activity_type: "mm.tool.execute"
+ selector:
+ mode: "by_capability"
 requirements:
-  capabilities:
-    - "sandbox"
+ capabilities:
+ - "sandbox"
 policies:
-  timeouts:
-    start_to_close_seconds: 300
-    schedule_to_close_seconds: 1800
-  retries:
-    max_attempts: 3
-    backoff: "exponential"
-    non_retryable_error_codes:
-      - "INVALID_INPUT"
-      - "PERMISSION_DENIED"
+ timeouts:
+ start_to_close_seconds: 300
+ schedule_to_close_seconds: 1800
+ retries:
+ max_attempts: 3
+ backoff: "exponential"
+ non_retryable_error_codes:
+ - "INVALID_INPUT"
+ - "PERMISSION_DENIED"
 security:
-  allowed_roles: ["user", "admin"]
+ allowed_roles: ["user", "admin"]
 ```
 
 #### Required fields
@@ -246,17 +246,17 @@ Note: Step-level agent skill selectors are defined in `docs/Tasks/AgentSkillSyst
 
 ```json
 {
-  "id": "n1",
-  "tool": { "type": "skill", "name": "repo.apply_patch", "version": "2.1.0" },
-  "inputs": {
-    "repo_ref": "git:org/repo#branch",
-    "patch_artifact": "art:sha256:…",
-    "format": true
-  },
-  "options": {
-    "timeouts_override": { "start_to_close_seconds": 120 },
-    "retries_override": { "max_attempts": 2 }
-  }
+ "id": "n1",
+ "tool": { "type": "skill", "name": "repo.apply_patch", "version": "2.1.0" },
+ "inputs": {
+ "repo_ref": "git:org/repo#branch",
+ "patch_artifact": "art:sha256:…",
+ "format": true
+ },
+ "options": {
+ "timeouts_override": { "start_to_close_seconds": 120 },
+ "retries_override": { "max_attempts": 2 }
+ }
 }
 ```
 
@@ -264,12 +264,12 @@ Legacy compatibility form (accepted only during migration):
 
 ```json
 {
-  "id": "n1",
-  "skill": { "name": "repo.apply_patch", "version": "2.1.0" },
-  "inputs": {
-    "repo_ref": "git:org/repo#branch",
-    "patch_artifact": "art:sha256:…"
-  }
+ "id": "n1",
+ "skill": { "name": "repo.apply_patch", "version": "2.1.0" },
+ "inputs": {
+ "repo_ref": "git:org/repo#branch",
+ "patch_artifact": "art:sha256:…"
+ }
 }
 ```
 
@@ -291,17 +291,17 @@ Canonical shapes:
 
 ```json
 {
-  "kind": "agent_skill",
-  "name": "jira-issue-creator",
-  "args": {}
+ "kind": "agent_skill",
+ "name": "jira-issue-creator",
+ "args": {}
 }
 ```
 
 ```json
 {
-  "kind": "runtime_command",
-  "name": "review",
-  "args": {}
+ "kind": "runtime_command",
+ "name": "review",
+ "args": {}
 }
 ```
 
@@ -309,19 +309,19 @@ Representative `agent_runtime` step using an agent skill:
 
 ```json
 {
-  "id": "n1",
-  "tool": { "type": "agent_runtime", "name": "codex_cli", "version": "1.0" },
-  "inputs": {
-    "instructions": "Use the selected runtime skill to create Jira stories.",
-    "runtimeSelection": {
-      "kind": "agent_skill",
-      "name": "jira-issue-creator",
-      "args": {}
-    },
-    "runtime": {
-      "mode": "codex_cli"
-    }
-  }
+ "id": "n1",
+ "tool": { "type": "agent_runtime", "name": "codex_cli", "version": "1.0" },
+ "inputs": {
+ "instructions": "Use the selected runtime skill to create Jira stories.",
+ "runtimeSelection": {
+ "kind": "agent_skill",
+ "name": "jira-issue-creator",
+ "args": {}
+ },
+ "runtime": {
+ "mode": "codex_cli"
+ }
+ }
 }
 ```
 
@@ -329,19 +329,19 @@ Representative `agent_runtime` step using a runtime-native command:
 
 ```json
 {
-  "id": "n2",
-  "tool": { "type": "agent_runtime", "name": "codex_cli", "version": "1.0" },
-  "inputs": {
-    "instructions": "Review the current changes and publish the review as artifacts.",
-    "runtimeSelection": {
-      "kind": "runtime_command",
-      "name": "review",
-      "args": {}
-    },
-    "runtime": {
-      "mode": "codex_cli"
-    }
-  }
+ "id": "n2",
+ "tool": { "type": "agent_runtime", "name": "codex_cli", "version": "1.0" },
+ "inputs": {
+ "instructions": "Review the current changes and publish the review as artifacts.",
+ "runtimeSelection": {
+ "kind": "runtime_command",
+ "name": "review",
+ "args": {}
+ },
+ "runtime": {
+ "mode": "codex_cli"
+ }
+ }
 }
 ```
 
@@ -349,26 +349,26 @@ Rules:
 
 * `runtimeSelection` is valid only for `tool.type = "agent_runtime"`.
 * `kind = "agent_skill"` selects a runtime-facing agent skill or skill preset
-  for that step.
+ for that step.
 * `kind = "runtime_command"` selects a MoonMind-native runtime command
-  implemented by the owning runtime adapter or managed-session plane.
+ implemented by the owning runtime adapter or managed-session plane.
 * A runtime command is not resolved from the executable tool registry snapshot.
 * A runtime command must be capability-gated by runtime. Unsupported commands
-  must fail validation or fail fast before the run starts.
+ must fail validation or fail fast before the run starts.
 * `args` must remain small JSON and must validate against command-specific
-  runtime validation rules.
+ runtime validation rules.
 * Any outputs produced by a runtime command use the normal `AgentRunResult` and
-  artifact contracts.
+ artifact contracts.
 
 Migration rule:
 
 * Legacy `selectedSkill` and `selectedSkillArgs` payloads may be accepted during
-  migration and normalized to
-  `inputs.runtimeSelection = { "kind": "agent_skill", ... }`.
+ migration and normalized to
+ `inputs.runtimeSelection = { "kind": "agent_skill", ... }`.
 * This legacy acceptance is deprecated and exists only for in-flight runs
-  created before `runtimeSelection` became the canonical contract. Remove
-  `selectedSkill` and `selectedSkillArgs` acceptance once those in-flight runs
-  have completed or been explicitly cut over.
+ created before `runtimeSelection` became the canonical contract. Remove
+ `selectedSkill` and `selectedSkillArgs` acceptance once those in-flight runs
+ have completed or been explicitly cut over.
 
 ---
 
@@ -378,18 +378,18 @@ Tool execution returns a structured result:
 
 ```json
 {
-  "status": "SUCCEEDED",
-  "outputs": {
-    "files_changed": 4,
-    "commit_sha": "abc123"
-  },
-  "output_artifacts": [
-    { "artifact_ref": "art:sha256:…", "content_type": "application/json", "bytes": 2048 }
-  ],
-  "progress": {
-    "message": "Patch applied and formatted",
-    "percent": 100
-  }
+ "status": "SUCCEEDED",
+ "outputs": {
+ "files_changed": 4,
+ "commit_sha": "abc123"
+ },
+ "output_artifacts": [
+ { "artifact_ref": "art:sha256:…", "content_type": "application/json", "bytes": 2048 }
+ ],
+ "progress": {
+ "message": "Patch applied and formatted",
+ "percent": 100
+ }
 }
 ```
 
@@ -406,14 +406,14 @@ All failures normalize to:
 
 ```json
 {
-  "error_code": "RATE_LIMITED",
-  "message": "Upstream provider rate limit",
-  "retryable": true,
-  "details": { "provider": "Jules", "retry_after_seconds": 30 },
-  "cause": {
-    "error_code": "HTTP_429",
-    "message": "Too Many Requests"
-  }
+ "error_code": "RATE_LIMITED",
+ "message": "Upstream provider rate limit",
+ "retryable": true,
+ "details": { "provider": "Jules", "retry_after_seconds": 30 },
+ "cause": {
+ "error_code": "HTTP_429",
+ "message": "Too Many Requests"
+ }
 }
 ```
 
@@ -459,28 +459,28 @@ Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`, `i
 
 ### 5.4 Story Output Tools
 
-Broad Moon Spec breakdown is an agent-runtime operation that writes story candidates as durable handoff files under `docs/tmp/story-breakdowns/`. It does not create `spec.md` files and does not write under `specs/`.
+Broad Moon Spec breakdown is an agent-runtime operation that writes story candidates as durable handoff files under `artifacts/story-breakdowns/`. It does not create `spec.md` files and does not write under `specs/`.
 
 When a task requests Jira issue creation from ambiguous user intent, the planner should dispatch an `agent_runtime` step with the `jira-issue-creator` agent skill selected. The agent uses the Jira connector/API to resolve projects, issue types, create fields, and issue descriptions.
 
 ```json
 {
-  "tool": {
-    "type": "agent_runtime",
-    "name": "codex_cli",
-    "version": "1.0"
-  },
-  "inputs": {
-    "runtimeSelection": {
-      "kind": "agent_skill",
-      "name": "jira-issue-creator",
-      "args": {}
-    },
-    "instructions": "Use the selected runtime skill to create a Jira story for each story in docs/tmp/story-breakdowns/example.",
-    "runtime": {
-      "mode": "codex_cli"
-    }
-  }
+ "tool": {
+ "type": "agent_runtime",
+ "name": "codex_cli",
+ "version": "1.0"
+ },
+ "inputs": {
+ "runtimeSelection": {
+ "kind": "agent_skill",
+ "name": "jira-issue-creator",
+ "args": {}
+ },
+ "instructions": "Use the selected runtime skill to create a Jira story for each story in artifacts/story-breakdowns/example.",
+ "runtime": {
+ "mode": "codex_cli"
+ }
+ }
 }
 ```
 
@@ -491,22 +491,22 @@ the planner may use the narrower deterministic batch tool:
 
 ```json
 {
-  "tool": {
-    "type": "skill",
-    "name": "story.create_jira_issues",
-    "version": "1.0"
-  },
-  "inputs": {
-    "storyOutput": {
-      "mode": "jira",
-      "jira": {
-        "projectKey": "MM",
-        "issueTypeName": "Story",
-        "dependencyMode": "linear_blocker_chain"
-      }
-    },
-    "storyBreakdownPath": "docs/tmp/story-breakdowns/example/stories.json"
-  }
+ "tool": {
+ "type": "skill",
+ "name": "story.create_jira_issues",
+ "version": "1.0"
+ },
+ "inputs": {
+ "storyOutput": {
+ "mode": "jira",
+ "jira": {
+ "projectKey": "MM",
+ "issueTypeName": "Story",
+ "dependencyMode": "linear_blocker_chain"
+ }
+ },
+ "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json"
+ }
 }
 ```
 
@@ -517,7 +517,7 @@ metadata surface when `issueTypeId` is not supplied, and creates dependency
 links when `dependencyMode = linear_blocker_chain`. It is not the default path
 for ambiguous Jira requests.
 
-If Jira output succeeds, workflow PR output is skipped because Jira is the requested output. If Jira output cannot run or fails and fallback is enabled, the tool returns fallback metadata pointing to the existing `docs/tmp/story-breakdowns/...` handoff so normal branch/PR publishing can expose that docs output.
+If Jira output succeeds, workflow PR output is skipped because Jira is the requested output. If Jira output cannot run or fails and fallback is enabled, the tool returns fallback metadata pointing to the existing `artifacts/story-breakdowns/...` handoff so normal branch/PR publishing can expose that docs output.
 
 ---
 
@@ -542,42 +542,42 @@ participate in execution.
 
 ```json
 {
-  "plan_version": "1.0",
-  "metadata": {
-    "title": "Fix failing tests",
-    "created_at": "2026-03-05T00:00:00Z",
-    "registry_snapshot": {
-      "digest": "reg:sha256:…",
-      "artifact_ref": "art:sha256:…"
-    }
-  },
-  "policy": {
-    "failure_mode": "FAIL_FAST",
-    "max_concurrency": 8
-  },
-  "nodes": [
-    {
-      "id": "n1",
-      "title": "Run test suite",
-      "tool": { "type": "skill", "name": "repo.run_tests", "version": "1.2.0" },
-      "inputs": { "repo_ref": "git:org/repo#branch" },
-      "source": {
-        "binding_id": "preset-binding-123",
-        "include_path": ["release-readiness", "test-suite"],
-        "blueprint_step_slug": "run-tests",
-        "detached": false
-      }
-    },
-    {
-      "id": "n2",
-      "title": "Generate follow-up plan",
-      "tool": { "type": "skill", "name": "plan.generate", "version": "1.0.0" },
-      "inputs": { "context_artifact": "art:sha256:…" }
-    }
-  ],
-  "edges": [
-    { "from": "n1", "to": "n2" }
-  ]
+ "plan_version": "1.0",
+ "metadata": {
+ "title": "Fix failing tests",
+ "created_at": "2026-03-05T00:00:00Z",
+ "registry_snapshot": {
+ "digest": "reg:sha256:…",
+ "artifact_ref": "art:sha256:…"
+ }
+ },
+ "policy": {
+ "failure_mode": "FAIL_FAST",
+ "max_concurrency": 8
+ },
+ "nodes": [
+ {
+ "id": "n1",
+ "title": "Run test suite",
+ "tool": { "type": "skill", "name": "repo.run_tests", "version": "1.2.0" },
+ "inputs": { "repo_ref": "git:org/repo#branch" },
+ "source": {
+ "binding_id": "preset-binding-123",
+ "include_path": ["release-readiness", "test-suite"],
+ "blueprint_step_slug": "run-tests",
+ "detached": false
+ }
+ },
+ {
+ "id": "n2",
+ "title": "Generate follow-up plan",
+ "tool": { "type": "skill", "name": "plan.generate", "version": "1.0.0" },
+ "inputs": { "context_artifact": "art:sha256:…" }
+ }
+ ],
+ "edges": [
+ { "from": "n1", "to": "n2" }
+ ]
 }
 ```
 
@@ -585,8 +585,8 @@ participate in execution.
 
 * `from → to` means:
 
-  * `to` may start only after `from` succeeds (v1).
-  * `to.inputs` may reference `from` outputs via references (see below).
+ * `to` may start only after `from` succeeds (v1).
+ * `to.inputs` may reference `from` outputs via references (see below).
 
 Operator-facing plan rule:
 
@@ -606,7 +606,7 @@ Inputs can reference outputs of prior nodes:
 
 ```json
 {
-  "ref": { "node": "n1", "json_pointer": "/outputs/test_report_artifact" }
+ "ref": { "node": "n1", "json_pointer": "/outputs/test_report_artifact" }
 }
 ```
 
@@ -669,18 +669,18 @@ Planning is expressed as one or more tools (e.g., `plan.generate`) executed as A
 1. Read the plan artifact reference.
 2. Validate plan:
 
-   * structural checks in workflow (cheap)
-   * deep schema checks in a validation Activity (authoritative) — see §11
+ * structural checks in workflow (cheap)
+ * deep schema checks in a validation Activity (authoritative) — see §11
 3. Compute ready set (nodes with satisfied deps).
 4. Schedule activity for each ready node up to concurrency cap.
 5. When a node completes:
 
-   * store its result reference
-   * update state
-   * unlock dependents whose deps are all succeeded
+ * store its result reference
+ * update state
+ * unlock dependents whose deps are all succeeded
 6. Apply failure policy:
 
-   * fail fast or continue, per plan policy.
+ * fail fast or continue, per plan policy.
 7. Produce final summary artifact.
 
 ### 9.2 Mapping a node to an Activity invocation
@@ -695,9 +695,9 @@ Planning is expressed as one or more tools (e.g., `plan.generate`) executed as A
 * Resolve `ToolDefinition` from the pinned tool registry snapshot.
 * Any agent instruction skill snapshot used by an agent-runtime step is resolved separately and passed as execution context, not looked up in the executable tool registry.
 * For `tool.type = "agent_runtime"`, any `inputs.runtimeSelection` is passed
-  through the `AgentExecutionRequest` or equivalent managed-session input and is
-  interpreted by the owning runtime adapter or managed-session plane. It is not
-  resolved from the executable tool registry snapshot.
+ through the `AgentExecutionRequest` or equivalent managed-session input and is
+ interpreted by the owning runtime adapter or managed-session plane. It is not
+ resolved from the executable tool registry snapshot.
 * Derive Activity Type and routing target (task queue) from ToolDefinition + worker capabilities.
 
 **Invocation payload**
@@ -722,13 +722,13 @@ Progress is represented as a small structured object:
 
 ```json
 {
-  "total_nodes": 12,
-  "pending": 4,
-  "running": 3,
-  "succeeded": 4,
-  "failed": 1,
-  "last_event": "Completed repo.run_tests",
-  "updated_at": "2026-03-05T00:10:00Z"
+ "total_nodes": 12,
+ "pending": 4,
+ "running": 3,
+ "succeeded": 4,
+ "failed": 1,
+ "last_event": "Completed repo.run_tests",
+ "updated_at": "2026-03-05T00:10:00Z"
 }
 ```
 
@@ -817,8 +817,8 @@ This section **locks decisions** for implementation.
 
 * Every plan includes `metadata.registry_snapshot` with:
 
-  * `digest` (immutable identifier)
-  * `artifact_ref` to the snapshot content (the tool registry file(s) used)
+ * `digest` (immutable identifier)
+ * `artifact_ref` to the snapshot content (the tool registry file(s) used)
 
 **Validation rule**
 
@@ -864,8 +864,8 @@ Reserve fields without enabling them:
 
 * `plan.validate(plan_artifact_ref, registry_snapshot_ref)` → returns either:
 
-  * `validated_plan_ref` (could be the same ref) or
-  * a `ToolFailure` error.
+ * `validated_plan_ref` (could be the same ref) or
+ * a `ToolFailure` error.
 
 **v1 rule**
 
@@ -882,10 +882,10 @@ Reserve fields without enabling them:
 * A single dispatcher Activity Type (`mm.tool.execute` / `mm.skill.execute`) is flexible and keeps catalogs small.
 * But some boundaries benefit from explicit types for routing/isolation/least-privilege:
 
-  * `artifact.read/write`
-  * `integration.jules.*`
-  * `integration.github.*`
-  * `sandbox.exec` (high-risk)
+ * `artifact.read/write`
+ * `integration.jules.*`
+ * `integration.github.*`
+ * `sandbox.exec` (high-risk)
 
 **Implementation**
 
@@ -913,9 +913,9 @@ Reserve fields without enabling them:
 * Reference format (`ref.node` + `json_pointer`)
 * Examples:
 
-  * linear chain
-  * parallel branches
-  * continue-on-failure
+ * linear chain
+ * parallel branches
+ * continue-on-failure
 
 ### C) Execution semantics
 
@@ -928,6 +928,6 @@ Reserve fields without enabling them:
 
 ## 14) Engineering backlog
 
-Minimum components: tool registry format + loader + validator; tool registry snapshot digest artifact; `plan.validate`; Plan Executor in `MoonMind.Run`; `mm.tool.execute` / tool dispatch activity; progress query and optional progress artifact. Status is tracked in [`docs/tmp/remaining-work/Tasks-SkillAndPlanContracts.md`](../tmp/remaining-work/Tasks-SkillAndPlanContracts.md).
+Minimum components: tool registry format + loader + validator; tool registry snapshot digest artifact; `plan.validate`; Plan Executor in `MoonMind.Run`; `mm.tool.execute` / tool dispatch activity; progress query and optional progress artifact. Status is tracked in MoonSpec feature artifacts (`specs/<feature>/`) and local handoffs under `artifacts/` when needed.
 
-Deployment-backed agent instruction skill work is tracked separately in [`docs/tmp/004-AgentSkillSystemPlan.md`](../tmp/004-AgentSkillSystemPlan.md).
+Deployment-backed agent instruction skill work is tracked separately in `docs/Tasks/AgentSkillSystem.md` and related feature directories under `specs/`.

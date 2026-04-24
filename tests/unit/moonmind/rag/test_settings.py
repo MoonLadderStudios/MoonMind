@@ -1,6 +1,5 @@
 from moonmind.rag.settings import RagRuntimeSettings
 
-
 def test_runtime_settings_from_env_overrides_defaults():
     env = {
         "QDRANT_HOST": "localhost",
@@ -19,7 +18,6 @@ def test_runtime_settings_from_env_overrides_defaults():
     )
     assert settings.resolved_transport(None) == "direct"
 
-
 def test_retrieval_executable_gateway_does_not_require_embedding_keys():
     env = {
         "RAG_ENABLED": "1",
@@ -32,7 +30,6 @@ def test_retrieval_executable_gateway_does_not_require_embedding_keys():
 
     assert settings.retrieval_executable(env, preferred_transport="gateway") is True
 
-
 def test_retrieval_executable_gateway_requires_url():
     env = {
         "RAG_ENABLED": "1",
@@ -44,7 +41,6 @@ def test_retrieval_executable_gateway_requires_url():
 
     assert settings.retrieval_executable(env, preferred_transport="gateway") is False
 
-
 def test_retrieval_executable_google_requires_google_api_key():
     env = {
         "RAG_ENABLED": "1",
@@ -55,7 +51,6 @@ def test_retrieval_executable_google_requires_google_api_key():
     settings = RagRuntimeSettings.from_env(env)
 
     assert settings.retrieval_executable(env, preferred_transport="direct") is False
-
 
 def test_retrieval_execution_reason_reports_ollama_dependency(monkeypatch):
     env = {

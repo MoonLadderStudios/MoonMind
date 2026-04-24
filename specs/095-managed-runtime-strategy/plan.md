@@ -2,7 +2,7 @@
 
 **Branch**: `095-managed-runtime-strategy` | **Date**: 2026-03-21 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/095-managed-runtime-strategy/spec.md`
-**Source Contract**: `docs/tmp/SharedManagedAgentAbstractions.md`
+**Source Contract**: `spec.md (Input)`
 
 ## Summary
 

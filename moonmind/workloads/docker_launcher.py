@@ -22,7 +22,6 @@ from moonmind.schemas.workload_models import (
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
-
 _MAX_CAPTURED_STREAM_CHARS = 64_000
 _MAX_CAPTURED_STREAM_BYTES = 64_000
 _DEFAULT_TIMEOUT_SECONDS = 300
@@ -47,17 +46,14 @@ _UNRESTRICTED_RUNNER_PROFILE = RunnerProfile.model_validate(
     }
 )
 
-
 class DockerWorkloadLauncherError(RuntimeError):
     """Raised when the Docker workload launcher cannot execute a request."""
-
 
 class _DockerMount(Protocol):
     type: str
     source: str
     target: str
     read_only: bool
-
 
 class _ConcurrencyLease:
     def __init__(
@@ -74,7 +70,6 @@ class _ConcurrencyLease:
             return
         self._released = True
         await self._limiter.release(self._profile_id)
-
 
 class DockerWorkloadConcurrencyLimiter:
     """Fail-fast in-process concurrency guard for Docker workload launches."""
@@ -120,20 +115,17 @@ class DockerWorkloadConcurrencyLimiter:
             if self._active_total > 0:
                 self._active_total -= 1
 
-
 def _decode_stream(data: bytes) -> str:
     text = data.decode("utf-8", errors="replace")
     if len(text) <= _MAX_CAPTURED_STREAM_CHARS:
         return text
     return text[-_MAX_CAPTURED_STREAM_CHARS:]
 
-
 def _append_limited(buffer: bytearray, chunk: bytes) -> None:
     buffer.extend(chunk)
     overflow = len(buffer) - _MAX_CAPTURED_STREAM_BYTES
     if overflow > 0:
         del buffer[:overflow]
-
 
 async def _read_limited_stream(
     stream: asyncio.StreamReader | None,
@@ -147,7 +139,6 @@ async def _read_limited_stream(
             return
         _append_limited(buffer, chunk)
 
-
 async def _wait_with_limited_output(
     process: asyncio.subprocess.Process,
     *,
@@ -160,19 +151,16 @@ async def _wait_with_limited_output(
     )
     return await process.wait()
 
-
 async def _kill_and_reap_process(process: asyncio.subprocess.Process) -> None:
     if process.returncode is None:
         process.kill()
     await process.wait()
-
 
 def _docker_env(*, docker_host: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
     if docker_host:
         env["DOCKER_HOST"] = docker_host
     return env
-
 
 def _mount_arg(mount: _DockerMount) -> str:
     parts = [
@@ -183,7 +171,6 @@ def _mount_arg(mount: _DockerMount) -> str:
     if mount.read_only:
         parts.append("readonly")
     return ",".join(parts)
-
 
 def _effective_resources(
     *,
@@ -202,7 +189,6 @@ def _effective_resources(
         resources["--shm-size"] = shm_size
     return resources
 
-
 def _workload_command_args(
     *,
     command_wrapper: Sequence[str],
@@ -214,7 +200,6 @@ def _workload_command_args(
         return [shlex.join(workload_command)]
     return list(workload_command)
 
-
 def _path_is_under_mount(path: str, mounts: Sequence[WorkloadMount]) -> bool:
     normalized = posixpath.normpath(path)
     for mount in mounts:
@@ -223,12 +208,10 @@ def _path_is_under_mount(path: str, mounts: Sequence[WorkloadMount]) -> bool:
             return True
     return False
 
-
 def _isoformat(value: datetime | None) -> str | None:
     if value is None:
         return None
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
-
 
 def _parse_iso_datetime(value: str) -> datetime | None:
     text = str(value or "").strip()
@@ -244,7 +227,6 @@ def _parse_iso_datetime(value: str) -> datetime | None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
 
-
 def _session_context(request: ValidatedWorkloadRequest) -> dict[str, object] | None:
     workload = request.request
     if workload.session_id is None:
@@ -255,7 +237,6 @@ def _session_context(request: ValidatedWorkloadRequest) -> dict[str, object] | N
     if workload.source_turn_id is not None:
         context["sourceTurnId"] = workload.source_turn_id
     return context
-
 
 def _operational_labels(request: ValidatedWorkloadRequest) -> dict[str, str]:
     if request.profile is not None and request.profile.kind == "bounded_service":
@@ -277,7 +258,6 @@ def _operational_labels(request: ValidatedWorkloadRequest) -> dict[str, str]:
         **request.ownership.labels,
         "moonmind.expires_at": _isoformat(expires_at) or "",
     }
-
 
 def _workload_metadata(
     request: ValidatedWorkloadRequest,
@@ -312,7 +292,6 @@ def _workload_metadata(
         "sessionContext": _session_context(request),
     }
 
-
 def _helper_metadata(
     request: ValidatedWorkloadRequest,
     *,
@@ -346,12 +325,10 @@ def _helper_metadata(
         "teardown": dict(teardown or {}),
     }
 
-
 def _write_text_artifact(path: Path, payload: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(payload, encoding="utf-8")
     return str(path)
-
 
 def _declared_output_refs(
     request: ValidatedWorkloadRequest,
@@ -371,7 +348,6 @@ def _declared_output_refs(
         else:
             missing[artifact_class] = relative_path
     return refs, missing
-
 
 def _publish_workload_artifacts(
     request: ValidatedWorkloadRequest,
@@ -439,7 +415,6 @@ def _publish_workload_artifacts(
         publication = {"status": "complete"}
     return stdout_ref, stderr_ref, diagnostics_ref, output_refs, publication
 
-
 def _request_timeout_seconds(request: ValidatedWorkloadRequest) -> int | float:
     return request.request.timeout_seconds or (
         request.profile.timeout_seconds
@@ -447,14 +422,12 @@ def _request_timeout_seconds(request: ValidatedWorkloadRequest) -> int | float:
         else _DEFAULT_TIMEOUT_SECONDS
     )
 
-
 def _request_kill_grace_seconds(request: ValidatedWorkloadRequest) -> int:
     return (
         request.profile.cleanup.kill_grace_seconds
         if request.profile is not None
         else _DEFAULT_KILL_GRACE_SECONDS
     )
-
 
 def _build_unrestricted_run_args(
     *,
@@ -504,7 +477,6 @@ def _build_unrestricted_run_args(
     args.extend(workload.command)
     return args
 
-
 def _ensure_paths_are_mounted(request: ValidatedWorkloadRequest) -> None:
     if request.profile is None:
         return
@@ -519,7 +491,6 @@ def _ensure_paths_are_mounted(request: ValidatedWorkloadRequest) -> None:
             "artifactsDir is not covered by approved profile mounts: "
             f"{workload.artifacts_dir}"
         )
-
 
 class DockerContainerJanitor:
     """Small Docker cleanup helper for workload containers."""
@@ -621,7 +592,6 @@ class DockerContainerJanitor:
         )
         stdout, stderr = await process.communicate()
         return stdout, stderr, int(process.returncode or 0)
-
 
 class DockerWorkloadLauncher:
     """Turn a validated workload request into one bounded Docker execution."""

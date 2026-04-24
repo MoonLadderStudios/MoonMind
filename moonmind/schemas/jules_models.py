@@ -48,7 +48,6 @@ _JULES_STATUS_MAP: dict[str, JulesNormalizedStatus] = {
     "timeout": "failed",
 }
 
-
 def normalize_jules_status(raw_status: str | None) -> JulesNormalizedStatus:
     """Map raw Jules task status values to the provider-neutral status set."""
 
@@ -61,7 +60,6 @@ def normalize_jules_status(raw_status: str | None) -> JulesNormalizedStatus:
         raise_unsupported_status(raw_status or "")
     return mapped
 
-
 class GitHubRepoContext(BaseModel):
     """Context to use a GitHub repo in a Jules session.
 
@@ -71,7 +69,6 @@ class GitHubRepoContext(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     starting_branch: str = Field("main", alias="startingBranch")
-
 
 class SourceContext(BaseModel):
     """Source context for a Jules session.
@@ -101,7 +98,6 @@ class SourceContext(BaseModel):
             github_repo_context=GitHubRepoContext(starting_branch=branch),
         )
 
-
 class JulesCreateTaskRequest(BaseModel):
     """Request payload for creating a Jules session.
 
@@ -118,7 +114,6 @@ class JulesCreateTaskRequest(BaseModel):
     source_context: Optional[SourceContext] = Field(None, alias="sourceContext")
     automation_mode: Optional[str] = Field(None, alias="automationMode")
 
-
 class JulesResolveTaskRequest(BaseModel):
     """Request payload for finishing a Jules task."""
 
@@ -128,14 +123,12 @@ class JulesResolveTaskRequest(BaseModel):
     resolution_notes: str = Field(..., alias="resolutionNotes")
     status: str = Field("completed", alias="status")
 
-
 class JulesGetTaskRequest(BaseModel):
     """Request payload for retrieving a Jules task."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     task_id: str = Field(..., alias="taskId")
-
 
 class JulesSendMessageRequest(BaseModel):
     """Request payload for sending a follow-up message to an existing Jules session.
@@ -147,7 +140,6 @@ class JulesSendMessageRequest(BaseModel):
 
     session_id: str = Field(..., alias="sessionId")
     prompt: str = Field(..., alias="prompt", min_length=1)
-
 
 class PullRequest(BaseModel):
     """A pull request created by a Jules session.
@@ -161,7 +153,6 @@ class PullRequest(BaseModel):
     title: Optional[str] = Field(None, alias="title")
     description: Optional[str] = Field(None, alias="description")
 
-
 class SessionOutput(BaseModel):
     """An output of a Jules session.
 
@@ -171,7 +162,6 @@ class SessionOutput(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     pull_request: Optional[PullRequest] = Field(None, alias="pullRequest")
-
 
 class JulesTaskResponse(BaseModel):
     """Response payload for Jules session operations.
@@ -197,7 +187,6 @@ class JulesTaskResponse(BaseModel):
             if output.pull_request and output.pull_request.url
         ), None)
 
-
 class JulesIntegrationStartRequest(BaseModel):
     """Provider-neutral start contract for Jules-backed monitoring."""
 
@@ -214,7 +203,6 @@ class JulesIntegrationStartRequest(BaseModel):
         None, alias="callbackCorrelationKey"
     )
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
-
 
 class JulesIntegrationStartResult(BaseModel):
     """Normalized start result returned by `integration.jules.start`."""
@@ -242,7 +230,6 @@ class JulesIntegrationStartResult(BaseModel):
     idempotency_key: str = Field(..., alias="idempotencyKey")
     ambiguous_timeout: bool = Field(False, alias="ambiguousTimeout")
 
-
 class JulesIntegrationStatusResult(BaseModel):
     """Normalized status result returned by `integration.jules.status`."""
 
@@ -264,7 +251,6 @@ class JulesIntegrationStatusResult(BaseModel):
         default_factory=dict, alias="providerSummary"
     )
 
-
 class JulesIntegrationFetchResult(BaseModel):
     """Normalized result returned by `integration.jules.fetch_result`."""
 
@@ -280,7 +266,6 @@ class JulesIntegrationFetchResult(BaseModel):
     diagnostics_ref: Optional[str] = Field(None, alias="diagnosticsRef")
     provider_status: str = Field(..., alias="providerStatus")
     normalized_status: JulesNormalizedStatus = Field(..., alias="normalizedStatus")
-
 
 class JulesIntegrationCancelResult(BaseModel):
     """Normalized result returned by `integration.jules.cancel`."""
@@ -299,7 +284,6 @@ class JulesIntegrationCancelResult(BaseModel):
     normalized_status: JulesNormalizedStatus = Field(..., alias="normalizedStatus")
     summary: Optional[str] = Field(None, alias="summary")
 
-
 class JulesAgentMessage(BaseModel):
     """The ``AgentMessaged`` activity type from the Jules Activities API.
 
@@ -309,7 +293,6 @@ class JulesAgentMessage(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_message: str = Field(..., alias="agentMessage")
-
 
 class JulesActivity(BaseModel):
     """A single activity from a Jules session.
@@ -326,7 +309,6 @@ class JulesActivity(BaseModel):
     originator: Optional[str] = Field(None, alias="originator")
     agent_messaged: Optional[JulesAgentMessage] = Field(None, alias="agentMessaged")
 
-
 class JulesListActivitiesResult(BaseModel):
     """Result from ``integration.jules.list_activities``."""
 
@@ -335,7 +317,6 @@ class JulesListActivitiesResult(BaseModel):
     session_id: str = Field(..., alias="sessionId")
     latest_agent_question: Optional[str] = Field(None, alias="latestAgentQuestion")
     activity_id: Optional[str] = Field(None, alias="activityId")
-
 
 __all__ = [
     "GitHubRepoContext",

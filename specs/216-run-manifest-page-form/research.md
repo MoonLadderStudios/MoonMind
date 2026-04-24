@@ -67,7 +67,7 @@ Test implications: final validation only.
 ## FR-010
 
 Decision: implemented_verified.
-Evidence: MM-419 appears in `docs/tmp/jira-orchestration-inputs/MM-419-moonspec-orchestration-input.md`; `specs/216-run-manifest-page-form/spec.md` preserves the original preset brief verbatim in `Input`.
+Evidence: MM-419 appears in `spec.md` (Input); `specs/216-run-manifest-page-form/spec.md` preserves the original preset brief verbatim in `Input`.
 Rationale: Final verification must explicitly preserve issue-key traceability.
 Alternatives considered: Reusing MM-418 spec was rejected because it would lose MM-419 traceability.
 Test implications: final MoonSpec verification.

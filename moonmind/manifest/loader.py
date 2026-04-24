@@ -11,7 +11,6 @@ import moonmind.config as settings_module
 from moonmind.config.settings import AppSettings
 from moonmind.schemas import Manifest
 
-
 class ManifestLoader:
     """Load a YAML manifest and merge defaults with application settings."""
 

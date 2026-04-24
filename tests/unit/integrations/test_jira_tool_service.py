@@ -23,7 +23,6 @@ from moonmind.integrations.jira.tool import JiraToolService
 
 pytestmark = [pytest.mark.asyncio]
 
-
 class _StubJiraToolService(JiraToolService):
     def __init__(
         self,
@@ -62,7 +61,6 @@ class _StubJiraToolService(JiraToolService):
             raise response
         return response
 
-
 def _build_settings(
     *,
     jira: JiraSettings | None = None,
@@ -91,7 +89,6 @@ def _build_settings(
         ),
         **overrides,
     )
-
 
 async def test_create_issue_converts_multiline_description_and_sanitizes_result() -> None:
     service = _StubJiraToolService(
@@ -128,7 +125,6 @@ async def test_create_issue_converts_multiline_description_and_sanitizes_result(
     assert description["content"][0]["content"][1] == {"type": "hardBreak"}
     assert "authorization" not in result
 
-
 async def test_edit_issue_does_not_attempt_transition() -> None:
     service = _StubJiraToolService(
         atlassian_settings=_build_settings(),
@@ -148,7 +144,6 @@ async def test_edit_issue_does_not_attempt_transition() -> None:
     assert service.calls[0]["path"] == "/issue/ENG-123"
     assert "/transitions" not in service.calls[0]["path"]
 
-
 async def test_search_issues_requires_project_key_when_multiple_projects_allowed() -> None:
     service = _StubJiraToolService(
         atlassian_settings=_build_settings(
@@ -164,7 +159,6 @@ async def test_search_issues_requires_project_key_when_multiple_projects_allowed
 
     assert excinfo.value.code == "jira_policy_denied"
     assert service.calls == []
-
 
 async def test_transition_issue_requires_explicit_lookup_and_rejects_stale_transition() -> None:
     service = _StubJiraToolService(
@@ -190,7 +184,6 @@ async def test_transition_issue_requires_explicit_lookup_and_rejects_stale_trans
     assert len(service.calls) == 1
     assert service.calls[0]["path"] == "/issue/ENG-123/transitions"
     assert service.calls[0]["method"] == "GET"
-
 
 async def test_transition_issue_allows_preflight_without_get_transitions_allowlist() -> None:
     service = _StubJiraToolService(
@@ -222,7 +215,6 @@ async def test_transition_issue_allows_preflight_without_get_transitions_allowli
     }
     assert [call["method"] for call in service.calls] == ["GET", "POST"]
 
-
 async def test_get_transitions_expands_transition_fields_for_required_field_checks() -> None:
     service = _StubJiraToolService(
         atlassian_settings=_build_settings(),
@@ -246,7 +238,6 @@ async def test_get_transitions_expands_transition_fields_for_required_field_chec
     assert result["transitions"][0]["fields"]["resolution"]["required"] is True
     assert service.calls[0]["params"] == {"expand": "transitions.fields"}
 
-
 async def test_add_comment_converts_plain_text_to_adf() -> None:
     service = _StubJiraToolService(
         atlassian_settings=_build_settings(),
@@ -264,7 +255,6 @@ async def test_add_comment_converts_plain_text_to_adf() -> None:
     body = service.calls[0]["json_body"]["body"]
     assert body["type"] == "doc"
     assert body["content"][0]["content"][1] == {"type": "hardBreak"}
-
 
 async def test_search_issues_preserves_order_by_after_project_scoping() -> None:
     service = _StubJiraToolService(
@@ -285,7 +275,6 @@ async def test_search_issues_preserves_order_by_after_project_scoping() -> None:
         service.calls[0]["json_body"]["jql"]
         == "project = ENG AND (status = 'Todo') ORDER BY created DESC"
     )
-
 
 async def test_create_issue_link_posts_trusted_jira_link_request() -> None:
     service = _StubJiraToolService(
@@ -315,14 +304,12 @@ async def test_create_issue_link_posts_trusted_jira_link_request() -> None:
         "inwardIssue": {"key": "ENG-2"},
     }
 
-
 async def test_create_issue_link_rejects_self_link() -> None:
     with pytest.raises(ValidationError):
         CreateIssueLinkRequest(
             blocksIssueKey="ENG-1",
             blockedIssueKey="ENG-1",
         )
-
 
 async def test_create_issue_link_enforces_action_policy() -> None:
     service = _StubJiraToolService(
@@ -346,7 +333,6 @@ async def test_create_issue_link_enforces_action_policy() -> None:
     assert excinfo.value.code == "jira_policy_denied"
     assert service.calls == []
 
-
 async def test_create_issue_link_enforces_project_policy_for_both_issues() -> None:
     service = _StubJiraToolService(
         atlassian_settings=_build_settings(
@@ -367,7 +353,6 @@ async def test_create_issue_link_enforces_project_policy_for_both_issues() -> No
 
     assert excinfo.value.code == "jira_policy_denied"
     assert service.calls == []
-
 
 async def test_create_issue_link_reports_existing_duplicate_link() -> None:
     service = _StubJiraToolService(
@@ -398,7 +383,6 @@ async def test_create_issue_link_reports_existing_duplicate_link() -> None:
     }
     assert "startAt" not in service.calls[0]["json_body"]
 
-
 async def test_search_issues_sends_next_page_token() -> None:
     service = _StubJiraToolService(
         atlassian_settings=_build_settings(),
@@ -422,14 +406,11 @@ async def test_search_issues_sends_next_page_token() -> None:
         "nextPageToken": "opaque-token",
     }
 
-
 async def test_search_issues_rejects_removed_start_at_contract() -> None:
     with pytest.raises(ValidationError):
         SearchIssuesRequest.model_validate(
             {"projectKey": "ENG", "jql": "status = 'Todo'", "startAt": 50}
         )
-
-
 
 async def test_verify_connection_returns_project_result() -> None:
     service = _StubJiraToolService(
@@ -445,7 +426,6 @@ async def test_verify_connection_returns_project_result() -> None:
         "projectName": "Engineering Platform",
     }
     assert service.calls[0]["path"] == "/project/ENG"
-
 
 async def test_action_allowlist_denies_disallowed_mutation_before_request() -> None:
     service = _StubJiraToolService(

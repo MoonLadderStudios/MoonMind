@@ -7,11 +7,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 def _load_compose() -> dict:
     compose_path = REPO_ROOT / "docker-compose.yaml"
     return yaml.safe_load(compose_path.read_text(encoding="utf-8"))
-
 
 def _env_map(environment: object) -> dict[str, str]:
     if isinstance(environment, dict):
@@ -26,7 +24,6 @@ def _env_map(environment: object) -> dict[str, str]:
         key, value = text.split("=", 1)
         mapped[key] = value
     return mapped
-
 
 def test_temporal_compose_topology_and_private_exposure():
     compose = _load_compose()
@@ -53,8 +50,6 @@ def test_temporal_compose_topology_and_private_exposure():
     elif isinstance(temporal_networks, list):
         assert "local-network" in temporal_networks
 
-
-
 def test_temporal_persistence_and_visibility_environment_defaults():
     compose = _load_compose()
     services = compose["services"]
@@ -80,7 +75,6 @@ def test_temporal_persistence_and_visibility_environment_defaults():
         "${TEMPORAL_RETENTION_ESTIMATED_GB_PER_DAY:-1}"
     )
 
-
 def test_local_compose_enables_temporal_task_editing_readiness():
     compose = _load_compose()
     services = compose["services"]
@@ -95,7 +89,6 @@ def test_local_compose_enables_temporal_task_editing_readiness():
         line.strip() == "TEMPORAL_TASK_EDITING_ENABLED=true"
         for line in env_template.splitlines()
     )
-
 
 def test_visibility_schema_rehearsal_service_is_wired():
     compose = _load_compose()
@@ -113,7 +106,6 @@ def test_visibility_schema_rehearsal_service_is_wired():
     assert rehearsal_env["TEMPORAL_SHARD_DECISION_ACK"] == (
         "${TEMPORAL_SHARD_DECISION_ACK:-}"
     )
-
 
 def test_runtime_services_receive_temporal_namespace_and_address():
     compose = _load_compose()

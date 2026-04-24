@@ -1,9 +1,9 @@
 # Managed Agent Git Authentication (Fast Path for Workflows)
 
-**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-ManagedAgentsGit.md`](../tmp/remaining-work/ManagedAgents-ManagedAgentsGit.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
-Status: Proposed  
-Owners: MoonMind Engineering  
+Status: Proposed 
+Owners: MoonMind Engineering 
 Last Updated: 2026-03-14
 
 ## 1. Purpose

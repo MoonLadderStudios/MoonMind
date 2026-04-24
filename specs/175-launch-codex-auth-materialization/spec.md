@@ -12,7 +12,7 @@ Source Document
 - Sections: 3.2 Shared task workspace volume, 3.3 Explicit auth-volume target, 4. Volume Targeting Rules, 7. Managed Codex Session Launch, 8. Verification
 - Coverage IDs: DESIGN-REQ-005, DESIGN-REQ-006, DESIGN-REQ-007, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-017
 - Breakdown Story ID: STORY-003
-- Breakdown JSON: docs/tmp/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthtermina-74125184/stories.json
+- Breakdown JSON: artifacts/story-breakdowns/mm-318-breakdown-docs-managedagents-oauthtermina-74125184/stories.json
 
 ## User Story - Managed Codex OAuth Auth Materialization
 

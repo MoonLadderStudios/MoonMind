@@ -49,7 +49,7 @@ Finish the Mission Control TypeScript migration by replacing the last legacy rou
 - Update `api_service/api/routers/task_dashboard.py` to render React pages only and to include dashboard alerts assets/root for React routes.
 - Replace legacy CSS ownership by moving the shared stylesheet into `frontend/src/styles/mission-control.css` and importing it from `mountPage.tsx`.
 - Update tests in `tests/unit/api/routers/`, `frontend/src/entrypoints/`, `tests/e2e/`, and `tools/test_unit.sh` to match the React/Vite system.
-- Update `README.md`, `docs/UI/TypeScriptSystem.md`, `docs/UI/MissionControlArchitecture.md`, `docs/UI/MissionControlStyleGuide.md`, and `docs/tmp/063-UI-TypeScriptSystem.md`.
+- Update `README.md`, `docs/UI/TypeScriptSystem.md`, `docs/UI/MissionControlArchitecture.md`, `docs/UI/MissionControlStyleGuide.md`, and `docs/UI/TypeScriptSystem.md`.
 
 ## Verification Plan
 

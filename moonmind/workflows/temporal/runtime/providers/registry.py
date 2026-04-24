@@ -52,14 +52,12 @@ OAUTH_PROVIDERS: dict[str, OAuthProviderSpec] = {
 
 }
 
-
 def get_provider(runtime_id: str) -> OAuthProviderSpec | None:
     """Look up the OAuth provider spec for a runtime.
 
     Returns ``None`` if the runtime is not registered.
     """
     return OAUTH_PROVIDERS.get(runtime_id)
-
 
 def get_provider_default(runtime_id: str, key: str) -> str | None:
     """Return a configured OAuth provider default for a runtime.
@@ -87,7 +85,6 @@ def get_provider_default(runtime_id: str, key: str) -> str | None:
         return spec["session_transport"]
     return None
 
-
 def get_provider_bootstrap_command(runtime_id: str) -> tuple[str, ...]:
     """Return a validated provider bootstrap command for OAuth enrollment."""
     spec = get_provider(runtime_id)
@@ -106,7 +103,6 @@ def get_provider_bootstrap_command(runtime_id: str) -> tuple[str, ...]:
             f"OAuth provider '{runtime_id}' bootstrap command is not configured"
         )
     return normalized
-
 
 def supported_runtime_ids() -> list[str]:
     """Return the list of runtime IDs with registered OAuth providers."""

@@ -49,9 +49,7 @@ _OBSERVABILITY_TERMINAL_STATUSES = frozenset(
     {"completed", "failed", "canceled", "cancelled", "timed_out"}
 )
 
-
 # Live Session legacy endpoints removed in Phase 6. Use /observability-summary and /logs/stream.
-
 
 # Observability API endpoints
 
@@ -61,17 +59,14 @@ def _get_agent_runtime_store_root() -> str:
         "managed_runs",
     )
 
-
 def _get_managed_session_store_root() -> str:
     return os.path.join(
         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
         "managed_sessions",
     )
 
-
 def _get_agent_runtime_artifacts_root() -> str:
     return str(managed_runtime_artifact_root())
-
 
 async def _load_managed_run_record(
     store: ManagedRunStore,
@@ -85,15 +80,12 @@ async def _load_managed_run_record(
             detail="Invalid task run id",
         ) from exc
 
-
 @lru_cache(maxsize=1)
 def get_temporal_client_adapter() -> TemporalClientAdapter:
     return TemporalClientAdapter()
 
-
 def _enum_value(value: object) -> object:
     return getattr(value, "value", value)
-
 
 def _coerce_owner_id(value: object) -> str | None:
     if isinstance(value, (list, tuple)):
@@ -105,7 +97,6 @@ def _coerce_owner_id(value: object) -> str | None:
     candidate = str(value or "").strip()
     return candidate or None
 
-
 async def _load_execution_owner_binding(
     workflow_id: str,
 ) -> tuple[str | None, str | None]:
@@ -116,7 +107,6 @@ async def _load_execution_owner_binding(
         if owner_id or (owner_type and owner_type != "user"):
             return owner_type, owner_id
     return None, None
-
 
 def _execution_owner_binding_candidates(workflow_id: str) -> tuple[str, ...]:
     normalized_workflow_id = str(workflow_id or "").strip()
@@ -143,7 +133,6 @@ def _execution_owner_binding_candidates(workflow_id: str) -> tuple[str, ...]:
 
     return tuple(dict.fromkeys(candidates))
 
-
 async def _load_exact_execution_owner_binding(
     workflow_id: str,
 ) -> tuple[str | None, str | None]:
@@ -168,7 +157,6 @@ async def _load_exact_execution_owner_binding(
             owner_type = "system" if owner_id.lower() == "system" or not owner_id else "user"
         return owner_type or None, owner_id or None
 
-
 async def _require_observability_access(record: object, user: User) -> None:
     if getattr(user, "is_superuser", False):
         return
@@ -187,7 +175,6 @@ async def _require_observability_access(record: object, user: User) -> None:
             detail="You do not have permission to access observability for this run.",
         )
 
-
 async def _require_task_run_access(task_run_id: str, user: User) -> None:
     if getattr(user, "is_superuser", False):
         return
@@ -199,7 +186,6 @@ async def _require_task_run_access(task_run_id: str, user: User) -> None:
             detail="You do not have permission to access this task run or its session projection.",
         )
 
-
 def _session_projection_not_found() -> None:
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -208,7 +194,6 @@ def _session_projection_not_found() -> None:
             "message": "Managed session projection was not found for the requested task run.",
         },
     )
-
 
 async def _resolve_projection_artifact(
     *,
@@ -235,7 +220,6 @@ async def _resolve_projection_artifact(
         pinned=pinned,
         read_policy=read_policy,
     )
-
 
 async def _build_task_run_artifact_session_projection(
     *,
@@ -323,10 +307,8 @@ async def _build_task_run_artifact_session_projection(
         latest_reset_boundary_ref=await _artifact_ref(record.latest_reset_boundary_ref),
     )
 
-
 def _task_run_session_workflow_id(*, task_run_id: str, runtime_id: str) -> str:
     return f"{task_run_id}:session:{runtime_id}"
-
 
 def _load_task_run_session_record(task_run_id: str) -> CodexManagedSessionRecord | None:
     store_root = Path(_get_managed_session_store_root())
@@ -355,7 +337,6 @@ def _load_task_run_session_record(task_run_id: str) -> CodexManagedSessionRecord
             best_updated_at = candidate_updated_at
     return best_record
 
-
 def _build_session_snapshot(
     record: CodexManagedSessionRecord | None,
 ) -> dict[str, object] | None:
@@ -374,7 +355,6 @@ def _build_session_snapshot(
         "latestResetBoundaryRef": record.latest_reset_boundary_ref,
     }
 
-
 def _build_record_session_snapshot(record: object) -> dict[str, object] | None:
     session_id = str(getattr(record, "session_id", "") or "").strip()
     if not session_id:
@@ -386,7 +366,6 @@ def _build_record_session_snapshot(record: object) -> dict[str, object] | None:
         "threadId": getattr(record, "thread_id", None),
         "activeTurnId": getattr(record, "active_turn_id", None),
     }
-
 
 def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]]:
     if not workspace_path:
@@ -414,7 +393,6 @@ def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]
     except OSError:
         return
 
-
 def _coerce_utc_datetime(value: object) -> datetime | None:
     if isinstance(value, datetime):
         return (value if value.tzinfo is not None else value.replace(tzinfo=UTC)).astimezone(
@@ -436,7 +414,6 @@ def _coerce_utc_datetime(value: object) -> datetime | None:
         UTC
     )
 
-
 def _iter_run_spool_chunks(
     workspace_path: str | None,
     *,
@@ -452,7 +429,6 @@ def _iter_run_spool_chunks(
             filtering = False
         yield payload
 
-
 def _spool_contains_renderable_chunks(
     workspace_path: str | None,
     *,
@@ -462,7 +438,6 @@ def _spool_contains_renderable_chunks(
         _iter_run_spool_chunks(workspace_path, started_at=started_at),
         None,
     ) is not None
-
 
 def _iter_spool_rendered_content(
     workspace_path: str | None,
@@ -474,7 +449,6 @@ def _iter_spool_rendered_content(
         header_for_item=lambda chunk: str(chunk.get("stream", "system")),
         text_for_item=lambda chunk: str(chunk.get("text", "")),
     )
-
 
 def _iter_grouped_rendered_content(
     items: Iterable[dict[str, object]],
@@ -499,7 +473,6 @@ def _iter_grouped_rendered_content(
             if not text.endswith("\n"):
                 yield b"\n"
 
-
 def _resolve_safe_artifact_path(ref: str | None, artifacts_root: Path) -> Path | None:
     if not isinstance(ref, str):
         return None
@@ -515,7 +488,6 @@ def _resolve_safe_artifact_path(ref: str | None, artifacts_root: Path) -> Path |
         return None
     return artifact_path
 
-
 def _iter_file_chunks(path: Path, *, chunk_size: int = 8192) -> Iterator[bytes]:
     with path.open("r", encoding="utf-8", errors="replace") as handle:
         while True:
@@ -523,7 +495,6 @@ def _iter_file_chunks(path: Path, *, chunk_size: int = 8192) -> Iterator[bytes]:
             if not chunk:
                 break
             yield chunk.encode("utf-8")
-
 
 def _iter_text_chunks(
     path: Path,
@@ -537,7 +508,6 @@ def _iter_text_chunks(
                 break
             yield chunk
 
-
 def _read_json_payload(path: Path | None) -> dict[str, object] | None:
     if path is None or not path.is_file():
         return None
@@ -547,10 +517,8 @@ def _read_json_payload(path: Path | None) -> dict[str, object] | None:
         return None
     return payload if isinstance(payload, dict) else None
 
-
 def _coerce_sequence(value: object) -> int | None:
     return value if isinstance(value, int) else None
-
 
 def _coerce_session_epoch(value: object) -> int | None:
     if isinstance(value, bool):
@@ -567,14 +535,12 @@ def _coerce_session_epoch(value: object) -> int | None:
             return None
     return None
 
-
 def _normalize_live_event(payload: dict[str, object]) -> dict[str, object] | None:
     try:
         chunk = RunObservabilityEvent.model_validate(payload)
     except Exception:
         return None
     return chunk.model_dump(mode="json", by_alias=True, exclude_none=True)
-
 
 def _iter_diagnostics_observability_events(
     diagnostics_path: Path | None,
@@ -630,7 +596,6 @@ def _iter_diagnostics_observability_events(
             continue
         yield normalized
 
-
 def _iter_event_journal(
     event_path: Path | None,
     *,
@@ -662,7 +627,6 @@ def _iter_event_journal(
                 yield normalized
     except OSError:
         return
-
 
 def _iter_text_artifact_events(
     ref: str | None,
@@ -700,7 +664,6 @@ def _iter_text_artifact_events(
 
     yield from chunk_events
 
-
 def _build_session_artifact_event(
     *,
     kind: str,
@@ -730,7 +693,6 @@ def _build_session_artifact_event(
     if normalized is None:
         raise ValueError("failed to normalize session artifact event")
     return normalized
-
 
 def _iter_historical_artifact_events(
     record: object,
@@ -860,7 +822,6 @@ def _iter_historical_artifact_events(
             metadata={"artifactRef": ref_attr, ref_key: ref_attr},
         )
 
-
 def _load_task_run_observability_events(
     *,
     record: object,
@@ -929,7 +890,6 @@ def _load_task_run_observability_events(
         source = "artifacts"
     return events, source
 
-
 def _event_matches_observability_filters(
     event: dict[str, object],
     *,
@@ -958,7 +918,6 @@ def _event_matches_observability_filters(
         return False
     return True
 
-
 def _collect_matching_observability_events(
     events: Iterator[dict[str, object]],
     *,
@@ -986,7 +945,6 @@ def _collect_matching_observability_events(
             break
     return collected
 
-
 def _filter_observability_events(
     events: list[dict[str, object]],
     *,
@@ -1010,12 +968,10 @@ def _filter_observability_events(
         filtered.append(event)
     return filtered
 
-
 def _event_sort_key(payload: dict[str, object]) -> tuple[datetime, int]:
     sequence = _coerce_sequence(payload.get("sequence"))
     timestamp = _coerce_utc_datetime(payload.get("timestamp")) or datetime.min.replace(tzinfo=UTC)
     return (timestamp, sequence if sequence is not None and sequence > 0 else 2**31 - 1)
-
 
 def _merged_event_sort_key(payload: dict[str, object]) -> tuple[int, int, datetime]:
     sequence = _coerce_sequence(payload.get("sequence"))
@@ -1024,14 +980,12 @@ def _merged_event_sort_key(payload: dict[str, object]) -> tuple[int, int, dateti
         return (0, sequence, timestamp)
     return (1, 2**31 - 1, timestamp)
 
-
 def _merged_event_header(payload: dict[str, object]) -> str:
     stream = str(payload.get("stream") or "system").strip() or "system"
     kind = str(payload.get("kind") or "").strip()
     if stream == "session" and kind:
         return f"{stream} ({kind})"
     return stream
-
 
 def _iter_event_rendered_content(events: Iterable[dict[str, object]]) -> Iterator[bytes]:
     return _iter_grouped_rendered_content(
@@ -1040,13 +994,11 @@ def _iter_event_rendered_content(events: Iterable[dict[str, object]]) -> Iterato
         text_for_item=lambda event: str(event.get("text") or ""),
     )
 
-
 def _iter_merged_journal_events(
     record: object,
     artifacts_root: Path,
 ) -> Iterator[dict[str, object]]:
     yield from _load_merged_journal_events(record, artifacts_root)
-
 
 def _load_merged_journal_events(
     record: object,
@@ -1073,10 +1025,8 @@ def _load_merged_journal_events(
     events.sort(key=_merged_event_sort_key)
     return events
 
-
 def _merged_journal_has_renderable_events(record: object, artifacts_root: Path) -> bool:
     return bool(_load_merged_journal_events(record, artifacts_root))
-
 
 def _emit_livelogs_metric_increment(
     metric: str,
@@ -1089,7 +1039,6 @@ def _emit_livelogs_metric_increment(
     except Exception:
         return
 
-
 def _emit_livelogs_metric_observe(
     metric: str,
     *,
@@ -1100,7 +1049,6 @@ def _emit_livelogs_metric_observe(
         get_metrics_emitter().observe(metric, value=value, tags=tags)
     except Exception:
         return
-
 
 def _iter_artifact_fallback_content(
     stdout_path: Path | None,
@@ -1124,7 +1072,6 @@ def _iter_artifact_fallback_content(
             yield chunk
         if last_chunk is not None and not last_chunk.endswith(b"\n"):
             yield b"\n"
-
 
 def _iter_diagnostics_annotations(
     diagnostics_path: Path | None,
@@ -1158,7 +1105,6 @@ def _iter_diagnostics_annotations(
         else:
             yield text
 
-
 def _resolve_legacy_log_artifact_path(
     record: object,
     artifacts_root: Path,
@@ -1169,7 +1115,6 @@ def _resolve_legacy_log_artifact_path(
         getattr(record, "log_artifact_ref", None),
         artifacts_root,
     )
-
 
 @router.get(
     "/{id}/observability-summary",
@@ -1229,7 +1174,6 @@ async def get_observability_summary(
             tags={"stream": "livelogs"},
         )
 
-
 @router.get(
     "/{task_run_id}/artifact-sessions/{session_id}",
     response_model=ArtifactSessionProjectionModel,
@@ -1253,7 +1197,6 @@ async def get_task_run_artifact_session(
     if projection is None:
         _session_projection_not_found()
     return projection
-
 
 @router.post(
     "/{task_run_id}/artifact-sessions/{session_id}/control",
@@ -1321,7 +1264,6 @@ async def control_task_run_artifact_session(
     if projection is None:
         _session_projection_not_found()
     return ArtifactSessionControlResponse(action=payload.action, projection=projection)
-
 
 @router.get(
     "/{id}/observability/events",
@@ -1412,7 +1354,6 @@ async def get_task_run_observability_events(
     _emit_livelogs_metric_increment("livelogs.history.source", tags=metric_tags)
 
     return response
-
 
 @router.get(
     "/{id}/logs/stream",
@@ -1505,8 +1446,6 @@ async def stream_task_run_live_logs(
             "X-Accel-Buffering": "no",
         }
     )
-
-
 
 @router.get(
     "/{id}/logs/{stream_name}",
@@ -1657,7 +1596,6 @@ async def stream_task_run_log(
             "Expires": "0",
         }
     )
-
 
 @router.get(
     "/{id}/diagnostics",

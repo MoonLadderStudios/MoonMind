@@ -24,4 +24,4 @@ The runtime semantics link must point to `docs/Tasks/SkillAndPlanContracts.md`.
 
 ## Validation Evidence
 
-The story is complete when `docs/tmp/101-PlansOverview.md` contains the contract language above and final MoonSpec verification confirms coverage of FR-001 through FR-009 and DESIGN-REQ-001, DESIGN-REQ-020, DESIGN-REQ-024, DESIGN-REQ-025, and DESIGN-REQ-026.
+The story is complete when `docs/MoonMindRoadmap.md` contains the contract language above and final MoonSpec verification confirms coverage of FR-001 through FR-009 and DESIGN-REQ-001, DESIGN-REQ-020, DESIGN-REQ-024, DESIGN-REQ-025, and DESIGN-REQ-026.

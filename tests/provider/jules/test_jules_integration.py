@@ -65,12 +65,10 @@ pytestmark = [
     pytest.mark.skipif(not _JULES_API_KEY, reason="JULES_API_KEY not set"),
 ]
 
-
 def _build_adapter() -> JulesAgentAdapter:
     """Build a real JulesAgentAdapter backed by the configured API key."""
     client = JulesClient(base_url=_JULES_API_URL, api_key=_JULES_API_KEY)
     return JulesAgentAdapter(client_factory=lambda: client)
-
 
 def _bundled_request() -> AgentExecutionRequest:
     """Build one checklist-shaped request for the bundled Jules smoke test."""
@@ -103,7 +101,6 @@ def _bundled_request() -> AgentExecutionRequest:
         },
     )
 
-
 async def _poll_until_terminal(
     adapter: JulesAgentAdapter,
     run_id: str,
@@ -134,7 +131,6 @@ async def _poll_until_terminal(
         f"[{step_label}] Jules session {run_id} did not reach a terminal "
         f"state after {_MAX_POLL_ITERATIONS} polls ({_MAX_POLL_MINUTES} min)"
     )
-
 
 class TestJulesAdapterLifecycle:
     """End-to-end bundled lifecycle: start one task, poll, then fetch result."""

@@ -10,7 +10,6 @@ from .registry import resolve_stage_execution
 
 T = TypeVar("T")
 
-
 def _set_context_execution(
     *,
     context: dict[str, object],
@@ -33,7 +32,6 @@ def _set_context_execution(
         "usedFallback": used_fallback,
         "shadowModeRequested": shadow_mode_requested,
     }
-
 
 def execute_stage(
     *,

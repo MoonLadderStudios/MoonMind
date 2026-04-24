@@ -31,11 +31,9 @@ from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 class _StubArtifactStorage:
     """Minimal file-based artifact storage for integration tests."""
@@ -53,11 +51,9 @@ class _StubArtifactStorage:
     def resolve_storage_path(self, ref):
         return self._root / ref
 
-
 # ---------------------------------------------------------------------------
 # Test 1 — stream_to_artifact captures stdout
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_stream_to_artifact_captures_stdout(tmp_path: Path):
@@ -95,11 +91,9 @@ async def test_stream_to_artifact_captures_stdout(tmp_path: Path):
     assert "Agent starting" in content
     assert "Task completed successfully" in content
 
-
 # ---------------------------------------------------------------------------
 # Test 2 — supervisor streams managed logs to artifacts (full lifecycle)
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_supervisor_streams_managed_logs_to_artifacts(tmp_path: Path):
@@ -151,11 +145,9 @@ async def test_supervisor_streams_managed_logs_to_artifacts(tmp_path: Path):
     diag = artifact_root / "managed-stream-1" / "diagnostics.json"
     assert diag.exists()
 
-
 # ---------------------------------------------------------------------------
 # Test 3 — exit code capture during streaming
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_exit_code_capture_during_streaming(tmp_path: Path):
@@ -205,11 +197,9 @@ async def test_exit_code_capture_during_streaming(tmp_path: Path):
     # Non-zero exit means the run classified as failed.
     assert result.status == "failed"
 
-
 # ---------------------------------------------------------------------------
 # Test 4 — concurrent stdout/stderr streaming
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_concurrent_stdout_stderr_streaming(tmp_path: Path):
@@ -259,11 +249,9 @@ async def test_concurrent_stdout_stderr_streaming(tmp_path: Path):
     assert stdout_artifact.read_bytes() == stdout_content
     assert stderr_artifact.read_bytes() == stderr_content
 
-
 # ---------------------------------------------------------------------------
 # Test 5 — supervisor streams concurrently (regression: deadlock prevention)
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_supervisor_streams_concurrently_with_process(tmp_path: Path):
@@ -324,11 +312,9 @@ async def test_supervisor_streams_concurrently_with_process(tmp_path: Path):
     assert stdout_artifact.exists(), "stdout.log artifact was not written"
     assert len(stdout_artifact.read_bytes()) >= 256_000
 
-
 # ---------------------------------------------------------------------------
 # Test 6 — supervisor handles None stdout/stderr gracefully
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_supervisor_with_none_stdout_stderr_completes(tmp_path: Path):
@@ -371,7 +357,6 @@ async def test_supervisor_with_none_stdout_stderr_completes(tmp_path: Path):
     assert result.status == "completed"
     diag_artifact = artifact_root / run_id / "diagnostics.json"
     assert diag_artifact.exists(), "diagnostics.json was not written"
-
 
 @pytest.mark.asyncio
 async def test_long_running_launch_is_visible_through_observability_routes(

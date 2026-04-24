@@ -5,7 +5,6 @@ from __future__ import annotations
 from moonmind.workflows.skills.registry import resolve_stage_execution
 from moonmind.workflows.skills.runner import execute_stage
 
-
 def _set_skill_defaults(monkeypatch) -> None:
     monkeypatch.setattr(
         "moonmind.workflows.skills.registry.settings.workflow.skills_enabled",
@@ -58,7 +57,6 @@ def _set_skill_defaults(monkeypatch) -> None:
         raising=False,
     )
 
-
 def test_execute_stage_uses_skill_path_by_default(monkeypatch):
     _set_skill_defaults(monkeypatch)
 
@@ -83,7 +81,6 @@ def test_execute_stage_uses_skill_path_by_default(monkeypatch):
     assert outcome.adapter_id is None
     assert calls == ["direct"]
 
-
 def test_execute_stage_uses_direct_path_when_skills_disabled(monkeypatch):
     _set_skill_defaults(monkeypatch)
     monkeypatch.setattr(
@@ -104,7 +101,6 @@ def test_execute_stage_uses_direct_path_when_skills_disabled(monkeypatch):
     assert outcome.selected_skill == "auto"
     assert outcome.adapter_id is None
 
-
 def test_stage_override_respects_allowlist(monkeypatch):
     _set_skill_defaults(monkeypatch)
     monkeypatch.setattr(
@@ -122,7 +118,6 @@ def test_stage_override_respects_allowlist(monkeypatch):
 
     assert decision.selected_skill == "custom"
     assert decision.execution_path == "skill"
-
 
 def test_stage_override_ignores_allowlist_in_permissive_mode(monkeypatch):
     _set_skill_defaults(monkeypatch)
@@ -146,7 +141,6 @@ def test_stage_override_ignores_allowlist_in_permissive_mode(monkeypatch):
 
     assert decision.selected_skill == "custom"
     assert decision.execution_path == "skill"
-
 
 def test_execute_stage_custom_skill_still_runs_directly(monkeypatch):
     """All skills now execute directly — custom overrides just change metadata."""

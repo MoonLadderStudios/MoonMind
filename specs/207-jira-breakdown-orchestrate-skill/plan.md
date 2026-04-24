@@ -1,6 +1,6 @@
 # Implementation Plan: Jira Breakdown and Orchestrate Skill
 
-**Branch**: `207-jira-breakdown-orchestrate-skill` | **Date**: 2026-04-18 | **Spec**: [spec.md](spec.md)  
+**Branch**: `207-jira-breakdown-orchestrate-skill` | **Date**: 2026-04-18 | **Spec**: [spec.md](spec.md) 
 **Input**: Single-story feature specification from `specs/207-jira-breakdown-orchestrate-skill/spec.md`
 
 **Setup note**: `scripts/bash/setup-plan.sh --json` was attempted, but this checkout does not contain that helper path or a plan template. This plan follows the repository's existing MoonSpec plan output contract manually using the active `.specify/feature.json` directory.
@@ -38,15 +38,15 @@ Implement MM-404 by adding a reusable Jira Breakdown and Orchestrate workflow su
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 with Pydantic v2 and SQLAlchemy async ORM  
-**Primary Dependencies**: Existing task template catalog, Temporal execution service, Jira story output tooling, trusted Jira tool service, MoonMind task dependency contract  
-**Storage**: Existing task template seed data, existing Temporal execution records, and existing execution dependency edge table; no new persistent database tables planned  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_task_step_templates_service.py tests/unit/workflows/temporal/test_story_output_tools.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_temporal_service.py` during iteration; final `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
-**Integration Testing**: `./tools/test_integration.sh` for required hermetic `integration_ci` coverage when Docker is available; add or extend `tests/integration/test_startup_task_template_seeding.py` for seeded preset persistence  
-**Target Platform**: MoonMind API service and Temporal-backed task creation on Linux containers  
-**Project Type**: Backend workflow orchestration and seeded task template feature  
-**Performance Goals**: Downstream task creation is linear in generated story count, bounded by normal task submission limits, and does not poll or wait for downstream execution completion during creation  
-**Constraints**: Runtime mode; no raw Jira credentials in agent runtimes; compose existing Jira Breakdown and Jira Orchestrate behavior; task dependencies are create-time only and target existing `MoonMind.Run` workflow IDs; direct dependencies are limited to 10 per run; dependency graph is linear and non-transitive by contract; preserve MM-404 traceability  
+**Language/Version**: Python 3.12 with Pydantic v2 and SQLAlchemy async ORM 
+**Primary Dependencies**: Existing task template catalog, Temporal execution service, Jira story output tooling, trusted Jira tool service, MoonMind task dependency contract 
+**Storage**: Existing task template seed data, existing Temporal execution records, and existing execution dependency edge table; no new persistent database tables planned 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/api/test_task_step_templates_service.py tests/unit/workflows/temporal/test_story_output_tools.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_temporal_service.py` during iteration; final `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` 
+**Integration Testing**: `./tools/test_integration.sh` for required hermetic `integration_ci` coverage when Docker is available; add or extend `tests/integration/test_startup_task_template_seeding.py` for seeded preset persistence 
+**Target Platform**: MoonMind API service and Temporal-backed task creation on Linux containers 
+**Project Type**: Backend workflow orchestration and seeded task template feature 
+**Performance Goals**: Downstream task creation is linear in generated story count, bounded by normal task submission limits, and does not poll or wait for downstream execution completion during creation 
+**Constraints**: Runtime mode; no raw Jira credentials in agent runtimes; compose existing Jira Breakdown and Jira Orchestrate behavior; task dependencies are create-time only and target existing `MoonMind.Run` workflow IDs; direct dependencies are limited to 10 per run; dependency graph is linear and non-transitive by contract; preserve MM-404 traceability 
 **Scale/Scope**: One source Jira/design input produces zero or more Jira story issues and zero or more downstream Jira Orchestrate tasks; the first version uses linear dependency ordering only
 
 ## Constitution Check
@@ -64,7 +64,7 @@ Implement MM-404 by adding a reusable Jira Breakdown and Orchestrate workflow su
 - **IX. Resilient by Default**: PASS with required guard. Creating downstream tasks and dependencies is side-effecting and must be idempotency-aware with partial outcome reporting.
 - **X. Facilitate Continuous Improvement**: PASS. The feature records structured downstream task and dependency outcomes.
 - **XI. Spec-Driven Development**: PASS. Implementation proceeds from the MM-404 spec, plan, tasks, and verification sequence.
-- **XII. Documentation Separation**: PASS. Volatile Jira orchestration input remains under `docs/tmp/`; no canonical migration backlog is added.
+- **XII. Documentation Separation**: PASS. Volatile Jira orchestration input remains under `local-only handoffs`; no canonical migration backlog is added.
 - **XIII. Pre-release Compatibility Policy**: PASS. No compatibility aliases are planned; unsupported values fail through validation.
 
 ## Project Structure
@@ -79,9 +79,9 @@ specs/207-jira-breakdown-orchestrate-skill/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── jira-breakdown-orchestrate.md
+│ └── jira-breakdown-orchestrate.md
 └── checklists/
-    └── requirements.md
+ └── requirements.md
 ```
 
 ### Source Code (repository root)
@@ -89,16 +89,16 @@ specs/207-jira-breakdown-orchestrate-skill/
 ```text
 api_service/
 ├── data/task_step_templates/
-│   ├── jira-breakdown.yaml
-│   ├── jira-orchestrate.yaml
-│   └── jira-breakdown-orchestrate.yaml
+│ ├── jira-breakdown.yaml
+│ ├── jira-orchestrate.yaml
+│ └── jira-breakdown-orchestrate.yaml
 ├── api/routers/executions.py
 └── services/task_templates/catalog.py
 
 moonmind/
 ├── workflows/temporal/
-│   ├── service.py
-│   └── story_output_tools.py
+│ ├── service.py
+│ └── story_output_tools.py
 └── schemas/temporal_models.py
 
 tests/

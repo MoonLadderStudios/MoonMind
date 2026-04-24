@@ -51,7 +51,7 @@ Run required hermetic integration checks when Docker is available:
 Run traceability check:
 
 ```bash
-rg -n "MM-405|DESIGN-REQ-001|DESIGN-REQ-002|DESIGN-REQ-003|DESIGN-REQ-004" specs/206-agent-skill-catalog-source-policy docs/tmp/jira-orchestration-inputs/MM-405-moonspec-orchestration-input.md
+rg -n "MM-405|DESIGN-REQ-001|DESIGN-REQ-002|DESIGN-REQ-003|DESIGN-REQ-004" specs/206-agent-skill-catalog-source-policy
 ```
 
 ## End-to-End Story Validation

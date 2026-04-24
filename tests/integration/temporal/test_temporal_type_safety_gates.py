@@ -9,7 +9,6 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 def test_temporal_type_safety_gate_self_check_covers_acceptance_scenarios() -> None:
     repo_root = Path(__file__).resolve().parents[3]
 

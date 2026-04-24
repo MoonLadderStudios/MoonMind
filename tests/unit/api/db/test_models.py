@@ -4,12 +4,10 @@ from sqlalchemy.orm import DeclarativeBase
 
 from api_service.db.models import Base, User
 
-
 def test_user_model_inheritance():
     """Test that the User model inherits from SQLAlchemyBaseUserTable and Base."""
     assert issubclass(User, SQLAlchemyBaseUserTable)
     assert issubclass(User, Base)
-
 
 def test_user_model_columns():
     """Test that the User model has the expected columns."""
@@ -48,7 +46,6 @@ def test_user_model_columns():
     assert inspector.columns["is_active"].type.python_type is bool
     assert inspector.columns["is_superuser"].type.python_type is bool
     assert inspector.columns["is_verified"].type.python_type is bool
-
 
 def test_base_model_inheritance():
     """Test that the Base model inherits from DeclarativeBase."""

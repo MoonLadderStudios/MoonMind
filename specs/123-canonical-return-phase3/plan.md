@@ -36,7 +36,7 @@ Phase 3 canonicalizes the managed runtime activity family (`agent_runtime.status
 | IX. Resilient by Default | ✅ PASS | Fail-fast on malformed inputs; retry safety preserved |
 | X. Continuous Improvement | ✅ PASS | Test coverage increases |
 | XI. Spec-Driven Development | ✅ PASS | This plan |
-| XII. Canonical Docs | ✅ PASS | Implementation notes in docs/tmp |
+| XII. Canonical Docs | ✅ PASS | Implementation notes in local-only handoffs |
 | XIII. Pre-Release Velocity | ✅ PASS | Old dict return types removed immediately, no compat shims |
 
 ## Project Structure
@@ -45,21 +45,21 @@ Phase 3 canonicalizes the managed runtime activity family (`agent_runtime.status
 
 ```text
 specs/123-canonical-return-phase3/
-├── plan.md              # This file
-├── research.md          # Phase 0 findings
-├── quickstart.md        # Validation quickstart
-└── tasks.md             # Execution plan (speckit-tasks output)
+├── plan.md # This file
+├── research.md # Phase 0 findings
+├── quickstart.md # Validation quickstart
+└── tasks.md # Execution plan (speckit-tasks output)
 ```
 
 ### Source Code (repository root)
 
 ```text
 moonmind/workflows/temporal/
-├── activity_runtime.py                  # MODIFY: change return types for 4 methods
+├── activity_runtime.py # MODIFY: change return types for 4 methods
 │
 tests/unit/workflows/temporal/
-├── test_agent_runtime_fetch_result.py   # MODIFY: assert typed return (existing tests)
-├── test_agent_runtime_activities.py     # NEW: TDD tests for status, cancel, publish_artifacts
+├── test_agent_runtime_fetch_result.py # MODIFY: assert typed return (existing tests)
+├── test_agent_runtime_activities.py # NEW: TDD tests for status, cancel, publish_artifacts
 ```
 
 **Structure Decision**: Single project, all changes in existing files. No new modules required — unlike Phase 2, managed runtime activities live in `TemporalAgentRuntimeActivities` within `activity_runtime.py` not standalone modules. Phase 3 spec explicitly permits leaving launch in the class in-place and only upgrading return types.

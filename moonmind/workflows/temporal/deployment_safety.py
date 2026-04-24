@@ -4,13 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping
 
-
 AGENT_SESSION_WORKFLOW_PATH = "moonmind/workflows/temporal/workflows/agent_session.py"
 AGENT_SESSION_REPLAYER_TEST_PATH = (
     "tests/unit/workflows/temporal/test_agent_session_replayer.py"
 )
 AGENT_SESSION_CUTOVER_PLAYBOOK_PATH = (
-    "docs/tmp/remaining-work/agent-session-deployment-safety-cutover.md"
+    "docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md"
 )
 
 AGENT_SESSION_DEPLOYMENT_SENSITIVE_PATHS = frozenset(
@@ -35,10 +34,8 @@ REQUIRED_AGENT_SESSION_CUTOVER_TOPICS = frozenset(
     }
 )
 
-
 class AgentSessionDeploymentSafetyError(RuntimeError):
     """Raised when a deployment-sensitive AgentSession change lacks rollout gates."""
-
 
 @dataclass(frozen=True)
 class AgentSessionDeploymentSafetyReport:
@@ -48,10 +45,8 @@ class AgentSessionDeploymentSafetyReport:
     cutover_playbook_path: str
     active_feature_dir: str | None = None
 
-
 def normalize_repo_path(path: str | Path) -> str:
     return str(path).replace("\\", "/").lstrip("./")
-
 
 def changed_agent_session_sensitive_paths(paths: Iterable[str | Path]) -> tuple[str, ...]:
     changed_paths = {normalize_repo_path(path) for path in paths if str(path).strip()}
@@ -62,7 +57,6 @@ def changed_agent_session_sensitive_paths(paths: Iterable[str | Path]) -> tuple[
         or path.startswith("moonmind/workflows/temporal/workflows/agent_session")
     )
     return tuple(sensitive)
-
 
 def resolve_active_feature_dir(
     *,
@@ -113,7 +107,6 @@ def resolve_active_feature_dir(
             "active feature override is missing artifacts: " + ", ".join(missing)
         )
     return relative
-
 
 def validate_agent_session_deployment_safety(
     *,

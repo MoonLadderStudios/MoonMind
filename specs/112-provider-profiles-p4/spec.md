@@ -3,7 +3,7 @@
 **Feature Branch**: `112-provider-profiles-p4`  
 **Created**: 2026-03-28  
 **Status**: Draft  
-**Input**: User description: "Fully implement Phase 4 of docs/tmp/005-ProviderProfilesPlan.md: Runtime Materialization and Secret-Resolution Integration"
+**Input**: User description: "Fully implement Phase 4 of docs/Tasks/SkillAndPlanContracts.md: Runtime Materialization and Secret-Resolution Integration"
 
 ## Source Document Requirements
 

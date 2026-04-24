@@ -7,7 +7,6 @@ os.environ["IGNORE_ENV_FILE"] = "1"
 
 from moonmind.summarization.readme_generator import ReadmeAiGenerator
 
-
 class TestReadmeAiGenerator(unittest.IsolatedAsyncioTestCase):
     def test_init(self):
         """Test the initialization of ReadmeAiGenerator with and without config."""
@@ -223,7 +222,6 @@ class TestReadmeAiGenerator(unittest.IsolatedAsyncioTestCase):
         mock_logger_debug.assert_any_call(
             "Temporary file /tmp/dummy_missing.md not found for deletion."
         )
-
 
 if __name__ == "__main__":
     unittest.main()

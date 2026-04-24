@@ -36,7 +36,7 @@ The technical approach is to extend the existing Temporal task editing runtime s
 - **IX. Resilient by Default**: PASS. Submit-side revalidation, stale-state handling, artifact failure handling, and best-effort telemetry preserve operator safety.
 - **X. Facilitate Continuous Improvement**: PASS. Telemetry and explicit failure reasons support rollout feedback and future improvement work.
 - **XI. Spec-Driven Development Is the Source of Truth**: PASS. This plan derives from `spec.md` and keeps implementation details in planning artifacts.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Any rollout/backlog notes remain in feature artifacts or `docs/tmp`, not canonical desired-state docs.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Any rollout/backlog notes remain in feature artifacts or `local-only handoffs`, not canonical desired-state docs.
 - **XIII. Pre-Release Velocity: Delete, Don't Deprecate**: PASS. Queue-era primary runtime references are removed rather than preserved as fallback aliases.
 
 ## Project Structure
@@ -50,10 +50,10 @@ specs/170-temporal-editing-hardening/
 ├── data-model.md
 ├── quickstart.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 ├── contracts/
-│   └── temporal-editing-hardening.openapi.yaml
-└── tasks.md              # Generated later by speckit-tasks
+│ └── temporal-editing-hardening.openapi.yaml
+└── tasks.md # Generated later by speckit-tasks
 ```
 
 ### Source Code (repository root)
@@ -61,32 +61,32 @@ specs/170-temporal-editing-hardening/
 ```text
 api_service/
 └── api/
-    └── routers/
-        ├── executions.py
-        └── task_dashboard_view_model.py
+ └── routers/
+ ├── executions.py
+ └── task_dashboard_view_model.py
 
 moonmind/
 ├── config/
-│   └── settings.py
+│ └── settings.py
 └── schemas/
-    └── temporal_models.py
+ └── temporal_models.py
 
 frontend/
 └── src/
-    ├── entrypoints/
-    │   ├── task-create.tsx
-    │   ├── task-create.test.tsx
-    │   ├── task-detail.tsx
-    │   └── task-detail.test.tsx
-    └── lib/
-        └── temporalTaskEditing.ts
+ ├── entrypoints/
+ │ ├── task-create.tsx
+ │ ├── task-create.test.tsx
+ │ ├── task-detail.tsx
+ │ └── task-detail.test.tsx
+ └── lib/
+ └── temporalTaskEditing.ts
 
 tests/
 └── unit/
-    └── api/
-        └── routers/
-            ├── test_executions.py
-            └── test_task_dashboard_view_model.py
+ └── api/
+ └── routers/
+ ├── test_executions.py
+ └── test_task_dashboard_view_model.py
 ```
 
 **Structure Decision**: Use existing API, dashboard config, frontend helper, and Mission Control entrypoint boundaries. This avoids a separate telemetry service or task-editing subsystem and keeps the feature close to the contracts it hardens.

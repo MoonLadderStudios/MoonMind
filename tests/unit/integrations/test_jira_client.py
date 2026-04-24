@@ -15,7 +15,6 @@ from moonmind.integrations.jira.errors import JiraToolError
 
 pytestmark = [pytest.mark.asyncio]
 
-
 def _build_connection(*, retry_attempts: int = 3) -> ResolvedJiraConnection:
     basic_pair = "bot@example.com:secret-token"
     basic_token = base64.b64encode(basic_pair.encode("utf-8")).decode("ascii")
@@ -39,7 +38,6 @@ def _build_connection(*, retry_attempts: int = 3) -> ResolvedJiraConnection:
         ),
     )
 
-
 def _build_cloud_connection() -> ResolvedJiraConnection:
     return ResolvedJiraConnection(
         auth_mode="service_account_scoped",
@@ -55,7 +53,6 @@ def _build_cloud_connection() -> ResolvedJiraConnection:
         redaction_values=("secret-token", "Bearer secret-token"),
     )
 
-
 def _build_injected_client(
     connection: ResolvedJiraConnection,
     handler: Callable[[httpx.Request], httpx.Response],
@@ -65,7 +62,6 @@ def _build_injected_client(
         headers=connection.headers,
         transport=httpx.MockTransport(handler),
     )
-
 
 async def test_request_json_sends_headers_and_decodes_json() -> None:
     connection = _build_connection()
@@ -93,7 +89,6 @@ async def test_request_json_sends_headers_and_decodes_json() -> None:
 
     assert payload == {"key": "ENG-1", "ok": True}
 
-
 async def test_request_json_maps_agile_paths_for_site_base_url() -> None:
     connection = _build_connection()
 
@@ -117,7 +112,6 @@ async def test_request_json_maps_agile_paths_for_site_base_url() -> None:
         await injected.aclose()
 
     assert payload == {"ok": True}
-
 
 async def test_request_json_maps_agile_paths_for_cloud_api_base_url() -> None:
     connection = _build_cloud_connection()
@@ -143,7 +137,6 @@ async def test_request_json_maps_agile_paths_for_cloud_api_base_url() -> None:
 
     assert payload == {"values": []}
 
-
 async def test_request_json_maps_auth_failures_to_sanitized_error() -> None:
     connection = _build_connection()
 
@@ -168,7 +161,6 @@ async def test_request_json_maps_auth_failures_to_sanitized_error() -> None:
 
     assert excinfo.value.code == "jira_auth_failed"
     assert "secret-token" not in str(excinfo.value)
-
 
 async def test_request_json_maps_issue_404_to_auth_failure_when_myself_rejects() -> None:
     connection = _build_connection()
@@ -209,7 +201,6 @@ async def test_request_json_maps_issue_404_to_auth_failure_when_myself_rejects()
     assert excinfo.value.code == "jira_auth_failed"
     assert seen_paths == ["/rest/api/3/issue/KANDY-2558", "/rest/api/3/myself"]
 
-
 async def test_request_json_preserves_issue_404_when_myself_succeeds() -> None:
     connection = _build_connection()
 
@@ -240,7 +231,6 @@ async def test_request_json_preserves_issue_404_when_myself_succeeds() -> None:
         await injected.aclose()
 
     assert excinfo.value.code == "jira_not_found"
-
 
 async def test_request_json_retries_retry_after_and_surfaces_rate_limit(
     monkeypatch: pytest.MonkeyPatch,
@@ -278,7 +268,6 @@ async def test_request_json_retries_retry_after_and_surfaces_rate_limit(
     assert attempts["count"] == 3
     assert sleep_calls == [0.25, 0.25]
 
-
 async def test_request_json_redacts_failure_logs(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -310,7 +299,6 @@ async def test_request_json_redacts_failure_logs(
     assert "secret-token" not in caplog.text
     assert "Ym90QGV4YW1wbGUuY29tOnNlY3JldC10b2tlbg==" not in caplog.text
     assert "***" in caplog.text
-
 
 async def test_request_json_retries_transient_server_failure(
     monkeypatch: pytest.MonkeyPatch,
@@ -348,7 +336,6 @@ async def test_request_json_retries_transient_server_failure(
     assert payload == {"ok": True}
     assert attempts["count"] == 2
     assert sleep_calls == [1.0]
-
 
 async def test_request_json_maps_decode_errors_to_sanitized_error() -> None:
     connection = _build_connection()

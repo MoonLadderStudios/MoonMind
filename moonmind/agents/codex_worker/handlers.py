@@ -36,14 +36,11 @@ _REPEATED_HUNK_TRIGGER_COUNT = 4
 _REPEATED_HUNK_MAX_SUPPRESSED_CHUNKS = 4096
 _SENSITIVE_COMMAND_FLAGS = frozenset({"--title", "--body", "--message", "-m"})
 
-
 class CodexWorkerHandlerError(RuntimeError):
     """Raised when handler payloads or command execution are invalid."""
 
-
 class CommandCancelledError(CodexWorkerHandlerError):
     """Raised when command execution is interrupted by a cancellation request."""
-
 
 @dataclass(frozen=True, slots=True)
 class ArtifactUpload:
@@ -55,7 +52,6 @@ class ArtifactUpload:
     digest: str | None = None
     required: bool = True
 
-
 @dataclass(frozen=True, slots=True)
 class WorkerExecutionResult:
     """Normalized execution result consumed by worker terminal updates."""
@@ -66,7 +62,6 @@ class WorkerExecutionResult:
     artifacts: tuple[ArtifactUpload, ...] = ()
     run_quality_reason: dict[str, Any] | None = None
 
-
 @dataclass(frozen=True, slots=True)
 class CommandResult:
     """Captured output from a single subprocess command."""
@@ -76,9 +71,7 @@ class CommandResult:
     stdout: str
     stderr: str
 
-
 OutputChunkCallback = Callable[[str, str | None], Awaitable[None]]
-
 
 @dataclass(frozen=True, slots=True)
 class PromptContextResolution:
@@ -87,7 +80,6 @@ class PromptContextResolution:
     instruction: str
     items_count: int = 0
     artifact: ArtifactUpload | None = None
-
 
 @dataclass(frozen=True, slots=True)
 class CodexExecPayload:
@@ -152,7 +144,6 @@ class CodexExecPayload:
             publish_mode=publish_mode,
             publish_base_branch=publish_base_branch,
         )
-
 
 @dataclass(frozen=True, slots=True)
 class CodexSkillPayload:
@@ -235,7 +226,6 @@ class CodexSkillPayload:
             publish_base_branch=publish_base_branch,
         )
 
-
 def _truncate_error_message(
     message: str,
     *,
@@ -247,14 +237,12 @@ def _truncate_error_message(
     tail_chars = max_chars - head_chars - 3
     return f"{message[:head_chars]}...{message[-tail_chars:]}"
 
-
 def _serialize_command_for_log(command: Sequence[str]) -> str:
     """Serialize argv for control marker logging without embedded newlines."""
 
     return " ".join(
         str(part).replace("\r", "\\r").replace("\n", "\\n") for part in command
     )
-
 
 def _build_completion_event_key(
     *,
@@ -279,7 +267,6 @@ def _build_completion_event_key(
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-
 def _is_git_diff_command(command: Sequence[str]) -> bool:
     if len(command) < 2:
         return False
@@ -287,7 +274,6 @@ def _is_git_diff_command(command: Sequence[str]) -> bool:
         os.path.basename(str(command[0]).strip()) == "git"
         and str(command[1]).strip() == "diff"
     )
-
 
 def _dedupe_adjacent_output_lines(text: str) -> tuple[str, int]:
     if not text:
@@ -308,7 +294,6 @@ def _dedupe_adjacent_output_lines(text: str) -> tuple[str, int]:
         omitted += max(0, run_length - 1)
         index += run_length
     return ("".join(deduped), omitted)
-
 
 def _cap_output_preserving_tail(
     *,
@@ -337,7 +322,6 @@ def _cap_output_preserving_tail(
     tail_chars = max(0, available - head_chars)
     return f"{text[:head_chars]}{marker}{text[-tail_chars:] if tail_chars else ''}"
 
-
 def _summarize_oversized_command_output(
     *,
     stream: str,
@@ -357,7 +341,6 @@ def _summarize_oversized_command_output(
         text=deduped,
         max_chars=max_chars,
     )
-
 
 def _summarize_sensitive_command_output(
     *,
@@ -380,7 +363,6 @@ def _summarize_sensitive_command_output(
         f"truncated={str(len(normalized) > max_chars).lower()}; "
         "contentLogged=false"
     )
-
 
 class CodexExecHandler:
     """Executes `codex_exec` jobs and produces uploadable artifacts."""
@@ -1754,7 +1736,6 @@ class CodexExecHandler:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(f"{text}\n")
 
-
 def _clean_optional_string(
     value: object, *, fallback: object | None = None
 ) -> str | None:
@@ -1766,7 +1747,6 @@ def _clean_optional_string(
     cleaned = str(candidate).strip()
     return cleaned or None
 
-
 def _normalize_codex_model(model: str | None) -> str | None:
     """Keep model identifiers as provided.
 
@@ -1775,14 +1755,12 @@ def _normalize_codex_model(model: str | None) -> str | None:
 
     return model
 
-
 def _normalize_codex_effort(effort: str | None) -> str | None:
     """Preserve effort as provided."""
 
     if effort is None:
         return None
     return effort.strip()
-
 
 def _parse_codex_overrides(payload: Mapping[str, Any]) -> tuple[str | None, str | None]:
     """Extract optional codex model/effort overrides from payload mapping."""
@@ -1797,7 +1775,6 @@ def _parse_codex_overrides(payload: Mapping[str, Any]) -> tuple[str | None, str 
     model = _normalize_codex_model(_clean_optional_string(raw.get("model")))
     effort = _normalize_codex_effort(_clean_optional_string(raw.get("effort")))
     return (model, effort)
-
 
 __all__ = [
     "ArtifactUpload",

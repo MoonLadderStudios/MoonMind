@@ -3,7 +3,7 @@
 ## Input Classification
 
 Decision: MM-483 is a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-483-moonspec-orchestration-input.md` has one user story, one operator outcome, explicit acceptance criteria, and explicit non-goals.
+Evidence: `spec.md` (Input) has one user story, one operator outcome, explicit acceptance criteria, and explicit non-goals.
 Rationale: Although the story spans backend, workflow, API, and UI surfaces, all requirements support one independently testable operator outcome: complete Task Remediation runtime behavior.
 Alternatives considered: Treat as broad design requiring breakdown. Rejected because Jira has already selected the single story and the brief defines concrete acceptance criteria.
 Test implications: Unit, integration, and UI coverage are required.

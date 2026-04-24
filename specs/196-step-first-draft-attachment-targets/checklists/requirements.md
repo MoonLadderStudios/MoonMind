@@ -36,4 +36,4 @@
 
 ## Notes
 
-- Validated against the canonical MM-377 Jira preset brief in `docs/tmp/jira-orchestration-inputs/MM-377-moonspec-orchestration-input.md`.
+- Validated against the canonical MM-377 Jira preset brief in `spec.md` (Input).

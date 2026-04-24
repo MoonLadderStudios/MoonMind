@@ -1,6 +1,6 @@
 # Implementation Plan: Create Page Repository Dropdown
 
-**Branch**: `204-repository-dropdown` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md)  
+**Branch**: `204-repository-dropdown` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md) 
 **Input**: Single-story feature specification from `/specs/204-repository-dropdown/spec.md`
 
 **Note**: This plan follows the Moon Spec lifecycle for MM-393 and treats the feature as runtime implementation work.
@@ -11,15 +11,15 @@ Task authors need repository suggestions on the Create page so they can select c
 
 ## Technical Context
 
-**Language/Version**: Python 3.12; TypeScript/React  
-**Primary Dependencies**: FastAPI dashboard runtime config helpers, Pydantic settings, `httpx`, React, Vitest, pytest  
-**Storage**: No new persistent storage; options are derived from configuration and best-effort GitHub API responses at runtime  
-**Unit Testing**: `./tools/test_unit.sh` for final unit verification; focused pytest and Vitest commands during iteration  
-**Integration Testing**: Existing Create page Vitest integration-style tests and FastAPI/dashboard view-model tests; no compose-backed integration required because no persistent service boundary changes  
-**Target Platform**: MoonMind API service and Mission Control Create page  
-**Project Type**: Web application with Python API/control plane and TypeScript frontend  
-**Performance Goals**: Create page rendering remains responsive; repository option discovery is bounded and best-effort  
-**Constraints**: Browser clients must call MoonMind APIs/configuration only and must never receive raw GitHub credentials, secret refs, or credential-bearing URLs  
+**Language/Version**: Python 3.12; TypeScript/React 
+**Primary Dependencies**: FastAPI dashboard runtime config helpers, Pydantic settings, `httpx`, React, Vitest, pytest 
+**Storage**: No new persistent storage; options are derived from configuration and best-effort GitHub API responses at runtime 
+**Unit Testing**: `./tools/test_unit.sh` for final unit verification; focused pytest and Vitest commands during iteration 
+**Integration Testing**: Existing Create page Vitest integration-style tests and FastAPI/dashboard view-model tests; no compose-backed integration required because no persistent service boundary changes 
+**Target Platform**: MoonMind API service and Mission Control Create page 
+**Project Type**: Web application with Python API/control plane and TypeScript frontend 
+**Performance Goals**: Create page rendering remains responsive; repository option discovery is bounded and best-effort 
+**Constraints**: Browser clients must call MoonMind APIs/configuration only and must never receive raw GitHub credentials, secret refs, or credential-bearing URLs 
 **Scale/Scope**: One Create page repository field and runtime boot payload path; repository discovery is limited to configured repositories plus a bounded GitHub repository listing
 
 ## Constitution Check
@@ -37,7 +37,7 @@ Task authors need repository suggestions on the Create page so they can select c
 - IX. Resilient by Default: PASS. Discovery errors are best-effort and do not block manual authoring.
 - X. Facilitate Continuous Improvement: PASS. Tests and MoonSpec artifacts preserve evidence.
 - XI. Spec-Driven Development: PASS. This plan implements the single-story spec.
-- XII. Canonical Documentation Separates Desired State from Migration Backlog: PASS. Implementation tracking remains under `specs/` and `docs/tmp/`.
+- XII. Canonical Documentation Separates Desired State from Migration Backlog: PASS. Implementation tracking remains under `specs/` and `local-only handoffs`.
 - XIII. Pre-release Compatibility Policy: PASS. No compatibility aliases or hidden fallbacks are introduced for internal contracts.
 
 ## Project Structure
@@ -51,7 +51,7 @@ specs/204-repository-dropdown/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── repository-options.md
+│ └── repository-options.md
 └── tasks.md
 ```
 

@@ -13,11 +13,9 @@ REHEARSAL_SCRIPT = (
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 def _write_executable(path: Path, contents: str) -> None:
     path.write_text(contents, encoding="utf-8")
     path.chmod(0o755)
-
 
 def _base_env(path_prefix: Path) -> dict[str, str]:
     env = os.environ.copy()
@@ -29,7 +27,6 @@ def _base_env(path_prefix: Path) -> dict[str, str]:
     env["TEMPORAL_VISIBILITY_DB"] = "temporal_visibility"
     env["TEMPORAL_VISIBILITY_SCHEMA_DIR"] = "/tmp/fake-visibility-schema"
     return env
-
 
 def test_rehearsal_requires_shard_ack_for_single_shard(tmp_path: Path):
     fake_bin = tmp_path / "bin"
@@ -61,7 +58,6 @@ def test_rehearsal_requires_shard_ack_for_single_shard(tmp_path: Path):
     )
     assert allowed.returncode == 0, allowed.stderr
     assert "Dry-run mode enabled" in allowed.stdout
-
 
 def test_rehearsal_executes_visibility_schema_update_command(tmp_path: Path):
     fake_bin = tmp_path / "bin"

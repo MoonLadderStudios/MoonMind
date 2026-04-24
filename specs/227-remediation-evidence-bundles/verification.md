@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-22
 **Verdict**: FULLY_IMPLEMENTED
-**Original Request Source**: `spec.md` `Input`, MM-452 Jira preset brief, and `docs/tmp/jira-orchestration-inputs/MM-452-moonspec-orchestration-input.md`
+**Original Request Source**: `spec.md` `Input`, MM-452 Jira preset brief, and `spec.md` (Input)
 
 ## Test Results
 
@@ -46,7 +46,7 @@
 
 ## Constitution
 
-All relevant constitution checks remain PASS: no new storage, no raw credential exposure, no workflow payload expansion, no compatibility alias, and no docs/tmp migration narrative added to canonical docs.
+All relevant constitution checks remain PASS: no new storage, no raw credential exposure, no workflow payload expansion, no compatibility alias, and no local-only handoffs migration narrative added to canonical docs.
 
 ## Residual Risk
 

@@ -21,10 +21,8 @@ from api_service.db.models import (
     TemporalWorkflowType,
 )
 
-
 def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
 
 def test_map_temporal_state_to_projection_success():
     start_time = datetime.now(UTC)
@@ -82,7 +80,6 @@ def test_map_temporal_state_to_projection_success():
     assert result["search_attributes"]["mm_custom"] == {"key": "value"}
     assert result["updated_at"] == updated_at
 
-
 def test_map_temporal_state_to_projection_uses_search_attributes_for_owner_fields():
     start_time = datetime.now(UTC)
     desc = Mock(spec=WorkflowExecutionDescription)
@@ -117,7 +114,6 @@ def test_map_temporal_state_to_projection_uses_search_attributes_for_owner_field
 
     assert result["owner_id"] == "owner-from-search"
     assert result["owner_type"] == TemporalExecutionOwnerType.USER
-
 
 def test_map_temporal_state_to_projection_memo_parameters_empty_by_default():
     """Temporal memo typically does not contain targetRuntime/model/effort.
@@ -157,7 +153,6 @@ def test_map_temporal_state_to_projection_memo_parameters_empty_by_default():
     assert params.get("targetRuntime") is None
     assert params.get("model") is None
     assert params.get("effort") is None
-
 
 @pytest.mark.asyncio
 async def test_sync_execution_projection_preserves_updated_at_when_mm_updated_at_missing(
@@ -229,7 +224,6 @@ async def test_sync_execution_projection_preserves_updated_at_when_mm_updated_at
     finally:
         await engine.dispose()
 
-
 @pytest.mark.asyncio
 async def test_sync_execution_projection_uses_mm_updated_at_from_temporal(
     tmp_path,
@@ -299,7 +293,6 @@ async def test_sync_execution_projection_uses_mm_updated_at_from_temporal(
             assert _as_utc(refreshed.last_synced_at) >= canonical_updated_at
     finally:
         await engine.dispose()
-
 
 @pytest.mark.asyncio
 async def test_sync_execution_projection_refreshes_canonical_summary_and_started_at(
@@ -396,7 +389,6 @@ async def test_sync_execution_projection_refreshes_canonical_summary_and_started
             assert _as_utc(canonical.updated_at) == updated_at
     finally:
         await engine.dispose()
-
 
 @pytest.mark.asyncio
 async def test_sync_execution_projection_preserves_metadata_when_temporal_memo_decode_fails(
@@ -516,7 +508,6 @@ async def test_sync_execution_projection_preserves_metadata_when_temporal_memo_d
     finally:
         await engine.dispose()
 
-
 def test_merged_parameters_for_projection_combines_canonical_with_memo_payload():
     from types import SimpleNamespace
 
@@ -531,11 +522,9 @@ def test_merged_parameters_for_projection_combines_canonical_with_memo_payload()
     assert merged["task"]["tool"]["name"] == "fix-ci"
     assert merged["model"] == "gpt-5"
 
-
 def test_merged_parameters_for_projection_without_canonical_returns_memo_only():
     payload = {"parameters": {"targetRuntime": "jules"}}
     assert merged_parameters_for_projection(payload, None) == {"targetRuntime": "jules"}
-
 
 # --- merged_memo_for_projection tests ---
 
@@ -561,7 +550,6 @@ def test_merged_memo_preserves_db_only_keys_absent_from_temporal_memo():
     assert merged["summary"] == "Executing step 3"
     assert merged["title"] == "My Task"
 
-
 def test_merged_memo_temporal_wins_for_overlapping_keys():
     """Temporal is authoritative for any key it supplies."""
     from types import SimpleNamespace
@@ -575,12 +563,10 @@ def test_merged_memo_temporal_wins_for_overlapping_keys():
     assert merged["summary"] == "New summary from Temporal"
     assert merged["taskRunId"] == "abc-123"
 
-
 def test_merged_memo_without_canonical_returns_temporal_memo_only():
     payload = {"memo": {"title": "task", "summary": "done"}}
     merged = merged_memo_for_projection(payload, None)
     assert merged == {"title": "task", "summary": "done"}
-
 
 def test_merged_memo_with_empty_temporal_memo_returns_canonical_memo():
     """When Temporal provides no memo (rare), the canonical DB memo is used."""

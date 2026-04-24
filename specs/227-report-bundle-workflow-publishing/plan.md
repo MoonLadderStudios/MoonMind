@@ -29,15 +29,15 @@ Implement MM-461 by adding a compact report bundle publication contract on top o
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Pydantic v2 patterns where schemas are needed, SQLAlchemy async ORM, existing Temporal artifact service/activity facade  
-**Storage**: Existing temporal artifact tables and configured artifact store; no new persistent storage  
-**Unit Testing**: `./tools/test_unit.sh` with targeted pytest during iteration  
-**Integration Testing**: `./tools/test_integration.sh` for required `integration_ci`; focused activity-boundary pytest for local iteration  
-**Target Platform**: MoonMind Temporal worker and API service runtime  
-**Project Type**: Python backend workflow/activity service  
-**Performance Goals**: Bundle return payload remains bounded by refs and compact metadata; report bytes remain artifact-backed  
-**Constraints**: Do not embed large report bodies, logs, screenshots, transcripts, raw URLs, or evidence blobs in workflow history; use existing artifact storage/linkage only  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: Pydantic v2 patterns where schemas are needed, SQLAlchemy async ORM, existing Temporal artifact service/activity facade 
+**Storage**: Existing temporal artifact tables and configured artifact store; no new persistent storage 
+**Unit Testing**: `./tools/test_unit.sh` with targeted pytest during iteration 
+**Integration Testing**: `./tools/test_integration.sh` for required `integration_ci`; focused activity-boundary pytest for local iteration 
+**Target Platform**: MoonMind Temporal worker and API service runtime 
+**Project Type**: Python backend workflow/activity service 
+**Performance Goals**: Bundle return payload remains bounded by refs and compact metadata; report bytes remain artifact-backed 
+**Constraints**: Do not embed large report bodies, logs, screenshots, transcripts, raw URLs, or evidence blobs in workflow history; use existing artifact storage/linkage only 
 **Scale/Scope**: One runtime story covering report bundle publication and compact workflow return values
 
 ## Constitution Check
@@ -55,7 +55,7 @@ Implement MM-461 by adding a compact report bundle publication contract on top o
 - IX. Resilient by Default: PASS. Activity boundary writes durable artifacts and returns compact deterministic refs.
 - X. Facilitate Continuous Improvement: PASS. Verification will produce traceable evidence.
 - XI. Spec-Driven Development: PASS. Spec, plan, tasks, and verification artifacts drive work.
-- XII. Canonical Documentation Separation: PASS. Migration/orchestration input remains under `docs/tmp`.
+- XII. Canonical Documentation Separation: PASS. Migration/orchestration input remains under `local-only handoffs`.
 - XIII. Pre-release Compatibility Policy: PASS. New internal contract is additive for a pre-release feature and does not add compatibility aliases.
 
 ## Project Structure
@@ -70,7 +70,7 @@ specs/227-report-bundle-workflow-publishing/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── report-bundle-contract.md
+│ └── report-bundle-contract.md
 └── tasks.md
 ```
 

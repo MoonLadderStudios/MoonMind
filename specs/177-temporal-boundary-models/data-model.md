@@ -56,4 +56,4 @@ Validation rules:
 Boundary status can only move forward by explicit code review:
 - `tracking_only` -> `compatibility_shim` when a named compatibility model exists.
 - `compatibility_shim` -> `modeled` when the canonical typed request/response is the public boundary.
-- `modeled` must not move backward unless a new compatibility issue is documented under `docs/tmp/`.
+- `modeled` must not move backward unless a new compatibility issue is documented under `local-only handoffs`.

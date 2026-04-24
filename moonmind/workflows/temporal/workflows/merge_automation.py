@@ -34,7 +34,6 @@ with workflow.unsafe.imports_passed_through():
         legacy_resolver_idempotency_key,
     )
 
-
 WORKFLOW_NAME = "MoonMind.MergeAutomation"
 STATE_WAITING = "waiting"
 STATE_EXECUTING = "executing"
@@ -55,7 +54,6 @@ ALLOWED_DISPOSITIONS = SUCCESS_DISPOSITIONS | NON_SUCCESS_DISPOSITIONS | {
     DISPOSITION_REENTER_GATE
 }
 MAX_PUBLISHED_ARTIFACT_REFS = 20
-
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindMergeAutomationWorkflow:

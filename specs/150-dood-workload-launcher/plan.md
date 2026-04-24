@@ -31,7 +31,7 @@ Implement the Phase 2 launcher as a standalone workload module that consumes the
 | IX. Resilient by Default | PASS | Timeout/cancel cleanup paths are explicit and tested. |
 | X. Continuous Improvement | PASS | Result metadata carries diagnostics needed by later artifact phases. |
 | XI. Spec-Driven Development | PASS | Spec, plan, tasks, tests, and implementation are included. |
-| XII. Canonical Docs vs tmp | PASS | Phase status is tracked in `docs/tmp/remaining-work/`. |
+| XII. Canonical Docs vs tmp | PASS | Phase status is tracked in `docs/ManagedAgents/DockerOutOfDocker.md`. |
 | XIII. Delete, Don't Deprecate | PASS | No compatibility aliases or old workload execution paths are added. |
 
 ## Project Structure
@@ -46,7 +46,7 @@ moonmind/workflows/temporal/workers.py
 tests/unit/workloads/test_docker_workload_launcher.py
 tests/unit/workflows/temporal/test_activity_catalog.py
 tests/unit/workflows/temporal/test_temporal_workers.py
-docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md
+docs/ManagedAgents/DockerOutOfDocker.md
 ```
 
 ## Complexity Tracking

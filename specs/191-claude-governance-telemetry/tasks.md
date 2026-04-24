@@ -24,7 +24,7 @@ Functional requirement coverage inventory:
 
 ## Phase 2: Foundational
 
-- [X] T004 Preserve MM-349 canonical Jira preset brief in `docs/tmp/jira-orchestration-inputs/MM-349-moonspec-orchestration-input.md` and `specs/191-claude-governance-telemetry/spec.md`
+- [X] T004 Preserve MM-349 canonical Jira preset brief in `spec.md` (Input) and `specs/191-claude-governance-telemetry/spec.md`
 - [X] T005 Review compact metadata validation helpers in `moonmind/schemas/_validation.py` and `moonmind/schemas/temporal_payload_policy.py` for payload-light guardrails (FR-003, FR-009, FR-010)
 - [X] T006 Confirm existing Claude hook, policy, child-work, surface, checkpoint, and context exports in `moonmind/schemas/__init__.py` before adding governance telemetry exports (FR-020 through FR-027)
 
@@ -84,7 +84,7 @@ Validation evidence:
 - [X] T025 Run final `/moonspec-verify` for `specs/191-claude-governance-telemetry/spec.md` and record the verdict in `specs/191-claude-governance-telemetry/verification.md`
 
 Final validation evidence:
-- Placeholder review: stale-placeholder scan across `specs/191-claude-governance-telemetry` and `docs/tmp/jira-orchestration-inputs/MM-349-moonspec-orchestration-input.md` found no stale placeholders.
+- Placeholder review: stale-placeholder scan across `specs/191-claude-governance-telemetry` and `spec.md` (Input) found no stale placeholders.
 - Full unit wrapper: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` passed; Python reported 3424 passed, 1 xpassed, 111 warnings, 16 subtests passed; frontend Vitest reported 10 files and 224 tests passed.
 - Hermetic integration wrapper: `./tools/test_integration.sh` could not run because Docker is unavailable in this managed container: `failed to connect to the docker API at unix:///var/run/docker.sock`.
 

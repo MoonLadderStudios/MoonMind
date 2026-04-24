@@ -37,7 +37,6 @@ from api_service.services.task_templates.save import TaskTemplateSaveService
 router = APIRouter(prefix="/api/task-step-templates", tags=["task-step-templates"])
 logger = logging.getLogger(__name__)
 
-
 def _map_service_error(exc: Exception) -> HTTPException:
     if isinstance(exc, TaskTemplateNotFoundError):
         return HTTPException(
@@ -72,18 +71,15 @@ def _map_service_error(exc: Exception) -> HTTPException:
         },
     )
 
-
 async def _get_catalog_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TaskTemplateCatalogService:
     return TaskTemplateCatalogService(session)
 
-
 async def _get_save_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TaskTemplateSaveService:
     return TaskTemplateSaveService(session)
-
 
 @router.get("", response_model=TaskTemplateListResponseSchema)
 async def list_templates(
@@ -118,7 +114,6 @@ async def list_templates(
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return TaskTemplateListResponseSchema(items=items)
-
 
 @router.post(
     "",
@@ -161,7 +156,6 @@ async def create_template(
         raise _map_service_error(exc) from exc
     return TaskTemplateResponseSchema.model_validate(created)
 
-
 @router.post(
     "/save-from-task",
     response_model=TaskTemplateResponseSchema,
@@ -198,7 +192,6 @@ async def save_from_task(
         raise _map_service_error(exc) from exc
     return TaskTemplateResponseSchema.model_validate(created)
 
-
 @router.post("/{slug}:expand", response_model=TaskTemplateExpandResponseSchema)
 async def expand_template(
     slug: str,
@@ -233,7 +226,6 @@ async def expand_template(
         raise _map_service_error(exc) from exc
     return TaskTemplateExpandResponseSchema.model_validate(expanded)
 
-
 @router.get("/{slug}", response_model=TaskTemplateResponseSchema)
 async def get_template(
     slug: str,
@@ -261,7 +253,6 @@ async def get_template(
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return TaskTemplateResponseSchema.model_validate(item)
-
 
 @router.get("/{slug}/versions/{version}", response_model=TaskTemplateResponseSchema)
 async def get_template_version(
@@ -291,7 +282,6 @@ async def get_template_version(
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return TaskTemplateResponseSchema.model_validate(item)
-
 
 @router.put("/{slug}/versions/{version}", response_model=TaskTemplateResponseSchema)
 async def review_template_version(
@@ -323,7 +313,6 @@ async def review_template_version(
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return TaskTemplateResponseSchema.model_validate(result)
-
 
 @router.post("/{slug}:favorite", status_code=status.HTTP_204_NO_CONTENT)
 async def favorite_template(
@@ -360,7 +349,6 @@ async def favorite_template(
         raise _map_service_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-
 @router.delete("/{slug}:favorite", status_code=status.HTTP_204_NO_CONTENT)
 async def unfavorite_template(
     slug: str,
@@ -396,7 +384,6 @@ async def unfavorite_template(
         raise _map_service_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-
 @router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_template(
     slug: str,
@@ -422,6 +409,5 @@ async def delete_template(
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
 
 __all__ = ["router"]

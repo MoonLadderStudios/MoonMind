@@ -11,7 +11,7 @@ Expected result: matches show Mission Control preview, task detail, submit, evid
 ## Source Traceability Check
 
 ```bash
-rg -n "MM-387|DESIGN-REQ-014|DESIGN-REQ-015|DESIGN-REQ-022|DESIGN-REQ-025|DESIGN-REQ-026" specs/200-mission-control-preset-provenance docs/tmp/jira-orchestration-inputs/MM-387-moonspec-orchestration-input.md
+rg -n "MM-387|DESIGN-REQ-014|DESIGN-REQ-015|DESIGN-REQ-022|DESIGN-REQ-025|DESIGN-REQ-026" specs/200-mission-control-preset-provenance
 ```
 
 Expected result: all source IDs and the Jira issue key remain visible in MoonSpec artifacts and the canonical orchestration input.

@@ -2,7 +2,7 @@
 
 **Verdict**: FULLY_IMPLEMENTED  
 **Date**: 2026-04-17  
-**Original Request Source**: `docs/tmp/jira-orchestration-inputs/MM-320-moonspec-orchestration-input.md` and `specs/201-managed-github-secret-materialization/spec.md`  
+**Original Request Source**: `spec.md` (Input) and `specs/201-managed-github-secret-materialization/spec.md`  
 **Jira Traceability**: MM-320
 
 ## Coverage Summary
@@ -24,7 +24,7 @@
 | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/schemas/test_managed_session_models.py tests/unit/workflows/temporal/test_agent_runtime_activities.py tests/unit/services/temporal/runtime/test_managed_session_controller.py` | PASS | 153 Python tests passed; frontend Vitest suite also passed through the runner. |
 | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 3529 Python tests passed, 1 xpassed, 16 subtests passed; frontend Vitest suite passed 267 tests. |
 | `./tools/test_integration.sh` | BLOCKED | Docker socket unavailable: `unix:///var/run/docker.sock` did not exist in this managed workspace. |
-| `rg -n "MM-320\|githubCredential\|GITHUB_TOKEN\|GITHUB_PAT\|SecretRef" specs/201-managed-github-secret-materialization docs/tmp/jira-orchestration-inputs/MM-320-moonspec-orchestration-input.md` | PASS | Traceability and source terms are present. |
+| `rg -n "MM-320\|githubCredential\|GITHUB_TOKEN\|GITHUB_PAT\|SecretRef" specs/201-managed-github-secret-materialization` | PASS | Traceability and source terms are present. |
 
 ## Residual Risk
 

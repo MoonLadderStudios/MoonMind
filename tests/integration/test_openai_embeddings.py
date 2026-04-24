@@ -4,24 +4,20 @@ from pathlib import Path
 
 import pytest
 
-
 def _avoid_local_workflows_package_shadowing() -> None:
     """Remove `<repo>/moonmind` from sys.path to avoid `workflows` shadowing."""
     moonmind_src_path = str(Path(__file__).resolve().parents[2] / "moonmind")
     while moonmind_src_path in sys.path:
         sys.path.remove(moonmind_src_path)
 
-
 def _resolve_openai_api_key() -> str | None:
     return os.getenv("OPENAI_API_KEY")
-
 
 _avoid_local_workflows_package_shadowing()
 from llama_index.embeddings.openai import OpenAIEmbedding
 
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
-
 
 def test_openai_embeddings_generation(monkeypatch):
     """Verify OpenAI embedding instantiation and basic structure (integration)."""

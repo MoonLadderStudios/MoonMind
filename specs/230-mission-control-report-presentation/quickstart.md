@@ -42,5 +42,5 @@ Run only if backend artifact behavior changes beyond the existing read-only quer
 ## Traceability Check
 
 ```bash
-rg -n "MM-494|DESIGN-REQ-005|DESIGN-REQ-014|DESIGN-REQ-015|DESIGN-REQ-016" specs/230-mission-control-report-presentation docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md
+rg -n "MM-494|DESIGN-REQ-005|DESIGN-REQ-014|DESIGN-REQ-015|DESIGN-REQ-016" specs/230-mission-control-report-presentation
 ```

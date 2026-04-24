@@ -1,6 +1,6 @@
 # Manifest Ingest Design & Implementation
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Rag-ManifestIngestDesign.md`](../tmp/remaining-work/Rag-ManifestIngestDesign.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 **Status:** Draft (2026-03-20)
 **Scope:** How MoonMind ingests a “manifest” artifact and reliably turns it into one or more **Temporal Workflow Executions**, with strong observability, editability, and scalability. Includes architecture, design decisions, and implementation-level detail.
@@ -122,7 +122,7 @@ Temporal’s guidance:
 
 * Signals = async write requests, no response.
 * Updates = synchronous, tracked write requests with response and validation. ([Temporal Docs][3])
-  **Decision:**
+ **Decision:**
 * Use **Updates** for anything “editable” that needs validation/ack (replace manifest, change concurrency, pause/resume, cancel pending nodes).
 * Use **Signals** only for low-value fire-and-forget nudges (e.g., “refresh status soon”), if needed. ([Temporal Docs][1])
 
@@ -140,9 +140,9 @@ Minimal (references only):
 * `requested_by: PrincipalRef` (user/service identity)
 * `execution_policy: ExecutionPolicy`
 
-  * `max_concurrency: int` (default 50–200, hard cap < 500 recommended; see limits) ([Temporal Docs][2])
-  * `failure_mode: enum { FAIL_FAST, BEST_EFFORT }`
-  * `default_task_queues: { activity_cpu, activity_llm, ... }` (optional; see §8)
+ * `max_concurrency: int` (default 50–200, hard cap < 500 recommended; see limits) ([Temporal Docs][2])
+ * `failure_mode: enum { FAIL_FAST, BEST_EFFORT }`
+ * `default_task_queues: { activity_cpu, activity_llm, ... }` (optional; see §8)
 * `tags: map<string,string>` (small; for Search Attributes / Memo)
 
 #### Output: `ManifestIngestResult`
@@ -160,15 +160,15 @@ Not fully specified here; the key contract for ingest is:
 
 * Input includes:
 
-  * `manifest_ingest_workflow_id: string`
-  * `node_id: string`
-  * `node_input_ref: ArtifactRef` (if large)
-  * `runtime_hints` (LLM vs non-LLM preference; see §8)
+ * `manifest_ingest_workflow_id: string`
+ * `node_id: string`
+ * `node_input_ref: ArtifactRef` (if large)
+ * `runtime_hints` (LLM vs non-LLM preference; see §8)
 
 * Output includes:
 
-  * `result_ref: ArtifactRef`
-  * small structured result summary (status, timestamps, etc.)
+ * `result_ref: ArtifactRef`
+ * small structured result summary (status, timestamps, etc.)
 
 ---
 
@@ -181,8 +181,8 @@ Proposed Updates:
 
 1. `UpdateManifest(new_manifest_ref: ArtifactRef, mode: enum { REPLACE_FUTURE, APPEND }) -> UpdateManifestResult`
 
-   * `REPLACE_FUTURE`: keep already-started nodes; recompute remaining graph.
-   * `APPEND`: add new nodes (must not modify existing node IDs).
+ * `REPLACE_FUTURE`: keep already-started nodes; recompute remaining graph.
+ * `APPEND`: add new nodes (must not modify existing node IDs).
 
 2. `SetConcurrency(max_concurrency: int) -> ok`
 
@@ -192,11 +192,11 @@ Proposed Updates:
 
 5. `CancelNodes(node_ids: list<string>) -> CancelResult`
 
-   * Cancels nodes not yet started; optionally requests cancel for running child workflows.
+ * Cancels nodes not yet started; optionally requests cancel for running child workflows.
 
 6. `RetryNodes(node_ids: list<string>) -> RetryResult`
 
-   * Only for nodes in terminal failed states; restarts via new child workflow run IDs or by a retry mechanism in `MoonMind.Run`.
+ * Only for nodes in terminal failed states; restarts via new child workflow run IDs or by a retry mechanism in `MoonMind.Run`.
 
 ---
 
@@ -250,15 +250,15 @@ If the product needs more granular progress labels such as “validated” or �
 
 ```
 Client/API
-  -> StartWorkflowExecution: MoonMind.ManifestIngest(manifest_ref)
-       -> Activity: Read manifest bytes (Artifact System)
-       -> Activity: Parse + validate
-       -> Activity: Compile to plan DAG
-       -> Activity: Persist plan (Artifact System)
-       -> Start child workflows: MoonMind.Run(node_i) with concurrency limit
-       -> Await children, update progress
-       -> Activity: Write summary + run index artifacts
-       -> Complete
+ -> StartWorkflowExecution: MoonMind.ManifestIngest(manifest_ref)
+ -> Activity: Read manifest bytes (Artifact System)
+ -> Activity: Parse + validate
+ -> Activity: Compile to plan DAG
+ -> Activity: Persist plan (Artifact System)
+ -> Start child workflows: MoonMind.Run(node_i) with concurrency limit
+ -> Await children, update progress
+ -> Activity: Write summary + run index artifacts
+ -> Complete
 ```
 
 ---
@@ -276,10 +276,10 @@ Reason:
 * Task Queues are a routing mechanism: workers poll task queues for tasks. ([Temporal Docs][1])
 * `MoonMind.Run` can schedule:
 
-  * LLM/model-facing Activities on `mm.activity.llm`
-  * repo/command/sandbox Activities on `mm.activity.sandbox`
-  * integration Activities on `mm.activity.integrations`
-  * artifact IO Activities on `mm.activity.artifacts`
+ * LLM/model-facing Activities on `mm.activity.llm`
+ * repo/command/sandbox Activities on `mm.activity.sandbox`
+ * integration Activities on `mm.activity.integrations`
+ * artifact IO Activities on `mm.activity.artifacts`
 
 The manifest (or compiled plan) can contain **runtime hints**, but the actual selection mechanism is “which Activity Type and Task Queue does the workflow schedule”.
 
@@ -291,13 +291,13 @@ This avoids forcing a single runtime choice at the Workflow level and supports m
 
 * Workflow task queue:
 
-  * `mm.workflow` (hosts `MoonMind.ManifestIngest`, `MoonMind.Run`)
+ * `mm.workflow` (hosts `MoonMind.ManifestIngest`, `MoonMind.Run`)
 * Activity task queues:
 
-  * `mm.activity.artifacts` (artifact read/write)
-  * `mm.activity.llm` (LLM calls, GPU-backed if needed)
-  * `mm.activity.sandbox` (repo/command/sandbox operations)
-  * `mm.activity.integrations` (external APIs)
+ * `mm.activity.artifacts` (artifact read/write)
+ * `mm.activity.llm` (LLM calls, GPU-backed if needed)
+ * `mm.activity.sandbox` (repo/command/sandbox operations)
+ * `mm.activity.integrations` (external APIs)
 
 Provider- or domain-specific sub-queues are deferred, not default. Add them only when stronger isolation or separate scaling is required.
 
@@ -384,7 +384,7 @@ Temporal Cloud limits directly constrain manifest ingest:
 ### 11.1 Payload / message size
 
 * Per-message gRPC limit and payload limits are bounded; large inputs should not be embedded in workflow history. ([Temporal Docs][2])
-  **Therefore:** manifests/plans/results must be ArtifactRefs, not embedded JSON blobs.
+ **Therefore:** manifests/plans/results must be ArtifactRefs, not embedded JSON blobs.
 
 ### 11.2 Event History limits
 
@@ -396,8 +396,8 @@ Temporal glossary: **Continue-As-New** passes relevant state to a new Workflow E
 
 * The ingest workflow uses **Continue-As-New** when:
 
-  * the number of scheduled nodes/events suggests the run is approaching history limits, or
-  * after every N node completions (e.g., every 500–2,000) for very large manifests.
+ * the number of scheduled nodes/events suggests the run is approaching history limits, or
+ * after every N node completions (e.g., every 500–2,000) for very large manifests.
 * Before continuing-as-new, persist orchestration state (running children IDs, completed set, remaining graph) to an artifact, then pass only a reference + minimal counters to the next run.
 
 ### 11.3 Per-workflow execution concurrency limits
@@ -410,7 +410,7 @@ Temporal Cloud: if a workflow has ~2,000 incomplete Activities/Signals/Child Wor
 Temporal Cloud limits include:
 
 * Max in-flight Updates, total Updates in history, and signal limits per Workflow Execution. ([Temporal Docs][2])
-  **Therefore:**
+ **Therefore:**
 * Use Updates sparingly and coalesce “chatty” UI operations.
 * Prefer: “UpdateManifest once” rather than “update per node”.
 
@@ -426,8 +426,8 @@ Temporal glossary: **Parent Close Policy** determines what happens to a Child Wo
 
 * `ParentClosePolicy = REQUEST_CANCEL` for `MoonMind.Run` children:
 
-  * If user cancels the ingest, children receive cancellation requests.
-  * If ingest completes normally, children should already be done; if not, treat as an invariant violation.
+ * If user cancels the ingest, children receive cancellation requests.
+ * If ingest completes normally, children should already be done; if not, treat as an invariant violation.
 
 (If you need “fire-and-forget runs”, use `ABANDON`, but that is usually the wrong default for a manifest-driven system.)
 
@@ -537,8 +537,8 @@ The UI should **not** infer totals by merging unrelated lists. Instead:
 * Child-run listings for a manifest should come from the canonical `run_index_ref` artifact until a shared manifest-lineage Search Attribute is explicitly standardized.
 * For fast pagination, the UI can:
 
-  1. Use Temporal Visibility pagination for “live truth”, respecting visibility read rate limits. ([Temporal Docs][2])
-  2. Or read the “run index” artifact for a stable per-manifest snapshot view (especially if Temporal visibility reads are costly or lineage fields are not yet standardized).
+ 1. Use Temporal Visibility pagination for “live truth”, respecting visibility read rate limits. ([Temporal Docs][2])
+ 2. Or read the “run index” artifact for a stable per-manifest snapshot view (especially if Temporal visibility reads are costly or lineage fields are not yet standardized).
 
 This eliminates the class of bugs where “page totals” are computed from one source while “next page” cursor is driven by another source, or where the UI invents its own cross-source notion of manifest lineage.
 
@@ -561,15 +561,15 @@ This eliminates the class of bugs where “page totals” are computed from one 
 
 ```json
 {
-  "manifestArtifactRef": "art_01JABC...",
-  "action": "run",
-  "requestedBy": { "type": "user", "id": "user-123" },
-  "executionPolicy": {
-    "failurePolicy": "fail_fast",
-    "maxConcurrency": 50
-  },
-  "planArtifactRef": null,
-  "manifestNodes": []
+ "manifestArtifactRef": "art_01JABC...",
+ "action": "run",
+ "requestedBy": { "type": "user", "id": "user-123" },
+ "executionPolicy": {
+ "failurePolicy": "fail_fast",
+ "maxConcurrency": 50
+ },
+ "planArtifactRef": null,
+ "manifestNodes": []
 }
 ```
 
@@ -586,13 +586,13 @@ The workflow executes the following stages:
 
 1. **Initialize**: Validate `manifestArtifactRef`, resolve `requestedBy` against workflow owner metadata, normalize execution policy.
 2. **Compile**: If no pre-compiled plan is provided:
-   - `manifest_read` Activity — reads manifest YAML from the artifact store.
-   - `manifest_compile` Activity — validates YAML via `normalize_manifest_job_payload`, derives required capabilities, computes manifest hash, produces a `CompiledManifestPlanModel` with stable node IDs and dependency edges.
+ - `manifest_read` Activity — reads manifest YAML from the artifact store.
+ - `manifest_compile` Activity — validates YAML via `normalize_manifest_job_payload`, derives required capabilities, computes manifest hash, produces a `CompiledManifestPlanModel` with stable node IDs and dependency edges.
 3. **Materialize nodes**: Convert compiled plan nodes to runtime `ManifestNodeModel` entries with initial state `ready`.
 4. **Execute (fan-out)**: For each ready node (respecting dependency ordering and concurrency limits):
-   - Spawn a child `MoonMind.Run` workflow with the node's parameters, linked to the parent via `manifestIngestWorkflowId` and `nodeId`.
-   - Track child state transitions (`running` → `succeeded`/`failed`).
-   - Apply failure policy: `fail_fast` cancels remaining nodes on first failure; `continue` proceeds.
+ - Spawn a child `MoonMind.Run` workflow with the node's parameters, linked to the parent via `manifestIngestWorkflowId` and `nodeId`.
+ - Track child state transitions (`running` → `succeeded`/`failed`).
+ - Apply failure policy: `fail_fast` cancels remaining nodes on first failure; `continue` proceeds.
 5. **Finalize**: Execute `manifest_write_summary` Activity to produce summary and run-index artifacts.
 
 ### 17.4 Idempotency and stable node IDs
@@ -665,7 +665,7 @@ The manifest contract (`manifest_contract.py`) enforces this at validation time 
 
 **Delivered baseline:** `MoonMind.ManifestIngest` workflow and tests, `/api/manifests` registry, manifest contract validation and normalization, compiled plan model and node materialization, Temporal Updates for interactive control, and projection/snapshot plumbing for API queries.
 
-**Remaining work:** data-fetch and embedding pipeline activities, incremental checkpoint semantics, Qdrant integration, and Mission Control list/detail/launch and node-level controls. Phased sequencing and verification are tracked in [`docs/tmp/remaining-work/Rag-ManifestIngestDesign.md`](../tmp/remaining-work/Rag-ManifestIngestDesign.md).
+**Remaining work:** data-fetch and embedding pipeline activities, incremental checkpoint semantics, Qdrant integration, and Mission Control list/detail/launch and node-level controls. Phased sequencing and verification are tracked in MoonSpec feature artifacts or local planning notes when needed.
 
 ---
 

@@ -1,7 +1,7 @@
 # MoonSpec Verification Report
 
 **Feature**: `specs/241-claude-oauth-session-backend`
-**Original Request Source**: MM-478 Jira preset brief in `docs/tmp/jira-orchestration-inputs/MM-478-moonspec-orchestration-input.md`
+**Original Request Source**: MM-478 Jira preset brief in `spec.md` (Input)
 **Verdict**: FULLY_IMPLEMENTED
 **Verified At**: 2026-04-22
 

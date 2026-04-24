@@ -8,7 +8,7 @@
 **Test Commands**:
 
 - Focused documentation contract check: `rg -n "preset-derived metadata|authoredPresets|live preset catalog|live re-expansion|refresh-latest|flattened-only|fabricate.*binding|preset provenance" docs/Tasks/TaskProposalSystem.md`
-- Source traceability check: `rg -n "MM-388|DESIGN-REQ-015|DESIGN-REQ-019|DESIGN-REQ-023|DESIGN-REQ-025|DESIGN-REQ-026" specs/202-document-proposal-promotion docs/tmp/jira-orchestration-inputs/MM-388-moonspec-orchestration-input.md`
+- Source traceability check: `rg -n "MM-388|DESIGN-REQ-015|DESIGN-REQ-019|DESIGN-REQ-023|DESIGN-REQ-025|DESIGN-REQ-026" specs/202-document-proposal-promotion`
 - Full unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - Final verification: `/moonspec-verify`
 
@@ -21,12 +21,12 @@
 - FR-006: refresh-latest preset behavior is explicit and not default.
 - FR-007, SC-005: generators preserve reliable provenance and do not fabricate bindings.
 - FR-008, DESIGN-REQ-026: detail and observability distinguish manual, preset-derived with preserved binding metadata, and preset-derived flattened-only work.
-- FR-009: canonical docs remain desired-state; volatile planning stays under `docs/tmp/` and `specs/`.
+- FR-009: canonical docs remain desired-state; volatile planning stays under `local-only handoffs` and `specs/`.
 - FR-010, SC-007: MM-388 and original Jira preset brief remain visible in artifacts and verification evidence.
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm active MM-388 feature directory and source input in `.specify/feature.json`, `docs/tmp/jira-orchestration-inputs/MM-388-moonspec-orchestration-input.md`, and `specs/202-document-proposal-promotion/spec.md` (FR-010, SC-007).
+- [X] T001 Confirm active MM-388 feature directory and source input in `.specify/feature.json`, `spec.md` (Input), and `specs/202-document-proposal-promotion/spec.md` (FR-010, SC-007).
 - [X] T002 Confirm `docs/Tasks/TaskProposalSystem.md` is the canonical documentation target and `docs/Tasks/PresetComposability.md` is absent in the current checkout in `specs/202-document-proposal-promotion/research.md` (FR-009).
 
 ## Phase 2: Foundational

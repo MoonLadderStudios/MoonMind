@@ -16,7 +16,6 @@ from moonmind.workflows.task_proposals.service import (
     TaskProposalValidationError,
 )
 
-
 @pytest.mark.asyncio
 async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None:
     repo = AsyncMock()
@@ -78,7 +77,6 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
     service._emit_notification.assert_awaited_once()
     assert proposal is record
 
-
 @pytest.mark.asyncio
 async def test_create_proposal_accepts_enum_origin_source() -> None:
     repo = AsyncMock()
@@ -128,7 +126,6 @@ async def test_create_proposal_accepts_enum_origin_source() -> None:
     repo.create_proposal.assert_awaited_once()
     args, kwargs = repo.create_proposal.await_args
     assert kwargs["origin_source"] == TaskProposalOriginSource.QUEUE
-
 
 @pytest.mark.asyncio
 async def test_create_proposal_normalizes_managed_runtime_ids() -> None:
@@ -186,7 +183,6 @@ async def test_create_proposal_normalizes_managed_runtime_ids() -> None:
     kwargs = repo.create_proposal.await_args.kwargs
     assert kwargs["task_create_request"]["payload"]["targetRuntime"] == "codex"
     assert kwargs["task_create_request"]["payload"]["task"]["runtime"]["mode"] == "claude"
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime_field", ["targetRuntime", "target_runtime", "runtime"])
@@ -246,7 +242,6 @@ async def test_create_proposal_normalizes_legacy_task_runtime_fields(
     kwargs = repo.create_proposal.await_args.kwargs
     assert kwargs["task_create_request"]["payload"]["task"]["runtime"]["mode"] == "claude"
 
-
 @pytest.mark.asyncio
 async def test_create_proposal_enforces_moonmind_metadata() -> None:
     repo = AsyncMock()
@@ -270,7 +265,6 @@ async def test_create_proposal_enforces_moonmind_metadata() -> None:
             proposed_by_worker_id="worker-1",
             proposed_by_user_id=None,
         )
-
 
 @pytest.mark.asyncio
 async def test_create_proposal_overrides_priority_for_moonmind() -> None:
@@ -325,7 +319,6 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
     kwargs = repo.create_proposal.await_args.kwargs
     assert kwargs["review_priority"] is TaskProposalReviewPriority.HIGH
     assert kwargs["priority_override_reason"] == "signal:loop_detected"
-
 
 @pytest.mark.asyncio
 async def test_create_proposal_honors_requested_priority_when_higher() -> None:
@@ -382,11 +375,6 @@ async def test_create_proposal_honors_requested_priority_when_higher() -> None:
     assert kwargs["review_priority"] is TaskProposalReviewPriority.URGENT
     assert kwargs["priority_override_reason"] is None
 
-
-
-
-
-
 @pytest.mark.asyncio
 async def test_dismiss_proposal_updates_status() -> None:
     repo = AsyncMock()
@@ -409,10 +397,6 @@ async def test_dismiss_proposal_updates_status() -> None:
     repo.refresh.assert_awaited_with(proposal)
     assert dismissed.status is TaskProposalStatus.DISMISSED
     assert "not now" in (dismissed.decision_note or "")
-
-
-
-
 
 @pytest.mark.asyncio
 async def test_update_review_priority_persists_value() -> None:
@@ -442,7 +426,6 @@ async def test_update_review_priority_persists_value() -> None:
     repo.commit.assert_awaited()
     assert updated is proposal
     assert updated.review_priority is TaskProposalReviewPriority.URGENT
-
 
 @pytest.mark.asyncio
 async def test_promote_proposal_applies_runtime_override() -> None:
@@ -490,7 +473,6 @@ async def test_promote_proposal_applies_runtime_override() -> None:
     
     assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
     assert updated_proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
-
 
 @pytest.mark.asyncio
 async def test_promote_proposal_preserves_preset_provenance() -> None:
@@ -556,7 +538,6 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
         "originalStepId": "add-regression-test",
     }
 
-
 @pytest.mark.asyncio
 async def test_promote_proposal_override_normalizes_managed_runtime_ids() -> None:
     repo = AsyncMock()
@@ -603,7 +584,6 @@ async def test_promote_proposal_override_normalizes_managed_runtime_ids() -> Non
     assert updated_proposal.status is TaskProposalStatus.PROMOTED
     assert final_request["payload"]["targetRuntime"] == "codex"
     assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime_mode_field", ["targetRuntime", "target_runtime"])
@@ -652,7 +632,4 @@ async def test_promote_proposal_override_normalizes_runtime_mapping_aliases(
     repo.commit.assert_awaited()
     assert updated_proposal.status is TaskProposalStatus.PROMOTED
     assert final_request["payload"]["task"]["runtime"]["mode"] == "claude"
-
-
-
 

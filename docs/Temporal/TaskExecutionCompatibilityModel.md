@@ -1,11 +1,11 @@
 # Task Execution Compatibility Model
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md`](../tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Bridge contract between MoonMind's **task-oriented product surfaces** and **Temporal-backed workflow executions**.
 
 **Status:** Normative (evolves with the compatibility layer)
-**Owner:** MoonMind Platform  
+**Owner:** MoonMind Platform 
 **Last updated:** 2026-04-04
 **Audience:** backend, dashboard, API, workflow authors
 
@@ -77,31 +77,31 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 ## 5. Compatibility principles
 
 1. **`task` remains the user-facing noun during migration.**
-   The product contract remains task-oriented even when the execution substrate is Temporal.
+ The product contract remains task-oriented even when the execution substrate is Temporal.
 
-2. **`workflow execution` remains the runtime noun.**  
-   Temporal implementation docs, worker code, and execution APIs should use Temporal language precisely.
+2. **`workflow execution` remains the runtime noun.** 
+ Temporal implementation docs, worker code, and execution APIs should use Temporal language precisely.
 
 2a. **Execution payloads should use `tool` as the canonical executable field.**
-   During migration, `skill` may remain as a compatibility alias where needed.
+ During migration, `skill` may remain as a compatibility alias where needed.
 
 3. **Identifiers are opaque.**
-   Clients must not parse source, entry type, or lifecycle meaning from the textual shape of an ID.
+ Clients must not parse source, entry type, or lifecycle meaning from the textual shape of an ID.
 
 4. **Compatibility adapters should translate task actions into Temporal controls.**
-   The UI should think in terms like edit, approve, rerun, pause, resume, and cancel, not raw Signal and Update names.
+ The UI should think in terms like edit, approve, rerun, pause, resume, and cancel, not raw Signal and Update names.
 
 5. **Temporal state should not be flattened so aggressively that operators lose meaning.**
-   The dashboard can show normalized task statuses, but raw execution state and Temporal status must remain available.
+ The dashboard can show normalized task statuses, but raw execution state and Temporal status must remain available.
 
 6. **Temporal-managed list/detail truth moves toward Temporal visibility and workflow state.**
-   Transitional projections are allowed, but they must mirror the documented execution contract instead of inventing a parallel model.
+ Transitional projections are allowed, but they must mirror the documented execution contract instead of inventing a parallel model.
 
 7. **Skill is a tool subtype, not a competing top-level noun.**
-   Task/step payload contracts should standardize on `task.tool` and `step.tool` with `tool.type="skill"` for current implementations.
+ Task/step payload contracts should standardize on `task.tool` and `step.tool` with `tool.type="skill"` for current implementations.
 
 8. **Compatibility adapters must not reconstruct canonical runtime contracts from provider-specific payloads.**
-   If a workflow activity returns a canonical `AgentRunResult`, compatibility layers must use that result directly. They must not parse provider-native response shapes and rebuild a result contract from raw provider data.
+ If a workflow activity returns a canonical `AgentRunResult`, compatibility layers must use that result directly. They must not parse provider-native response shapes and rebuild a result contract from raw provider data.
 
 ---
 
@@ -278,25 +278,25 @@ Rules:
 
 ```json
 {
-  "taskId": "mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
-  "source": "temporal",
-  "entry": "run",
-  "title": "Repo update run",
-  "summary": "Execution resumed.",
-  "state": "executing",
-  "dashboardStatus": "running",
-  "temporalStatus": "running",
-  "workflowId": "mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
-  "workflowType": "MoonMind.Run",
-  "ownerType": "user",
-  "ownerId": "0f2d5802-0bd2-4d31-a618-6f7d3b0f09da",
-  "waitingReason": null,
-  "attentionRequired": false,
-  "createdAt": "2026-03-06T08:15:21Z",
-  "updatedAt": "2026-03-06T08:18:04Z",
-  "closedAt": null,
-  "artifactsCount": 2,
-  "detailHref": "/tasks/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB"
+ "taskId": "mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
+ "source": "temporal",
+ "entry": "run",
+ "title": "Repo update run",
+ "summary": "Execution resumed.",
+ "state": "executing",
+ "dashboardStatus": "running",
+ "temporalStatus": "running",
+ "workflowId": "mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
+ "workflowType": "MoonMind.Run",
+ "ownerType": "user",
+ "ownerId": "0f2d5802-0bd2-4d31-a618-6f7d3b0f09da",
+ "waitingReason": null,
+ "attentionRequired": false,
+ "createdAt": "2026-03-06T08:15:21Z",
+ "updatedAt": "2026-03-06T08:18:04Z",
+ "closedAt": null,
+ "artifactsCount": 2,
+ "detailHref": "/tasks/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB"
 }
 ```
 
@@ -582,7 +582,7 @@ Public naming can lag runtime naming while compatibility remains explicit.
 
 ## 15. Compatibility maturity
 
-The bridge is **in force** when Temporal-backed executions participate honestly in task-shaped list/detail/edit/cancel/rerun flows: **`taskId == workflowId`**, stable routes across Continue-As-New, documented payload shapes, normalized dashboard status, waiting metadata, and explicit handling of raw Temporal identifiers in operator views. Sequencing, phase-style checkpoints, and retirement decisions for compatibility surfaces are tracked in [`docs/tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md`](../tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md).
+The bridge is **in force** when Temporal-backed executions participate honestly in task-shaped list/detail/edit/cancel/rerun flows: **`taskId == workflowId`**, stable routes across Continue-As-New, documented payload shapes, normalized dashboard status, waiting metadata, and explicit handling of raw Temporal identifiers in operator views. Sequencing, phase-style checkpoints, and retirement decisions for compatibility surfaces are tracked in MoonSpec feature artifacts or local planning notes when needed.
 
 ---
 

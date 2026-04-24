@@ -17,7 +17,6 @@ from api_service.auth_providers import get_current_user_optional
 from api_service.db.models import User
 from moonmind.config.settings import settings
 
-
 @dataclasses.dataclass
 class _WorkerRequestAuth:
     """Resolved worker auth context used by mutation endpoints."""
@@ -28,7 +27,6 @@ class _WorkerRequestAuth:
     allowed_job_types: tuple[str, ...]
     capabilities: tuple[str, ...]
     token_id: Optional[UUID] = None
-
 
 async def _require_worker_auth(
     worker_token: Optional[str] = Header(None, alias="X-MoonMind-Worker-Token"),
@@ -68,6 +66,5 @@ async def _require_worker_auth(
             "message": "Valid worker or OIDC credentials are required",
         },
     )
-
 
 __all__ = ["_WorkerRequestAuth", "_require_worker_auth"]

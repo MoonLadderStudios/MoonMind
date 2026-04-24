@@ -36,6 +36,6 @@
 
 ## Notes
 
-- Input classified as a single-story runtime feature request from `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md`.
+- Input classified as a single-story runtime feature request from `spec.md` (Input).
 - Historical source path `docs/Tools/SkillSystem.md` was mapped to the current canonical source documents `docs/Tasks/AgentSkillSystem.md` and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`.
 - No clarification markers remain.

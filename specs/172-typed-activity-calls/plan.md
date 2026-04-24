@@ -35,7 +35,7 @@ Enforce typed Temporal payload conversion and typed activity calls for the high-
 - **IX. Resilient by Default**: PASS. Boundary tests and validated compatibility aliases protect in-flight invocation shapes.
 - **X. Facilitate Continuous Improvement**: PASS. Stronger contracts make failures explicit and easier to diagnose.
 - **XI. Spec-Driven Development Is the Source of Truth**: PASS. This plan derives from the single-story spec.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Runtime work and tracking remain in feature artifacts and docs/tmp references.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Runtime work and tracking remain in feature artifacts and local-only handoffs references.
 - **XIII. Pre-Release Velocity: Delete, Don't Deprecate**: PASS. No new internal compatibility alias is added beyond boundary validation for existing payload shapes.
 
 ## Project Structure
@@ -50,9 +50,9 @@ specs/172-typed-activity-calls/
 ├── data-model.md
 ├── quickstart.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 ├── contracts/
-│   └── temporal-activity-boundary.md
+│ └── temporal-activity-boundary.md
 └── tasks.md
 ```
 
@@ -61,25 +61,25 @@ specs/172-typed-activity-calls/
 ```text
 moonmind/
 ├── schemas/
-│   └── temporal_activity_models.py
+│ └── temporal_activity_models.py
 └── workflows/
-    └── temporal/
-        ├── client.py
-        ├── data_converter.py
-        ├── typed_execution.py
-        ├── activity_runtime.py
-        └── workflows/
-            └── agent_run.py
+ └── temporal/
+ ├── client.py
+ ├── data_converter.py
+ ├── typed_execution.py
+ ├── activity_runtime.py
+ └── workflows/
+ └── agent_run.py
 
 tests/
 └── unit/
-    └── workflows/
-        └── temporal/
-            ├── test_temporal_client.py
-            ├── test_typed_activity_boundaries.py
-            ├── test_agent_runtime_activities.py
-            └── workflows/
-                └── test_agent_run_jules_execution.py
+ └── workflows/
+ └── temporal/
+ ├── test_temporal_client.py
+ ├── test_typed_activity_boundaries.py
+ ├── test_agent_runtime_activities.py
+ └── workflows/
+ └── test_agent_run_jules_execution.py
 ```
 
 **Structure Decision**: Use existing schema, Temporal client, typed execution, activity runtime, and AgentRun workflow modules. This keeps the feature at the Temporal boundary where the source design requires it.

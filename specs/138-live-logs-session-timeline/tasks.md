@@ -42,7 +42,7 @@
 
 ### Implementation for User Story 1
 
-- [X] T010 [US1] Replace `docs/tmp/009-LiveLogsPlan.md` with the session-aware rollout tracker aligned to the shipped baseline
+- [X] T010 [US1] Replace `docs/ManagedAgents/LiveLogs.md` with the session-aware rollout tracker aligned to the shipped baseline
 - [X] T011 [US1] Align feature-flag defaults and sample config documentation for the new rollout field in `api_service/config.template.toml` and `moonmind/config/settings.py`
 
 **Checkpoint**: The migration tracker and runtime boot payload both describe the session-aware upgrade rather than a greenfield live-logs build.

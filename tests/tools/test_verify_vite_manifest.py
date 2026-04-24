@@ -9,7 +9,6 @@ import importlib.util
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-
 def _load_verify_module():
     path = REPO_ROOT / "tools" / "verify_vite_manifest.py"
     spec = importlib.util.spec_from_file_location("verify_vite_manifest", path)
@@ -18,12 +17,10 @@ def _load_verify_module():
     spec.loader.exec_module(mod)
     return mod
 
-
 def test_expected_entrypoints_matches_vite_config() -> None:
     mod = _load_verify_module()
     names = mod.expected_entrypoints()
     assert names == ["mission-control"]
-
 
 def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
     tmp_path, monkeypatch

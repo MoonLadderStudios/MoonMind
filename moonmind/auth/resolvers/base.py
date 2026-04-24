@@ -9,7 +9,6 @@ from moonmind.auth.secret_refs import (
 
 logger = structlog.get_logger(__name__)
 
-
 class SecretBackendResolver:
     """Protocol for specialized secret backend resolvers."""
 
@@ -26,7 +25,6 @@ class SecretBackendResolver:
             SecretDecryptionError: If the payload cannot be decrypted.
         """
         raise NotImplementedError
-
 
 class RootSecretResolver:
     """Aggregates multiple backend resolvers and delegates resolution."""

@@ -3,7 +3,7 @@
 **Feature Branch**: `run-jira-orchestrate-for-mm-428-apply-page-composition`  
 **Created**: 2026-04-21  
 **Status**: Implemented  
-**Input**: Trusted Jira preset brief for MM-428 from `docs/tmp/jira-orchestration-inputs/MM-428-moonspec-orchestration-input.md`. Summary: "Apply page-specific composition to task workflows." Source design: `docs/UI/MissionControlDesignSystem.md`, section 11.
+**Input**: Trusted Jira preset brief for MM-428 from `spec.md` (Input). Summary: "Apply page-specific composition to task workflows." Source design: `docs/UI/MissionControlDesignSystem.md`, section 11.
 
 ## Original Jira Preset Brief
 
@@ -34,7 +34,6 @@ Coverage IDs:
 
 User Story
 As a Mission Control operator, I want the task list, task creation flow, and task detail/evidence pages to use the documented composition patterns so each workflow has a clear primary surface and readable supporting content.
-
 
 Acceptance Criteria
 - /tasks/list has a compact filter/control deck above a distinct matte table slab.

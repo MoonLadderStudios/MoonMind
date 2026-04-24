@@ -40,15 +40,15 @@ Plan MM-492 as a verification-first report contract story. The current repositor
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 backend/runtime plus existing TypeScript/React Mission Control consumer surfaces  
-**Primary Dependencies**: Existing Temporal artifact service/helpers, Pydantic v2 patterns already in repo, React/TanStack Query consumer path, pytest  
-**Storage**: Existing artifact metadata tables and configured artifact store only; no new persistent storage  
-**Unit Testing**: `./tools/test_unit.sh`; focused iteration can use targeted pytest paths and dashboard UI args  
-**Integration Testing**: `./tools/test_integration.sh`; contract regression can also use `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py` for read-model/API coverage  
-**Target Platform**: MoonMind Temporal worker and API service runtime with Mission Control consuming report artifacts  
-**Project Type**: Python backend/runtime contract with existing frontend consumer coverage  
-**Performance Goals**: Keep report payloads compact and ref-based; validation remains deterministic in-memory checks over bounded metadata  
-**Constraints**: No separate report storage system; no inline report/evidence/log payloads in workflow-facing bundle data; keep generic outputs distinct from report outputs; preserve MM-492 traceability  
+**Language/Version**: Python 3.12 backend/runtime plus existing TypeScript/React Mission Control consumer surfaces 
+**Primary Dependencies**: Existing Temporal artifact service/helpers, Pydantic v2 patterns already in repo, React/TanStack Query consumer path, pytest 
+**Storage**: Existing artifact metadata tables and configured artifact store only; no new persistent storage 
+**Unit Testing**: `./tools/test_unit.sh`; focused iteration can use targeted pytest paths and dashboard UI args 
+**Integration Testing**: `./tools/test_integration.sh`; contract regression can also use `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py` for read-model/API coverage 
+**Target Platform**: MoonMind Temporal worker and API service runtime with Mission Control consuming report artifacts 
+**Project Type**: Python backend/runtime contract with existing frontend consumer coverage 
+**Performance Goals**: Keep report payloads compact and ref-based; validation remains deterministic in-memory checks over bounded metadata 
+**Constraints**: No separate report storage system; no inline report/evidence/log payloads in workflow-facing bundle data; keep generic outputs distinct from report outputs; preserve MM-492 traceability 
 **Scale/Scope**: One contract story covering report link semantics, bundle/result shape, metadata validation, canonical resolution semantics, and report/evidence/observability separation
 
 ## Constitution Check
@@ -66,7 +66,7 @@ Plan MM-492 as a verification-first report contract story. The current repositor
 - IX. Resilient by Default: PASS - workflow-facing report results remain bounded and deterministic.
 - X. Facilitate Continuous Improvement: PASS - planning artifacts make current evidence and remaining verification explicit.
 - XI. Spec-Driven Development: PASS - this plan follows the new single-story MM-492 spec.
-- XII. Canonical Documentation Separation: PASS - migration/orchestration notes remain in `docs/tmp`, while canonical behavior remains in `docs/Artifacts/ReportArtifacts.md`.
+- XII. Canonical Documentation Separation: PASS - migration/orchestration notes remain in `local-only handoffs`, while canonical behavior remains in `docs/Artifacts/ReportArtifacts.md`.
 - XIII. Pre-release Compatibility Policy: PASS - no compatibility aliasing or hidden semantic transforms are introduced.
 
 ## Project Structure
@@ -82,9 +82,9 @@ specs/244-define-report-artifact-contract/
 ├── quickstart.md
 ├── tasks.md
 ├── contracts/
-│   └── report-artifact-contract.md
+│ └── report-artifact-contract.md
 └── checklists/
-    └── requirements.md
+ └── requirements.md
 ```
 
 ### Source Code (repository root)

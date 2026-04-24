@@ -21,16 +21,13 @@ from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 # These tests remain available for local development verification only.
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
-
 # Local mock activities that simulate the catalog-routed activities
 # (the standalone stubs were removed in favor of catalog routing).
 from temporalio import activity as _activity
 
-
 @_activity.defn(name="agent_runtime.publish_artifacts")
 async def mock_publish_artifacts(result: AgentRunResult | None = None) -> AgentRunResult | None:
     return result
-
 
 @_activity.defn(name="agent_runtime.cancel")
 async def mock_cancel(request: dict) -> AgentRunStatus:
@@ -40,9 +37,6 @@ async def mock_cancel(request: dict) -> AgentRunStatus:
         agentId="managed",
         status="canceled"
     )
-
-
-
 
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list(request: dict) -> dict:
@@ -85,16 +79,13 @@ async def mock_provider_profile_list(request: dict) -> dict:
         ]
     }
 
-
 @_activity.defn(name="provider_profile.ensure_manager")
 async def mock_provider_profile_ensure_manager(request: dict) -> dict:
     return {"started": True, "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'test')}"}
 
-
 @_activity.defn(name="provider_profile.reset_manager")
 async def mock_provider_profile_reset_manager(request: dict) -> dict:
     return {"reset": True, "workflow_id": f"provider-profile-manager:{request.get('runtime_id', 'test')}"}
-
 
 # Collect all activities that need to be registered on the main task queue.
 _COMMON_AGENT_RUN_ACTIVITIES = [
@@ -104,7 +95,6 @@ _COMMON_AGENT_RUN_ACTIVITIES = [
     mock_provider_profile_ensure_manager,
     mock_provider_profile_reset_manager,
 ]
-
 
 @_activity.defn(name="agent_runtime.launch")
 async def mock_agent_runtime_launch(request: dict) -> dict:
@@ -116,7 +106,6 @@ async def mock_agent_runtime_launch(request: dict) -> dict:
         "agent_id": request.get("agent_id", "test-agent"),
     }
 
-
 @_activity.defn(name="agent_runtime.status")
 async def mock_agent_runtime_status(request: dict) -> dict:
     """Simulate polling the agent's execution status."""
@@ -124,7 +113,6 @@ async def mock_agent_runtime_status(request: dict) -> dict:
         "status": "running",
         "container_id": request.get("container_id", "test-container-001"),
     }
-
 
 @_activity.defn(name="agent_runtime.fetch_result")
 async def mock_agent_runtime_fetch_result(request: dict) -> dict:
@@ -134,7 +122,6 @@ async def mock_agent_runtime_fetch_result(request: dict) -> dict:
         "artifacts": [],
     }
 
-
 # Add launch/status/fetch_result to the common activities list
 _COMMON_AGENT_RUN_ACTIVITIES.extend([
     mock_agent_runtime_launch,
@@ -143,7 +130,6 @@ _COMMON_AGENT_RUN_ACTIVITIES.extend([
 ])
 
 _managed_launch_requests: list[dict] = []
-
 
 @pytest.mark.integration_ci
 async def test_workload_auth_volume_guardrails_reject_inheritance_and_allow_declared_exception(
@@ -217,9 +203,6 @@ async def test_workload_auth_volume_guardrails_reject_inheritance_and_allow_decl
         in run_args
     )
     assert "Approved credential repair" not in " ".join(run_args)
-
-
-
 
 @workflow.defn(name="MoonMind.ProviderProfileManager")
 class MockProviderProfileManager:
@@ -295,7 +278,6 @@ class MockProviderProfileManager:
                     await handle.signal("slot_assigned", {"profile_id": profile_id})
         return {}
 
-
 @workflow.defn(name="TestAgentRunParent")
 class TestAgentRunParent:
     def __init__(self) -> None:
@@ -326,7 +308,6 @@ class TestAgentRunParent:
             task_queue="agent-run-task-queue",
         )
 
-
 @_activity.defn(name="agent_runtime.status")
 async def mock_agent_runtime_status_rate_limited(request: dict) -> dict:
     return {
@@ -336,7 +317,6 @@ async def mock_agent_runtime_status_rate_limited(request: dict) -> dict:
         "status": "failed",
     }
 
-
 @_activity.defn(name="agent_runtime.fetch_result")
 async def mock_agent_runtime_fetch_result_rate_limited(request: dict) -> dict:
     return {
@@ -344,7 +324,6 @@ async def mock_agent_runtime_fetch_result_rate_limited(request: dict) -> dict:
         "failureClass": "integration_error",
         "providerErrorCode": "429",
     }
-
 
 @pytest.mark.asyncio
 async def test_agent_run_workflow():
@@ -393,7 +372,6 @@ async def test_agent_run_workflow():
             
                 assert isinstance(result, AgentRunResult)
                 assert result.summary == "Success"
-
 
 async def test_agent_run_workflow_cancellation():
     _managed_launch_requests.clear()
@@ -444,7 +422,6 @@ async def test_agent_run_workflow_cancellation():
                 assert "cancel" in exc_str or "cancel" in cause_str or isinstance(
                     exc_info.value.__cause__, asyncio.CancelledError
                 )
-
 
 @pytest.mark.asyncio
 async def test_agent_run_reports_managed_429_retry_summary_to_parent():
@@ -522,7 +499,6 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
                 with pytest.raises(WorkflowFailureError):
                     await parent_handle.result()
 
-
 @pytest.mark.asyncio
 async def test_agent_run_binds_managed_launch_to_parent_workflow_for_new_histories():
     _managed_launch_requests.clear()
@@ -579,23 +555,15 @@ async def test_agent_run_binds_managed_launch_to_parent_workflow_for_new_histori
                 assert isinstance(result, AgentRunResult)
                 assert result.summary == "Success"
 
-
-
-
 # --- External agent workflow path ---
 
 # Track activity calls for external-agent verification.
 _external_activity_calls: list[str] = []
 
-
 @_activity.defn(name="integration.resolve_adapter_metadata")
 async def mock_resolve_adapter_metadata(agent_id: str) -> dict:
     _external_activity_calls.append(f"resolve_metadata:{agent_id}")
     return {"agent_id": agent_id, "execution_style": "polling"}
-
-
-
-
 
 @_activity.defn(name="integration.jules.start")
 async def mock_jules_start(request: dict) -> dict:
@@ -615,10 +583,8 @@ async def mock_jules_start(request: dict) -> dict:
         },
     }
 
-
 # Counter for status polling — starts running, then completes.
 _status_poll_count = 0
-
 
 @_activity.defn(name="integration.jules.status")
 async def mock_jules_status(request: dict) -> dict:
@@ -652,7 +618,6 @@ async def mock_jules_status(request: dict) -> dict:
         },
     }
 
-
 @_activity.defn(name="integration.jules.fetch_result")
 async def mock_jules_fetch_result(request: dict) -> dict:
     run_id = request.get("external_id", "unknown")
@@ -662,7 +627,6 @@ async def mock_jules_fetch_result(request: dict) -> dict:
         "summary": f"Jules task {run_id} completed successfully.",
         "metadata": {"normalizedStatus": "completed"},
     }
-
 
 @_activity.defn(name="integration.jules.cancel")
 async def mock_jules_cancel(request: dict) -> dict:
@@ -678,7 +642,6 @@ async def mock_jules_cancel(request: dict) -> dict:
         "observedAt": datetime.now(tz=UTC).isoformat(),
         "metadata": {"cancelAccepted": False, "unsupported": True},
     }
-
 
 @pytest.mark.asyncio
 async def test_agent_run_external_agent_workflow():
@@ -749,7 +712,6 @@ async def test_agent_run_external_agent_workflow():
                         c.startswith("status:")
                         for c in _external_activity_calls[start_idx:fetch_idx]
                     )
-
 
 @pytest.mark.asyncio
 @pytest.mark.xfail(
@@ -849,9 +811,7 @@ async def test_cancellation_releases_provider_profile_slot():
                     f"Slot was NOT released after cancellation. Manager state: {manager_state_after}"
                 )
 
-
 # ── OpenRouter-specific integration tests (Phase 2) ──
-
 
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list_openrouter(request: dict) -> dict:
@@ -910,7 +870,6 @@ async def mock_provider_profile_list_openrouter(request: dict) -> dict:
         ]
     }
 
-
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list_openrouter_disabled_high(request: dict) -> dict:
     """Return openrouter profiles with high-priority disabled to test fallback."""
@@ -948,7 +907,6 @@ async def mock_provider_profile_list_openrouter_disabled_high(request: dict) -> 
             },
         ]
     }
-
 
 @pytest.mark.integration
 async def test_openrouter_profile_cooldown_attaches_to_profile():
@@ -1104,7 +1062,6 @@ async def test_openrouter_profile_cooldown_attaches_to_profile():
         finally:
             test_module.mock_provider_profile_list = original_mock
 
-
 @pytest.mark.integration
 async def test_openrouter_profile_slot_leasing():
     """Verify that slot leasing attaches to the openrouter profile specifically."""
@@ -1254,7 +1211,6 @@ async def test_openrouter_profile_slot_leasing():
         finally:
             test_module.mock_provider_profile_list = original_mock
 
-
 @pytest.mark.integration
 async def test_openrouter_profile_cancellation_releases_slot():
     """Verify that cancellation releases the openrouter profile slot lease."""
@@ -1400,7 +1356,6 @@ async def test_openrouter_profile_cancellation_releases_slot():
                 )
         finally:
             test_module.mock_provider_profile_list = original_mock
-
 
 @pytest.mark.integration
 async def test_profile_selector_provider_id_routes_to_openrouter():
@@ -1551,7 +1506,6 @@ async def test_profile_selector_provider_id_routes_to_openrouter():
                 await agent_handle.cancel()
         finally:
             test_module.mock_provider_profile_list = original_mock
-
 
 @pytest.mark.integration
 async def test_profile_selector_falls_back_to_lower_priority_when_high_disabled():

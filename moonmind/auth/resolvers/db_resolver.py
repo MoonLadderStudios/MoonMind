@@ -1,6 +1,5 @@
 import structlog
 
-
 from moonmind.auth.resolvers.base import SecretBackendResolver
 from moonmind.auth.secret_refs import (
     ParsedSecretRef,
@@ -11,7 +10,6 @@ from api_service.db.base import async_session_maker
 from api_service.services.secrets import SecretsService
 
 logger = structlog.get_logger(__name__)
-
 
 class DbEncryptedSecretResolver(SecretBackendResolver):
     """Resolves secrets dynamically from the database (`db://`)."""

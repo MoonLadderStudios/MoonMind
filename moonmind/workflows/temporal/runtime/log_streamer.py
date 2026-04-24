@@ -26,7 +26,6 @@ from moonmind.workflows.temporal.runtime.output_parser import (
 _STREAM_CHUNK_SIZE = 65536
 _ARTIFACT_COPY_CHUNK_SIZE = 1024 * 1024
 
-
 class RuntimeLogStreamer:
     """Streams subprocess output to artifact storage and collects diagnostics."""
 

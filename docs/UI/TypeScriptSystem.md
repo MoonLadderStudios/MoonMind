@@ -5,7 +5,7 @@ Owners: MoonMind Engineering
 Last Updated: 2026-04-03
 Related: `README.md`, `api_service/static/task_dashboard/`, `docs/Tasks/TaskArchitecture.md`
 
-**Implementation tracking:** [`docs/tmp/063-UI-TypeScriptSystem.md`](../tmp/063-UI-TypeScriptSystem.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 ---
 
@@ -196,54 +196,54 @@ The frontend source should be moved out of the static asset output directory and
 
 ```text
 frontend/
-  src/
-    boot/
-      parseBootPayload.ts
-      mountPage.tsx
-    entrypoints/
-      mission-control.tsx
-      tasks-home.tsx
-      tasks-list.tsx
-      task-detail.tsx
-      manifests-list.tsx
-      schedules-list.tsx
-      schedule-create.tsx
-      proposals-list.tsx
-      proposal-detail.tsx
-      settings.tsx
-    components/
-      layout/
-      tables/
-      forms/
-      status/
-      feedback/
-    features/
-      tasks/
-      manifests/
-      schedules/
-      proposals/
-      settings/
-      authProfiles/
-      workerPause/
-    lib/
-      api/
-      query/
-      routing/
-      format/
-      dom/
-      errors/
-    generated/
-      openapi.ts
-    styles/
-      mission-control.css
-    types/
-      boot.ts
-      ui.ts
-      domain.ts
-  vite.config.ts
-  tsconfig.json
-  tsconfig.node.json
-  eslint.config.js
+ src/
+ boot/
+ parseBootPayload.ts
+ mountPage.tsx
+ entrypoints/
+ mission-control.tsx
+ tasks-home.tsx
+ tasks-list.tsx
+ task-detail.tsx
+ manifests-list.tsx
+ schedules-list.tsx
+ schedule-create.tsx
+ proposals-list.tsx
+ proposal-detail.tsx
+ settings.tsx
+ components/
+ layout/
+ tables/
+ forms/
+ status/
+ feedback/
+ features/
+ tasks/
+ manifests/
+ schedules/
+ proposals/
+ settings/
+ authProfiles/
+ workerPause/
+ lib/
+ api/
+ query/
+ routing/
+ format/
+ dom/
+ errors/
+ generated/
+ openapi.ts
+ styles/
+ mission-control.css
+ types/
+ boot.ts
+ ui.ts
+ domain.ts
+ vite.config.ts
+ tsconfig.json
+ tsconfig.node.json
+ eslint.config.js
 ```
 
 ### 7.2 Production Output
@@ -318,7 +318,7 @@ This mode requires **two processes running simultaneously**:
 
 1. **Vite dev server** — start with `npm run ui:dev` (serves HMR-capable modules on `http://127.0.0.1:5173` by default).
 2. **FastAPI with `MOONMIND_UI_DEV_SERVER_URL` set** — for example:
-   `MOONMIND_UI_DEV_SERVER_URL=http://127.0.0.1:5173 <fastapi-start-command>`.
+ `MOONMIND_UI_DEV_SERVER_URL=http://127.0.0.1:5173 <fastapi-start-command>`.
 
 When `MOONMIND_UI_DEV_SERVER_URL` is set, `ui_assets()` bypasses the manifest entirely and injects `<script type="module">` tags for `@vite/client` and `/entrypoints/mission-control.tsx` directly from the Vite dev server. The shared entrypoint then reads `payload.page` to lazy-load the requested page module. **Without this env var, FastAPI serves the built `dist/` bundle and live changes from Vite will not appear.**
 
@@ -332,14 +332,14 @@ Recommended scripts:
 
 ```json
 {
-  "scripts": {
-    "ui:dev": "vite --config frontend/vite.config.ts",
-    "ui:build": "vite build --config frontend/vite.config.ts",
-    "ui:typecheck": "tsc --noEmit -p frontend/tsconfig.json",
-    "ui:lint": "eslint frontend/src --ext .ts,.tsx",
-    "ui:test": "vitest run --config frontend/vite.config.ts",
-    "ui:test:watch": "vitest --config frontend/vite.config.ts"
-  }
+ "scripts": {
+ "ui:dev": "vite --config frontend/vite.config.ts",
+ "ui:build": "vite build --config frontend/vite.config.ts",
+ "ui:typecheck": "tsc --noEmit -p frontend/tsconfig.json",
+ "ui:lint": "eslint frontend/src --ext .ts,.tsx",
+ "ui:test": "vitest run --config frontend/vite.config.ts",
+ "ui:test:watch": "vitest --config frontend/vite.config.ts"
+ }
 }
 ```
 
@@ -378,7 +378,7 @@ Example:
 ```html
 <div id="mission-control-root" data-page="tasks-list"></div>
 <script id="moonmind-ui-boot" type="application/json">
-  {"page":"tasks-list","apiBase":"/api","features":{"oauth":true}}
+ {"page":"tasks-list","apiBase":"/api","features":{"oauth":true}}
 </script>
 ```
 
@@ -432,14 +432,14 @@ Recommended baseline:
 
 ```json
 {
-  "compilerOptions": {
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "useUnknownInCatchVariables": true,
-    "noImplicitOverride": true,
-    "noEmit": true
-  }
+ "compilerOptions": {
+ "strict": true,
+ "noUncheckedIndexedAccess": true,
+ "exactOptionalPropertyTypes": true,
+ "useUnknownInCatchVariables": true,
+ "noImplicitOverride": true,
+ "noEmit": true
+ }
 }
 ```
 
@@ -658,7 +658,7 @@ If multiple pages need boot payloads, add a small backend helper layer so payloa
 
 ## 15. Incremental adoption
 
-Mission Control now runs on **Vite + React + TypeScript** under FastAPI-owned routes. Historical migration sequencing and completion status live in [`docs/tmp/063-UI-TypeScriptSystem.md`](../tmp/063-UI-TypeScriptSystem.md).
+Mission Control now runs on **Vite + React + TypeScript** under FastAPI-owned routes. Historical migration sequencing and completion status live in .
 
 ---
 

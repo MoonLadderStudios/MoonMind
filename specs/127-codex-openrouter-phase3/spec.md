@@ -233,5 +233,5 @@ An operator can create, view, edit, and delete OpenRouter-backed Codex provider 
 | IX. Resilient by Default | **PASS** — Missing secrets fail fast with actionable errors. Generated files are cleaned up on completion. |
 | X. Facilitate Continuous Improvement | **N/A** — No direct improvement-signal capture in this feature. |
 | XI. Spec-Driven Development | **PASS** — This spec provides requirements, user stories, edge cases, and success criteria before implementation. |
-| XII. Canonical Documentation | **PASS** — Migration/implementation tracking belongs in `docs/tmp/`, not canonical docs. |
+| XII. Canonical Documentation | **PASS** — Migration/implementation tracking belongs in `local-only handoffs`, not canonical docs. |
 | XIII. Pre-Release: Delete, Don't Deprecate | **PASS** — `auth_mode` will be removed, not aliased. Legacy records will be migrated, not dual-maintained. |

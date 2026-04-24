@@ -5,7 +5,6 @@ from temporalio.testing import ActivityEnvironment
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.temporal.activities.openclaw_activities import openclaw_execute_activity
 
-
 @pytest.mark.asyncio
 @patch("moonmind.openclaw.execute.run_openclaw_execution")
 async def test_openclaw_execute_activity_delegates(mock_run):

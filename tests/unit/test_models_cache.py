@@ -11,11 +11,9 @@ from moonmind.models_cache import (
     refresh_model_cache_for_user,
 )
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures (function-scoped by default, auto-applied to all tests)
 # ---------------------------------------------------------------------------
-
 
 @pytest.fixture(autouse=True)
 def _reset_model_cache_singleton():
@@ -24,7 +22,6 @@ def _reset_model_cache_singleton():
     ModelCache._instance = None
     yield
     ModelCache._instance = None
-
 
 @pytest.fixture()
 def provider_settings(monkeypatch):
@@ -37,7 +34,6 @@ def provider_settings(monkeypatch):
     monkeypatch.setattr(settings.anthropic, "anthropic_api_key", "fake_anthropic_key_for_test")
     monkeypatch.setattr(settings.anthropic, "anthropic_enabled", True)
     monkeypatch.setattr(settings.anthropic, "anthropic_chat_model", "claude-test-cache-model")
-
 
 @pytest.fixture()
 def model_mocks(provider_settings):
@@ -93,11 +89,9 @@ def model_mocks(provider_settings):
             "ollama_model_raw": ollama_model,
         }
 
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
 
 def test_singleton_behavior(model_mocks):
     m = model_mocks
@@ -108,24 +102,20 @@ def test_singleton_behavior(model_mocks):
     cache2 = ModelCache(refresh_interval_seconds=1000)
     assert cache1 is cache2
 
-
 def test_default_refresh_interval_from_settings(model_mocks, monkeypatch):
     monkeypatch.setattr(settings, "model_cache_refresh_interval_seconds", 43200)
     cache = ModelCache()
     assert cache.refresh_interval_seconds == 43200
-
 
 def test_override_refresh_interval_via_patched_settings(model_mocks, monkeypatch):
     monkeypatch.setattr(settings, "model_cache_refresh_interval_seconds", 100)
     cache = ModelCache()
     assert cache.refresh_interval_seconds == 100
 
-
 def test_override_refresh_interval_via_constructor_argument(model_mocks, monkeypatch):
     monkeypatch.setattr(settings, "model_cache_refresh_interval_seconds", 9999)
     cache = ModelCache(refresh_interval_seconds=50)
     assert cache.refresh_interval_seconds == 50
-
 
 def test_initial_refresh_populates_data(model_mocks):
     m = model_mocks
@@ -157,7 +147,6 @@ def test_initial_refresh_populates_data(model_mocks):
     assert anthropic_data["owned_by"] == "Anthropic"
     assert anthropic_data["context_window"] == 200000
 
-
 def test_get_all_models_after_refresh(model_mocks):
     cache = ModelCache(refresh_interval_seconds=36000)
     cache.refresh_models_sync()
@@ -169,7 +158,6 @@ def test_get_all_models_after_refresh(model_mocks):
     assert any(m["id"] == "test-ollama-model" for m in models)
     assert any(m["id"] == "claude-test-cache-model" for m in models)
 
-
 def test_get_model_provider(model_mocks):
     cache = ModelCache(refresh_interval_seconds=36000)
     cache.refresh_models_sync()
@@ -179,7 +167,6 @@ def test_get_model_provider(model_mocks):
     assert cache.get_model_provider("test-ollama-model") == "Ollama"
     assert cache.get_model_provider("claude-test-cache-model") == "Anthropic"
     assert cache.get_model_provider("non-existent-model") is None
-
 
 def test_cache_refresh_logic_manual_trigger(model_mocks):
     m = model_mocks
@@ -200,7 +187,6 @@ def test_cache_refresh_logic_manual_trigger(model_mocks):
         m["openai"].assert_called_once()
         m["ollama"].assert_called_once()
         assert cache.last_refresh_time == 1000.0
-
 
 def test_cache_refresh_logic_stale_get_all_models(model_mocks):
     m = model_mocks
@@ -223,7 +209,6 @@ def test_cache_refresh_logic_stale_get_all_models(model_mocks):
         m["openai"].assert_called_once()
         m["ollama"].assert_called_once()
         assert cache.last_refresh_time == initial_time + refresh_interval + 1
-
 
 def test_error_handling_google_fetch_fails(model_mocks, monkeypatch):
     m = model_mocks
@@ -248,7 +233,6 @@ def test_error_handling_google_fetch_fails(model_mocks, monkeypatch):
         for arg in arg_list[0]
     )
 
-
 def test_missing_api_keys_skips_providers(model_mocks, monkeypatch):
     monkeypatch.setattr(settings.google, "google_api_key", None)
     monkeypatch.setattr(settings.openai, "openai_api_key", None)
@@ -267,7 +251,6 @@ def test_missing_api_keys_skips_providers(model_mocks, monkeypatch):
     assert any("Google API key not set." in w for w in warnings_logged)
     assert any("OpenAI API key not set." in w for w in warnings_logged)
 
-
 def test_force_refresh_model_cache_function(model_mocks):
     m = model_mocks
     cache = ModelCache(refresh_interval_seconds=36000)
@@ -283,7 +266,6 @@ def test_force_refresh_model_cache_function(model_mocks):
     assert m["google"].call_count == 2
     assert m["openai"].call_count == 2
     assert m["ollama"].call_count == 2
-
 
 @pytest.mark.asyncio
 async def test_refresh_model_cache_for_user_does_not_mutate_singleton_keys(model_mocks):
@@ -306,8 +288,6 @@ async def test_refresh_model_cache_for_user_does_not_mutate_singleton_keys(model
     assert cache.openai_api_key == "global_openai_key"
     m["google"].assert_called_with(api_key="user_google_key")
     m["openai"].assert_called_with(api_key="user_openai_key")
-
-
 
 def test_periodic_refresh_thread_execution(provider_settings):
     """Verify Thread is created with the correct target and the refresh produces data."""

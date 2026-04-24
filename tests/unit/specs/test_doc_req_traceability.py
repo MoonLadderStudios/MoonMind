@@ -25,13 +25,11 @@ _VALIDATION_COLUMN_NAMES = (
 )
 _EMPTY_VALIDATION_VALUES = {"", "-", "tbd", "todo", "n/a", "na", "none"}
 
-
 def _doc_req_ids_from_text(spec_path: Path) -> set[str]:
     spec_text = spec_path.read_text(encoding="utf-8")
     return {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-
 
 def _discover_contract_backed_features() -> list[tuple[str, Path, Path]]:
     features: list[tuple[str, Path, Path]] = []
@@ -50,9 +48,7 @@ def _discover_contract_backed_features() -> list[tuple[str, Path, Path]]:
             features.append((path.name, feature_spec, feature_traceability))
     return features
 
-
 _FEATURES = _discover_contract_backed_features()
-
 
 @pytest.mark.parametrize(
     ("feature_name", "feature_spec", "feature_traceability"),
@@ -79,7 +75,6 @@ def test_doc_req_traceability_contract(
         "Unexpected DOC-REQ traceability rows in "
         f"{feature_traceability}: {', '.join(extra_ids)}"
     )
-
 
 def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
     lines = traceability_path.read_text(encoding="utf-8").splitlines()
@@ -134,7 +129,6 @@ def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
     assert rows, f"No DOC-REQ rows found in {traceability_path}"
     return rows
 
-
 def _find_header_line(lines: list[str]) -> int | None:
     for index, line in enumerate(lines):
         if not line.strip().startswith("|"):
@@ -147,13 +141,11 @@ def _find_header_line(lines: list[str]) -> int | None:
             return index
     return None
 
-
 def _split_row(line: str) -> list[str]:
     stripped = line.strip()
     if not stripped.startswith("|"):
         return []
     return [cell.strip() for cell in stripped.strip("|").split("|")]
-
 
 def _find_column_index(header: list[str], names: tuple[str, ...]) -> int | None:
     normalized_to_index = {
@@ -164,10 +156,8 @@ def _find_column_index(header: list[str], names: tuple[str, ...]) -> int | None:
             return normalized_to_index[name]
     return None
 
-
 def _normalize_validation_value(value: str) -> str:
     return value.replace("`", "").strip().lower()
-
 
 def _is_delimiter_row(cells: list[str]) -> bool:
     return all(cell and set(cell) <= {"-", ":", " "} for cell in cells)

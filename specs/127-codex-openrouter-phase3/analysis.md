@@ -135,7 +135,7 @@ The spec states profile resolution must complete within 500ms and materializatio
 | IX. Resilient by Default | PASS -- Invalid values fail fast. |
 | X. Facilitate Continuous Improvement | N/A |
 | XI. Spec-Driven Development | PASS -- Traceable to DOC-REQ IDs. |
-| XII. Canonical Documentation | PASS -- Migration tracking belongs in `docs/tmp/`. |
+| XII. Canonical Documentation | PASS -- Migration tracking belongs in `local-only handoffs`. |
 | XIII. Pre-Release: Delete, Don't Deprecate | PASS -- `auth_mode` removed entirely. |
 
 **Note**: The unresolved OQ-004 (other `auth_mode` surfaces in `OAuthProviderSpec`) could be viewed as a partial violation of Principle XIII if those surfaces are considered the same legacy pattern. This depends on whether `OAuthProviderSpec.auth_mode` is semantically equivalent to `ManagedAgentProviderProfile.auth_mode` or a distinct concept.

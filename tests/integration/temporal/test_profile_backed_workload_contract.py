@@ -28,11 +28,9 @@ from moonmind.workloads.tool_bridge import (
     register_workload_tool_handlers,
 )
 
-
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 WORKSPACE_ROOT = Path("/work/agent_jobs")
-
 
 def _profile_payload() -> dict[str, object]:
     return {
@@ -57,7 +55,6 @@ def _profile_payload() -> dict[str, object]:
             "killGraceSeconds": 30,
         },
     }
-
 
 def _helper_profile_payload() -> dict[str, object]:
     return {
@@ -90,7 +87,6 @@ def _helper_profile_payload() -> dict[str, object]:
             "killGraceSeconds": 3,
         },
     }
-
 
 class _FakeLauncher:
     def __init__(self) -> None:
@@ -175,7 +171,6 @@ class _FakeLauncher:
             },
         )
 
-
 def _snapshot(*tool_names: str) -> SkillRegistrySnapshot:
     return create_registry_snapshot(
         skills=tuple(
@@ -186,7 +181,6 @@ def _snapshot(*tool_names: str) -> SkillRegistrySnapshot:
         ),
         artifact_store=InMemoryArtifactStore(),
     )
-
 
 async def test_profile_backed_run_workload_routes_through_runner_profile() -> None:
     registry = RunnerProfileRegistry(
@@ -230,7 +224,6 @@ async def test_profile_backed_run_workload_routes_through_runner_profile() -> No
     assert launcher.validated.request.tool_name == CONTAINER_RUN_WORKLOAD_TOOL
     assert result.status == "COMPLETED"
     assert result.outputs["profileId"] == "local-python"
-
 
 async def test_profile_backed_run_workload_keeps_session_metadata_as_association_only() -> None:
     registry = RunnerProfileRegistry(
@@ -284,7 +277,6 @@ async def test_profile_backed_run_workload_keeps_session_metadata_as_association
     }
     assert "session.summary" not in result.outputs["outputRefs"]
 
-
 @pytest.mark.parametrize(
     ("raw_field", "raw_value"),
     (
@@ -334,7 +326,6 @@ async def test_profile_backed_run_workload_rejects_raw_container_fields(
 
     assert exc_info.value.error_code == "INVALID_INPUT"
     assert launcher.validated is None
-
 
 async def test_profile_backed_helper_lifecycle_stays_bounded() -> None:
     registry = RunnerProfileRegistry(
@@ -407,7 +398,6 @@ async def test_profile_backed_helper_lifecycle_stays_bounded() -> None:
         "owner_task_canceled"
     )
 
-
 async def test_unrestricted_run_docker_preserves_shared_workload_metadata() -> None:
     launcher = _FakeLauncher()
     dispatcher = ToolActivityDispatcher()
@@ -442,7 +432,6 @@ async def test_unrestricted_run_docker_preserves_shared_workload_metadata() -> N
     assert launcher.validated.request.tool_name == "container.run_docker"
     assert result.outputs["workloadMetadata"]["workflowDockerMode"] == "unrestricted"
     assert result.outputs["workloadMetadata"]["toolName"] == "container.run_docker"
-
 
 async def test_disabled_mode_denies_profile_backed_workload_tools() -> None:
     registry = RunnerProfileRegistry(

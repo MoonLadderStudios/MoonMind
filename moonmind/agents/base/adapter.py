@@ -7,7 +7,6 @@ by the MoonMind Managed Agents Authentication spec.
 
 from typing import Dict, Optional
 
-
 def shape_agent_environment(
     base_env: Dict[str, str],
     auth_mode: str,
@@ -41,7 +40,6 @@ def shape_agent_environment(
             shaped_env[key] = ""
             
     return shaped_env
-
 
 def resolve_volume_mount_env(
     base_env: Dict[str, str],

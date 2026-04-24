@@ -32,7 +32,6 @@ from moonmind.workflows.skills.skill_registry import (
     parse_skill_registry,
 )
 
-
 def _registry_payload() -> dict:
     return {
         "skills": [
@@ -119,7 +118,6 @@ def _registry_payload() -> dict:
         ]
     }
 
-
 def _plan_payload(
     *, snapshot_digest: str, snapshot_ref: str, failure_mode: str = "FAIL_FAST"
 ) -> dict:
@@ -160,11 +158,9 @@ def _plan_payload(
         "edges": [{"from": "n1", "to": "n2"}],
     }
 
-
 def _snapshot(store: InMemoryArtifactStore):
     skills = parse_skill_registry(_registry_payload())
     return create_registry_snapshot(skills=skills, artifact_store=store)
-
 
 def test_artifact_store_is_content_addressed_and_immutable():
     store = InMemoryArtifactStore()
@@ -177,13 +173,11 @@ def test_artifact_store_is_content_addressed_and_immutable():
     with pytest.raises(ArtifactStoreError, match="Artifact not found"):
         store.get_bytes("art:sha256:does-not-exist")
 
-
 def test_file_artifact_store_rejects_non_digest_artifact_refs(tmp_path):
     store = FileArtifactStore(root=tmp_path)
 
     with pytest.raises(ArtifactStoreError, match="Unsupported artifact ref"):
         store.get_bytes("art:sha256:../../etc/passwd")
-
 
 def test_validate_plan_payload_accepts_dag_and_refs():
     store = InMemoryArtifactStore()
@@ -196,7 +190,6 @@ def test_validate_plan_payload_accepts_dag_and_refs():
     validated = validate_plan_payload(payload=plan_payload, registry_snapshot=snapshot)
 
     assert validated.topological_order == ("n1", "n2")
-
 
 def test_validate_plan_payload_rejects_invalid_reference_pointer():
     store = InMemoryArtifactStore()
@@ -211,7 +204,6 @@ def test_validate_plan_payload_rejects_invalid_reference_pointer():
 
     with pytest.raises(PlanValidationError, match="invalid output path"):
         validate_plan_payload(payload=plan_payload, registry_snapshot=snapshot)
-
 
 def test_validate_plan_payload_rejects_registry_snapshot_digest_mismatch():
     store = InMemoryArtifactStore()
@@ -228,7 +220,6 @@ def test_validate_plan_payload_rejects_registry_snapshot_digest_mismatch():
     ):
         validate_plan_payload(payload=plan_payload, registry_snapshot=snapshot)
 
-
 def test_validate_plan_payload_rejects_cyclic_graph():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
@@ -240,7 +231,6 @@ def test_validate_plan_payload_rejects_cyclic_graph():
 
     with pytest.raises(PlanValidationError, match="acyclic"):
         validate_plan_payload(payload=plan_payload, registry_snapshot=snapshot)
-
 
 def test_parse_plan_definition_accepts_tool_nodes():
     store = InMemoryArtifactStore()
@@ -257,7 +247,6 @@ def test_parse_plan_definition_accepts_tool_nodes():
 
     assert parsed.nodes[0].skill_name == "repo.run_tests"
     assert parsed.nodes[0].to_payload()["tool"]["type"] == "skill"
-
 
 def test_parse_plan_definition_accepts_optional_source_provenance():
     store = InMemoryArtifactStore()
@@ -283,7 +272,6 @@ def test_parse_plan_definition_accepts_optional_source_provenance():
     assert parsed.nodes[0].to_payload()["source"] == plan_payload["nodes"][0]["source"]
     assert parsed.nodes[1].source is None
 
-
 @pytest.mark.parametrize(
     "source",
     [
@@ -306,7 +294,6 @@ def test_parse_plan_definition_rejects_invalid_source_provenance(source):
     with pytest.raises(ValueError, match="node.source"):
         parse_plan_definition(plan_payload)
 
-
 @pytest.mark.parametrize(
     "node",
     [
@@ -327,7 +314,6 @@ def test_parse_plan_definition_rejects_unresolved_preset_include_nodes(node):
     with pytest.raises(ValueError, match="unresolved preset include"):
         parse_plan_definition(plan_payload)
 
-
 def test_plan_validate_activity_persists_validated_plan_artifact():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
@@ -346,7 +332,6 @@ def test_plan_validate_activity_persists_validated_plan_artifact():
     assert "validated_plan_ref" in response
     saved = store.get_json(response["validated_plan_ref"])
     assert saved["plan_version"] == "1.0"
-
 
 def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
     store = InMemoryArtifactStore()
@@ -408,7 +393,6 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
     assert result_b.outputs["files_changed"] == 1
     assert seen_inputs["repo_ref"] == "git:org/repo#branch"
 
-
 def test_skill_dispatcher_accepts_tool_payload_alias():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
@@ -438,7 +422,6 @@ def test_skill_dispatcher_accepts_tool_payload_alias():
     assert result.status == "COMPLETED"
     assert result.outputs["test_report_artifact"] == "git:org/repo#branch"
 
-
 def test_skill_dispatcher_rejects_missing_handlers():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
@@ -457,7 +440,6 @@ def test_skill_dispatcher_rejects_missing_handlers():
                 context=None,
             )
         )
-
 
 def test_skill_dispatcher_uses_default_handler_when_specific_handler_missing():
     store = InMemoryArtifactStore()
@@ -488,7 +470,6 @@ def test_skill_dispatcher_uses_default_handler_when_specific_handler_missing():
     assert result.status == "COMPLETED"
     assert result.outputs["echo_repo"] == "git:org/repo#branch"
 
-
 def test_plan_executor_fail_fast_skips_dependents():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
@@ -516,7 +497,6 @@ def test_plan_executor_fail_fast_skips_dependents():
     assert summary.status == "FAILED"
     assert "n2" in summary.skipped
     assert summary.progress_artifact_ref is not None
-
 
 def test_plan_executor_continue_executes_independent_nodes():
     store = InMemoryArtifactStore()
@@ -552,7 +532,6 @@ def test_plan_executor_continue_executes_independent_nodes():
 
     assert summary.status == "PARTIAL"
     assert "n2" in summary.results
-
 
 def test_plan_executor_fail_fast_records_cancelled_in_flight_nodes():
     store = InMemoryArtifactStore()

@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 AdapterFactory = Callable[[], AgentAdapter]
 
-
 class ExternalAdapterRegistry:
     """Thread-safe registry of external-agent adapter factories.
 
@@ -60,7 +59,6 @@ class ExternalAdapterRegistry:
 
     def __len__(self) -> int:
         return len(self._factories)
-
 
 def build_default_registry(
     *,
@@ -132,7 +130,6 @@ def build_default_registry(
         logger.info("Registered OpenClaw external adapter")
 
     return registry
-
 
 __all__ = [
     "AdapterFactory",

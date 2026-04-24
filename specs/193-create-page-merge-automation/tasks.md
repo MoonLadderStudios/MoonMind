@@ -24,7 +24,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-365 source input and single-story traceability in `docs/tmp/jira-orchestration-inputs/MM-365-moonspec-orchestration-input.md` and `specs/193-create-page-merge-automation/spec.md`.
+- [X] T001 Confirm MM-365 source input and single-story traceability in `spec.md` (Input) and `specs/193-create-page-merge-automation/spec.md`.
 - [X] T002 Confirm current Create page publish and resolver behavior in `frontend/src/entrypoints/task-create.tsx` and `frontend/src/entrypoints/task-create.test.tsx`.
 
 ## Phase 2: Foundational

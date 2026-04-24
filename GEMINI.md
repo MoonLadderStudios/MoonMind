@@ -7,11 +7,11 @@ Read relevant documents in the following order before implementing tasks:
 1. **Constitution:** `.specify/memory/constitution.md` for non-negotiable principles and constraints
 2. **Standards:** Code style and guidance in `README.md`
 3. **Spec:** `specs/<feature-id>/spec.md`, then `plan.md`, then `tasks.md`
-4. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs tmp** below).
+4. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs feature artifacts** below).
    - Start here for Agent Skills: `docs/Tasks/AgentSkillSystem.md`
    - For Executable Tools: `docs/Tasks/SkillAndPlanContracts.md`
    - For Runtime boundaries: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
-5. **Migration / implementation backlog (when relevant):** `docs/tmp/remaining-work/` and `docs/tmp/PlansOverview.md` for plan-shaped or in-flight work tied to canonical docs.
+5. **Migration / implementation backlog (when relevant):** MoonSpec artifacts under `specs/<feature>/` and local-only handoffs (for example under `artifacts/`), not disposable paths under `docs/`.
 
 ## Agent Skill System Terminology
 - Executable `tool.type = "skill"` contracts are **not** the same thing as agent instruction bundles (skill sets) under `.agents/skills`.
@@ -27,10 +27,10 @@ When writing code that interacts with skills:
 - Keep large skill content out of workflow history (use refs).
 - Add workflow/activity or adapter-boundary tests.
 
-## Documentation: canonical vs `docs/tmp`
+## Documentation: canonical vs feature artifacts
 
-- **Canonical docs** (`docs/` except `docs/tmp/`): describe **declarative desired state** — architecture, contracts, operator-visible behavior, target semantics. Avoid making phased migration or implementation checklists the main story in these files.
-- **Migration and implementation notes** belong under **`docs/tmp/`** (e.g. per-doc trackers in `docs/tmp/remaining-work/`, indexes in `docs/tmp/PlansOverview.md`) so they can be **removed when the work completes** without rewriting the canonical spec.
+- **Canonical docs** (`docs/`): describe **declarative desired state** — architecture, contracts, operator-visible behavior, target semantics. Avoid making phased migration or implementation checklists the main story in these files.
+- **Migration, rollout, and MoonSpec execution notes** belong under **`specs/<feature>/`** (and similar feature-local artifacts) or in **local-only / gitignored paths** (e.g. `artifacts/` for tool handoffs), not as the primary framing of canonical docs.
 - Align with **Constitution principle XII** in `.specify/memory/constitution.md`.
 
 ## Spec Numbering

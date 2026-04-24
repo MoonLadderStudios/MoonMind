@@ -3,7 +3,7 @@
 **Feature Branch**: `102-temporal-schedule-crud`
 **Created**: 2026-03-23
 **Status**: Draft
-**Input**: User description: "Implement Phase 1 of docs/tmp/TemporalSchedulingPlan.md"
+**Input**: User description: "Implement Phase 1 of spec.md (Input)"
 
 ## Source Document Requirements
 

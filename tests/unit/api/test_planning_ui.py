@@ -13,16 +13,13 @@ client = TestClient(app)
 # Mock templates like in profile tests
 mock_templates = AsyncMock()
 
-
 def template_side_effect(name, context, status_code=200, headers=None):
     return planning_router.HTMLResponse(
         content=f"<html>{name}</html>", status_code=status_code, headers=headers
     )
 
-
 mock_templates.TemplateResponse = MagicMock(side_effect=template_side_effect)
 planning_router.templates = mock_templates
-
 
 def test_get_planner_page():
     response = client.get("/v1/planning/jira/ui")
@@ -32,7 +29,6 @@ def test_get_planner_page():
     assert args[0] == "planning.html"
     context = args[1]
     assert context["result"] is None
-
 
 def test_post_planner_page_success():
     draft = StoryDraft(summary="s", description="d", issue_type="Task")

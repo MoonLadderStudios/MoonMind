@@ -13,7 +13,7 @@
 - Jira issue: `MM-336`
 - Story: `STORY-005` from MM-318 breakdown
 - Coverage: FR-001 through FR-007; SC-001 through SC-005; DESIGN-REQ-004, DESIGN-REQ-016, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022
-- Original preset brief: `docs/tmp/jira-orchestration-inputs/MM-336-moonspec-orchestration-input.md`
+- Original preset brief: `spec.md` (Input)
 
 ## Phase 1: Setup
 

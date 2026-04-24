@@ -19,7 +19,6 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
-
 @router.post(
     "",
     response_model=SecretMetadataResponse,
@@ -49,7 +48,6 @@ async def create_secret(
     )
     return SecretMetadataResponse.model_validate(secret)
 
-
 @router.get(
     "",
     response_model=SecretListResponse,
@@ -63,7 +61,6 @@ async def list_secrets(
     metadata = await SecretsService.list_metadata(db)
     items = [SecretMetadataResponse.model_validate(m) for m in metadata]
     return SecretListResponse(items=items)
-
 
 @router.put(
     "/{slug}",
@@ -84,7 +81,6 @@ async def update_secret(
         )
     return SecretMetadataResponse.model_validate(secret)
 
-
 @router.post(
     "/{slug}/rotate",
     response_model=SecretMetadataResponse,
@@ -103,7 +99,6 @@ async def rotate_secret(
             status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found"
         )
     return SecretMetadataResponse.model_validate(secret)
-
 
 @router.put(
     "/{slug}/status",
@@ -125,7 +120,6 @@ async def update_secret_status(
         )
     return SecretMetadataResponse.model_validate(secret)
 
-
 @router.delete(
     "/{slug}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -141,7 +135,6 @@ async def delete_secret(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found"
         )
-
 
 @router.get(
     "/{slug}/validate",

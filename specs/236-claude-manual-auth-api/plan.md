@@ -46,15 +46,15 @@ Add the backend half of Claude Anthropic manual token enrollment for MM-447. The
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 with Pydantic v2 models and SQLAlchemy async ORM  
-**Primary Dependencies**: FastAPI router patterns, SQLAlchemy async session fixtures, Pydantic response models, `httpx`, existing Managed Secret and Provider Profile services, existing provider profile manager sync helper  
-**Storage**: Existing `managed_secrets` and `managed_agent_provider_profiles` tables; no new persistent tables  
-**Unit Testing**: `./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py` and `./tools/test_unit.sh tests/unit/workflows/adapters/test_secret_redaction.py` for focused verification; final `./tools/test_unit.sh`  
-**Integration Testing**: Route-level ASGI tests in `tests/unit/api_service/api/routers/test_provider_profiles.py` exercise the API/service boundary with a real test database; no compose-backed `integration_ci` test is required because no external service or Temporal workflow contract changed  
-**Target Platform**: MoonMind FastAPI control plane and managed-runtime provider profile materialization  
-**Project Type**: Backend API/service boundary  
-**Performance Goals**: Manual auth commit remains one operator-triggered request and does not add background polling or runtime startup overhead beyond normal provider profile materialization  
-**Constraints**: No raw token in provider profiles, workflow-shaped payloads, route responses, logs captured by tests, or validation failure messages; no reuse of volume-first OAuth session finalization; preserve existing Codex OAuth behavior  
+**Language/Version**: Python 3.12 with Pydantic v2 models and SQLAlchemy async ORM 
+**Primary Dependencies**: FastAPI router patterns, SQLAlchemy async session fixtures, Pydantic response models, `httpx`, existing Managed Secret and Provider Profile services, existing provider profile manager sync helper 
+**Storage**: Existing `managed_secrets` and `managed_agent_provider_profiles` tables; no new persistent tables 
+**Unit Testing**: `./tools/test_unit.sh tests/unit/api_service/api/routers/test_provider_profiles.py` and `./tools/test_unit.sh tests/unit/workflows/adapters/test_secret_redaction.py` for focused verification; final `./tools/test_unit.sh` 
+**Integration Testing**: Route-level ASGI tests in `tests/unit/api_service/api/routers/test_provider_profiles.py` exercise the API/service boundary with a real test database; no compose-backed `integration_ci` test is required because no external service or Temporal workflow contract changed 
+**Target Platform**: MoonMind FastAPI control plane and managed-runtime provider profile materialization 
+**Project Type**: Backend API/service boundary 
+**Performance Goals**: Manual auth commit remains one operator-triggered request and does not add background polling or runtime startup overhead beyond normal provider profile materialization 
+**Constraints**: No raw token in provider profiles, workflow-shaped payloads, route responses, logs captured by tests, or validation failure messages; no reuse of volume-first OAuth session finalization; preserve existing Codex OAuth behavior 
 **Scale/Scope**: One provider-profile route, one managed secret upsert path, provider profile manager sync, and runtime secret resolver support
 
 ## Constitution Check
@@ -72,7 +72,7 @@ Add the backend half of Claude Anthropic manual token enrollment for MM-447. The
 - IX. Resilient by Default: PASS. Unsupported profiles and invalid tokens fail fast with secret-free errors; profile sync uses the existing retry-safe manager boundary.
 - X. Continuous Improvement: PASS. Evidence is captured in MoonSpec artifacts and tests.
 - XI. Spec-Driven Development: PASS. This plan resumes the existing branch from the first missing MoonSpec stage and preserves MM-447 traceability.
-- XII. Canonical Documentation Separation: PASS. Migration/runtime notes stay under `specs/` and `docs/tmp/`; canonical docs are not rewritten.
+- XII. Canonical Documentation Separation: PASS. Migration/runtime notes stay under `specs/` and `local-only handoffs`; canonical docs are not rewritten.
 - XIII. Pre-Release Velocity: PASS. No compatibility alias is introduced for old internal contracts; the new path uses existing pre-release profile fields directly.
 
 ## Project Structure
@@ -87,9 +87,9 @@ specs/236-claude-manual-auth-api/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── claude-manual-auth-api.md
+│ └── claude-manual-auth-api.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 
@@ -111,7 +111,6 @@ tests/unit/api_service/api/routers/
 tests/unit/workflows/adapters/
 └── test_secret_redaction.py
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-447-moonspec-orchestration-input.md
 ```
 

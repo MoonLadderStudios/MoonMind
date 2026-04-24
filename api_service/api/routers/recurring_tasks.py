@@ -29,7 +29,6 @@ from api_service.services.recurring_tasks_service import (
 router = APIRouter(prefix="/api/recurring-tasks", tags=["recurring-tasks"])
 logger = logging.getLogger(__name__)
 
-
 class RecurringTaskDefinitionModel(BaseModel):
     """Serialized recurring schedule definition."""
 
@@ -55,7 +54,6 @@ class RecurringTaskDefinitionModel(BaseModel):
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
 
-
 class RecurringTaskDefinitionListResponse(BaseModel):
     """List response for recurring definitions."""
 
@@ -64,7 +62,6 @@ class RecurringTaskDefinitionListResponse(BaseModel):
     items: list[RecurringTaskDefinitionModel] = Field(
         default_factory=list, alias="items"
     )
-
 
 class RecurringTaskRunModel(BaseModel):
     """Serialized recurring run history record."""
@@ -84,14 +81,12 @@ class RecurringTaskRunModel(BaseModel):
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
 
-
 class RecurringTaskRunListResponse(BaseModel):
     """List response for recurring run history."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     items: list[RecurringTaskRunModel] = Field(default_factory=list, alias="items")
-
 
 class CreateRecurringTaskRequest(BaseModel):
     """Request payload for creating recurring schedules."""
@@ -109,7 +104,6 @@ class CreateRecurringTaskRequest(BaseModel):
     target: dict[str, Any] = Field(default_factory=dict, alias="target")
     policy: dict[str, Any] = Field(default_factory=dict, alias="policy")
 
-
 class UpdateRecurringTaskRequest(BaseModel):
     """Request payload for updating recurring schedules."""
 
@@ -124,14 +118,12 @@ class UpdateRecurringTaskRequest(BaseModel):
     target: Optional[dict[str, Any]] = Field(None, alias="target")
     policy: Optional[dict[str, Any]] = Field(None, alias="policy")
 
-
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> RecurringTasksService:
     return RecurringTasksService(session, temporal_client_adapter=TemporalClientAdapter())
-
 
 def _serialize_definition(
     definition: RecurringTaskDefinition,
@@ -158,7 +150,6 @@ def _serialize_definition(
         updated_at=definition.updated_at,
     )
 
-
 def _serialize_run(run: RecurringTaskRun) -> RecurringTaskRunModel:
     return RecurringTaskRunModel(
         id=run.id,
@@ -174,7 +165,6 @@ def _serialize_run(run: RecurringTaskRun) -> RecurringTaskRunModel:
         created_at=run.created_at,
         updated_at=run.updated_at,
     )
-
 
 def _require_operator_for_global_scope(
     *,
@@ -192,7 +182,6 @@ def _require_operator_for_global_scope(
             },
         )
 
-
 def _log_route_exception(
     *, action: str, definition_id: UUID | None, user_id: UUID | None, exc: Exception
 ) -> None:
@@ -205,7 +194,6 @@ def _log_route_exception(
             "error_type": type(exc).__name__,
         },
     )
-
 
 def _audit_schedule_action(
     *,
@@ -225,7 +213,6 @@ def _audit_schedule_action(
             "scope": scope,
         },
     )
-
 
 def _map_error(exc: Exception) -> HTTPException:
     if isinstance(exc, RecurringTaskNotFoundError):
@@ -260,7 +247,6 @@ def _map_error(exc: Exception) -> HTTPException:
         },
     )
 
-
 @router.get("", response_model=RecurringTaskDefinitionListResponse)
 async def list_recurring_tasks(
     *,
@@ -281,7 +267,6 @@ async def list_recurring_tasks(
     return RecurringTaskDefinitionListResponse(
         items=[_serialize_definition(item) for item in definitions]
     )
-
 
 @router.post(
     "",
@@ -345,7 +330,6 @@ async def create_recurring_task(
     )
     return _serialize_definition(definition)
 
-
 @router.get("/{definition_id}", response_model=RecurringTaskDefinitionModel)
 async def get_recurring_task(
     definition_id: UUID,
@@ -368,7 +352,6 @@ async def get_recurring_task(
         )
         raise _map_error(exc) from exc
     return _serialize_definition(definition)
-
 
 @router.patch("/{definition_id}", response_model=RecurringTaskDefinitionModel)
 async def update_recurring_task(
@@ -418,7 +401,6 @@ async def update_recurring_task(
     )
     return _serialize_definition(updated)
 
-
 @router.post(
     "/{definition_id}/run",
     response_model=RecurringTaskRunModel,
@@ -459,7 +441,6 @@ async def run_recurring_task_now(
         scope=definition.scope_type.value,
     )
     return _serialize_run(run)
-
 
 @router.get("/{definition_id}/runs", response_model=RecurringTaskRunListResponse)
 async def list_recurring_task_runs(

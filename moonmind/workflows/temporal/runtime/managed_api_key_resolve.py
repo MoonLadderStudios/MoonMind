@@ -33,7 +33,6 @@ if TYPE_CHECKING:
         ManagedGitHubCredentialDescriptor,
     )
 
-
 def _normalize_secret_ref_input(
     ref: str | Mapping[str, Any],
     *,
@@ -48,7 +47,6 @@ def _normalize_secret_ref_input(
     if not stripped:
         raise ValueError(f"{field_name} is empty")
     return stripped
-
 
 async def resolve_managed_github_token_from_store() -> str | None:
     """Return an active GitHub PAT from managed secrets (Settings), if any.
@@ -74,7 +72,6 @@ async def resolve_managed_github_token_from_store() -> str | None:
             if candidate:
                 return candidate
     return None
-
 
 async def resolve_github_token_for_launch(
     environment: Mapping[str, str] | None = None,
@@ -181,7 +178,6 @@ async def resolve_github_token_for_launch(
         )
         return None
 
-
 def build_github_credential_descriptor_for_launch(
     environment: Mapping[str, str] | None = None,
     *,
@@ -225,7 +221,6 @@ def build_github_credential_descriptor_for_launch(
         return ManagedGitHubCredentialDescriptor(source="managed_secret", required=False)
     return None
 
-
 async def shape_launch_github_auth_environment(
     environment: Mapping[str, str] | None = None,
     *,
@@ -247,7 +242,6 @@ async def shape_launch_github_auth_environment(
         shaped_environment.setdefault("GIT_TERMINAL_PROMPT", "0")
 
     return shaped_environment
-
 
 async def resolve_managed_api_key_reference(
     ref: str | Mapping[str, Any],
@@ -326,7 +320,6 @@ async def resolve_managed_api_key_reference(
     finally:
         if vault_resolver_instance is not None:
             await vault_resolver_instance.aclose()
-
 
 __all__ = [
     "build_github_credential_descriptor_for_launch",

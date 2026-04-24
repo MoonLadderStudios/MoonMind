@@ -85,7 +85,6 @@ frontend/src/components/settings/
 ├── ProviderProfilesManager.tsx
 └── ProviderProfilesManager.test.tsx
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-445-moonspec-orchestration-input.md
 ```
 

@@ -38,7 +38,7 @@
 
 ### Implementation for User Story 1
 
-- [X] T005 [US1] Update `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md` to mark Phase 1 contract work complete and keep later launcher/tool/artifact phases pending.
+- [X] T005 [US1] Update `docs/ManagedAgents/DockerOutOfDocker.md` to mark Phase 1 contract work complete and keep later launcher/tool/artifact phases pending.
 
 **Checkpoint**: Phase 0 validation remains green and the remaining-work tracker reflects Phase 1 completion.
 

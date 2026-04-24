@@ -43,7 +43,6 @@ _COMMAND_COMMENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-
 def _build_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
     existing_parts = [part for part in env.get("PATH", "").split(":") if part]
@@ -52,7 +51,6 @@ def _build_subprocess_env() -> dict[str, str]:
             existing_parts.append(fallback)
     env["PATH"] = ":".join(existing_parts) if existing_parts else _SYSTEM_PATH_FALLBACK
     return env
-
 
 def _resolve_command(cmd: list[str]) -> list[str]:
     if not cmd:
@@ -71,12 +69,10 @@ def _resolve_command(cmd: list[str]) -> list[str]:
         return [resolved, *[str(part) for part in cmd[1:]]]
     return [str(part) for part in cmd]
 
-
 def _compact_error_details(stdout: str, stderr: str) -> str:
     return "\n".join(
         item.strip() for item in (stdout or "", stderr or "") if item.strip()
     )
-
 
 def run_command(
     cmd,
@@ -128,7 +124,6 @@ def run_command(
             )
             sys.exit(1)
 
-
 def run_command_optional_with_error(cmd) -> tuple[dict | list | None, str | None]:
     resolved_cmd = _resolve_command(cmd)
     try:
@@ -159,11 +154,9 @@ def run_command_optional_with_error(cmd) -> tuple[dict | list | None, str | None
         return payload, None
     return None, f"unsupported JSON payload type from command: {' '.join(resolved_cmd)}"
 
-
 def run_command_optional(cmd) -> dict | list | None:
     payload, _ = run_command_optional_with_error(cmd)
     return payload
-
 
 def _current_branch_name() -> str | None:
     resolved_cmd = _resolve_command(["git", "branch", "--show-current"])
@@ -184,7 +177,6 @@ def _current_branch_name() -> str | None:
         return None
     return branch
 
-
 def _fetch_pr_data_from_selector(
     selector: str | None,
 ) -> tuple[dict | None, str | None]:
@@ -196,7 +188,6 @@ def _fetch_pr_data_from_selector(
     if isinstance(payload, dict):
         return payload, None
     return None, error
-
 
 def _discover_pr_number_from_head_branch(branch: str) -> str | None:
     payload = run_command_optional(
@@ -223,7 +214,6 @@ def _discover_pr_number_from_head_branch(branch: str) -> str | None:
     if number in {None, ""}:
         return None
     return str(number)
-
 
 def fetch_pr_data(
     requested_pr_selector: str | None,
@@ -261,7 +251,6 @@ def fetch_pr_data(
 
     return None, None, errors
 
-
 def infer_repo_from_pr_url(url: str | None) -> str | None:
     if not url:
         return None
@@ -277,15 +266,12 @@ def infer_repo_from_pr_url(url: str | None) -> str | None:
         return f"{owner}/{repo}"
     return None
 
-
 def normalize_user(login: str | None) -> str:
     return (login or "").lower().strip()
-
 
 def is_bot_user(login: str | None) -> bool:
     user = normalize_user(login)
     return user.endswith("[bot]") or user == "github-actions[bot]"
-
 
 def _classify_comment_actionability(
     comment: dict,
@@ -345,7 +331,6 @@ def _classify_comment_actionability(
 
     return False, "unsupported_type"
 
-
 def _is_comment_actionable(
     comment: dict,
     *,
@@ -359,13 +344,11 @@ def _is_comment_actionable(
     )
     return actionable
 
-
 _LEDGER_CANDIDATE_PATHS = [
     Path("artifacts/pr_resolver_addressed_comments.json"),
     Path("var/pr_comments/comment-resolution-ledger.json"),
 ]
 _ACCEPTED_DISPOSITIONS = {"addressed", "not-applicable"}
-
 
 def _extract_ids_from_entries(entries: list, *, id_keys: tuple[str, ...] = ("id", "comment_id")) -> set[int]:
     """Extract comment IDs from a list of ledger entry dicts.
@@ -390,7 +373,6 @@ def _extract_ids_from_entries(entries: list, *, id_keys: tuple[str, ...] = ("id"
                 ids.add(cid)
                 break
     return ids
-
 
 def _load_addressed_comment_ids(ledger_path: Path | None = None) -> set[int]:
     """Load comment IDs that have been locally marked as addressed or not-applicable.
@@ -428,7 +410,6 @@ def _load_addressed_comment_ids(ledger_path: Path | None = None) -> set[int]:
                 if isinstance(nested, list):
                     ids.update(_extract_ids_from_entries(nested))
     return ids
-
 
 def summarize_comments(
     comments: list[dict],
@@ -497,14 +478,11 @@ def summarize_comments(
         "classifiedComments": classified_comments,
     }
 
-
 def _check_name(check: dict) -> str:
     return str(check.get("name") or check.get("context") or "Unknown Check").strip()
 
-
 def _check_url(check: dict) -> str:
     return str(check.get("targetUrl") or check.get("detailsUrl") or "").strip()
-
 
 def _check_state(check: dict) -> str:
     state = str(check.get("state") or "").strip().upper()
@@ -516,7 +494,6 @@ def _check_state(check: dict) -> str:
     if status == "COMPLETED" and conclusion:
         return conclusion
     return conclusion or status
-
 
 def _is_security_check(check: dict) -> bool:
     name = _check_name(check).upper()
@@ -541,7 +518,6 @@ def _is_security_check(check: dict) -> bool:
     if name.startswith("ANALYZE (") and workflow == "CODEQL":
         return True
     return False
-
 
 def summarize_ci_checks(checks: list[dict]) -> dict:
     is_running = False
@@ -596,7 +572,6 @@ def summarize_ci_checks(checks: list[dict]) -> dict:
         "missingRequiredChecks": [],
     }
 
-
 def _fetch_required_status_checks(
     *,
     pr_repo: str | None,
@@ -620,7 +595,6 @@ def _fetch_required_status_checks(
     if not isinstance(contexts, list):
         return []
     return [str(item).strip() for item in contexts if str(item).strip()]
-
 
 def _fetch_previous_commit_sha(
     *,
@@ -658,7 +632,6 @@ def _fetch_previous_commit_sha(
                 return shas[index - 1]
     return shas[-2]
 
-
 def _fetch_commit_check_runs(
     *, pr_repo: str | None, commit_sha: str | None
 ) -> list[dict]:
@@ -679,7 +652,6 @@ def _fetch_commit_check_runs(
         if isinstance(entry, dict):
             result.append(entry)
     return result
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -883,7 +855,6 @@ def main():
         "actionable_comment_count": comments_summary.get("actionableCommentCount", 0),
     }
     print(json.dumps(summary, indent=2))
-
 
 if __name__ == "__main__":
     main()

@@ -59,7 +59,6 @@ _EMBEDDED_ATTACHMENT_DATA_FIELDS = frozenset(
     }
 )
 
-
 class TaskContractError(ValueError):
     """Raised when queue payloads violate task contract requirements."""
 
@@ -69,17 +68,14 @@ class TaskContractError(ValueError):
         super().__init__(message)
         self.diagnostic = dict(diagnostic) if diagnostic is not None else None
 
-
 def _clean_str(value: object) -> str:
     if value is None:
         return ""
     return str(value).strip()
 
-
 def _clean_optional_str(value: object) -> str | None:
     cleaned = _clean_str(value)
     return cleaned or None
-
 
 def _contains_data_image_url(value: object) -> bool:
     if isinstance(value, str):
@@ -89,7 +85,6 @@ def _contains_data_image_url(value: object) -> bool:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return any(_contains_data_image_url(item) for item in value)
     return False
-
 
 def _attachment_validation_failed_diagnostic(
     *,
@@ -126,7 +121,6 @@ def _attachment_validation_failed_diagnostic(
                 payload[output_key] = value
     return payload
 
-
 def _attachment_payload_value(
     payload: Mapping[str, object], *field_names: str
 ) -> object:
@@ -135,7 +129,6 @@ def _attachment_payload_value(
         if _clean_optional_str(value):
             return value
     return None
-
 
 def _raise_attachment_validation_error(
     message: str,
@@ -153,7 +146,6 @@ def _raise_attachment_validation_error(
             error=message,
         ),
     )
-
 
 def _validate_input_attachment_payloads(
     value: object,
@@ -210,18 +202,15 @@ def _validate_input_attachment_payloads(
             )
     return value
 
-
 def _default_publish_mode() -> str:
     mode = getattr(settings.workflow, "default_publish_mode", "pr") or "pr"
     normalized = str(mode).strip().lower()
     return normalized if normalized in SUPPORTED_PUBLISH_MODES else "pr"
 
-
 def _default_propose_tasks() -> bool:
     """Default queue-task proposal generation toggle."""
 
     return bool(getattr(settings.workflow, "enable_task_proposals", True))
-
 
 def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
     candidate = _clean_optional_str(value)
@@ -233,7 +222,6 @@ def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
         raise TaskContractError(f"{field_name} must be one of: {supported}")
     return lowered
 
-
 def _normalize_publish_mode(value: object) -> str:
     candidate = (_clean_optional_str(value) or _default_publish_mode()).lower()
     if candidate not in SUPPORTED_PUBLISH_MODES:
@@ -241,16 +229,13 @@ def _normalize_publish_mode(value: object) -> str:
         raise TaskContractError(f"publish.mode must be one of: {supported}")
     return candidate
 
-
 def _normalize_skill_id(value: object) -> str:
     return (_clean_optional_str(value) or "").lower()
-
 
 def is_self_managed_publish_skill(skill_id: object) -> bool:
     """Return True when the selected skill handles commit/push/merge directly."""
 
     return _normalize_skill_id(skill_id) in _SELF_MANAGED_PUBLISH_SKILLS
-
 
 def resolve_publish_mode_for_skill(skill_id: object, requested_mode: object) -> str:
     """Resolve publish mode for a skill while enforcing self-managed constraints."""
@@ -264,7 +249,6 @@ def resolve_publish_mode_for_skill(skill_id: object, requested_mode: object) -> 
         return "none"
     return publish_mode
 
-
 def _is_resolve_pr_objective(value: object) -> bool:
     """Return True when task instructions target PR resolution behavior."""
 
@@ -273,7 +257,6 @@ def _is_resolve_pr_objective(value: object) -> bool:
         return False
     return _RESOLVE_PR_OBJECTIVE_PATTERN.search(text) is not None
 
-
 def _contains_no_commit_push_constraint(value: object) -> bool:
     """Return True when text instructs the runtime not to commit/push."""
 
@@ -281,7 +264,6 @@ def _contains_no_commit_push_constraint(value: object) -> bool:
     if not text:
         return False
     return _NO_COMMIT_PUSH_PATTERN.search(text) is not None
-
 
 def _has_explicit_skill_selection(value: object) -> bool:
     """Return True when a skill identifier is explicitly set (not blank/auto)."""
@@ -295,7 +277,6 @@ def _has_explicit_skill_selection(value: object) -> bool:
         return False
     return _normalize_skill_id(normalized) != "auto"
 
-
 def _normalize_capabilities(values: list[object] | tuple[object, ...]) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
@@ -306,7 +287,6 @@ def _normalize_capabilities(values: list[object] | tuple[object, ...]) -> list[s
         normalized.append(item)
         seen.add(item)
     return normalized
-
 
 def _normalize_secret_ref(value: object, *, field_name: str) -> str | None:
     """Validate and normalize optional secret references.
@@ -342,7 +322,6 @@ def _normalize_secret_ref(value: object, *, field_name: str) -> str | None:
         raise TaskContractError(f"{field_name} field contains invalid characters")
     return f"vault://{mount}/{path}#{field}"
 
-
 class TaskSkillSelectorExact(BaseModel):
     """Explicitly included skill by name and optional version."""
 
@@ -355,7 +334,6 @@ class TaskSkillSelectorExact(BaseModel):
     @classmethod
     def _normalize_optional_strings(cls, value: object) -> str | None:
         return _clean_optional_str(value)
-
 
 class TaskSkillSelectors(BaseModel):
     """Resolved definition for active skills during execution."""
@@ -421,7 +399,6 @@ class TaskSkillSelectors(BaseModel):
             )
         return lowered
 
-
 def _coerce_task_skill_selectors(
     value: TaskSkillSelectors | Mapping[str, Any] | None,
     *,
@@ -434,7 +411,6 @@ def _coerce_task_skill_selectors(
     if isinstance(value, Mapping):
         return TaskSkillSelectors.model_validate(dict(value))
     raise TaskContractError(f"{field_name} must be an object")
-
 
 def build_effective_task_skill_selectors(
     task_skills: TaskSkillSelectors | Mapping[str, Any] | None,
@@ -505,7 +481,6 @@ def build_effective_task_skill_selectors(
         return None
     return TaskSkillSelectors.model_validate(payload)
 
-
 class TaskSkillSelection(BaseModel):
     """Selected skill and optional skill argument object."""
 
@@ -534,7 +509,6 @@ class TaskSkillSelection(BaseModel):
         normalized = _normalize_capabilities(value)
         return normalized or None
 
-
 class TaskRuntimeSelection(BaseModel):
     """Runtime mode and optional model/effort overrides."""
 
@@ -559,7 +533,6 @@ class TaskRuntimeSelection(BaseModel):
     def _normalize_optional_strings(cls, value: object) -> str | None:
         return _clean_optional_str(value)
 
-
 class TaskGitSelection(BaseModel):
     """Branch-selection values for task execution."""
 
@@ -572,7 +545,6 @@ class TaskGitSelection(BaseModel):
     @classmethod
     def _normalize_branches(cls, value: object) -> str | None:
         return _clean_optional_str(value)
-
 
 class TaskPublishSelection(BaseModel):
     """Publish controls for branch/pull-request behavior."""
@@ -605,7 +577,6 @@ class TaskPublishSelection(BaseModel):
     def _normalize_optional_strings(cls, value: object) -> str | None:
         return _clean_optional_str(value)
 
-
 class TaskAuthSelection(BaseModel):
     """Optional secret references for repo and publish authentication."""
 
@@ -623,7 +594,6 @@ class TaskAuthSelection(BaseModel):
     @classmethod
     def _normalize_publish_auth_ref(cls, value: object) -> str | None:
         return _normalize_secret_ref(value, field_name="auth.publishAuthRef")
-
 
 class TaskContainerCacheVolume(BaseModel):
     """Named volume mount requested by container-enabled task execution."""
@@ -664,7 +634,6 @@ class TaskContainerCacheVolume(BaseModel):
                 "task.container.cacheVolumes[].target must be an absolute path"
             )
         return cleaned
-
 
 class TaskContainerSelection(BaseModel):
     """Optional container execution controls for canonical tasks."""
@@ -781,7 +750,6 @@ class TaskContainerSelection(BaseModel):
             )
         return self
 
-
 class TaskProposalPolicy(BaseModel):
     """Optional policy block controlling worker proposal emission."""
 
@@ -856,7 +824,6 @@ class TaskProposalPolicy(BaseModel):
             )
         return lowered
 
-
 class TaskInputAttachmentRef(BaseModel):
     """Compact task input attachment reference for task-shaped submissions."""
 
@@ -908,7 +875,6 @@ class TaskInputAttachmentRef(BaseModel):
             )
         return cleaned
 
-
 class TaskStepSource(BaseModel):
     """Optional provenance for a step in a compiled task payload."""
 
@@ -948,7 +914,6 @@ class TaskStepSource(BaseModel):
             if (cleaned := _clean_optional_str(item)) is not None
         ]
         return normalized or None
-
 
 class AuthoredPresetBinding(BaseModel):
     """Optional preset binding metadata used to compile a task payload."""
@@ -999,7 +964,6 @@ class AuthoredPresetBinding(BaseModel):
                 "task.authoredPresets[].inputMapping must be an object"
             )
         return dict(value)
-
 
 class TaskStepSpec(BaseModel):
     """Optional execution step contained within a canonical task payload."""
@@ -1062,7 +1026,6 @@ class TaskStepSpec(BaseModel):
                 f"task.steps entries may not define task-scoped overrides: {formatted}"
             )
         return payload
-
 
 class TaskExecutionSpec(BaseModel):
     """Main task execution body."""
@@ -1227,7 +1190,6 @@ class TaskExecutionSpec(BaseModel):
 
         return self
 
-
 @dataclass
 class EffectiveProposalPolicy:
     """Resolved proposal policy derived from config and optional overrides."""
@@ -1278,7 +1240,6 @@ class EffectiveProposalPolicy:
             return False
         floor_rank = self.severity_rank.get(self.min_severity_for_moonmind, 0)
         return candidate_rank >= floor_rank
-
 
 class CanonicalTaskPayload(BaseModel):
     """Top-level canonical queue payload for `type=task` jobs."""
@@ -1358,7 +1319,6 @@ class CanonicalTaskPayload(BaseModel):
             payload["task"] = task_node
         return payload
 
-
 def _assign_sequential_step_ids(steps: list[Any]) -> None:
     """Ensure every task step has a deterministic `step-{index}` identifier."""
 
@@ -1372,7 +1332,6 @@ def _assign_sequential_step_ids(steps: list[Any]) -> None:
             target = dict(raw)
             steps[index] = target
         target["id"] = f"step-{index + 1}"
-
 
 def _build_task_from_codex_exec_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     publish_raw = payload.get("publish")
@@ -1411,7 +1370,6 @@ def _build_task_from_codex_exec_payload(payload: Mapping[str, Any]) -> dict[str,
         "publish": publish_payload,
     }
 
-
 def _build_auth_from_payload(payload: Mapping[str, Any]) -> dict[str, Any] | None:
     """Normalize optional auth secret reference object from source payload."""
 
@@ -1423,7 +1381,6 @@ def _build_auth_from_payload(payload: Mapping[str, Any]) -> dict[str, Any] | Non
     except (ValidationError, TaskContractError) as exc:
         raise TaskContractError(str(exc)) from exc
     return auth.model_dump(by_alias=True, exclude_none=False)
-
 
 def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     raw_inputs = payload.get("inputs")
@@ -1508,7 +1465,6 @@ def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
     if repository:
         task["skill"]["args"].setdefault("repo", repository)
     return task
-
 
 def build_canonical_task_view(
     *,
@@ -1668,7 +1624,6 @@ def build_canonical_task_view(
     canonical["requiredCapabilities"] = _normalize_capabilities(tuple(required))
     return canonical
 
-
 def build_effective_proposal_policy(
     *,
     policy: TaskProposalPolicy | None,
@@ -1738,7 +1693,6 @@ def build_effective_proposal_policy(
         severity_rank=severity_rank,
     )
 
-
 def normalize_queue_job_payload(
     *,
     job_type: str,
@@ -1771,7 +1725,6 @@ def normalize_queue_job_payload(
         source["requiredCapabilities"] = _normalize_capabilities(tuple(required))
     return source
 
-
 def has_attachment_mutation_fields(payload: Mapping[str, Any] | None) -> bool:
     """Return ``True`` when payload includes unsupported attachment edit fields."""
 
@@ -1787,7 +1740,6 @@ def has_attachment_mutation_fields(payload: Mapping[str, Any] | None) -> bool:
                 return True
     return False
 
-
 def build_task_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]:
     """Return ordered stage identifiers for canonical task execution."""
 
@@ -1801,7 +1753,6 @@ def build_task_stage_plan(canonical_payload: Mapping[str, Any]) -> list[str]:
     if publish_mode != "none":
         stages.append("moonmind.task.publish")
     return stages
-
 
 __all__ = [
     "CANONICAL_TASK_JOB_TYPE",

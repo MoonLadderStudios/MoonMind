@@ -23,7 +23,6 @@ from moonmind.workflows.adapters.openclaw_client import (
     OpenClawHttpClient,
 )
 
-
 async def run_openclaw_execution(request: AgentExecutionRequest) -> AgentRunResult:
     """Stream chat completion, heartbeat periodically, return ``AgentRunResult``."""
 
@@ -92,6 +91,5 @@ async def run_openclaw_execution(request: AgentExecutionRequest) -> AgentRunResu
         )
 
     return openclaw_success_result(full_text=full_text, request=request)
-
 
 __all__ = ["run_openclaw_execution"]

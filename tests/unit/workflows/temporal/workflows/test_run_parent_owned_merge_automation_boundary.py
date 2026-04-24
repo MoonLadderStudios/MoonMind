@@ -9,7 +9,6 @@ from temporalio.workflow import ChildWorkflowCancellationType
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
-
 def _patch_workflow_context(monkeypatch: pytest.MonkeyPatch) -> None:
     workflow_info = type(
         "WorkflowInfo",
@@ -24,7 +23,6 @@ def _patch_workflow_context(monkeypatch: pytest.MonkeyPatch) -> None:
         "upsert_search_attributes",
         lambda _attributes: None,
     )
-
 
 @pytest.mark.asyncio
 async def test_parent_owned_merge_automation_awaits_child_success(
@@ -71,7 +69,6 @@ async def test_parent_owned_merge_automation_awaits_child_success(
     assert workflow._publish_context["mergeAutomationWorkflowId"].startswith(
         "merge-automation:"
     )
-
 
 @pytest.mark.asyncio
 async def test_parent_owned_merge_automation_preserves_post_merge_jira_summary(
@@ -123,7 +120,6 @@ async def test_parent_owned_merge_automation_preserves_post_merge_jira_summary(
     assert summary["postMergeJira"]["status"] == "noop_already_done"
     assert summary["artifactRefs"]["postMergeJiraResolution"] == "art-resolution"
 
-
 @pytest.mark.asyncio
 async def test_parent_owned_merge_automation_blocks_parent_success_on_child_failure(
     monkeypatch: pytest.MonkeyPatch,
@@ -163,7 +159,6 @@ async def test_parent_owned_merge_automation_blocks_parent_success_on_child_fail
     assert workflow._awaiting_external is False
     assert workflow._publish_context["mergeAutomationStatus"] == "blocked"
 
-
 @pytest.mark.asyncio
 async def test_parent_owned_merge_automation_canceled_child_cancels_parent(
     monkeypatch: pytest.MonkeyPatch,
@@ -199,7 +194,6 @@ async def test_parent_owned_merge_automation_canceled_child_cancels_parent(
     assert workflow._cancel_requested is True
     assert workflow._awaiting_external is False
     assert workflow._publish_context["mergeAutomationStatus"] == "canceled"
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -259,7 +253,6 @@ async def test_parent_owned_merge_automation_invalid_child_status_fails_determin
     assert workflow._publish_context["mergeAutomationSummary"] == expected_reason
     assert memo_statuses == ["awaiting_child", "failed"]
 
-
 @pytest.mark.asyncio
 async def test_parent_owned_merge_automation_never_publishes_unsupported_status(
     monkeypatch: pytest.MonkeyPatch,
@@ -304,7 +297,6 @@ async def test_parent_owned_merge_automation_never_publishes_unsupported_status(
 
     assert "completed" not in published_statuses
     assert published_statuses[-1] == "failed"
-
 
 @pytest.mark.asyncio
 async def test_parent_owned_merge_automation_duplicate_retry_preserves_one_child(

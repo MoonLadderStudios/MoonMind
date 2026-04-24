@@ -84,7 +84,6 @@ SUSPECT_VALUE_SUBSTRINGS = (
 _JWT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+=*$")
 _BASE64ISH_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
 
-
 def _configured_manifest_capabilities() -> tuple[str, ...]:
     """Return baseline manifest capability labels from settings."""
 
@@ -103,10 +102,8 @@ def _configured_manifest_capabilities() -> tuple[str, ...]:
     # Preserve order while removing duplicates.
     return tuple(dict.fromkeys(normalized))
 
-
 class ManifestContractError(ValueError):
     """Raised when manifest queue payloads violate the contract."""
-
 
 class ManifestProfileSecretRef(TypedDict):
     provider: str
@@ -114,13 +111,11 @@ class ManifestProfileSecretRef(TypedDict):
     envKey: str
     normalized: str
 
-
 class ManifestVaultSecretRef(TypedDict):
     mount: str
     path: str
     field: str
     ref: str
-
 
 def normalize_manifest_job_payload(
     payload: Mapping[str, Any],
@@ -193,7 +188,6 @@ def normalize_manifest_job_payload(
         normalized_payload["manifestSecretRefs"] = secret_refs
     return normalized_payload
 
-
 def derive_required_capabilities(manifest: Mapping[str, Any]) -> list[str]:
     """Return ordered list of capability labels required for the manifest."""
 
@@ -260,7 +254,6 @@ def derive_required_capabilities(manifest: Mapping[str, Any]) -> list[str]:
 
     return ordered_caps
 
-
 def _normalize_source(
     source_node: Any,
     manifest_name: str,
@@ -308,7 +301,6 @@ def _normalize_source(
 
     return source, content
 
-
 def _normalize_options(options_node: Any) -> dict[str, Any]:
     if options_node is None:
         return {}
@@ -337,7 +329,6 @@ def _normalize_options(options_node: Any) -> dict[str, Any]:
                 normalized[key] = parsed
     return normalized
 
-
 def _parse_manifest_bool_option(key: str, value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -349,7 +340,6 @@ def _parse_manifest_bool_option(key: str, value: Any) -> bool:
             return False
     raise ManifestContractError(f"manifest.options.{key} must be a boolean")
 
-
 def _build_effective_run_config(
     manifest: Mapping[str, Any],
     overrides: Mapping[str, Any],
@@ -360,7 +350,6 @@ def _build_effective_run_config(
         base[key] = value
     return base
 
-
 def _parse_manifest_yaml(content: str) -> Mapping[str, Any]:
     try:
         parsed = yaml.safe_load(content)
@@ -370,22 +359,18 @@ def _parse_manifest_yaml(content: str) -> Mapping[str, Any]:
         raise ManifestContractError("manifest YAML must decode to an object")
     return parsed
 
-
 def _detect_manifest_version(manifest: Mapping[str, Any]) -> str:
     version = manifest.get("version")
     if isinstance(version, str):
         return version.strip().lower()
     return "legacy"
 
-
 def _compute_manifest_hash(content: str) -> str:
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
 
-
 def _clean_str(value: Any) -> str:
     return str(value).strip() if value is not None else ""
-
 
 def sanitize_manifest_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     """Return a redacted manifest payload safe for API serialization.
@@ -519,20 +504,17 @@ def sanitize_manifest_payload(payload: Mapping[str, Any] | None) -> dict[str, An
 
     return sanitized
 
-
 def _allowed_source_kinds() -> frozenset[str]:
     kinds = set(_BASE_ALLOWED_SOURCE_KINDS)
     if settings.workflow.allow_manifest_path_source:
         kinds.add("path")
     return frozenset(kinds)
 
-
 def detect_manifest_secret_leaks(*nodes: Any) -> None:
     """Raise when manifest structures contain raw secret values."""
 
     for node in nodes:
         _scan_for_secret_values(node)
-
 
 def _scan_for_secret_values(node: Any, *, key_hint: bool = False) -> None:
     if isinstance(node, Mapping):
@@ -551,7 +533,6 @@ def _scan_for_secret_values(node: Any, *, key_hint: bool = False) -> None:
             raise ManifestContractError(
                 "manifest contains raw secret material; replace tokens with env/profile/vault references"
             )
-
 
 def _value_looks_like_secret(value: str, *, key_hint: bool) -> bool:
     trimmed = value.strip()
@@ -578,12 +559,10 @@ def _value_looks_like_secret(value: str, *, key_hint: bool) -> bool:
         return True
     return False
 
-
 def _is_safe_reference(value: str) -> bool:
     return value.startswith(SAFE_REFERENCE_PREFIXES) or (
         value.startswith("${") and value.endswith("}")
     )
-
 
 def _looks_like_jwt(value: str) -> bool:
     if value.count(".") != 2:
@@ -595,13 +574,11 @@ def _looks_like_jwt(value: str) -> bool:
         for segment in segments
     )
 
-
 def _looks_like_base64_secret(value: str) -> bool:
     compact = value.replace("\n", "").replace("\r", "")
     if len(compact) < 40:
         return False
     return bool(_BASE64ISH_RE.fullmatch(compact))
-
 
 def collect_manifest_secret_refs(
     manifest: Mapping[str, Any],
@@ -649,7 +626,6 @@ def collect_manifest_secret_refs(
         refs["vault"] = vault_refs
     return refs
 
-
 def _parse_profile_reference(value: str) -> ManifestProfileSecretRef:
     parsed = urlsplit(value)
     if parsed.scheme.lower() != "profile":
@@ -677,7 +653,6 @@ def _parse_profile_reference(value: str) -> ManifestProfileSecretRef:
         normalized=normalized,
     )
 
-
 def _profile_env_key(provider: str, field: str) -> str:
     def _normalize(token: str) -> str:
         cleaned = _PROFILE_ENV_TOKEN_RE.sub("_", token.strip())
@@ -690,7 +665,6 @@ def _profile_env_key(provider: str, field: str) -> str:
             "profile secret references must include provider and field segments"
         )
     return f"{provider_token.upper()}_{field_token.upper()}"
-
 
 def _parse_vault_reference(value: str) -> ManifestVaultSecretRef:
     parsed = urlsplit(value)
@@ -713,7 +687,6 @@ def _parse_vault_reference(value: str) -> ManifestVaultSecretRef:
         raise ManifestContractError("vault field contains invalid characters")
     normalized = f"vault://{mount}/{path}#{field}"
     return ManifestVaultSecretRef(mount=mount, path=path, field=field, ref=normalized)
-
 
 __all__ = [
     "ManifestContractError",

@@ -36,7 +36,7 @@ Implement Phase 2 of the Docker-out-of-Docker plan by adding a MoonMind-owned wo
 | IX. Resilient by Default | PASS | Timeout/cancel cleanup and orphan lookup are planned and validated. |
 | X. Continuous Improvement | PASS | Results include bounded diagnostics metadata for later artifact and observability phases. |
 | XI. Spec-Driven Development | PASS | Spec, plan, design artifacts, and later tasks trace the runtime scope. |
-| XII. Canonical Docs vs tmp | PASS | Phase tracking remains in `docs/tmp/remaining-work/`; canonical docs are not converted into migration checklists. |
+| XII. Canonical Docs vs tmp | PASS | Phase tracking remains in `docs/ManagedAgents/DockerOutOfDocker.md`; canonical docs are not converted into migration checklists. |
 | XIII. Delete, Don't Deprecate | PASS | No compatibility shim or legacy workload launch alias is introduced. |
 
 **Post-Design Recheck**: PASS. Research and design artifacts preserve the same boundaries: one-shot workload launcher, existing Docker-capable fleet, no managed-session verb overload, runtime code plus validation tests.

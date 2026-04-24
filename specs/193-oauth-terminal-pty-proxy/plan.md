@@ -1,6 +1,6 @@
 # Implementation Plan: OAuth Terminal PTY Proxy
 
-**Branch**: `193-oauth-terminal-pty-proxy` | **Date**: 2026-04-16 | **Spec**: `specs/193-oauth-terminal-pty-proxy/spec.md`  
+**Branch**: `193-oauth-terminal-pty-proxy` | **Date**: 2026-04-16 | **Spec**: `specs/193-oauth-terminal-pty-proxy/spec.md` 
 **Input**: Single-story feature specification from `specs/193-oauth-terminal-pty-proxy/spec.md`
 
 ## Summary
@@ -9,15 +9,15 @@ This story changes the OAuth terminal attach WebSocket from metadata-only frame 
 
 ## Technical Context
 
-**Language/Version**: Python 3.12; TypeScript only if Mission Control terminal client behavior must change.  
-**Primary Dependencies**: FastAPI WebSockets, SQLAlchemy async sessions, Pydantic v2 schemas, Docker SDK / Docker CLI behavior already used by terminal surfaces, Temporal OAuth session workflow metadata, pytest.  
-**Storage**: Existing `ManagedAgentOAuthSession` rows and `metadata_json`; no new persistent storage.  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` with focused pytest targets for OAuth session router and terminal bridge runtime.  
-**Integration Testing**: `./tools/test_integration.sh` for compose-backed `integration_ci` coverage when Docker is available; focused target is OAuth session workflow/terminal boundary.  
-**Target Platform**: MoonMind API service, Temporal worker/runtime services, auth-runner container boundary, and Mission Control OAuth terminal.  
-**Project Type**: Backend orchestration/runtime with browser WebSocket terminal surface.  
-**Performance Goals**: Terminal forwarding should process input/output frames without material overhead compared with existing WebSocket terminal behavior and must not persist raw terminal scrollback.  
-**Constraints**: Preserve `MM-362` traceability; keep raw credentials out of workflow history, browser non-terminal responses, logs, and artifacts; do not expose generic Docker exec through OAuth terminal; fail fast for unsupported frames and unsupported runtime values; preserve in-flight Temporal payload compatibility because only API/runtime bridge behavior changes.  
+**Language/Version**: Python 3.12; TypeScript only if Mission Control terminal client behavior must change. 
+**Primary Dependencies**: FastAPI WebSockets, SQLAlchemy async sessions, Pydantic v2 schemas, Docker SDK / Docker CLI behavior already used by terminal surfaces, Temporal OAuth session workflow metadata, pytest. 
+**Storage**: Existing `ManagedAgentOAuthSession` rows and `metadata_json`; no new persistent storage. 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` with focused pytest targets for OAuth session router and terminal bridge runtime. 
+**Integration Testing**: `./tools/test_integration.sh` for compose-backed `integration_ci` coverage when Docker is available; focused target is OAuth session workflow/terminal boundary. 
+**Target Platform**: MoonMind API service, Temporal worker/runtime services, auth-runner container boundary, and Mission Control OAuth terminal. 
+**Project Type**: Backend orchestration/runtime with browser WebSocket terminal surface. 
+**Performance Goals**: Terminal forwarding should process input/output frames without material overhead compared with existing WebSocket terminal behavior and must not persist raw terminal scrollback. 
+**Constraints**: Preserve `MM-362` traceability; keep raw credentials out of workflow history, browser non-terminal responses, logs, and artifacts; do not expose generic Docker exec through OAuth terminal; fail fast for unsupported frames and unsupported runtime values; preserve in-flight Temporal payload compatibility because only API/runtime bridge behavior changes. 
 **Scale/Scope**: One OAuth terminal story, dependencies: MM-318; provider profile registration and workload credential inheritance are out of scope.
 
 ## Constitution Check
@@ -35,7 +35,7 @@ This story changes the OAuth terminal attach WebSocket from metadata-only frame 
 - IX Resilient by Default: PASS. Invalid states fail fast; attach tokens, TTLs, close metadata, and cleanup are explicit.
 - X Continuous Improvement: PASS. Verification artifacts capture evidence and remaining blockers.
 - XI Spec-Driven Development: PASS. Implementation proceeds from isolated spec, plan, contracts, tasks, and verification.
-- XII Canonical Docs Separation: PASS. Work artifacts remain in `specs/` and `docs/tmp`; canonical docs are not rewritten.
+- XII Canonical Docs Separation: PASS. Work artifacts remain in `specs/` and `local-only handoffs`; canonical docs are not rewritten.
 - XIII Pre-Release Compatibility: PASS. No compatibility aliases or semantic transforms are introduced; unsupported frame/runtime values fail fast.
 
 ## Project Structure
@@ -50,7 +50,7 @@ specs/193-oauth-terminal-pty-proxy/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── oauth-terminal-pty-proxy.md
+│ └── oauth-terminal-pty-proxy.md
 └── tasks.md
 ```
 
@@ -59,8 +59,8 @@ specs/193-oauth-terminal-pty-proxy/
 ```text
 api_service/
 ├── api/
-│   ├── routers/oauth_sessions.py
-│   └── websockets.py
+│ ├── routers/oauth_sessions.py
+│ └── websockets.py
 └── services/oauth_auth_runner.py
 
 moonmind/
@@ -68,9 +68,9 @@ moonmind/
 
 tests/
 ├── unit/
-│   ├── api_service/api/routers/test_oauth_sessions.py
-│   ├── api_service/api/test_oauth_terminal_websocket.py
-│   └── services/temporal/runtime/test_terminal_bridge.py
+│ ├── api_service/api/routers/test_oauth_sessions.py
+│ ├── api_service/api/test_oauth_terminal_websocket.py
+│ └── services/temporal/runtime/test_terminal_bridge.py
 └── integration/temporal/test_oauth_session.py
 ```
 

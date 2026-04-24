@@ -14,7 +14,6 @@ from moonmind.agents.codex_worker.worker import (
     CodexWorkerConfig,
 )
 
-
 class _FakeQueueClient:
     def __init__(self, downloads: dict[str, bytes] | None = None) -> None:
         self.downloads = dict(downloads or {})
@@ -51,13 +50,11 @@ class _FakeQueueClient:
         self.live_session_heartbeats.append(str(job_id))
         return self.live_session_state or {}
 
-
 class _FakeHandler:
     async def handle(
         self, *, job_id, payload, cancel_event=None, output_chunk_callback=None
     ):
         return WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
-
 
 def _worker(tmp_path: Path, queue: _FakeQueueClient | None = None) -> CodexWorker:
     return CodexWorker(
@@ -72,7 +69,6 @@ def _worker(tmp_path: Path, queue: _FakeQueueClient | None = None) -> CodexWorke
         queue_client=queue or _FakeQueueClient(),  # type: ignore[arg-type]
         codex_exec_handler=_FakeHandler(),  # type: ignore[arg-type]
     )
-
 
 def _canonical_payload() -> dict[str, object]:
     return {
@@ -114,7 +110,6 @@ def _canonical_payload() -> dict[str, object]:
         },
     }
 
-
 def test_collect_attachment_targets_preserves_canonical_target_fields(
     tmp_path: Path,
 ) -> None:
@@ -129,7 +124,6 @@ def test_collect_attachment_targets_preserves_canonical_target_fields(
     assert targets[1].step_ordinal == 0
     assert targets[2].step_ref == "step-2"
     assert targets[2].step_ordinal == 1
-
 
 def test_attachment_workspace_paths_are_target_aware_and_sanitized(
     tmp_path: Path,
@@ -147,7 +141,6 @@ def test_attachment_workspace_paths_are_target_aware_and_sanitized(
         ".moonmind/inputs/steps/review-step/art_step-shot.png",
         ".moonmind/inputs/steps/step-2/art_no_id-same.png",
     ]
-
 
 def test_attachment_workspace_paths_do_not_depend_on_unrelated_target_order(
     tmp_path: Path,
@@ -184,7 +177,6 @@ def test_attachment_workspace_paths_do_not_depend_on_unrelated_target_order(
     assert reordered_paths["art_step"] == original_paths["art_step"]
     assert reordered_paths["art_no_id"] == original_paths["art_no_id"]
 
-
 def test_collect_attachment_targets_rejects_malformed_refs(tmp_path: Path) -> None:
     worker = _worker(tmp_path)
     payload = _canonical_payload()
@@ -194,7 +186,6 @@ def test_collect_attachment_targets_rejects_malformed_refs(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="filename is required"):
         worker._collect_input_attachment_targets(payload)
-
 
 @pytest.mark.asyncio
 async def test_materialize_input_attachments_records_prepare_download_diagnostics(
@@ -247,7 +238,6 @@ async def test_materialize_input_attachments_records_prepare_download_diagnostic
         event["event"] for event in diagnostic_events
     ]
 
-
 @pytest.mark.asyncio
 async def test_materialize_input_attachments_records_failed_step_diagnostics(
     tmp_path: Path,
@@ -279,7 +269,6 @@ async def test_materialize_input_attachments_records_failed_step_diagnostics(
     assert failed["stepRef"] == "review-step"
     assert failed["artifactId"] == "art_step"
     assert "missing artifact: art_step" in str(failed["error"])
-
 
 @pytest.mark.asyncio
 async def test_materialize_input_attachments_writes_files_and_manifest(
@@ -349,7 +338,6 @@ async def test_materialize_input_attachments_writes_files_and_manifest(
         },
     ]
 
-
 @pytest.mark.asyncio
 async def test_materialize_input_attachments_fails_on_download_error(
     tmp_path: Path,
@@ -367,7 +355,6 @@ async def test_materialize_input_attachments_fails_on_download_error(
             repo_dir=repo_dir,
             prepare_log_path=tmp_path / "prepare.log",
         )
-
 
 @pytest.mark.asyncio
 async def test_prepare_stage_materializes_attachments_before_return(

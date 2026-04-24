@@ -27,12 +27,10 @@ from tests.helpers.codex_session_runtime import (
     write_fake_app_server,
 )
 
-
 def _iso_timestamp(*, minutes_offset: int) -> str:
     return (
         datetime.now(UTC) + timedelta(minutes=minutes_offset)
     ).isoformat().replace("+00:00", "Z")
-
 
 def _write_fake_codex_logs(
     codex_home_path: str | Path,
@@ -56,7 +54,6 @@ def _write_fake_codex_logs(
         connection.close()
     return log_path
 
-
 def _runtime_for_rollout_mirror(tmp_path: Path) -> CodexManagedSessionRuntime:
     request = launch_request(tmp_path)
     return CodexManagedSessionRuntime(
@@ -70,7 +67,6 @@ def _runtime_for_rollout_mirror(tmp_path: Path) -> CodexManagedSessionRuntime:
         app_server_command=("python3", "-c", "pass"),
     )
 
-
 def _rollout_state(*, rollout_path: Path) -> CodexSessionRuntimeState:
     return CodexSessionRuntimeState(
         sessionId="sess-1",
@@ -83,7 +79,6 @@ def _rollout_state(*, rollout_path: Path) -> CodexSessionRuntimeState:
         lastTurnId="vendor-turn-1",
         lastTurnStatus="running",
     )
-
 
 def test_app_server_client_ignores_notifications_until_matching_response(
     tmp_path: Path,
@@ -99,7 +94,6 @@ def test_app_server_client_ignores_notifications_until_matching_response(
 
     assert initialized["codexHome"] == "/tmp/fake-codex-home"
     client.close()
-
 
 def test_runtime_launch_session_persists_logical_thread_mapping(tmp_path: Path) -> None:
     script = write_fake_app_server(tmp_path)
@@ -128,7 +122,6 @@ def test_runtime_launch_session_persists_logical_thread_mapping(tmp_path: Path) 
     assert state_payload["logicalThreadId"] == "logical-thread-1"
     assert state_payload["vendorThreadId"] == "vendor-thread-1"
     assert state_payload["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
-
 
 def test_runtime_send_turn_returns_terminal_completed_response(
     tmp_path: Path,
@@ -173,7 +166,6 @@ def test_runtime_send_turn_returns_terminal_completed_response(
     assert handle.status == "ready"
     assert handle.session_state.active_turn_id is None
     assert handle.metadata["lastAssistantText"] == "OK"
-
 
 def test_runtime_send_turn_mirrors_rollout_updates_to_stdout_spool(
     tmp_path: Path,
@@ -266,7 +258,6 @@ def test_runtime_send_turn_mirrors_rollout_updates_to_stdout_spool(
     assert "tool output:\nlive-output-works\n" in stdout_text
     assert stdout_text.count("assistant: Streaming update\n") == 1
 
-
 def test_runtime_rollout_live_mirror_preserves_incomplete_tail(
     tmp_path: Path,
 ) -> None:
@@ -336,7 +327,6 @@ def test_runtime_rollout_live_mirror_preserves_incomplete_tail(
     )
     assert mirror.offset == rollout_path.stat().st_size
 
-
 def test_runtime_rollout_live_mirror_keeps_repeated_identical_tool_events(
     tmp_path: Path,
 ) -> None:
@@ -387,7 +377,6 @@ def test_runtime_rollout_live_mirror_keeps_repeated_identical_tool_events(
     assert (runtime._artifact_spool_path / "stdout.log").read_text(
         encoding="utf-8"
     ) == stdout_text
-
 
 def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_output(
     tmp_path: Path,
@@ -451,7 +440,6 @@ def test_runtime_session_status_fails_when_completed_turn_has_no_assistant_outpu
         encoding="utf-8"
     )
 
-
 def test_runtime_send_turn_accepts_item_completed_notification_contract(
     tmp_path: Path,
 ) -> None:
@@ -485,7 +473,6 @@ def test_runtime_send_turn_accepts_item_completed_notification_contract(
     assert response.status == "completed"
     assert response.turn_id == "vendor-turn-1"
     assert response.metadata["assistantText"] == "OK"
-
 
 def test_runtime_send_turn_completes_via_thread_read_without_notification(
     tmp_path: Path,
@@ -532,7 +519,6 @@ def test_runtime_send_turn_completes_via_thread_read_without_notification(
     assert handle.status == "ready"
     assert handle.session_state.active_turn_id is None
     assert handle.metadata["lastAssistantText"] == "OK"
-
 
 def test_runtime_send_turn_completes_when_thread_read_omits_turns(
     tmp_path: Path,
@@ -614,7 +600,6 @@ def test_runtime_send_turn_completes_when_thread_read_omits_turns(
     )
     assert handle.status == "ready"
     assert handle.metadata["lastAssistantText"] == "Recovered from rollout transcript"
-
 
 def test_runtime_send_turn_recovers_last_agent_message_from_task_complete_event(
     tmp_path: Path,
@@ -700,7 +685,6 @@ def test_runtime_send_turn_recovers_last_agent_message_from_task_complete_event(
     assert handle.status == "ready"
     assert handle.metadata["lastAssistantText"] == "Recovered from task_complete event"
 
-
 def test_runtime_send_turn_stays_running_when_rollout_turn_has_not_completed(
     tmp_path: Path,
 ) -> None:
@@ -771,7 +755,6 @@ def test_runtime_send_turn_stays_running_when_rollout_turn_has_not_completed(
     assert handle.status == "busy"
     assert handle.metadata["lastTurnStatus"] == "running"
 
-
 def test_runtime_send_turn_stays_running_when_large_rollout_tail_has_active_turn(
     tmp_path: Path,
 ) -> None:
@@ -831,7 +814,6 @@ def test_runtime_send_turn_stays_running_when_large_rollout_tail_has_active_turn
 
     assert response.status == "running"
     assert response.session_state.active_turn_id == "vendor-turn-1"
-
 
 def test_runtime_send_turn_ignores_transient_log_error_when_rollout_has_final_answer(
     tmp_path: Path,
@@ -915,7 +897,6 @@ def test_runtime_send_turn_ignores_transient_log_error_when_rollout_has_final_an
     assert response.status == "completed"
     assert response.metadata["assistantText"] == "Recovered after retry"
     assert "reason" not in response.metadata
-
 
 def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
     tmp_path: Path,
@@ -1038,7 +1019,6 @@ def test_runtime_send_turn_recovers_terminal_rollout_without_turn_reference(
         == "Recovered final answer without vendor turn id"
     )
 
-
 def test_runtime_send_turn_ignores_stale_terminal_rollout_without_turn_reference(
     tmp_path: Path,
 ) -> None:
@@ -1133,7 +1113,6 @@ def test_runtime_send_turn_ignores_stale_terminal_rollout_without_turn_reference
     assert handle.status == "failed"
     assert handle.metadata["lastTurnStatus"] == "failed"
 
-
 def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
     tmp_path: Path,
 ) -> None:
@@ -1213,7 +1192,6 @@ def test_runtime_send_turn_fails_when_rollout_only_has_other_turn_output(
     assert handle.status == "failed"
     assert handle.metadata["lastTurnStatus"] == "failed"
 
-
 def test_runtime_send_turn_ignores_rollout_paths_outside_codex_sessions(
     tmp_path: Path,
 ) -> None:
@@ -1273,7 +1251,6 @@ def test_runtime_send_turn_ignores_rollout_paths_outside_codex_sessions(
         response.metadata["reason"]
         == "codex app-server turn/completed produced no assistant output"
     )
-
 
 def test_runtime_send_turn_fails_from_rollout_completion_when_thread_read_is_not_loaded(
     tmp_path: Path,
@@ -1362,7 +1339,6 @@ def test_runtime_send_turn_fails_from_rollout_completion_when_thread_read_is_not
     assert handle.metadata["lastTurnStatus"] == "failed"
     assert handle.metadata["lastTurnError"] == expected_reason
 
-
 def test_runtime_send_turn_prefers_rollout_task_complete_failure_over_agent_message(
     tmp_path: Path,
 ) -> None:
@@ -1436,7 +1412,6 @@ def test_runtime_send_turn_prefers_rollout_task_complete_failure_over_agent_mess
     assert response.status == "failed"
     assert response.metadata["reason"] == "provider returned exit code 1"
 
-
 def test_runtime_send_turn_prefers_failed_thread_status_over_rollout_success(
     tmp_path: Path,
 ) -> None:
@@ -1504,7 +1479,6 @@ def test_runtime_send_turn_prefers_failed_thread_status_over_rollout_success(
     assert response.status == "failed"
     assert response.metadata["reason"] == "provider failed the thread"
 
-
 def test_runtime_extract_turn_error_from_logs_prefers_highest_numeric_shard(
     tmp_path: Path,
 ) -> None:
@@ -1542,7 +1516,6 @@ def test_runtime_extract_turn_error_from_logs_prefers_highest_numeric_shard(
 
     assert runtime._extract_turn_error_from_logs("vendor-turn-1") == "latest shard"
 
-
 def test_runtime_extract_turn_error_from_logs_recovers_provider_error_message(
     tmp_path: Path,
 ) -> None:
@@ -1569,7 +1542,6 @@ def test_runtime_extract_turn_error_from_logs_recovers_provider_error_message(
     )
 
     assert runtime._extract_turn_error_from_logs("vendor-turn-1") == "http 404"
-
 
 @pytest.mark.parametrize(
     ("thread_status_type", "thread_status_reason", "expected_status", "expected_reason"),
@@ -1620,7 +1592,6 @@ def test_runtime_send_turn_uses_terminal_thread_status_when_turn_missing(
 
     assert response.status == expected_status
     assert response.metadata["reason"] == expected_reason
-
 
 def test_runtime_send_turn_recovers_vendor_thread_path_from_sessions_dir(
     tmp_path: Path,
@@ -1678,7 +1649,6 @@ def test_runtime_send_turn_recovers_vendor_thread_path_from_sessions_dir(
     updated_state = json.loads(state_path.read_text(encoding="utf-8"))
     assert updated_state["vendorThreadPath"] == str(recovered_path)
 
-
 def test_runtime_send_turn_falls_back_to_new_thread_when_resume_fails(
     tmp_path: Path,
 ) -> None:
@@ -1722,7 +1692,6 @@ def test_runtime_send_turn_falls_back_to_new_thread_when_resume_fails(
         )
     )
     assert updated_state["vendorThreadId"] == "vendor-thread-1"
-
 
 def test_runtime_send_turn_drops_stale_vendor_thread_path_when_fallback_starts_new_thread(
     tmp_path: Path,
@@ -1774,7 +1743,6 @@ def test_runtime_send_turn_drops_stale_vendor_thread_path_when_fallback_starts_n
     assert updated_state["vendorThreadId"] == "vendor-thread-2"
     assert "vendorThreadPath" not in updated_state
 
-
 def test_runtime_send_turn_ignores_nonexistent_vendor_thread_path_from_state(
     tmp_path: Path,
 ) -> None:
@@ -1824,7 +1792,6 @@ def test_runtime_send_turn_ignores_nonexistent_vendor_thread_path_from_state(
     assert updated_state["vendorThreadId"] == "vendor-thread-1"
     assert updated_state["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
 
-
 def test_runtime_clear_session_rotates_logical_thread_and_epoch(tmp_path: Path) -> None:
     script = write_fake_app_server(tmp_path)
     request = launch_request(tmp_path)
@@ -1854,7 +1821,6 @@ def test_runtime_clear_session_rotates_logical_thread_and_epoch(tmp_path: Path) 
     assert handle.session_state.session_epoch == 2
     assert handle.session_state.thread_id == "logical-thread-2"
     assert handle.metadata["vendorThreadId"] == "vendor-thread-1"
-
 
 def test_runtime_session_status_remains_busy_without_completion_notification(
     tmp_path: Path,
@@ -1905,7 +1871,6 @@ def test_runtime_session_status_remains_busy_without_completion_notification(
         )
     )
     assert state_payload["activeTurnId"] == "vendor-turn-1"
-
 
 def test_runtime_session_status_prefers_failed_thread_status_over_rollout_success(
     tmp_path: Path,
@@ -1982,7 +1947,6 @@ def test_runtime_session_status_prefers_failed_thread_status_over_rollout_succes
     assert handle.metadata["lastTurnStatus"] == "failed"
     assert handle.metadata["lastTurnError"] == "refresh saw a provider failure"
 
-
 def test_runtime_interrupt_turn_uses_app_server_transport(tmp_path: Path) -> None:
     interrupt_record_path = tmp_path / "interrupt.json"
     script = write_fake_app_server(
@@ -2025,7 +1989,6 @@ def test_runtime_interrupt_turn_uses_app_server_transport(tmp_path: Path) -> Non
     }
     updated_state = json.loads(state_path.read_text(encoding="utf-8"))
     assert updated_state.get("activeTurnId") is None
-
 
 def test_runtime_steer_turn_uses_app_server_transport(tmp_path: Path) -> None:
     steer_record_path = tmp_path / "steer.json"
@@ -2081,7 +2044,6 @@ def test_runtime_steer_turn_uses_app_server_transport(tmp_path: Path) -> None:
     assert updated_state.get("activeTurnId") == "vendor-turn-1"
     assert updated_state["lastControlAction"] == "steer_turn"
 
-
 def test_runtime_steer_turn_tolerates_null_metadata(tmp_path: Path) -> None:
     steer_record_path = tmp_path / "steer.json"
     script = write_fake_app_server(
@@ -2127,7 +2089,6 @@ def test_runtime_steer_turn_tolerates_null_metadata(tmp_path: Path) -> None:
         "input": [{"type": "text", "text": "Keep going."}],
     }
 
-
 def test_runtime_launch_session_exports_codex_home(tmp_path: Path) -> None:
     codex_home_record_path = tmp_path / "codex-home.txt"
     script = write_fake_app_server(
@@ -2151,7 +2112,6 @@ def test_runtime_launch_session_exports_codex_home(tmp_path: Path) -> None:
     assert codex_home_record_path.read_text(encoding="utf-8").splitlines()[-1] == str(
         Path(request.codex_home_path)
     )
-
 
 def test_runtime_launch_session_seeds_auth_volume_without_overwriting_materialized_config(
     tmp_path: Path,
@@ -2187,7 +2147,6 @@ def test_runtime_launch_session_seeds_auth_volume_without_overwriting_materializ
         "model = 'qwen/qwen3.6-plus'\n"
     )
     assert not Path(request.codex_home_path, "logs_1.sqlite").exists()
-
 
 def test_runtime_launch_session_seeds_auth_directories_and_excludes_sessions(
     tmp_path: Path,
@@ -2229,7 +2188,6 @@ def test_runtime_launch_session_seeds_auth_directories_and_excludes_sessions(
     assert not Path(request.codex_home_path, ".tmp").exists()
     assert not Path(request.codex_home_path, "linked-auth.json").exists()
 
-
 def test_runtime_launch_session_auth_seed_overwrites_read_only_files_on_retry(
     tmp_path: Path,
 ) -> None:
@@ -2268,7 +2226,6 @@ def test_runtime_launch_session_auth_seed_overwrites_read_only_files_on_retry(
     )
     assert destination_auth.stat().st_mode & 0o777 == 0o444
 
-
 def test_runtime_launch_session_rejects_missing_auth_volume_path(
     tmp_path: Path,
 ) -> None:
@@ -2290,7 +2247,6 @@ def test_runtime_launch_session_rejects_missing_auth_volume_path(
 
     with pytest.raises(RuntimeError, match="MANAGED_AUTH_VOLUME_PATH does not exist"):
         runtime.launch_session(request)
-
 
 def test_runtime_launch_session_rejects_file_auth_volume_path(
     tmp_path: Path,
@@ -2315,7 +2271,6 @@ def test_runtime_launch_session_rejects_file_auth_volume_path(
     with pytest.raises(RuntimeError, match="MANAGED_AUTH_VOLUME_PATH must be a directory"):
         runtime.launch_session(request)
 
-
 def test_runtime_launch_session_rejects_auth_volume_equal_to_codex_home(
     tmp_path: Path,
 ) -> None:
@@ -2339,7 +2294,6 @@ def test_runtime_launch_session_rejects_auth_volume_equal_to_codex_home(
         match="MANAGED_AUTH_VOLUME_PATH must not equal MOONMIND_SESSION_CODEX_HOME_PATH",
     ):
         runtime.launch_session(request)
-
 
 def test_run_ready_requires_runtime_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     workspace_path = tmp_path / "repo"

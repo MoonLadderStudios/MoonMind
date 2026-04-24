@@ -7,7 +7,6 @@ from llama_index.core.schema import NodeWithScore
 
 logger = logging.getLogger(__name__)
 
-
 class QdrantRAG:
     def __init__(
         self,

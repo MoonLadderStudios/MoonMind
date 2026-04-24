@@ -40,7 +40,6 @@ from moonmind.schemas.temporal_models import (
     StepLedgerSnapshotModel,
 )
 
-
 class _ScalarRows:
     def __init__(self, rows: list[SimpleNamespace]) -> None:
         self._rows = rows
@@ -48,14 +47,12 @@ class _ScalarRows:
     def all(self) -> list[SimpleNamespace]:
         return self._rows
 
-
 class _ExecuteResult:
     def __init__(self, rows: list[SimpleNamespace]) -> None:
         self._rows = rows
 
     def scalars(self) -> _ScalarRows:
         return _ScalarRows(self._rows)
-
 
 class _QueryHandle:
     def __init__(
@@ -82,7 +79,6 @@ class _QueryHandle:
             return self._summary
         raise AssertionError(f"Unexpected query name: {name}")
 
-
 def _override_query_client(
     app: FastAPI,
     *,
@@ -107,7 +103,6 @@ def _override_query_client(
     app.dependency_overrides[get_temporal_client] = lambda: client
     return client
 
-
 def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNamespace:
     mock_user = SimpleNamespace(
         id=uuid4(),
@@ -131,7 +126,6 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNa
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = _current_user
     return mock_user
-
 
 def _build_execution_record(
     *,
@@ -213,12 +207,10 @@ def _build_execution_record(
         integration_state=None,
     )
 
-
 def _override_temporal_client(app: FastAPI) -> AsyncMock:
     client = AsyncMock()
     app.dependency_overrides[get_temporal_client] = lambda: client
     return client
-
 
 @pytest.fixture
 def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
@@ -234,7 +226,6 @@ def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
 
     app.dependency_overrides.clear()
 
-
 def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
     app.include_router(router)
@@ -247,7 +238,6 @@ def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
         yield test_client, mock_service
 
     app.dependency_overrides.clear()
-
 
 def test_list_executions_passes_temporal_filters_for_admin() -> None:
     app = FastAPI()
@@ -291,7 +281,6 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
     assert kwargs["page_size"] == 25
     assert kwargs["next_page_token"] == "token-123"
 
-
 def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -306,7 +295,6 @@ def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "execution_forbidden"
     mock_service.list_executions.assert_not_awaited()
-
 
 def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
     progress = ExecutionProgressModel.model_validate(
@@ -370,7 +358,6 @@ def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
     assert dumped_snapshot["runScope"] == "latest"
     assert dumped_snapshot["steps"][0]["logicalStepId"] == "prepare"
 
-
 def test_list_executions_uses_owner_id_without_owner_type_for_non_admin() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -392,7 +379,6 @@ def test_list_executions_uses_owner_id_without_owner_type_for_non_admin() -> Non
     assert kwargs["owner_id"] == str(mock_user.id)
     assert kwargs["owner_type"] is None
 
-
 def test_list_executions_allows_explicit_user_owner_type_for_non_admin() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -413,7 +399,6 @@ def test_list_executions_allows_explicit_user_owner_type_for_non_admin() -> None
     kwargs = mock_service.list_executions.await_args.kwargs
     assert kwargs["owner_id"] == str(mock_user.id)
     assert kwargs["owner_type"] == "user"
-
 
 def test_create_task_shaped_execution_rejects_invalid_required_capabilities() -> None:
     app = FastAPI()
@@ -444,7 +429,6 @@ def test_create_task_shaped_execution_rejects_invalid_required_capabilities() ->
     )
     mock_service.create_execution.assert_not_awaited()
 
-
 def test_create_task_shaped_execution_rejects_more_than_10_dependencies(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -466,7 +450,6 @@ def test_create_task_shaped_execution_rejects_more_than_10_dependencies(
     assert response.status_code == 422
     assert "payload.task.dependsOn can have a maximum of 10 items" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
-
 
 def test_create_task_shaped_execution_rejects_more_than_50_steps(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -490,7 +473,6 @@ def test_create_task_shaped_execution_rejects_more_than_50_steps(
     assert response.status_code == 422
     assert "payload.task.steps can have a maximum of 50 items" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
-
 
 def test_create_task_shaped_execution_rejects_attachments_when_policy_disabled(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -523,7 +505,6 @@ def test_create_task_shaped_execution_rejects_attachments_when_policy_disabled(
     assert "attachment policy is disabled" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
-
 def test_create_task_shaped_execution_rejects_unknown_attachment_fields(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
@@ -555,7 +536,6 @@ def test_create_task_shaped_execution_rejects_unknown_attachment_fields(
     assert response.status_code == 422
     assert "unsupported fields" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
-
 
 def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachments(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -603,7 +583,6 @@ def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachmen
     assert response.status_code == 422
     assert "Unsupported targetRuntime" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
-
 
 def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -685,7 +664,6 @@ def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
     execute.assert_awaited_once()
     service.create_execution.assert_awaited_once()
 
-
 def test_create_task_shaped_execution_rejects_svg_attachment_type(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
@@ -721,7 +699,6 @@ def test_create_task_shaped_execution_rejects_svg_attachment_type(
     assert response.status_code == 422
     assert "image/svg+xml is not supported" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
-
 
 def test_create_task_shaped_execution_rejects_attachment_policy_limits(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -761,7 +738,6 @@ def test_create_task_shaped_execution_rejects_attachment_policy_limits(
     assert "too many input attachments" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
-
 def test_create_task_shaped_execution_dedupes_and_normalizes_dependencies(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -785,7 +761,6 @@ def test_create_task_shaped_execution_dedupes_and_normalizes_dependencies(
     service.create_execution.assert_awaited_once()
     kwargs = service.create_execution.call_args.kwargs
     assert kwargs["initial_parameters"]["task"]["dependsOn"] == ["dep-1", "dep-2", "dep-3"]
-
 
 def test_create_task_shaped_execution_prefers_task_depends_on(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -811,7 +786,6 @@ def test_create_task_shaped_execution_prefers_task_depends_on(
     service.create_execution.assert_awaited_once()
     kwargs = service.create_execution.call_args.kwargs
     assert "dependsOn" not in kwargs["initial_parameters"]["task"]
-
 
 def test_create_task_shaped_execution_applies_default_publish_mode(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -842,7 +816,6 @@ def test_create_task_shaped_execution_applies_default_publish_mode(
     ]
     assert initial_parameters["publishMode"] == "pr"
     assert initial_parameters["task"]["publish"]["mode"] == "pr"
-
 
 def test_create_task_shaped_execution_prefers_task_publish_mode_alias_over_top_publish(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -879,7 +852,6 @@ def test_create_task_shaped_execution_prefers_task_publish_mode_alias_over_top_p
         "commitMessage": "Top-level publish details",
     }
 
-
 def test_create_task_shaped_execution_rejects_falsy_non_string_publish_mode(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -905,7 +877,6 @@ def test_create_task_shaped_execution_rejects_falsy_non_string_publish_mode(
         "publish.mode must be one of: branch, none, pr"
     )
     service.create_execution.assert_not_awaited()
-
 
 def test_create_task_shaped_execution_preserves_remediation_payload(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -943,7 +914,6 @@ def test_create_task_shaped_execution_preserves_remediation_payload(
         "trigger": {"type": "manual"},
     }
 
-
 def test_create_task_shaped_execution_preserves_malformed_remediation_for_service_validation(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -969,7 +939,6 @@ def test_create_task_shaped_execution_preserves_malformed_remediation_for_servic
     service.create_execution.assert_awaited_once()
     kwargs = service.create_execution.call_args.kwargs
     assert kwargs["initial_parameters"]["task"]["remediation"] == "mm:target-workflow"
-
 
 def test_create_remediation_convenience_route_expands_to_task_create_contract(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1007,7 +976,6 @@ def test_create_remediation_convenience_route_expands_to_task_create_contract(
     }
     assert kwargs["initial_parameters"]["publishMode"] == "pr"
     assert kwargs["initial_parameters"]["task"]["publish"]["mode"] == "pr"
-
 
 def test_create_remediation_convenience_route_uses_top_level_overrides(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1064,7 +1032,6 @@ def test_create_remediation_convenience_route_uses_top_level_overrides(
     assert initial_parameters["publishMode"] == "none"
     assert initial_parameters["task"]["publish"]["mode"] == "none"
 
-
 def test_create_remediation_convenience_route_rejects_malformed_remediation(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1085,7 +1052,6 @@ def test_create_remediation_convenience_route_rejects_malformed_remediation(
         "message": "task.remediation must be an object",
     }
     service.create_execution.assert_not_awaited()
-
 
 def test_list_remediations_for_target_returns_compact_inbound_links(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1156,7 +1122,6 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
     service.list_remediations_for_target.assert_awaited_once_with("mm:target-workflow")
     service.list_remediation_targets.assert_not_called()
 
-
 def test_list_remediations_for_remediation_returns_compact_outbound_links(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1211,7 +1176,6 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
     service.list_remediation_targets.assert_awaited_once_with("mm:remediation-1")
     service.list_remediations_for_target.assert_not_called()
 
-
 def test_list_remediations_rejects_unknown_direction(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1227,7 +1191,6 @@ def test_list_remediations_rejects_unknown_direction(
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_remediation_direction"
-
 
 def test_record_remediation_approval_decision_calls_trusted_service(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1263,7 +1226,6 @@ def test_record_remediation_approval_decision_calls_trusted_service(
         actor=user.email,
     )
 
-
 def test_record_remediation_approval_decision_rejects_unknown_decision(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1282,7 +1244,6 @@ def test_record_remediation_approval_decision_rejects_unknown_decision(
         "invalid_remediation_approval_decision"
     )
     service.record_remediation_approval_decision.assert_not_awaited()
-
 
 def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1340,7 +1301,6 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
         "startingBranch": "feature/resolve-pr",
         "targetBranch": "codex/pr-resolver",
     }
-
 
 def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1411,7 +1371,6 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
         "include": [{"name": "architecture-review"}],
     }
 
-
 def test_create_task_shaped_execution_rejects_invalid_proposal_policy(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1435,7 +1394,6 @@ def test_create_task_shaped_execution_rejects_invalid_proposal_policy(
     assert response.status_code == 422
     assert "task.proposalPolicy.targets" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
-
 
 def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
     app = FastAPI()
@@ -1479,7 +1437,6 @@ def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
     assert initial_parameters["modelSource"] == "provider_profile_default"
     app.dependency_overrides.clear()
 
-
 def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1511,7 +1468,6 @@ def test_create_task_shaped_execution_preserves_task_title_and_publish_overrides
     assert initial_parameters["task"]["title"] == "Fix login redirect"
     assert initial_parameters["task"]["publish"]["prTitle"] == "PR: Ensure OAuth redirect is correct"
     assert initial_parameters["task"]["publish"]["prBody"] == "Adds integration tests and updates callback routing."
-
 
 def test_create_task_shaped_execution_preserves_merge_automation_request(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1552,7 +1508,6 @@ def test_create_task_shaped_execution_preserves_merge_automation_request(
         "mergeMethod": "squash",
         "fallbackPollSeconds": 60,
     }
-
 
 def test_create_task_shaped_execution_preserves_nested_merge_automation_request(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1599,7 +1554,6 @@ def test_create_task_shaped_execution_preserves_nested_merge_automation_request(
         "mergeMethod": "rebase",
     }
 
-
 def test_serialize_execution_exposes_merge_automation_selection() -> None:
     record = _build_execution_record()
     record.parameters = {
@@ -1617,7 +1571,6 @@ def test_serialize_execution_exposes_merge_automation_selection() -> None:
     assert payload.merge_automation_selected is True
     assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is True
 
-
 def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> None:
     record = _build_execution_record()
     record.parameters = {
@@ -1633,7 +1586,6 @@ def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> No
     assert payload.merge_automation_selected is True
     assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is True
 
-
 def test_serialize_execution_defaults_merge_automation_selection_to_false() -> None:
     record = _build_execution_record()
     record.parameters = {"publishMode": "pr", "mergeAutomation": {"enabled": False}}
@@ -1642,7 +1594,6 @@ def test_serialize_execution_defaults_merge_automation_selection_to_false() -> N
 
     assert payload.merge_automation_selected is False
     assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is False
-
 
 def test_create_task_shaped_execution_preserves_story_output_contract(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1687,7 +1638,6 @@ def test_create_task_shaped_execution_preserves_story_output_contract(
     }
     assert initial_parameters["task"]["storyOutput"] == initial_parameters["storyOutput"]
 
-
 def test_create_task_shaped_execution_defaults_partial_story_output_mode(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1723,7 +1673,6 @@ def test_create_task_shaped_execution_defaults_partial_story_output_mode(
         },
     }
 
-
 def test_create_task_shaped_execution_defaults_runtime_into_parameters(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
@@ -1752,7 +1701,6 @@ def test_create_task_shaped_execution_defaults_runtime_into_parameters(
     ]
     assert initial_parameters["targetRuntime"] == "codex_cli"
     assert initial_parameters["task"]["runtime"]["mode"] == "codex_cli"
-
 
 def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaults(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1820,7 +1768,6 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
         },
     ]
 
-
 def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_instructions(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -1850,7 +1797,6 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_in
         "or payload.task.git.startingBranch."
     )
     service.create_execution.assert_not_awaited()
-
 
 def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1886,7 +1832,6 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     assert initial_parameters["task"]["git"] == {
         "startingBranch": "feature/resolve-pr"
     }
-
 
 def test_create_task_shaped_execution_forwards_input_attachments(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -1974,7 +1919,6 @@ def test_create_task_shaped_execution_forwards_input_attachments(
             "sizeBytes": 20,
         }
     ]
-
 
 def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2065,7 +2009,6 @@ def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
     ]
     assert "input_attachments" not in step_payload
 
-
 def test_create_task_shaped_execution_rejects_embedded_attachment_data(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -2101,7 +2044,6 @@ def test_create_task_shaped_execution_rejects_embedded_attachment_data(
     assert "unsupported fields" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
-
 def test_create_task_shaped_execution_derives_pr_resolver_title_from_tool_inputs(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -2131,7 +2073,6 @@ def test_create_task_shaped_execution_derives_pr_resolver_title_from_tool_inputs
     assert called_kwargs["title"] == "feature/from-tool-inputs"
     initial_parameters = called_kwargs["initial_parameters"]
     assert initial_parameters["task"]["title"] == "feature/from-tool-inputs"
-
 
 def test_create_task_shaped_execution_once_schedule_sets_start_delay(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2166,7 +2107,6 @@ def test_create_task_shaped_execution_once_schedule_sets_start_delay(
     assert 200 <= start_delay.total_seconds() <= 300
     assert response.json()["scheduledFor"] is not None
 
-
 def test_create_execution_surfaces_domain_validation_errors(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -2182,7 +2122,6 @@ def test_create_execution_surfaces_domain_validation_errors(
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_execution_request"
-
 
 def test_create_execution_routes_directly_to_temporal(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2200,7 +2139,6 @@ def test_create_execution_routes_directly_to_temporal(
     assert response.status_code == 201
     assert response.json()["title"] == "Test direct temporal"
     service.create_execution.assert_awaited_once()
-
 
 def test_create_execution_persists_task_input_snapshot_for_direct_run_submission(
     monkeypatch: pytest.MonkeyPatch,
@@ -2280,7 +2218,6 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
     session.commit.assert_awaited_once()
     session.refresh.assert_awaited_once_with(record)
 
-
 def test_create_execution_enforces_idempotency(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -2296,7 +2233,6 @@ def test_create_execution_enforces_idempotency(
     called_kwargs = service.create_execution.await_args.kwargs
     assert called_kwargs["idempotency_key"] == "idem-123"
 
-
 def test_list_executions_rejects_non_admin_cross_owner_queries(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -2310,7 +2246,6 @@ def test_list_executions_rejects_non_admin_cross_owner_queries(
         == "Cannot list executions for another user."
     )
     service.list_executions.assert_not_awaited()
-
 
 def test_describe_execution_hides_foreign_workflow_visibility(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2327,7 +2262,6 @@ def test_describe_execution_hides_foreign_workflow_visibility(
     assert response.json()["detail"]["code"] == "execution_not_found"
     assert str(user.id) != service.describe_execution.return_value.owner_id
 
-
 def test_describe_execution_allows_search_attribute_owner_id_fallback(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -2341,7 +2275,6 @@ def test_describe_execution_allows_search_attribute_owner_id_fallback(
 
     assert response.status_code == 200
     assert response.json()["workflowId"] == "mm:wf-1"
-
 
 def test_describe_execution_source_temporal_uses_projection_fallback_when_sync_fails(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2366,7 +2299,6 @@ def test_describe_execution_source_temporal_uses_projection_fallback_when_sync_f
     assert response.status_code == 200
     assert response.json()["workflowId"] == "mm:wf-1"
     assert service.describe_execution.await_args.kwargs["include_orphaned"] is True
-
 
 def test_describe_execution_rolls_back_session_when_temporal_sync_commit_fails(
     monkeypatch: pytest.MonkeyPatch,
@@ -2407,7 +2339,6 @@ def test_describe_execution_rolls_back_session_when_temporal_sync_commit_fails(
     session.rollback.assert_awaited_once()
     assert service.describe_execution.await_args.kwargs["include_orphaned"] is True
 
-
 def test_describe_execution_source_temporal_returns_503_when_no_fallback_record(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
@@ -2434,7 +2365,6 @@ def test_describe_execution_source_temporal_returns_503_when_no_fallback_record(
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "temporal_unavailable"
 
-
 def test_update_execution_invalid_update_name_returns_contract_error(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -2452,7 +2382,6 @@ def test_update_execution_invalid_update_name_returns_contract_error(
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_update_request"
 
-
 def test_signal_execution_invalid_signal_name_returns_contract_error(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -2469,7 +2398,6 @@ def test_signal_execution_invalid_signal_name_returns_contract_error(
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "signal_rejected"
-
 
 def test_signal_execution_routes_send_message_and_serializes_audit(
     monkeypatch: pytest.MonkeyPatch,
@@ -2513,7 +2441,6 @@ def test_signal_execution_routes_send_message_and_serializes_audit(
     assert body["interventionAudit"][0]["action"] == "send_message"
     assert body["interventionAudit"][0]["detail"] == "Continue with provider profiles."
 
-
 def test_signal_execution_routes_skip_dependency_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
     app.include_router(router)
@@ -2548,7 +2475,6 @@ def test_signal_execution_routes_skip_dependency_wait(monkeypatch: pytest.Monkey
     assert body["actions"]["canSkipDependencyWait"] is False
     assert body["interventionAudit"][0]["action"] == "skip_dependency_wait"
 
-
 def test_cancel_execution_passes_reject_action_to_service() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record(
@@ -2582,7 +2508,6 @@ def test_cancel_execution_passes_reject_action_to_service() -> None:
         assert called["reason"] == "Rejected by operator."
         assert response.json()["interventionAudit"][0]["action"] == "reject"
 
-
 def test_cancel_execution_authorizes_projection_only_child_target() -> None:
     for test_client, service in _client_with_service():
         child = _build_execution_record(state=MoonMindWorkflowState.AWAITING_SLOT)
@@ -2609,7 +2534,6 @@ def test_cancel_execution_authorizes_projection_only_child_target() -> None:
         assert called["workflow_id"] == child.workflow_id
         assert called["reason"] == "stop child"
         assert called["graceful"] is True
-
 
 def test_cancel_execution_authorizes_projection_only_nested_parent(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -2648,7 +2572,6 @@ def test_cancel_execution_authorizes_projection_only_nested_parent(
     assert called["workflow_id"] == child.workflow_id
     assert called["reason"] == "stop nested child"
 
-
 def test_serialize_execution_treats_system_owner_id_as_system_owner_type() -> None:
     record = SimpleNamespace(
         close_status=None,
@@ -2673,7 +2596,6 @@ def test_serialize_execution_treats_system_owner_id_as_system_owner_type() -> No
 
     assert payload.owner_type == "system"
     assert payload.owner_id == "system"
-
 
 def test_serialize_execution_uses_created_at_for_immediate_schedule() -> None:
     created_at = datetime(2026, 3, 6, 0, 0, tzinfo=UTC)
@@ -2702,7 +2624,6 @@ def test_serialize_execution_uses_created_at_for_immediate_schedule() -> None:
     assert payload.scheduled_for == created_at
     assert payload.created_at == created_at
 
-
 def test_serialize_execution_falls_back_to_updated_at_for_created_at() -> None:
     updated_at = datetime(2026, 3, 6, 0, 0, tzinfo=UTC)
     record = SimpleNamespace(
@@ -2728,7 +2649,6 @@ def test_serialize_execution_falls_back_to_updated_at_for_created_at() -> None:
 
     assert payload.created_at == updated_at
     assert payload.scheduled_for == updated_at
-
 
 def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> None:
     """Ensure runtime/model/effort stored in record.parameters are surfaced."""
@@ -2772,7 +2692,6 @@ def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> 
     assert dumped["model"] == "gpt-5-codex"
     assert dumped["effort"] == "high"
 
-
 def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key() -> None:
     """Some payloads store mode under parameters.runtime.mode without top-level targetRuntime."""
     record = SimpleNamespace(
@@ -2806,7 +2725,6 @@ def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key
     dumped = payload.model_dump(by_alias=True)
     assert dumped["targetRuntime"] == "gemini_cli"
 
-
 def test_serialize_execution_surfaces_runtime_fields_from_task_runtime_payload() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
@@ -2829,7 +2747,6 @@ def test_serialize_execution_surfaces_runtime_fields_from_task_runtime_payload()
     assert dumped["resolvedModel"] == "claude-3.7-sonnet"
     assert dumped["effort"] == "low"
     assert dumped["profileId"] == "profile:claude-default"
-
 
 def test_serialize_execution_surfaces_task_template_slug_as_primary_skill() -> None:
     record = _build_execution_record(
@@ -2854,7 +2771,6 @@ def test_serialize_execution_surfaces_task_template_slug_as_primary_skill() -> N
     assert dumped["taskSkills"] == ["jira-orchestrate"]
     assert dumped["skillRuntime"]["selectedSkills"] == ["jira-orchestrate"]
 
-
 def test_serialize_execution_surfaces_applied_template_slug_as_primary_skill() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
@@ -2876,7 +2792,6 @@ def test_serialize_execution_surfaces_applied_template_slug_as_primary_skill() -
 
     assert dumped["targetSkill"] == "jira-orchestrate"
     assert dumped["taskSkills"] == ["jira-orchestrate"]
-
 
 def test_serialize_execution_uses_latest_applied_template_as_primary_skill() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
@@ -2905,7 +2820,6 @@ def test_serialize_execution_uses_latest_applied_template_as_primary_skill() -> 
     assert dumped["targetSkill"] == "latest-preset"
     assert dumped["taskSkills"] == ["latest-preset"]
     assert dumped["skillRuntime"]["selectedSkills"] == ["latest-preset"]
-
 
 def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
@@ -2977,7 +2891,6 @@ def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     }
     assert "FULL SKILL BODY SHOULD NOT LEAK" not in str(dumped["skillRuntime"])
 
-
 def test_serialize_execution_preserves_direct_skill_source_provenance() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
@@ -3018,7 +2931,6 @@ def test_serialize_execution_preserves_direct_skill_source_provenance() -> None:
         },
     ]
 
-
 def test_serialize_execution_accepts_snake_case_skill_materialization_metadata() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
@@ -3048,7 +2960,6 @@ def test_serialize_execution_accepts_snake_case_skill_materialization_metadata()
     assert skill_runtime["promptIndexRef"] == "artifact:prompt-index-1"
     assert skill_runtime["activationSummaryRef"] == "artifact:activation-summary-1"
 
-
 def test_serialize_execution_surfaces_skill_lifecycle_intent_for_schedule_defaults() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.SCHEDULED)
     record.parameters = {
@@ -3071,7 +2982,6 @@ def test_serialize_execution_surfaces_skill_lifecycle_intent_for_schedule_defaul
     assert lifecycle["resolutionMode"] == "selector-based"
     assert lifecycle["explanation"] == "Scheduled run resolves selected skills when it starts."
 
-
 def test_serialize_execution_marks_lifecycle_defaults_as_inherited_defaults() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.SCHEDULED)
     record.parameters = {
@@ -3087,7 +2997,6 @@ def test_serialize_execution_marks_lifecycle_defaults_as_inherited_defaults() ->
     assert lifecycle["resolvedSkillsetRef"] is None
     assert lifecycle["resolutionMode"] == "inherited-defaults"
     assert lifecycle["explanation"] == "Execution inherits deployment skill defaults explicitly."
-
 
 def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run(
     monkeypatch: pytest.MonkeyPatch,
@@ -3110,7 +3019,6 @@ def test_serialize_execution_ignores_stale_waiting_reason_for_executing_run(
     assert payload.waiting_reason is None
     assert payload.debug_fields is not None
     assert payload.debug_fields.waiting_reason is None
-
 
 def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
     record = SimpleNamespace(
@@ -3141,7 +3049,6 @@ def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
     assert payload.task_run_id == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
     dumped = payload.model_dump(by_alias=True)
     assert dumped["taskRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
-
 
 def test_serialize_execution_surfaces_dependency_metadata() -> None:
     record = SimpleNamespace(
@@ -3185,7 +3092,6 @@ def test_serialize_execution_surfaces_dependency_metadata() -> None:
     assert dumped["dependencyResolution"] == "success"
     assert dumped["failedDependencyId"] is None
 
-
 def test_serialize_execution_repository_ignores_mapping_values_and_uses_first_scalar() -> None:
     record = SimpleNamespace(
         close_status=None,
@@ -3220,7 +3126,6 @@ def test_serialize_execution_repository_ignores_mapping_values_and_uses_first_sc
     dumped = payload.model_dump(by_alias=True)
     assert dumped["repository"] == "Moon/Mind"
 
-
 def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record()
@@ -3236,7 +3141,6 @@ def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
         assert payload["latestRunView"] is True
         assert payload["continueAsNewCause"] == "manual_rerun"
         assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
-
 
 def test_describe_execution_includes_latest_run_progress() -> None:
     app = FastAPI()
@@ -3283,7 +3187,6 @@ def test_describe_execution_includes_latest_run_progress() -> None:
         "currentStepTitle": "Run tests",
         "updatedAt": "2026-04-08T12:00:00Z",
     }
-
 
 def test_describe_execution_includes_live_merge_automation_summary() -> None:
     app = FastAPI()
@@ -3386,7 +3289,6 @@ def test_describe_execution_includes_live_merge_automation_summary() -> None:
         }
     ]
 
-
 def test_describe_execution_queries_resolver_children_concurrently() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -3453,7 +3355,6 @@ def test_describe_execution_queries_resolver_children_concurrently() -> None:
         for child in response.json()["mergeAutomation"]["resolverChildren"]
     ] == resolver_ids
 
-
 def test_describe_execution_prefers_progress_query_run_id_when_newer_latest_run() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -3503,7 +3404,6 @@ def test_describe_execution_prefers_progress_query_run_id_when_newer_latest_run(
     }
     assert "runId" not in payload["progress"]
 
-
 def test_describe_execution_leaves_progress_null_when_query_fails() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -3521,7 +3421,6 @@ def test_describe_execution_leaves_progress_null_when_query_fails() -> None:
     assert payload["stepsHref"] == "/api/executions/mm:wf-1/steps"
     assert payload["progress"] is None
 
-
 def test_describe_execution_steps_href_uses_configured_detail_endpoint(monkeypatch) -> None:
     monkeypatch.setattr(
         settings.temporal_dashboard,
@@ -3530,7 +3429,6 @@ def test_describe_execution_steps_href_uses_configured_detail_endpoint(monkeypat
     )
     payload = _serialize_execution(_build_execution_record()).model_dump(by_alias=True)
     assert payload["stepsHref"] == "/gateway/api/executions/mm:wf-1/steps"
-
 
 def test_describe_execution_does_not_query_progress_for_manifest_workflows() -> None:
     app = FastAPI()
@@ -3551,7 +3449,6 @@ def test_describe_execution_does_not_query_progress_for_manifest_workflows() -> 
     assert payload["progress"] is None
     assert payload["stepsHref"] is None
     assert query_client.get_workflow_handle.call_count <= 1
-
 
 def test_get_execution_steps_returns_latest_run_ledger() -> None:
     app = FastAPI()
@@ -3632,7 +3529,6 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
         "sessionId": "session-1",
         "sessionEpoch": 4,
     }
-
 
 def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
     app = FastAPI()
@@ -3747,7 +3643,6 @@ def test_get_execution_steps_enriches_missing_agent_task_run_ids_once() -> None:
         ),
     )
 
-
 def test_get_execution_steps_returns_503_for_temporal_rpc_errors() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -3766,7 +3661,6 @@ def test_get_execution_steps_returns_503_for_temporal_rpc_errors() -> None:
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "temporal_unavailable"
 
-
 def test_get_execution_steps_returns_500_for_invalid_ledger_payload() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -3781,7 +3675,6 @@ def test_get_execution_steps_returns_500_for_invalid_ledger_payload() -> None:
 
     assert response.status_code == 500
     assert response.json()["detail"]["code"] == "invalid_execution_query_payload"
-
 
 def test_get_execution_steps_rejects_unsupported_workflow_types() -> None:
     app = FastAPI()
@@ -3799,7 +3692,6 @@ def test_get_execution_steps_rejects_unsupported_workflow_types() -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_execution_query"
-
 
 def test_describe_execution_includes_report_projection_when_latest_report_artifacts_exist() -> None:
     app = FastAPI()
@@ -3888,7 +3780,6 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
         'severityCounts': {'high': 1},
     }
 
-
 def test_describe_execution_report_projection_degrades_safely_when_no_report_exists() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -3933,7 +3824,6 @@ def test_describe_execution_report_projection_degrades_safely_when_no_report_exi
         ),
     ]
     assert payload['reportProjection'] == {'hasReport': False}
-
 
 def test_describe_execution_report_projection_ignores_incomplete_report_artifacts() -> None:
     app = FastAPI()
@@ -4000,7 +3890,6 @@ def test_describe_execution_report_projection_ignores_incomplete_report_artifact
     ]
     assert payload['reportProjection'] == {'hasReport': False}
 
-
 def test_describe_execution_hydrates_provider_profile_metadata() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -4030,7 +3919,6 @@ def test_describe_execution_hydrates_provider_profile_metadata() -> None:
     assert payload["providerId"] == "google"
     assert payload["providerLabel"] == "Google"
     app.dependency_overrides.clear()
-
 
 def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -4067,7 +3955,6 @@ def test_describe_execution_falls_back_to_managed_run_store_task_run_id(
     assert len(to_thread_calls) == 1
     assert to_thread_calls[0][1] == (("mm:wf-1",),)
 
-
 def test_request_rerun_update_response_includes_continue_as_new_cause() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record()
@@ -4088,7 +3975,6 @@ def test_request_rerun_update_response_includes_continue_as_new_cause() -> None:
 
         assert response.status_code == 200
         assert response.json()["continueAsNewCause"] == "manual_rerun"
-
 
 def test_request_rerun_update_redirects_response_to_created_rerun_execution() -> None:
     for test_client, service in _client_with_service():
@@ -4126,7 +4012,6 @@ def test_request_rerun_update_redirects_response_to_created_rerun_execution() ->
         assert service.describe_execution.await_args_list[-1].args == (
             "mm:rerun-created",
         )
-
 
 def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
     metrics = Mock()
@@ -4175,7 +4060,6 @@ def test_task_editing_update_route_emits_attempt_and_result_metrics() -> None:
             "applied": "next_safe_point",
         }
 
-
 def test_task_editing_update_route_emits_failure_reason_metrics() -> None:
     metrics = Mock()
     for test_client, service in _client_with_service():
@@ -4208,7 +4092,6 @@ def test_task_editing_update_route_emits_failure_reason_metrics() -> None:
             "reason": "validation",
         }
 
-
 def test_list_executions_preserves_logical_identity_fields() -> None:
     for test_client, service in _client_with_service():
         service.list_executions.return_value = SimpleNamespace(
@@ -4231,7 +4114,6 @@ def test_list_executions_preserves_logical_identity_fields() -> None:
         assert item["latestRunView"] is True
         assert item["continueAsNewCause"] == "manual_rerun"
 
-
 def test_describe_manifest_execution_exposes_bounded_manifest_fields() -> None:
     """Manifest ingest detail should expose refs, policy, and bounded counts."""
 
@@ -4250,7 +4132,6 @@ def test_describe_manifest_execution_exposes_bounded_manifest_fields() -> None:
         assert payload["executionPolicy"]["maxConcurrency"] == 3
         assert payload["counts"]["ready"] == 1
         assert payload["counts"]["running"] == 1
-
 
 def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() -> None:
     for test_client, service in _client_with_service():
@@ -4308,7 +4189,6 @@ def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() 
             }
         ]
 
-
 def test_manifest_update_route_passes_manifest_specific_fields() -> None:
     """Manifest-specific update requests should be forwarded unchanged to the service."""
 
@@ -4338,7 +4218,6 @@ def test_manifest_update_route_passes_manifest_specific_fields() -> None:
         assert called["new_manifest_artifact_ref"] == "art_manifest_2"
         assert called["mode"] == "REPLACE_FUTURE"
 
-
 def test_manifest_status_route_returns_bounded_snapshot() -> None:
     """Manifest status route should return the service snapshot unchanged."""
 
@@ -4367,7 +4246,6 @@ def test_manifest_status_route_returns_bounded_snapshot() -> None:
 
         assert response.status_code == 200
         assert response.json()["counts"]["running"] == 1
-
 
 def test_manifest_nodes_route_returns_page_payload() -> None:
     """Manifest node page route should preserve cursor and count fields."""
@@ -4399,7 +4277,6 @@ def test_manifest_nodes_route_returns_page_payload() -> None:
         assert body["nextCursor"] == "cursor-1"
         assert body["items"][0]["nodeId"] == "node-b"
         assert body["items"][0]["workflowType"] == "MoonMind.Run"
-
 
 def test_describe_execution_includes_actions_and_debug_fields(
     monkeypatch: pytest.MonkeyPatch,
@@ -4435,7 +4312,6 @@ def test_describe_execution_includes_actions_and_debug_fields(
     assert body["debugFields"]["workflowId"] == "mm:wf-1"
     assert body["redirectPath"] == "/tasks/mm:wf-1?source=temporal"
 
-
 def test_describe_execution_exposes_dependency_bypass_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4457,7 +4333,6 @@ def test_describe_execution_exposes_dependency_bypass_action(
     body = response.json()
     assert body["actions"]["canBypassDependencies"] is True
     assert "canBypassDependencies" not in body["actions"]["disabledReasons"]
-
 
 def test_describe_execution_exposes_temporal_task_editing_contract(
     monkeypatch: pytest.MonkeyPatch,
@@ -4493,7 +4368,6 @@ def test_describe_execution_exposes_temporal_task_editing_contract(
     assert body["actions"]["canUpdateInputs"] is True
     assert body["actions"]["canRerun"] is False
 
-
 def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4523,7 +4397,6 @@ def test_temporal_task_editing_actions_require_run_workflow_and_feature_flag(
         == "unsupported_workflow_type"
     )
 
-
 def test_temporal_task_editing_actions_require_original_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4541,7 +4414,6 @@ def test_temporal_task_editing_actions_require_original_snapshot(
         actions.disabled_reasons["canRerun"]
         == "original_task_input_snapshot_missing"
     )
-
 
 def test_describe_execution_disables_actions_when_feature_flag_off(
     monkeypatch: pytest.MonkeyPatch,
@@ -4564,7 +4436,6 @@ def test_describe_execution_disables_actions_when_feature_flag_off(
     assert body["actions"]["canPause"] is False
     assert body["actions"]["disabledReasons"]["pause"] == "actions_disabled"
     assert body["debugFields"] is None
-
 
 def test_action_endpoints_reject_requests_when_actions_disabled(
     monkeypatch: pytest.MonkeyPatch,
@@ -4597,7 +4468,6 @@ def test_action_endpoints_reject_requests_when_actions_disabled(
         cancel_response = test_client.post("/api/executions/mm:wf-1/cancel", json={})
         assert cancel_response.status_code == 403
         assert cancel_response.json()["detail"]["code"] == "actions_disabled"
-
 
 def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
     """Regression: 'cancelled' (British) must not leak into the Literal('canceled') field."""

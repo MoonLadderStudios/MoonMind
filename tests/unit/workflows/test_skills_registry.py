@@ -9,7 +9,6 @@ import pytest
 from moonmind.workflows.skills import registry
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 
-
 @pytest.fixture
 def mock_settings(monkeypatch):
     def _set_setting(name: str, value: Any):
@@ -42,7 +41,6 @@ def mock_settings(monkeypatch):
 
     return _set_setting
 
-
 def test_stable_percent():
     # Should always return a stable percentage 0-99
     val1 = registry._stable_percent("run-123", "stage-a")
@@ -50,7 +48,6 @@ def test_stable_percent():
 
     assert 0 <= val1 <= 99
     assert val1 == val2
-
 
 def test_select_stage_skill_uses_override(mock_settings):
     context = {"skill_overrides": {"stage-a": "custom-skill"}}
@@ -62,13 +59,11 @@ def test_select_stage_skill_uses_override(mock_settings):
     skill2 = registry._select_stage_skill("stage-a", context2)
     assert skill2 == "auto"  # Falls back to default
 
-
 def test_select_stage_skill_uses_stage_mappings(mock_settings):
     assert registry._select_stage_skill("discover_next_phase", {}) == "speckit-discover"
     assert registry._select_stage_skill("submit_codex_job", {}) == "speckit-submit"
     assert registry._select_stage_skill("apply_and_publish", {}) == "speckit-publish"
     assert registry._select_stage_skill("unknown_stage", {}) == "auto"
-
 
 def test_skill_allowed(mock_settings):
     # Allowlist mode
@@ -88,7 +83,6 @@ def test_skill_allowed(mock_settings):
     mock_settings("allowed_skills", ("auto",))
     assert registry._skill_allowed("unknown") is True
 
-
 def test_resolve_stage_execution_uses_skills(mock_settings):
     mock_settings("skills_enabled", True)
     mock_settings("skills_canary_percent", 100)
@@ -106,7 +100,6 @@ def test_resolve_stage_execution_uses_skills(mock_settings):
     assert decision.fallback_enabled is True
     assert decision.shadow_mode is False
 
-
 def test_resolve_stage_execution_direct_only_when_disabled(mock_settings):
     mock_settings("skills_enabled", False)
     mock_settings("skills_canary_percent", 100)
@@ -118,7 +111,6 @@ def test_resolve_stage_execution_direct_only_when_disabled(mock_settings):
     assert decision.use_skills is False
     assert decision.execution_path == "direct_only"
 
-
 def test_resolve_stage_execution_direct_only_outside_canary(mock_settings):
     mock_settings("skills_enabled", True)
     mock_settings("skills_canary_percent", 0)  # Nobody gets it
@@ -129,7 +121,6 @@ def test_resolve_stage_execution_direct_only_outside_canary(mock_settings):
 
     assert decision.use_skills is False
     assert decision.execution_path == "direct_only"
-
 
 def test_resolve_stage_execution_unallowed_skill_fallback(mock_settings):
     mock_settings("skill_policy_mode", "allowlist")
@@ -145,11 +136,6 @@ def test_resolve_stage_execution_unallowed_skill_fallback(mock_settings):
 
     # Should fall back to the default allowed skill
     assert decision.selected_skill == "auto"
-
-
-
-
-
 
 def test_contract_registry_helpers_roundtrip_snapshot():
     store = InMemoryArtifactStore()

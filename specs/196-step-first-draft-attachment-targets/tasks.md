@@ -15,7 +15,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-377 orchestration input exists in `docs/tmp/jira-orchestration-inputs/MM-377-moonspec-orchestration-input.md` and is preserved in `specs/196-step-first-draft-attachment-targets/spec.md` (FR-009)
+- [X] T001 Confirm MM-377 orchestration input exists in `spec.md` (Input) and is preserved in `specs/196-step-first-draft-attachment-targets/spec.md` (FR-009)
 - [X] T002 Create Moon Spec artifact directory `specs/196-step-first-draft-attachment-targets/` with spec, plan, research, data model, contract, quickstart, and tasks
 
 ## Phase 2: Foundational

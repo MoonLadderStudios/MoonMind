@@ -11,12 +11,10 @@ from moonmind.models_cache import model_cache  # Import the model cache
 router = APIRouter(tags=["models"])
 logger = logging.getLogger(__name__)
 
-
 @router.get("/health", include_in_schema=False)  # Health checks should be public
 @router.head("/health", include_in_schema=False)
 async def health_check():  # Public
     return {"status": "healthy"}
-
 
 @router.get("/")
 async def models(_user: User = Depends(get_current_user())):  # Protected

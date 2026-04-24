@@ -1,7 +1,7 @@
 # Implementation Plan: Remediation Evidence Bundles
 
 **Branch**: `227-remediation-evidence-bundles` | **Date**: 2026-04-22 | **Spec**: `specs/227-remediation-evidence-bundles/spec.md`
-**Input**: Single-story runtime feature specification from `specs/227-remediation-evidence-bundles/spec.md`, generated from the MM-452 Jira preset brief in `docs/tmp/jira-orchestration-inputs/MM-452-moonspec-orchestration-input.md`.
+**Input**: Single-story runtime feature specification from `specs/227-remediation-evidence-bundles/spec.md`, generated from the MM-452 Jira preset brief in `spec.md` (Input).
 
 ## Summary
 
@@ -31,15 +31,15 @@ Implement MM-452 by treating the existing remediation context builder and typed 
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: SQLAlchemy async ORM, existing Temporal artifact service, remediation link/context models  
-**Storage**: Existing `TemporalExecutionRemediationLink`, `TemporalExecutionCanonicalRecord`, and Temporal artifact tables only; no new persistent tables  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: SQLAlchemy async ORM, existing Temporal artifact service, remediation link/context models 
+**Storage**: Existing `TemporalExecutionRemediationLink`, `TemporalExecutionCanonicalRecord`, and Temporal artifact tables only; no new persistent tables 
 **Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_remediation_context.py`
-**Integration Testing**: `./tools/test_integration.sh` for compose-backed `integration_ci` where Docker is available  
-**Target Platform**: MoonMind Temporal control-plane/runtime service boundary  
-**Project Type**: Python service modules plus unit/integration tests  
-**Performance Goals**: Evidence context and guard reads stay bounded and ref-based; no unbounded log or artifact bodies in workflow history  
-**Constraints**: No raw Jira credentials, no raw storage paths/URLs/secrets in durable evidence, no action execution registry in this story, no new tables  
+**Integration Testing**: `./tools/test_integration.sh` for compose-backed `integration_ci` where Docker is available 
+**Target Platform**: MoonMind Temporal control-plane/runtime service boundary 
+**Project Type**: Python service modules plus unit/integration tests 
+**Performance Goals**: Evidence context and guard reads stay bounded and ref-based; no unbounded log or artifact bodies in workflow history 
+**Constraints**: No raw Jira credentials, no raw storage paths/URLs/secrets in durable evidence, no action execution registry in this story, no new tables 
 **Scale/Scope**: One independently testable remediation runtime evidence story
 
 ## Constitution Check
@@ -55,7 +55,7 @@ Implement MM-452 by treating the existing remediation context builder and typed 
 - IX. Resilient by Default: PASS. Missing evidence and target records fail fast or degrade explicitly.
 - X. Continuous Improvement: PASS. Verification artifacts record remaining risk and evidence.
 - XI. Spec-Driven Development: PASS. MM-452 artifacts define and trace the work.
-- XII. Docs Separation: PASS. Jira input and implementation plan stay under `docs/tmp` and `specs/`.
+- XII. Docs Separation: PASS. Jira input and implementation plan stay under `local-only handoffs` and `specs/`.
 - XIII. Pre-release Compatibility: PASS. Adds the canonical guard surface without compatibility aliases.
 
 ## Project Structure

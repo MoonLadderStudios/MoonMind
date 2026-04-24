@@ -1,6 +1,6 @@
 # Activity Catalog and Worker Topology
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md`](../tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Status: **Implemented in core runtime** (catalog live; some target-state families still pending)
 Last updated: **2026-03-30**
@@ -41,25 +41,25 @@ This document covers the **Temporal-managed worker model** only.
 ## 2.1 Goals
 
 1. Provide a stable activity taxonomy for:
-   - artifact lifecycle
-   - planning
-   - executable tool execution
-   - external integrations
-   - managed runtime supervision
-   - provider-profile coordination support
-   - proposal/review support
-   - future agent skill resolution and materialization
+ - artifact lifecycle
+ - planning
+ - executable tool execution
+ - external integrations
+ - managed runtime supervision
+ - provider-profile coordination support
+ - proposal/review support
+ - future agent skill resolution and materialization
 
 2. Define worker fleets with clear:
-   - capability boundaries
-   - security boundaries
-   - scaling expectations
+ - capability boundaries
+ - security boundaries
+ - scaling expectations
 
 3. Ensure activity contracts are:
-   - retry-safe
-   - observable
-   - cancel-aware where needed
-   - payload-disciplined
+ - retry-safe
+ - observable
+ - cancel-aware where needed
+ - payload-disciplined
 
 4. Keep Task Queue usage minimal and operational.
 
@@ -683,31 +683,31 @@ If using OpenTelemetry:
 ## 14. Testing strategy
 
 1. **Activity contract tests**
-   - validate canonical request and response schemas
-   - ensure provider activities return canonical contracts
+ - validate canonical request and response schemas
+ - ensure provider activities return canonical contracts
 
 2. **Worker fleet integration tests**
-   - verify activity-to-fleet routing
-   - verify helper activities remain narrow and intentional
+ - verify activity-to-fleet routing
+ - verify helper activities remain narrow and intentional
 
 3. **Load tests**
-   - sandbox concurrency and isolation
-   - LLM rate limiting correctness
-   - managed runtime queue behavior
+ - sandbox concurrency and isolation
+ - LLM rate limiting correctness
+ - managed runtime queue behavior
 
 4. **Failure injection**
-   - provider outages
-   - artifact store outages
-   - worker restarts mid-activity
-   - manager restart and lease recovery paths
+ - provider outages
+ - artifact store outages
+ - worker restarts mid-activity
+ - manager restart and lease recovery paths
 
 5. **Canonical contract enforcement**
-   - reject unknown provider statuses at the adapter/activity boundary
-   - ensure workflows do not depend on provider-shaped payloads
-   - ensure metadata carries provider-specific details without breaking canonical top-level schemas
+ - reject unknown provider statuses at the adapter/activity boundary
+ - ensure workflows do not depend on provider-shaped payloads
+ - ensure metadata carries provider-specific details without breaking canonical top-level schemas
 
 6. **Traceability gate**
-   - catalog changes must stay aligned with runtime code, docs, and tests
+ - catalog changes must stay aligned with runtime code, docs, and tests
 
 ---
 

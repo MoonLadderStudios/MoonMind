@@ -19,7 +19,6 @@ from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.main import app as main_app
 
-
 class DummyProfileService:
     def __init__(self):
         self.update_called_with = None
@@ -35,10 +34,8 @@ class DummyProfileService:
         self.update_called_with = profile_data
         return None
 
-
 TEST_JOB_ID = "123e4567-e89b-12d3-a456-426614174000"
 TEST_OPENAI_API_KEY = "test-openai-api-key"
-
 
 @contextmanager
 def _playwright_page(playwright_obj):
@@ -51,7 +48,6 @@ def _playwright_page(playwright_obj):
             page.close()
     finally:
         browser.close()
-
 
 @pytest.fixture(scope="module")
 def server():
@@ -75,7 +71,6 @@ def server():
     server.should_exit = True
     thread.join()
 
-
 def test_submit_key(server):
     with sync_playwright() as p:
         with _playwright_page(p) as page:
@@ -86,7 +81,6 @@ def test_submit_key(server):
 
     assert server.update_called_with is not None
 
-
 def _fill_queue_task_create_form(page):
     page.wait_for_selector("form#queue-submit-form")
     page.fill(
@@ -95,7 +89,6 @@ def _fill_queue_task_create_form(page):
     )
     page.fill("input[name='repository']", "moon/demo")
     return page.locator("form#queue-submit-form button[type='submit']")
-
 
 def _mock_queue_runtime_capabilities(page):
     page.route(
@@ -106,7 +99,6 @@ def _mock_queue_runtime_capabilities(page):
             body=json.dumps({}),
         ),
     )
-
 
 def _mock_queue_create_job(page, job_id=None, should_fail=False):
     def handler(route):
@@ -137,7 +129,6 @@ def _mock_queue_create_job(page, job_id=None, should_fail=False):
 
     page.route("**/api/executions", handler)
 
-
 def test_submit_create_task_flow_successful_navigation(server):
     with sync_playwright() as p:
         with _playwright_page(p) as page:
@@ -159,7 +150,6 @@ def test_submit_create_task_flow_successful_navigation(server):
             page.wait_for_url(f"**/tasks/mm:{TEST_JOB_ID}?source=temporal")
 
             assert page.url.endswith(f"/tasks/mm:{TEST_JOB_ID}?source=temporal")
-
 
 def test_submit_create_task_flow_error_restores_label(server):
     with sync_playwright() as p:

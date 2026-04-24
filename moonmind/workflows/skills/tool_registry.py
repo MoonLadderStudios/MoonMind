@@ -18,10 +18,8 @@ from .tool_plan_contracts import (
     parse_tool_definition,
 )
 
-
 class ToolRegistryError(ValueError):
     """Raised when registry definitions or snapshots are invalid."""
-
 
 @dataclass(frozen=True, slots=True)
 class ToolRegistrySnapshot:
@@ -69,7 +67,6 @@ class ToolRegistrySnapshot:
             "skills": entries,
         }
 
-
 def _canonical_registry_doc(skills: tuple[ToolDefinition, ...]) -> dict[str, Any]:
     ordered = sorted(skills, key=lambda skill: (skill.name, skill.version))
     entries = [skill.to_payload() for skill in ordered]
@@ -79,17 +76,14 @@ def _canonical_registry_doc(skills: tuple[ToolDefinition, ...]) -> dict[str, Any
         "skills": entries,
     }
 
-
 def _digest_registry_doc(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"{REGISTRY_DIGEST_PREFIX}{hashlib.sha256(encoded).hexdigest()}"
-
 
 def compute_registry_digest(*, skills: tuple[ToolDefinition, ...]) -> str:
     """Compute the canonical digest for a registry snapshot payload."""
 
     return _digest_registry_doc(_canonical_registry_doc(skills))
-
 
 def validate_tool_registry(skills: tuple[ToolDefinition, ...]) -> None:
     """Validate a registry payload after it has been parsed."""
@@ -104,7 +98,6 @@ def validate_tool_registry(skills: tuple[ToolDefinition, ...]) -> None:
                 f"Duplicate tool definition for '{definition.name}:{definition.version}'"
             )
         seen.add(definition.key)
-
 
 def parse_tool_registry(payload: Mapping[str, Any]) -> tuple[ToolDefinition, ...]:
     """Parse untrusted registry payload into validated tool definitions."""
@@ -137,7 +130,6 @@ def parse_tool_registry(payload: Mapping[str, Any]) -> tuple[ToolDefinition, ...
     validate_tool_registry(skills)
     return skills
 
-
 def load_tool_registry(path: Path) -> tuple[ToolDefinition, ...]:
     """Load registry definitions from a YAML or JSON file."""
 
@@ -153,7 +145,6 @@ def load_tool_registry(path: Path) -> tuple[ToolDefinition, ...]:
     if not isinstance(payload, Mapping):
         raise ToolRegistryError("Registry root must be an object")
     return parse_tool_registry(payload)
-
 
 def create_registry_snapshot(
     *,
@@ -180,7 +171,6 @@ def create_registry_snapshot(
         digest=digest, artifact_ref=artifact.artifact_ref, skills=skills
     )
 
-
 def load_registry_snapshot_from_artifact(
     *,
     artifact_ref: str,
@@ -195,7 +185,6 @@ def load_registry_snapshot_from_artifact(
     skills = parse_tool_registry(payload)
     digest = _digest_registry_doc(_canonical_registry_doc(skills))
     return ToolRegistrySnapshot(digest=digest, artifact_ref=artifact_ref, skills=skills)
-
 
 __all__ = [
     "ToolRegistryError",

@@ -1,6 +1,6 @@
 # System Pause & Maintenance Mode
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkerPauseSystem.md`](../tmp/remaining-work/Temporal-WorkerPauseSystem.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Status: **Implemented**
 Owners: **MoonMind Engineering**
@@ -22,7 +22,7 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 2. Keep the queues **undisturbed**: queued Temporal workflows remain queued.
 3. Provide a **clear, auditable operator control** (API + Mission Control Dashboard) with reason + timestamps.
 4. Support an upgrade-friendly workflow:
-   * **Pause → Drain → Upgrade → Resume**
+ * **Pause → Drain → Upgrade → Resume**
 5. Optional “workflow pause” mode: allow operators to request that **running jobs pause at safe Activity boundaries** while retaining state durably (Temporal history for workflow state + `ManagedRunStore` for detached managed runtimes).
 
 ---
@@ -50,19 +50,19 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 ### 4.1 Components
 
 1. **System Pause State (DB, singleton)**
-   * Source of truth for whether the Mission Control UI accepts new workflow submissions via the `POST /api/workflows` boundary.
-   * **Note**: This does not govern the Temporal workers themselves; it only prevents new tasks from being injected into the system from the frontend.
+ * Source of truth for whether the Mission Control UI accepts new workflow submissions via the `POST /api/workflows` boundary.
+ * **Note**: This does not govern the Temporal workers themselves; it only prevents new tasks from being injected into the system from the frontend.
 
 2. **Mission Control API Guard**
-   * `POST /api/workflows` returns “system paused” metadata and **does not** trigger new Temporal Workflows while the DB singleton is paused.
+ * `POST /api/workflows` returns “system paused” metadata and **does not** trigger new Temporal Workflows while the DB singleton is paused.
 
 3. **Temporal Worker Graceful Shutdown (Drain)**
-   * Used by operators at the infrastructure level (e.g., `docker compose stop <worker>`) to gracefully drain inflight Activities without killing them instantly.
-   * This is the native Temporal way to halt new work assignments to a specific worker node.
+ * Used by operators at the infrastructure level (e.g., `docker compose stop <worker>`) to gracefully drain inflight Activities without killing them instantly.
+ * This is the native Temporal way to halt new work assignments to a specific worker node.
 
 4. **Dashboard UX**
-   * Global banner + a “Pause System / Resume System” control.
-   * Drain progress indicator (running workflow count pulled from Temporal Visibility APIs: `ExecutionStatus="Running"`).
+ * Global banner + a “Pause System / Resume System” control.
+ * Drain progress indicator (running workflow count pulled from Temporal Visibility APIs: `ExecutionStatus="Running"`).
 
 ---
 
@@ -71,20 +71,20 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 ### 5.1 System pause endpoints (operator-only)
 
 * `GET /api/system/worker-pause`
-  * Returns current pause state (including `reason`) + computed drain metrics from Temporal:
-    * queued count
-    * running count
-    * `isDrained = (activeRunning == 0)`
+ * Returns current pause state (including `reason`) + computed drain metrics from Temporal:
+ * queued count
+ * running count
+ * `isDrained = (activeRunning == 0)`
 
 * `POST /api/system/worker-pause`
-  * Body:
-    ```json
-    {
-      "action": "pause" | "resume",
-      "mode": "drain" | "quiesce",
-      "reason": "Upgrading images"
-    }
-    ```
+ * Body:
+ ```json
+ {
+ "action": "pause" | "resume",
+ "mode": "drain" | "quiesce",
+ "reason": "Upgrading images"
+ }
+ ```
 
 ---
 
@@ -113,17 +113,17 @@ For external agents (e.g., Jules), the pause mechanism behaves differently. Exte
 ## 7. Operational Playbook (Recommended)
 
 1. **Pause System (Drain)**
-   * Post to API or use Dashboard to pause new workflow ingestions.
-   * Send graceful shutdown signals (SIGINT/SIGTERM) to Temporal worker containers. Note that Docker-Out-Of-Docker (DOOD) ephemeral containers might complete or get killed depending on Activity wall-clock timeouts.
+ * Post to API or use Dashboard to pause new workflow ingestions.
+ * Send graceful shutdown signals (SIGINT/SIGTERM) to Temporal worker containers. Note that Docker-Out-Of-Docker (DOOD) ephemeral containers might complete or get killed depending on Activity wall-clock timeouts.
 2. **Wait for drain**
-   * Temporal UI shows 0 active workers on the queues, and all inflight Activities have completed.
+ * Temporal UI shows 0 active workers on the queues, and all inflight Activities have completed.
 3. **Perform upgrades**:
-   * rebuild/pull images
-   * run migrations
-   * restart services
+ * rebuild/pull images
+ * run migrations
+ * restart services
 4. **Resume System**
-   * Workers reconnect to Temporal and begin pulling Tasks. The `agent_runtime` workers securely resume tracking detached runtimes via the `ManagedRunStore` (backed by the persistent `agent_workspaces`/`/work/agent_jobs` volume). Note that cross-node upgrades require the replacement workers to mount the same persistent/shared store path.
-   * Dashboard allows new workflow submissions.
+ * Workers reconnect to Temporal and begin pulling Tasks. The `agent_runtime` workers securely resume tracking detached runtimes via the `ManagedRunStore` (backed by the persistent `agent_workspaces`/`/work/agent_jobs` volume). Note that cross-node upgrades require the replacement workers to mount the same persistent/shared store path.
+ * Dashboard allows new workflow submissions.
 
 ---
 
@@ -136,4 +136,4 @@ For external agents (e.g., Jules), the pause mechanism behaves differently. Exte
 
 ## 9. Follow-on enhancements
 
-**Steady-state today:** API-driven pause, worker drain, and Temporal-aligned operator messaging (see sections above). **Optional next steps** — banner wired purely to Temporal visibility (where not already), runbooks standardized on `worker.shutdown()` for drain, and a deeper “quiesce” mode using `workflow.wait_condition()` plus batch signals — are tracked in [`docs/tmp/remaining-work/Temporal-WorkerPauseSystem.md`](../tmp/remaining-work/Temporal-WorkerPauseSystem.md).
+**Steady-state today:** API-driven pause, worker drain, and Temporal-aligned operator messaging (see sections above). **Optional next steps** — banner wired purely to Temporal visibility (where not already), runbooks standardized on `worker.shutdown()` for drain, and a deeper “quiesce” mode using `workflow.wait_condition()` plus batch signals — are tracked in MoonSpec feature artifacts or local planning notes when needed.

@@ -2,7 +2,7 @@
 
 **Feature**: Apply Report Access and Lifecycle Policy  
 **Spec**: `/work/agent_jobs/mm:9a8c9f87-6de4-442d-aaab-d2a41a0669a5/repo/specs/231-sensitive-report-access-retention/spec.md`  
-**Original Request Source**: `spec.md` Input and `docs/tmp/jira-orchestration-inputs/MM-495-moonspec-orchestration-input.md`  
+**Original Request Source**: `spec.md` Input and `spec.md` (Input)  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH
 
@@ -13,7 +13,7 @@
 | Existing focused unit evidence | `./tools/test_unit.sh tests/unit/workflows/temporal/test_artifacts.py tests/unit/workflows/temporal/test_artifact_authorization.py` | PASS | Existing implementation evidence covers metadata safety, preview/default-read behavior, raw denial, retention defaults, and unpin restoration. No production code changed during the MM-495 alignment pass. |
 | Existing focused integration evidence | `pytest tests/integration/temporal/test_temporal_artifact_lifecycle.py -m integration_ci -q --tb=short` | PASS | Existing implementation evidence covers report deletion without cascading into unrelated observability artifacts. No production code changed during the MM-495 alignment pass. |
 | Existing full unit evidence | `./tools/test_unit.sh` | PASS | Existing feature verification recorded a clean full unit run; code behavior was not changed in this alignment pass. |
-| Traceability | `rg -n "MM-495|DESIGN-REQ-011|DESIGN-REQ-017|DESIGN-REQ-018" specs/231-sensitive-report-access-retention docs/tmp/jira-orchestration-inputs/MM-495-moonspec-orchestration-input.md` | PASS | Updated MoonSpec artifacts preserve the MM-495 Jira key and new source design IDs. |
+| Traceability | `rg -n "MM-495|DESIGN-REQ-011|DESIGN-REQ-017|DESIGN-REQ-018" specs/231-sensitive-report-access-retention` | PASS | Updated MoonSpec artifacts preserve the MM-495 Jira key and new source design IDs. |
 
 ## Requirement Coverage
 

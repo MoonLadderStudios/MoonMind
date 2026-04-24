@@ -7,7 +7,7 @@
 
 ## Scope Verified
 
-- Canonical input: `docs/tmp/jira-orchestration-inputs/MM-467-moonspec-orchestration-input.md`
+- Canonical input: `spec.md` (Input)
 - Spec: `specs/236-motion-theme-intensity-presets/spec.md`
 - Plan: `specs/236-motion-theme-intensity-presets/plan.md`
 - Tasks: `specs/236-motion-theme-intensity-presets/tasks.md`

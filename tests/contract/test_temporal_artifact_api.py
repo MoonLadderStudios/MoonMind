@@ -24,7 +24,6 @@ from moonmind.schemas.temporal_artifact_models import (
     PresignUploadPartResponse,
 )
 
-
 def _build_artifact() -> SimpleNamespace:
     now = datetime.now(UTC)
     return SimpleNamespace(
@@ -44,7 +43,6 @@ def _build_artifact() -> SimpleNamespace:
         metadata_json={},
     )
 
-
 def _build_read_policy(artifact: SimpleNamespace) -> SimpleNamespace:
     artifact_ref = SimpleNamespace(
         artifact_ref_v=1,
@@ -60,7 +58,6 @@ def _build_read_policy(artifact: SimpleNamespace) -> SimpleNamespace:
         default_read_ref=artifact_ref,
     )
 
-
 def _build_link(
     *, link_type: str = "output.primary", label: str = "Final output"
 ) -> SimpleNamespace:
@@ -74,7 +71,6 @@ def _build_link(
         created_by_activity_type=None,
         created_by_worker=None,
     )
-
 
 def _build_app() -> tuple[FastAPI, AsyncMock]:
     app = FastAPI()
@@ -96,7 +92,6 @@ def _build_app() -> tuple[FastAPI, AsyncMock]:
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
     return app, service
-
 
 def test_temporal_artifact_create_and_presign_contracts() -> None:
     app, service = _build_app()
@@ -134,7 +129,6 @@ def test_temporal_artifact_create_and_presign_contracts() -> None:
         assert part_response.status_code == 200
         PresignUploadPartResponse.model_validate(part_response.json())
 
-
 def test_temporal_artifact_get_list_presign_download_contracts() -> None:
     app, service = _build_app()
     artifact = _build_artifact()
@@ -169,7 +163,6 @@ def test_temporal_artifact_get_list_presign_download_contracts() -> None:
         )
         assert download_response.status_code == 200
         PresignDownloadResponse.model_validate(download_response.json())
-
 
 def test_temporal_artifact_latest_report_contract() -> None:
     app, service = _build_app()

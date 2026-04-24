@@ -13,7 +13,6 @@ from moonmind.services.observability.publisher import ObservabilityPublisher
 from moonmind.services.observability.models import LogStreamEvent, LogStreamType
 from moonmind.services.observability.subscriber import log_stream_generator
 
-
 class MockRequest:
     def __init__(self, disconnect_after: int = 0):
         self.disconnect_after = disconnect_after
@@ -24,7 +23,6 @@ class MockRequest:
         if self.disconnect_after > 0 and self.reads >= self.disconnect_after:
             return True
         return False
-
 
 async def test_log_stream_high_volume_performance():
     """Verify subscriber keeps up with a high-volume publisher without dropping events.
@@ -94,7 +92,6 @@ async def test_log_stream_high_volume_performance():
         f"Expected sequences 0..{total_events - 1}, got {len(seen_sequences)} events"
     )
     assert duration < 10.0, f"Performance regression: took {duration:.2f}s"
-
 
 async def test_log_stream_graceful_disconnect():
     """Verify stream handles client disconnects effectively without unbounded memory growth."""

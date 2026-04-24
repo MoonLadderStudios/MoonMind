@@ -1,6 +1,5 @@
 from moonmind.rag.context_pack import ContextItem, build_context_pack
 
-
 def test_build_context_pack_truncates_long_text():
     items = [
         ContextItem(score=0.9, source="a.py", text="line" * 1000),

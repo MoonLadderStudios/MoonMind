@@ -22,12 +22,10 @@ from .tool_registry import validate_tool_registry as validate_contract_tool_regi
 SkillRegistryError = ToolRegistryError
 SkillRegistrySnapshot = ToolRegistrySnapshot
 
-
 def _stable_percent(run_id: str, stage_name: str) -> int:
     seed = f"{run_id}:{stage_name}".encode("utf-8")
     digest = sha256(seed).hexdigest()
     return int(digest[:8], 16) % 100
-
 
 def _select_stage_skill(stage_name: str, context: Mapping[str, Any]) -> str:
     override = context.get("skill_overrides")
@@ -47,7 +45,6 @@ def _select_stage_skill(stage_name: str, context: Mapping[str, Any]) -> str:
         return selected
     return cfg.default_skill
 
-
 def _skill_allowed(skill_name: str) -> bool:
     cfg = settings.workflow
     if cfg.skill_policy_mode != "allowlist":
@@ -56,7 +53,6 @@ def _skill_allowed(skill_name: str) -> bool:
     if not allowed:
         return True
     return skill_name in allowed
-
 
 def resolve_stage_execution(
     *,
@@ -86,7 +82,6 @@ def resolve_stage_execution(
         shadow_mode=bool(cfg.skills_shadow_mode),
     )
 
-
 def configured_stage_skills() -> tuple[str, ...]:
     """Return configured stage skills in deterministic order."""
 
@@ -102,42 +97,35 @@ def configured_stage_skills() -> tuple[str, ...]:
         return ()
     return tuple(dict.fromkeys(values))
 
-
 def load_tool_registry(path: Path) -> tuple[Any, ...]:
     """Load tool definitions from a YAML/JSON registry file."""
 
     return load_contract_tool_registry(path)
-
 
 def parse_tool_registry(payload: Mapping[str, Any]) -> tuple[Any, ...]:
     """Parse untrusted tool registry payload."""
 
     return parse_contract_tool_registry(payload)
 
-
 def validate_tool_registry(skills: tuple[Any, ...]) -> None:
     """Validate parsed tool definitions."""
 
     validate_contract_tool_registry(skills)
-
 
 def load_skill_registry(path: Path) -> tuple[Any, ...]:
     """Compatibility wrapper for legacy skill-named callers."""
 
     return load_tool_registry(path)
 
-
 def parse_skill_registry(payload: Mapping[str, Any]) -> tuple[Any, ...]:
     """Compatibility wrapper for legacy skill-named callers."""
 
     return parse_tool_registry(payload)
 
-
 def validate_skill_registry(skills: tuple[Any, ...]) -> None:
     """Compatibility wrapper for legacy skill-named callers."""
 
     validate_tool_registry(skills)
-
 
 def create_registry_snapshot(
     *,
@@ -150,7 +138,6 @@ def create_registry_snapshot(
         skills=skills, artifact_store=artifact_store
     )
 
-
 def load_registry_snapshot_from_artifact(
     *,
     artifact_ref: str,
@@ -162,7 +149,6 @@ def load_registry_snapshot_from_artifact(
         artifact_ref=artifact_ref,
         artifact_store=artifact_store,
     )
-
 
 __all__ = [
     "ToolRegistryError",

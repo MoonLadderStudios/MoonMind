@@ -50,7 +50,7 @@ Deliver MM-419 by validating and hardening the existing Manifests-page Run Manif
 - **IX. Resilient by Default**: PASS. Invalid input fails before side effects.
 - **X. Continuous Improvement**: PASS. Adds regression tests for prior gaps.
 - **XI. Spec-Driven Development**: PASS. Spec, plan, tasks, and verification are maintained under `specs/216-run-manifest-page-form/`.
-- **XII. Canonical Documentation Separation**: PASS. Existing canonical UI doc remains desired-state; temporary orchestration artifacts stay under `docs/tmp`.
+- **XII. Canonical Documentation Separation**: PASS. Existing canonical UI doc remains desired-state; temporary orchestration artifacts stay under `local-only handoffs`.
 - **XIII. Pre-Release Compatibility**: PASS. No compatibility shim or legacy duplicate behavior is introduced.
 
 ## Project Structure
@@ -65,7 +65,7 @@ specs/216-run-manifest-page-form/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── ui-contract.md
+│ └── ui-contract.md
 └── tasks.md
 ```
 
@@ -76,7 +76,6 @@ frontend/src/entrypoints/
 ├── manifests.tsx
 └── manifests.test.tsx
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-419-moonspec-orchestration-input.md
 ```
 

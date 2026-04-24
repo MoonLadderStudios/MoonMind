@@ -13,7 +13,6 @@ from api_service.db.models import Base, TemporalExecutionRecord
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @pytest_asyncio.fixture
 async def db_session(tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
@@ -28,7 +27,6 @@ async def db_session(tmp_path):
         yield session
 
     await engine.dispose()
-
 
 @pytest.mark.asyncio
 async def test_sync_execution_projection_upsert_no_duplicates(db_session: AsyncSession):
@@ -87,7 +85,6 @@ async def test_sync_execution_projection_upsert_no_duplicates(db_session: AsyncS
     )
     records = result.scalars().all()
     assert len(records) == 1
-
 
 @pytest.mark.skip(reason="Not implemented yet")
 @pytest.mark.asyncio

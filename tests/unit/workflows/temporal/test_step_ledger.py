@@ -17,7 +17,6 @@ from moonmind.workflows.temporal.step_ledger import (
     update_step_row,
 )
 
-
 def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     updated_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
     rows = build_initial_step_rows(
@@ -49,7 +48,6 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert rows[1]["status"] == "pending"
     assert rows[1]["dependsOn"] == ["step-1"]
     assert rows[1]["tool"] == {"type": "skill", "name": "repo.test", "version": "1"}
-
 
 def test_build_initial_step_rows_skips_blank_node_ids() -> None:
     updated_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
@@ -104,7 +102,6 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
         }
     ]
 
-
 def test_progress_summary_prefers_active_step_title_and_counts_statuses() -> None:
     updated_at = datetime(2026, 4, 7, 12, 5, tzinfo=UTC)
     progress = build_progress_summary(
@@ -145,7 +142,6 @@ def test_progress_summary_prefers_active_step_title_and_counts_statuses() -> Non
         "currentStepTitle": "Run tests",
         "updatedAt": updated_at.isoformat(),
     }
-
 
 def test_contract_models_accept_representative_rows_and_progress() -> None:
     updated_at = datetime(2026, 4, 7, 12, 10, tzinfo=UTC)
@@ -289,7 +285,6 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
     ]
     assert snapshot.run_scope == "latest"
 
-
 def test_row_defaults_remain_bounded_and_structured() -> None:
     refs = StepLedgerRefsModel()
     artifacts = StepLedgerArtifactsModel()
@@ -308,7 +303,6 @@ def test_row_defaults_remain_bounded_and_structured() -> None:
         "runtimeDiagnostics": None,
         "providerSnapshot": None,
     }
-
 
 def test_update_step_row_allows_explicit_last_error_clear() -> None:
     updated_at = datetime(2026, 4, 7, 12, 12, tzinfo=UTC)
@@ -340,7 +334,6 @@ def test_update_step_row_allows_explicit_last_error_clear() -> None:
     )
 
     assert rows[0]["status"] == "succeeded"
-
 
 def test_upsert_step_check_updates_existing_review_state() -> None:
     updated_at = datetime(2026, 4, 7, 12, 15, tzinfo=UTC)
@@ -385,7 +378,6 @@ def test_upsert_step_check_updates_existing_review_state() -> None:
         }
     ]
     assert rows[0]["lastError"] is None
-
 
 def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
     updated_at = datetime(2026, 4, 7, 12, 15, tzinfo=UTC)

@@ -28,7 +28,6 @@ ch.setLevel(logging.DEBUG)  # Set handler level
 # Add the handler to your logger
 logger.addHandler(ch)
 
-
 @pytest.fixture(scope="session")
 def ollama_running():
     """Fixture to check if Ollama is running at the specified URL."""
@@ -40,7 +39,6 @@ def ollama_running():
         logger.debug(f"Ollama connection error: {e}")
     return False
 
-
 @pytest.fixture(scope="session")
 def ollama_embeddings_instance(ollama_running):
     """Fixture to create an Ollama embeddings instance."""
@@ -50,7 +48,6 @@ def ollama_embeddings_instance(ollama_running):
         )
     embed_model, _ = build_embed_model(settings)
     return embed_model
-
 
 def test_ollama_embeddings_generation(ollama_embeddings_instance):
     """Test generating embeddings using the Ollama embeddings instance."""
@@ -63,7 +60,6 @@ def test_ollama_embeddings_generation(ollama_embeddings_instance):
     assert (
         len(embeddings) > 10
     ), "Embeddings should have a reasonable length (more than 10 dimensions)."  # Basic sanity check
-
 
 def test_ollama_embeddings_generation_multiple_texts(ollama_embeddings_instance):
     """Test generating embeddings for multiple texts."""
@@ -86,7 +82,6 @@ def test_ollama_embeddings_generation_multiple_texts(ollama_embeddings_instance)
             len(embeddings) > 10
         ), "Embeddings should have a reasonable length (more than 10 dimensions)."  # Basic sanity check
 
-
 def test_ollama_embeddings_long_prompt(ollama_embeddings_instance):
     """Test generating embeddings for a long prompt (approx. 2048 tokens)."""
     # Note: This may truncate
@@ -102,12 +97,10 @@ def test_ollama_embeddings_long_prompt(ollama_embeddings_instance):
         len(embeddings) > 10
     ), "Embeddings should have a reasonable length (more than 10 dimensions)."  #
 
-
 def test_ollama_embeddings_instance_creation(ollama_embeddings_instance):
     """Test that the Ollama embeddings instance is created successfully."""
     assert ollama_embeddings_instance is not None
     assert isinstance(ollama_embeddings_instance, OllamaEmbedding)
-
 
 def test_ollama_embeddings_confluence_document(ollama_embeddings_instance):
     """Test embedding a Confluence document."""

@@ -15,7 +15,6 @@ from moonmind.workflows.temporal.schedule_errors import (
 
 logger = logging.getLogger(__name__)
 
-
 def _workflow_type_for_target(target: dict) -> str:
     kind = str(target.get("kind") or "")
     if kind in {"queue_task", "queue_task_template"}:
@@ -23,7 +22,6 @@ def _workflow_type_for_target(target: dict) -> str:
     if kind == "manifest_run":
         return "MoonMind.ManifestIngest"
     return "MoonMind.Run"
-
 
 async def migrate_definitions() -> None:
     logger.info("Starting migration to Temporal Schedules...")
@@ -109,7 +107,6 @@ async def migrate_definitions() -> None:
             except Exception:
                 logger.exception("Unexpected error migrating %s", dfn.id)
                 await session.rollback()
-
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

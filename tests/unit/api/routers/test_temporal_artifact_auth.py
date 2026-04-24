@@ -19,7 +19,6 @@ from api_service.api.routers.temporal_artifacts import (
 from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
 
-
 @pytest.fixture
 def _restore_auth_provider() -> Iterator[None]:
     original = settings.oidc.AUTH_PROVIDER
@@ -27,7 +26,6 @@ def _restore_auth_provider() -> Iterator[None]:
         yield
     finally:
         settings.oidc.AUTH_PROVIDER = original
-
 
 def _override_user_dependencies(app: FastAPI) -> None:
     mock_user = SimpleNamespace(
@@ -44,7 +42,6 @@ def _override_user_dependencies(app: FastAPI) -> None:
         user_dependencies = {get_current_user()}
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
-
 
 def test_disabled_mode_attributes_to_default_local_principal(
     _restore_auth_provider,
@@ -82,7 +79,6 @@ def test_disabled_mode_attributes_to_default_local_principal(
     assert response.status_code == 201
     kwargs = service.create.await_args.kwargs
     assert kwargs["principal"] is not None
-
 
 def test_authenticated_mode_requires_identity(_restore_auth_provider) -> None:
     """Authenticated mode should reject unauthenticated artifact route calls."""

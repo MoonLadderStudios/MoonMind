@@ -3,7 +3,7 @@
 ## Classification
 
 Decision: MM-397 is a single-story runtime feature request with a declarative source design.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-397-moonspec-orchestration-input.md` defines one user story: upload one skill zip from the Skills Page and save it as a new skill when valid.
+Evidence: `spec.md` (Input) defines one user story: upload one skill zip from the Skills Page and save it as a new skill when valid.
 Rationale: The brief describes one independently testable flow with validation branches, not multiple independent product stories.
 Alternatives considered: Treating the input as a broad design and routing through breakdown was rejected because all requirements support one upload/import story.
 Test implications: Unit and frontend tests are sufficient for this story, with final full unit validation.

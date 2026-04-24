@@ -4,7 +4,6 @@ import pytest
 
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
-
 def _enabled_parameters() -> dict[str, object]:
     return {
         "publishMode": "pr",
@@ -18,7 +17,6 @@ def _enabled_parameters() -> dict[str, object]:
             }
         },
     }
-
 
 def test_parent_owned_merge_automation_payload_uses_required_workflow_type() -> None:
     workflow = MoonMindRunWorkflow()
@@ -41,7 +39,6 @@ def test_parent_owned_merge_automation_payload_uses_required_workflow_type() -> 
     assert payload["pullRequest"]["headSha"] == "abc123"
     assert payload["jiraIssueKey"] == "MM-350"
 
-
 def test_parent_owned_merge_automation_requires_real_head_sha() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._repo = "MoonLadderStudios/MoonMind"
@@ -56,13 +53,11 @@ def test_parent_owned_merge_automation_requires_real_head_sha() -> None:
 
     assert payload is None
 
-
 @pytest.mark.parametrize("status", ["merged", "already_merged"])
 def test_parent_owned_merge_automation_success_outcomes(status: str) -> None:
     workflow = MoonMindRunWorkflow()
 
     assert workflow._merge_automation_child_succeeded({"status": status}) is True
-
 
 @pytest.mark.parametrize("status", ["blocked", "failed", "expired", "completed"])
 def test_parent_owned_merge_automation_non_success_outcomes(status: str) -> None:
@@ -70,13 +65,11 @@ def test_parent_owned_merge_automation_non_success_outcomes(status: str) -> None
 
     assert workflow._merge_automation_child_succeeded({"status": status}) is False
 
-
 def test_parent_owned_merge_automation_canceled_outcome_is_cancellation() -> None:
     workflow = MoonMindRunWorkflow()
 
     assert workflow._merge_automation_child_canceled({"status": "canceled"}) is True
     assert workflow._merge_automation_child_succeeded({"status": "canceled"}) is False
-
 
 @pytest.mark.parametrize(
     ("result", "expected"),
@@ -96,7 +89,6 @@ def test_parent_owned_merge_automation_unknown_status_reason_is_deterministic(
 
     assert workflow._merge_automation_failure_reason(result) == expected
 
-
 def test_parent_owned_merge_automation_failure_reason_includes_blocker() -> None:
     workflow = MoonMindRunWorkflow()
 
@@ -115,7 +107,6 @@ def test_parent_owned_merge_automation_failure_reason_includes_blocker() -> None
     assert "blocked" in reason
     assert "Required checks are failing." in reason
 
-
 def test_run_records_merge_automation_disposition_from_step_outputs() -> None:
     workflow = MoonMindRunWorkflow()
 
@@ -132,7 +123,6 @@ def test_run_records_merge_automation_disposition_from_step_outputs() -> None:
     assert workflow._merge_automation_disposition == "already_merged"
     assert workflow._merge_automation_head_sha == "abc123"
 
-
 def test_run_records_pushed_head_sha_for_parent_owned_merge_automation() -> None:
     workflow = MoonMindRunWorkflow()
 
@@ -147,7 +137,6 @@ def test_run_records_pushed_head_sha_for_parent_owned_merge_automation() -> None
     )
 
     assert workflow._publish_context["headSha"] == "pushed-head-sha"
-
 
 def test_parent_run_summary_projects_merge_automation_visibility() -> None:
     workflow = MoonMindRunWorkflow()

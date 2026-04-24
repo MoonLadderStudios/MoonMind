@@ -36,7 +36,7 @@ This story implements the Codex OAuth Provider Profile contract at the profile r
 - IX Resilient by Default: PASS. Unsafe profile input fails fast; workflow-facing payloads remain compact and secret-free.
 - X Continuous Improvement: PASS. Verification evidence and blockers are captured in MoonSpec artifacts.
 - XI Spec-Driven Development: PASS. This plan is derived from an isolated one-story spec with traceability to `MM-355`.
-- XII Canonical Docs Separation: PASS. Planning and implementation tracking remain under `specs/` and `docs/tmp`, not canonical docs.
+- XII Canonical Docs Separation: PASS. Planning and implementation tracking remain under `specs/` and `local-only handoffs`, not canonical docs.
 - XIII Pre-Release Compatibility: PASS. Unsupported internal contract values should fail through validation; no compatibility aliases or hidden transforms are planned.
 
 ## Project Structure
@@ -48,20 +48,20 @@ This story implements the Codex OAuth Provider Profile contract at the profile r
 - Contract: `specs/189-codex-auth-profile/contracts/codex-auth-profile.md`
 - Quickstart: `specs/189-codex-auth-profile/quickstart.md`
 - Likely production touchpoints:
-  - `api_service/api/routers/provider_profiles.py`
-  - `api_service/api/routers/oauth_sessions.py`
-  - `api_service/api/schemas_oauth_sessions.py`
-  - `api_service/services/provider_profile_service.py`
-  - `moonmind/schemas/agent_runtime_models.py`
-  - `moonmind/workflows/temporal/activities/oauth_session_activities.py`
-  - `moonmind/workflows/temporal/workflows/oauth_session.py`
+ - `api_service/api/routers/provider_profiles.py`
+ - `api_service/api/routers/oauth_sessions.py`
+ - `api_service/api/schemas_oauth_sessions.py`
+ - `api_service/services/provider_profile_service.py`
+ - `moonmind/schemas/agent_runtime_models.py`
+ - `moonmind/workflows/temporal/activities/oauth_session_activities.py`
+ - `moonmind/workflows/temporal/workflows/oauth_session.py`
 - Unit test targets:
-  - `tests/unit/api_service/api/routers/test_provider_profiles.py`
-  - `tests/unit/api/routers/test_oauth_sessions.py`
-  - `tests/unit/auth/test_oauth_session_activities.py`
-  - `tests/unit/schemas/test_agent_runtime_models.py`
+ - `tests/unit/api_service/api/routers/test_provider_profiles.py`
+ - `tests/unit/api/routers/test_oauth_sessions.py`
+ - `tests/unit/auth/test_oauth_session_activities.py`
+ - `tests/unit/schemas/test_agent_runtime_models.py`
 - Integration test targets:
-  - `tests/integration/temporal/test_oauth_session.py`
+ - `tests/integration/temporal/test_oauth_session.py`
 
 ## Test Strategy
 

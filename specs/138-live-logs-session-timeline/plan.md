@@ -31,7 +31,7 @@ Implement the Phase 0 and Phase 1 slice of the session-aware Live Logs migration
 - **VIII. Modular and Extensible Architecture**: PASS. Changes stay within config, schema, transport, runtime persistence, and task-runs observability boundaries.
 - **IX. Resilient by Default**: PASS. Structured history persistence must remain non-fatal to runtime control, and ended runs become more observable, not less.
 - **XI. Spec-Driven Development**: PASS. Spec, plan, tasks, and tests are defined before implementation.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Canonical docs stay declarative; only `docs/tmp/009-LiveLogsPlan.md` is rewritten as the migration tracker.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Canonical docs stay declarative; only `docs/ManagedAgents/LiveLogs.md` is rewritten as the migration tracker.
 - **XIII. Pre-Release Velocity: Delete, Don't Deprecate**: PASS. We will replace old-only internal assumptions directly rather than adding a second long-lived event model.
 
 ## Research
@@ -45,7 +45,7 @@ Implement the Phase 0 and Phase 1 slice of the session-aware Live Logs migration
 
 ## Project Structure
 
-- Update `docs/tmp/009-LiveLogsPlan.md` to the new session-aware rollout tracker.
+- Update `docs/ManagedAgents/LiveLogs.md` to the new session-aware rollout tracker.
 - Extend `moonmind/config/settings.py` with a session-timeline rollout flag and expose it from `api_service/api/routers/task_dashboard_view_model.py`.
 - Replace chunk-centric internal event typing in `moonmind/schemas/agent_runtime_models.py`, `moonmind/observability/transport.py`, `moonmind/workflows/temporal/runtime/log_streamer.py`, and `api_service/api/routers/task_runs.py`.
 - Extend `moonmind/workflows/temporal/runtime/store.py`, `moonmind/workflows/temporal/runtime/supervisor.py`, and `moonmind/workflows/temporal/runtime/managed_session_supervisor.py` to persist durable event-history refs and latest session snapshot fields on `ManagedRunRecord`.
@@ -67,7 +67,7 @@ Implement the Phase 0 and Phase 1 slice of the session-aware Live Logs migration
    - the canonical event model supports the full stream/kind/session field set,
    - managed-run persistence stores a durable observability-history ref and session snapshot fields,
    - task-runs history retrieval prefers structured event history when present.
-2. Replace `docs/tmp/009-LiveLogsPlan.md` with the new session-aware rollout tracker from the user’s plan and align rollout wording with the shipped baseline.
+2. Replace `docs/ManagedAgents/LiveLogs.md` with the new session-aware rollout tracker from the user’s plan and align rollout wording with the shipped baseline.
 3. Introduce the session-timeline rollout setting in `FeatureFlagsSettings` and expose both rollout scope and enabled/disabled state from the task-dashboard runtime config.
 4. Introduce `RunObservabilityEvent` as the canonical internal contract, update transport and runtime streamer code to publish/read that model, and keep payload compatibility by preserving the current event fields on the wire.
 5. Persist structured observability history as `observability.events.jsonl` artifacts during run/session publication and store the resulting ref plus latest session snapshot fields on `ManagedRunRecord`.

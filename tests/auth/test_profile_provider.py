@@ -8,7 +8,6 @@ from api_service.db.models import Base, User, UserProfile
 from api_service.services.profile_service import ProfileService
 from moonmind.auth.profile_provider import ProfileAuthProvider
 
-
 @pytest.mark.asyncio
 async def test_profile_provider_returns_secret(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/test.db")

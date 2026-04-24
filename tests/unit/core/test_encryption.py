@@ -7,14 +7,12 @@ from cryptography.fernet import Fernet
 
 from api_service.core import encryption
 
-
 @pytest.fixture(autouse=True)
 def reset_encryption_key():
     """Reset the module-level cached key before and after each test."""
     encryption._ACTIVE_ENCRYPTION_KEY = None
     yield
     encryption._ACTIVE_ENCRYPTION_KEY = None
-
 
 @pytest.fixture
 def mock_settings():
@@ -29,7 +27,6 @@ def mock_settings():
         
         yield mock_set
 
-
 def test_get_encryption_key_from_settings(mock_settings):
     """Test that settings override takes highest precedence."""
     mock_settings.security.ENCRYPTION_MASTER_KEY = "dummy_settings_key"
@@ -37,7 +34,6 @@ def test_get_encryption_key_from_settings(mock_settings):
     key = encryption.get_encryption_key()
     assert key == "dummy_settings_key"
     assert encryption._ACTIVE_ENCRYPTION_KEY == "dummy_settings_key"
-
 
 @patch("api_service.core.encryption.Path")
 def test_get_encryption_key_from_docker_secret(mock_path, mock_settings):
@@ -57,7 +53,6 @@ def test_get_encryption_key_from_docker_secret(mock_path, mock_settings):
     
     key = encryption.get_encryption_key()
     assert key == "dummy_docker_key"
-
 
 def test_get_encryption_key_from_local_file_generated_by_default(
     mock_settings, tmp_path, monkeypatch
@@ -84,7 +79,6 @@ def test_get_encryption_key_from_local_file_generated_by_default(
     assert not bool(st_mode & stat.S_IRGRP)
     assert not bool(st_mode & stat.S_IROTH)
 
-
 def test_get_encryption_key_local_generation_can_be_disabled(
     mock_settings, tmp_path, monkeypatch
 ):
@@ -98,7 +92,6 @@ def test_get_encryption_key_local_generation_can_be_disabled(
     local_key_file = tmp_path / "var" / "secrets" / "encryption_master_key"
     assert not local_key_file.exists()
 
-
 def test_get_encryption_key_from_local_file_reads_existing(mock_settings, tmp_path):
     """Test that existing local key is read rather than overwritten."""
     mock_settings.workflow.repo_root = str(tmp_path)
@@ -110,7 +103,6 @@ def test_get_encryption_key_from_local_file_reads_existing(mock_settings, tmp_pa
     
     key = encryption.get_encryption_key()
     assert key == existing_key
-
 
 def test_get_encryption_key_cached_in_memory(mock_settings):
     """Test that subsequent calls return the cached key without checking files/settings."""

@@ -17,7 +17,6 @@ from moonmind.workflows.temporal.workflows.merge_gate import (
     legacy_resolver_idempotency_key,
 )
 
-
 def _payload() -> dict[str, Any]:
     return {
         "workflowType": "MoonMind.MergeAutomation",
@@ -47,7 +46,6 @@ def _payload() -> dict[str, Any]:
         "idempotencyKey": "merge-automation:wf-parent:MoonLadderStudios/MoonMind:350:abc123",
     }
 
-
 def _payload_with_post_merge_jira(**post_merge_overrides: Any) -> dict[str, Any]:
     payload = _payload()
     payload["mergeAutomationConfig"]["postMergeJira"] = {
@@ -58,7 +56,6 @@ def _payload_with_post_merge_jira(**post_merge_overrides: Any) -> dict[str, Any]
     }
     return payload
 
-
 @pytest.fixture(autouse=True)
 def _default_temporal_patch_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -66,7 +63,6 @@ def _default_temporal_patch_state(monkeypatch: pytest.MonkeyPatch) -> None:
         "patched",
         lambda _patch_id: True,
     )
-
 
 def test_merge_automation_extracts_artifact_id_from_ref_shapes() -> None:
     assert (
@@ -94,7 +90,6 @@ def test_merge_automation_extracts_artifact_id_from_ref_shapes() -> None:
         == "art-attr-camel"
     )
 
-
 def test_merge_automation_summary_payload_bounds_published_artifact_refs() -> None:
     workflow = MoonMindMergeAutomationWorkflow()
     max_refs = merge_automation_module.MAX_PUBLISHED_ARTIFACT_REFS
@@ -115,7 +110,6 @@ def test_merge_automation_summary_payload_bounds_published_artifact_refs() -> No
     ]
     assert len(workflow._gate_snapshot_artifact_refs) == max_refs + 5
     assert len(workflow._resolver_attempt_artifact_refs) == max_refs + 3
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_at", ["create", "write_complete"])
@@ -156,7 +150,6 @@ async def test_write_json_artifact_preserves_cancellation(
 
     with pytest.raises(CancelledError):
         await workflow._write_json_artifact(name="artifact.json", payload={})
-
 
 @pytest.mark.asyncio
 async def test_merge_automation_reenters_gate_after_resolver_remediation(
@@ -266,7 +259,6 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         "name": "pr-resolver",
         "version": "1.0",
     }
-
 
 @pytest.mark.asyncio
 async def test_merge_automation_tracks_current_head_when_checks_are_still_running(
@@ -378,7 +370,6 @@ async def test_merge_automation_tracks_current_head_when_checks_are_still_runnin
     assert child_workflow_ids == [f"{expected_resolver_id}:1"]
     assert child_payloads[0]["initial_parameters"]["mergeGate"]["headSha"] == "def456"
 
-
 @pytest.mark.asyncio
 async def test_merge_automation_resolver_child_uses_try_cancel(
     monkeypatch: pytest.MonkeyPatch,
@@ -438,7 +429,6 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
     assert search_attributes["mm_owner_type"] == ["user"]
     assert search_attributes["mm_owner_id"] == ["wf-parent"]
     assert search_attributes["mm_repo"] == ["MoonLadderStudios/MoonMind"]
-
 
 @pytest.mark.asyncio
 async def test_merge_automation_resolver_child_uses_legacy_id_before_patch_marker(
@@ -515,7 +505,6 @@ async def test_merge_automation_resolver_child_uses_legacy_id_before_patch_marke
     )
     assert child_workflow_ids == [f"{legacy_resolver_id}:1"]
 
-
 @pytest.mark.asyncio
 async def test_merge_automation_launches_resolver_when_checks_are_failing_but_complete(
     monkeypatch: pytest.MonkeyPatch,
@@ -585,7 +574,6 @@ async def test_merge_automation_launches_resolver_when_checks_are_failing_but_co
     assert child_calls == 1
     assert result["status"] == "merged"
     assert result["blockers"] == []
-
 
 @pytest.mark.asyncio
 async def test_merge_automation_adopts_initial_waiting_head_sha_before_resolver(
@@ -682,7 +670,6 @@ async def test_merge_automation_adopts_initial_waiting_head_sha_before_resolver(
         resolver_payloads[0]["initial_parameters"]["mergeGate"]["headSha"] == "def456"
     )
 
-
 @pytest.mark.asyncio
 async def test_merge_automation_adopts_initial_ready_head_sha_before_resolver(
     monkeypatch: pytest.MonkeyPatch,
@@ -747,7 +734,6 @@ async def test_merge_automation_adopts_initial_ready_head_sha_before_resolver(
         resolver_payloads[0]["initial_parameters"]["mergeGate"]["headSha"] == "def456"
     )
 
-
 @pytest.mark.asyncio
 async def test_merge_automation_finishes_already_merged_without_resolver(
     monkeypatch: pytest.MonkeyPatch,
@@ -803,7 +789,6 @@ async def test_merge_automation_finishes_already_merged_without_resolver(
     assert result["latestHeadSha"] == "def456"
     assert result["blockers"] == []
     assert result["resolverChildWorkflowIds"] == []
-
 
 @pytest.mark.asyncio
 async def test_merge_automation_runs_post_merge_jira_before_merged_success(
@@ -866,7 +851,6 @@ async def test_merge_automation_runs_post_merge_jira_before_merged_success(
     )
     assert result["postMergeJira"]["status"] == "succeeded"
 
-
 @pytest.mark.asyncio
 async def test_merge_automation_blocks_when_required_post_merge_jira_blocks(
     monkeypatch: pytest.MonkeyPatch,
@@ -918,7 +902,6 @@ async def test_merge_automation_blocks_when_required_post_merge_jira_blocks(
     assert result["postMergeJira"]["status"] == "blocked"
     assert result["blockers"][0]["source"] == "jira"
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("disposition", ["manual_review", "failed"])
 async def test_merge_automation_does_not_run_post_merge_jira_for_non_success_dispositions(
@@ -965,7 +948,6 @@ async def test_merge_automation_does_not_run_post_merge_jira_for_non_success_dis
     assert child_calls == 1
     assert result["status"] == "failed"
     assert "postMergeJira" not in result
-
 
 @pytest.mark.asyncio
 async def test_merge_automation_cancellation_while_resolver_active_sets_canceled_status(
@@ -1030,7 +1012,6 @@ async def test_merge_automation_cancellation_while_resolver_active_sets_canceled
         == "Merge automation canceled while resolver child was active."
     )
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("disposition", "expected_status"),
@@ -1093,7 +1074,6 @@ async def test_merge_automation_success_dispositions_complete_successfully(
 
     assert result["status"] == expected_status
     assert result["blockers"] == []
-
 
 @pytest.mark.asyncio
 async def test_merge_automation_writes_visibility_artifact_refs(
@@ -1174,7 +1154,6 @@ async def test_merge_automation_writes_visibility_artifact_refs(
     assert result["artifactRefs"]["gateSnapshots"]
     assert result["artifactRefs"]["resolverAttempts"]
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("disposition", "expected_summary"),
@@ -1244,7 +1223,6 @@ async def test_merge_automation_non_success_dispositions_fail(
     assert result["blockers"]
     assert result["blockers"][0]["kind"] == disposition
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("resolver_result", "expected_summary"),
@@ -1313,7 +1291,6 @@ async def test_merge_automation_invalid_dispositions_fail_deterministically(
     assert result["blockers"]
     assert result["blockers"][0]["kind"] == "resolver_disposition_invalid"
 
-
 @pytest.mark.asyncio
 async def test_merge_automation_ignores_wait_condition_timeout_only(
     monkeypatch: pytest.MonkeyPatch,
@@ -1369,7 +1346,6 @@ async def test_merge_automation_ignores_wait_condition_timeout_only(
 
     assert readiness_calls == 2
     assert result["status"] == "blocked"
-
 
 @pytest.mark.asyncio
 async def test_merge_automation_propagates_unexpected_wait_condition_error(

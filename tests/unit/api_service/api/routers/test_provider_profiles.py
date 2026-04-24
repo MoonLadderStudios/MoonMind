@@ -23,7 +23,6 @@ from api_service.db.models import (
 from api_service.main import app
 from api_service.services.provider_profile_service import _manager_profile_payload
 
-
 @pytest.fixture(scope="module")
 def _module_db(tmp_path_factory):
     """Create a single SQLite engine and schema for the entire module."""
@@ -52,11 +51,9 @@ def _module_db(tmp_path_factory):
     db_base.DATABASE_URL, db_base.engine, db_base.async_session_maker = _orig
     asyncio.run(_teardown(engine))
 
-
 @pytest.fixture
 def client_app(_module_db) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
-
 
 def _override_current_user(*, user_id=None, is_superuser: bool = False):
     user = SimpleNamespace(
@@ -76,7 +73,6 @@ def _override_current_user(*, user_id=None, is_superuser: bool = False):
     for dependency in dependencies:
         app.dependency_overrides[dependency] = lambda user=user: user
     return user
-
 
 async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
     """Helper to create a baseline profile in the test DB."""
@@ -102,7 +98,6 @@ async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
         await session.commit()
         await session.refresh(profile)
         return profile
-
 
 @pytest.mark.asyncio
 async def test_provider_profile_response_redacts_secret_like_runtime_fields(
@@ -163,7 +158,6 @@ async def test_provider_profile_response_redacts_secret_like_runtime_fields(
     )
     assert response.json()["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
 
-
 def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -> None:
     raw_secret = "sk-test-manager-payload-secret"
     row = ManagedAgentProviderProfile(
@@ -206,7 +200,6 @@ def test_provider_profile_manager_payload_redacts_secret_like_runtime_fields() -
     assert payload["command_behavior"]["authorization"] == "[REDACTED_AUTHORIZATION]"
     assert payload["secret_refs"] == {"provider_api_key": "env://OPENAI_API_KEY"}
 
-
 @pytest.mark.asyncio
 async def test_create_codex_oauth_profile_requires_volume_ref_and_mount_path(
     client_app: AsyncClient, _module_db
@@ -226,7 +219,6 @@ async def test_create_codex_oauth_profile_requires_volume_ref_and_mount_path(
     assert response.status_code == 422
     assert "volume_ref is required" in response.text
     assert "volume_mount_path is required" in response.text
-
 
 @pytest.mark.asyncio
 async def test_provider_profile_update_rejects_non_owner(
@@ -267,7 +259,6 @@ async def test_provider_profile_update_rejects_non_owner(
     assert response.status_code == 403
     assert response.json()["detail"] == "Not authorized to manage this provider profile."
 
-
 @pytest.mark.asyncio
 async def test_provider_profile_update_allows_ownerless_shared_profile(
     client_app: AsyncClient, _module_db
@@ -307,7 +298,6 @@ async def test_provider_profile_update_allows_ownerless_shared_profile(
     assert data["enabled"] is False
     assert data["volume_mount_path"] == "/home/app/.codex"
 
-
 @pytest.mark.asyncio
 async def test_create_provider_profile(client_app: AsyncClient, _module_db):
     """Test creating a new provider profile."""
@@ -336,7 +326,6 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
     assert data["default_model"] == "test-model-v2"
     assert data["model_overrides"] == {"smart": "test-model-v3"}
     assert data["is_default"] is True
-
 
 @pytest.mark.asyncio
 async def test_create_second_profile_can_become_runtime_default(
@@ -376,7 +365,6 @@ async def test_create_second_profile_can_become_runtime_default(
     profiles = {profile["profile_id"]: profile for profile in listed.json()}
     assert profiles["runtime_default_first"]["is_default"] is False
     assert profiles["runtime_default_second"]["is_default"] is True
-
 
 @pytest.mark.asyncio
 async def test_update_profile_can_become_runtime_default(
@@ -423,7 +411,6 @@ async def test_update_profile_can_become_runtime_default(
     assert profiles["patch_runtime_default_first"]["is_default"] is False
     assert profiles["patch_runtime_default_second"]["is_default"] is True
 
-
 @pytest.mark.asyncio
 async def test_create_provider_profile_invalid_secret_refs(client_app: AsyncClient, _module_db):
     """Test that creating a profile with raw secrets fails."""
@@ -442,7 +429,6 @@ async def test_create_provider_profile_invalid_secret_refs(client_app: AsyncClie
     assert response.status_code == 422
     assert "Invalid secret reference" in response.text
 
-
 @pytest.mark.asyncio
 async def test_create_duplicate_profile(client_app: AsyncClient, _module_db):
     """Test creating a profile that already exists returns 409."""
@@ -457,7 +443,6 @@ async def test_create_duplicate_profile(client_app: AsyncClient, _module_db):
         response = await client.post("/api/v1/provider-profiles", json=payload)
     assert response.status_code == 409
 
-
 @pytest.mark.asyncio
 async def test_list_profiles(client_app: AsyncClient, _module_db):
     """Test retrieving lists of profiles."""
@@ -469,7 +454,6 @@ async def test_list_profiles(client_app: AsyncClient, _module_db):
     assert len(data) >= 1
     assert any(p["profile_id"] == sample_profile.profile_id for p in data)
 
-
 @pytest.mark.asyncio
 async def test_get_single_profile(client_app: AsyncClient, _module_db):
     """Test retrieving a single profile by ID."""
@@ -479,14 +463,12 @@ async def test_get_single_profile(client_app: AsyncClient, _module_db):
     assert response.status_code == 200
     assert response.json()["runtime_id"] == "gemini_pro_runtime"
 
-
 @pytest.mark.asyncio
 async def test_get_unknown_profile(client_app: AsyncClient, _module_db):
     """Test 404 on missing profile."""
     async with client_app as client:
         response = await client.get("/api/v1/provider-profiles/does_not_exist_xyz")
     assert response.status_code == 404
-
 
 @pytest.mark.asyncio
 async def test_update_profile(client_app: AsyncClient, _module_db):
@@ -503,7 +485,6 @@ async def test_update_profile(client_app: AsyncClient, _module_db):
     assert data["max_parallel_runs"] == 10
     assert data["enabled"] is False
 
-
 @pytest.mark.asyncio
 async def test_delete_profile(client_app: AsyncClient, _module_db):
     """Test deleting a profile."""
@@ -515,7 +496,6 @@ async def test_delete_profile(client_app: AsyncClient, _module_db):
         # Verify it is gone
         check = await client.get(f"/api/v1/provider-profiles/{sample_profile.profile_id}")
         assert check.status_code == 404
-
 
 @pytest.mark.asyncio
 async def test_update_profile_syncs_provider_profile_manager(
@@ -562,7 +542,6 @@ async def test_update_profile_syncs_provider_profile_manager(
     signal_name, signal_payload = signals[-1]
     assert signal_name == "sync_profiles"
     assert signal_payload["profiles"] == []
-
 
 @pytest.mark.asyncio
 async def test_claude_manual_auth_commit_stores_secret_ref_only(
@@ -677,7 +656,6 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert validated_tokens == [submitted_token]
     assert synced_runtimes == ["claude_code"]
 
-
 def test_claude_manual_auth_secret_slug_is_collision_resistant() -> None:
     first = provider_profiles_router._claude_manual_secret_slug("claude.anthropic")
     second = provider_profiles_router._claude_manual_secret_slug("claude_anthropic")
@@ -687,7 +665,6 @@ def test_claude_manual_auth_secret_slug_is_collision_resistant() -> None:
     assert second.startswith("claude-anthropic-")
     assert first.endswith("-token")
     assert second.endswith("-token")
-
 
 @pytest.mark.asyncio
 async def test_claude_oauth_lifecycle_actions_validate_and_disconnect(
@@ -769,7 +746,6 @@ async def test_claude_oauth_lifecycle_actions_validate_and_disconnect(
     assert profile_payload["command_behavior"]["auth_status_label"] == "Claude OAuth disconnected"
     assert synced_runtimes == ["claude_code", "claude_code"]
 
-
 @pytest.mark.asyncio
 async def test_validate_claude_manual_token_reuses_shared_http_client(
     monkeypatch: pytest.MonkeyPatch,
@@ -803,7 +779,6 @@ async def test_validate_claude_manual_token_reuses_shared_http_client(
 
     assert len(created_clients) == 1
     assert requested_tokens == ["sk-ant-test-one", "sk-ant-test-two"]
-
 
 @pytest.mark.asyncio
 async def test_claude_manual_auth_commit_rejects_malformed_token_without_persisting(
@@ -857,7 +832,6 @@ async def test_claude_manual_auth_commit_rejects_malformed_token_without_persist
             )
         )
         assert result.scalar_one_or_none() is None
-
 
 @pytest.mark.asyncio
 async def test_claude_manual_auth_commit_rejects_non_owner_without_validating_or_persisting(
@@ -919,7 +893,6 @@ async def test_claude_manual_auth_commit_rejects_non_owner_without_validating_or
         )
         assert result.scalar_one_or_none() is None
 
-
 @pytest.mark.asyncio
 async def test_claude_manual_auth_commit_rejects_unsupported_profile_without_persisting(
     client_app: AsyncClient,
@@ -974,7 +947,6 @@ async def test_claude_manual_auth_commit_rejects_unsupported_profile_without_per
             )
         )
         assert result.scalar_one_or_none() is None
-
 
 @pytest.mark.asyncio
 async def test_claude_oauth_validate_failure_redacts_secret_like_reason(

@@ -12,7 +12,6 @@ from moonmind.rag.embedding import EmbeddingClient
 from moonmind.rag.qdrant_client import RagQdrantClient
 from moonmind.rag.settings import RagRuntimeSettings
 
-
 @dataclass(slots=True)
 class OverlayChunk:
     path: Path
@@ -24,7 +23,6 @@ class OverlayChunk:
     def chunk_hash(self) -> str:
         digest = hashlib.sha256(self.text.encode("utf-8")).hexdigest()
         return f"sha256:{digest}"
-
 
 def chunk_file(path: Path, *, chunk_chars: int, overlap: int) -> Iterable[OverlayChunk]:
     text = path.read_text(encoding="utf-8", errors="ignore")
@@ -46,7 +44,6 @@ def chunk_file(path: Path, *, chunk_chars: int, overlap: int) -> Iterable[Overla
             break
         cursor = max(chunk_end - overlap, cursor + 1)
     return results
-
 
 def upsert_overlay_files(
     *,

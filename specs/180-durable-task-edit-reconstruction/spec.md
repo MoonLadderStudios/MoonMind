@@ -65,7 +65,7 @@ Include regression coverage for the workflow above or an equivalent skill-only e
 inline instructions.
 
 Expected deliverables:
-- A concise proposed design under docs/tmp/remaining-work/ or a new spec under specs/ using the
+- A concise proposed design under spec.md (Input) or a new spec under specs/ using the
 repo's global spec numbering rules if this becomes a non-trivial implementation project.
 - A field-by-field reconstruction matrix that names the canonical persisted source for each form
 value and whether it must be editable in rerun, editable in active edit, read-only, or omitted.

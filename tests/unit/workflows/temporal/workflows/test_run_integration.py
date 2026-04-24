@@ -35,7 +35,6 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
     dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
     return dump_method() if dump_method else payload
 
-
 @pytest.fixture
 def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     workflow = MoonMindRunWorkflow()
@@ -63,7 +62,6 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     monkeypatch.setattr(run_workflow_module.workflow, "logger", logger)
 
     return workflow
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_integration_after_merge_gate_cancellation(
@@ -143,7 +141,6 @@ async def test_run_execution_stage_skips_integration_after_merge_gate_cancellati
 
     assert integration_calls == []
 
-
 @pytest.mark.asyncio
 async def test_run_integration_stage_poll_driven_completion(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -184,7 +181,6 @@ async def test_run_integration_stage_poll_driven_completion(
     assert captured[1][0] == "integration.jules.start"
     assert captured[2][0] == "integration.jules.status"
     assert mock_run_workflow._external_status == "completed"
-
 
 @pytest.mark.asyncio
 async def test_run_integration_poll_completion_invokes_patched_with_stable_id(
@@ -229,7 +225,6 @@ async def test_run_integration_poll_completion_invokes_patched_with_stable_id(
     assert set(patch_calls) == {INTEGRATION_POLL_LOOP_PATCH}
     assert mock_run_workflow._external_status == "completed"
 
-
 @pytest.mark.asyncio
 async def test_run_integration_legacy_unpatched_poll_completion_still_completes(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -265,7 +260,6 @@ async def test_run_integration_legacy_unpatched_poll_completion_still_completes(
     )
 
     assert mock_run_workflow._external_status == "completed"
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_bundles_consecutive_jules_nodes(
@@ -375,7 +369,6 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
     assert "2. Step 2" in request.instruction_ref
     assert request.parameters["metadata"]["moonmind"]["bundleManifestRef"] == "artifact://bundle/1"
     assert request.parameters["metadata"]["moonmind"]["bundleStrategy"] == "one_shot_jules"
-
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activity(
@@ -505,7 +498,6 @@ async def test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activ
     assert payload["context"]["node_id"] == "workload-step"
     assert tool_calls[0][2]["task_queue"] == "mm.activity.agent_runtime"
 
-
 @pytest.mark.asyncio
 async def test_run_execution_stage_skips_integration_after_merge_automation_cancels(
     monkeypatch: pytest.MonkeyPatch,
@@ -585,7 +577,6 @@ async def test_run_execution_stage_skips_integration_after_merge_automation_canc
 
     assert integration_calls == 0
 
-
 @pytest.mark.asyncio
 async def test_run_integration_stage_signal_driven_completion(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -626,7 +617,6 @@ async def test_run_integration_stage_signal_driven_completion(
     assert captured[0][0] == "artifact.read"
     assert captured[1][0] == "integration.jules.start"
     assert mock_run_workflow._external_status == "completed"
-
 
 @pytest.mark.asyncio
 async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
@@ -683,7 +673,6 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
     # No target_branch should be passed since we didn't override it
     assert merge_payload == {"pr_url": "https://github.com/org/repo/pull/123"}
 
-
 @pytest.mark.asyncio
 async def test_run_integration_stage_branch_publish_requires_pr_url(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -721,7 +710,6 @@ async def test_run_integration_stage_branch_publish_requires_pr_url(
             },
             plan_ref="plan-1",
         )
-
 
 @pytest.mark.asyncio
 async def test_run_integration_stage_branch_publish_requires_merge_success(
@@ -762,7 +750,6 @@ async def test_run_integration_stage_branch_publish_requires_merge_success(
             },
             plan_ref="plan-1",
         )
-
 
 @pytest.mark.asyncio
 async def test_run_integration_stage_multi_step_bundles_into_single_start(
@@ -831,7 +818,6 @@ async def test_run_integration_stage_multi_step_bundles_into_single_start(
     assert len(status_calls) == 1
     assert mock_run_workflow._external_status == "completed"
 
-
 def test_determine_publish_completion_fails_for_no_commit_pr_publish(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -866,7 +852,6 @@ def test_determine_publish_completion_fails_for_no_commit_pr_publish(
     assert "Files edited in this run: none." in message
     assert publish_failure is True
 
-
 def test_native_pr_branch_resolution_keeps_legacy_branch_only_replay_shape(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
@@ -883,7 +868,6 @@ def test_native_pr_branch_resolution_keeps_legacy_branch_only_replay_shape(
 
     assert head_branch == "feature/existing"
     assert base_branch == "feature/existing"
-
 
 def test_native_pr_branch_resolution_uses_patched_publish_defaults(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -905,7 +889,6 @@ def test_native_pr_branch_resolution_uses_patched_publish_defaults(
     assert head_branch == ""
     assert base_branch == "release"
 
-
 def test_native_pr_push_status_gate_preserves_legacy_protected_branch_fallback(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
@@ -926,7 +909,6 @@ def test_native_pr_push_status_gate_preserves_legacy_protected_branch_fallback(
         "protected_branch"
     ) is False
     assert mock_run_workflow._publish_status is None
-
 
 def test_native_pr_push_status_gate_blocks_protected_branch_when_patched(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -953,7 +935,6 @@ def test_native_pr_push_status_gate_blocks_protected_branch_when_patched(
     assert mock_run_workflow._publish_status == "failed"
     assert "feature/existing" in (mock_run_workflow._publish_reason or "")
 
-
 def test_record_execution_context_resets_last_step_fields_when_current_node_has_no_summary(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -976,7 +957,6 @@ def test_record_execution_context_resets_last_step_fields_when_current_node_has_
     assert mock_run_workflow._last_step_summary is None
     assert mock_run_workflow._last_diagnostics_ref is None
 
-
 def test_record_execution_context_scrubs_operator_summary_and_ignores_negative_commit_count(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -997,7 +977,6 @@ def test_record_execution_context_scrubs_operator_summary_and_ignores_negative_c
     assert "ghp_" not in mock_run_workflow._operator_summary
     assert "commitCount" not in mock_run_workflow._publish_context
 
-
 def test_determine_publish_completion_fails_when_pr_publish_creates_no_pr(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -1011,7 +990,6 @@ def test_determine_publish_completion_fails_when_pr_publish_creates_no_pr(
     assert message == "publishMode 'pr' requested but no PR was created"
     assert publish_failure is True
 
-
 def test_determine_publish_completion_allows_integration_pr_without_local_pr_url(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
@@ -1024,7 +1002,6 @@ def test_determine_publish_completion_allows_integration_pr_without_local_pr_url
     assert status == "success"
     assert message == "Workflow completed successfully"
     assert publish_failure is False
-
 
 def test_determine_publish_completion_fails_for_unknown_branch_publish_outcome(
     mock_run_workflow: MoonMindRunWorkflow,

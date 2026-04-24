@@ -10,7 +10,7 @@ Phase 1 requires capturing stdout, stderr, and diagnostics directly from supervi
 
 The plan is therefore to:
 1. Formalize the `tasks.md` and complete any remaining DOC-REQ-* checks.
-2. Mark the Phase 1 checklist as `[x]` in `docs/tmp/009-LiveLogsPlan.md`.
+2. Mark the Phase 1 checklist as `[x]` in `docs/ManagedAgents/LiveLogs.md`.
 3. Verify tests and commit.
 
 ## Traceability

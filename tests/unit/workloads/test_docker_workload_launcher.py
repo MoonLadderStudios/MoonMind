@@ -16,9 +16,7 @@ from moonmind.workloads.docker_launcher import (
 )
 from moonmind.workloads.registry import RunnerProfileRegistry
 
-
 WORKSPACE_ROOT = Path("/work/agent_jobs")
-
 
 def _profile_payload(
     *,
@@ -73,7 +71,6 @@ def _profile_payload(
     payload.update(overrides)
     return payload
 
-
 def _registry(
     tmp_path: Path,
     *,
@@ -88,7 +85,6 @@ def _registry(
         registry_path,
         workspace_root=workspace_root,
     )
-
 
 def _validated_request(
     tmp_path: Path,
@@ -125,7 +121,6 @@ def _validated_request(
         )
     return registry.validate_request(WorkloadRequest.model_validate(payload))
 
-
 def _helper_profile_payload(
     *,
     workspace_root: Path = WORKSPACE_ROOT,
@@ -154,7 +149,6 @@ def _helper_profile_payload(
     payload.update(overrides)
     return payload
 
-
 def _validated_helper_request(
     tmp_path: Path,
     *,
@@ -182,7 +176,6 @@ def _validated_helper_request(
         profiles=[_helper_profile_payload(workspace_root=workspace_root)],
         **payload,
     )
-
 
 class _Process:
     def __init__(
@@ -225,7 +218,6 @@ class _Process:
         self.returncode = -9
         self._closed.set()
 
-
 class _Pipe:
     def __init__(self, process: _Process, data: bytes) -> None:
         self._process = process
@@ -240,7 +232,6 @@ class _Pipe:
         chunk = bytes(self._data[:size])
         del self._data[:size]
         return chunk
-
 
 @pytest.mark.asyncio
 async def test_launcher_builds_deterministic_docker_run_and_cleans_up(
@@ -301,7 +292,6 @@ async def test_launcher_builds_deterministic_docker_run_and_cleans_up(
     assert result.metadata["artifactsDir"] == "/work/agent_jobs/task-1/artifacts/step-test"
     assert result.metadata["stdout"] == "tests passed\n"
 
-
 def test_launcher_wraps_multi_part_shell_command_as_single_arg(
     tmp_path: Path,
 ) -> None:
@@ -310,7 +300,6 @@ def test_launcher_wraps_multi_part_shell_command_as_single_arg(
     )
 
     assert run_args[-3:] == ["python:3.12-slim", "-lc", "python -V"]
-
 
 def test_unrestricted_docker_request_replaces_leading_docker_binary(
     tmp_path: Path,
@@ -332,7 +321,6 @@ def test_unrestricted_docker_request_replaces_leading_docker_binary(
     args = DockerWorkloadLauncher(docker_binary="podman").build_run_args(validated)
 
     assert args == ["podman", "ps"]
-
 
 def test_unrestricted_helper_request_reuses_unrestricted_arg_builder(
     tmp_path: Path,
@@ -395,7 +383,6 @@ async def test_unrestricted_launcher_timeout_stops_and_kills_without_remove_on_e
     assert ["docker", "kill", "mm-workload-task-unrestricted-docker-cli-1"] in created
     assert ["docker", "rm", "-f", "mm-workload-task-unrestricted-docker-cli-1"] not in created
 
-
 @pytest.mark.asyncio
 async def test_unrestricted_launcher_cancel_stops_and_kills_without_remove_on_exit(
     tmp_path: Path,
@@ -447,7 +434,6 @@ async def test_unrestricted_launcher_cancel_stops_and_kills_without_remove_on_ex
     assert run_process is not None
     assert run_process.terminated
 
-
 def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> None:
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),
@@ -497,7 +483,6 @@ def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> 
     assert "ghcr.io/moonladderstudios/moonmind-unreal-runner:5.3" in run_args
     assert "/var/run/docker.sock" not in " ".join(run_args)
 
-
 def test_launcher_mounts_only_explicit_credential_declarations(
     tmp_path: Path,
 ) -> None:
@@ -524,7 +509,6 @@ def test_launcher_mounts_only_explicit_credential_declarations(
     )
     assert "OAuth enrollment repair" not in " ".join(run_args)
     assert "approvalRef" not in " ".join(run_args)
-
 
 def test_launcher_rejects_artifacts_dir_outside_profile_mount(
     tmp_path: Path,
@@ -571,7 +555,6 @@ def test_launcher_rejects_artifacts_dir_outside_profile_mount(
     with pytest.raises(DockerWorkloadLauncherError, match="artifactsDir"):
         DockerWorkloadLauncher().build_run_args(validated)
 
-
 @pytest.mark.asyncio
 async def test_launcher_removes_container_after_nonzero_exit(
     tmp_path: Path,
@@ -596,7 +579,6 @@ async def test_launcher_removes_container_after_nonzero_exit(
     assert result.exit_code == 7
     assert result.metadata["stderr"] == "failed\n"
     assert created[-1] == ["docker", "rm", "-f", "mm-workload-task-1-step-test-2"]
-
 
 @pytest.mark.asyncio
 async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
@@ -652,7 +634,6 @@ async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
     assert result.metadata["workload"]["identityKind"] == "workload"
     assert "managedSessionIdentity" not in result.metadata["workload"]
 
-
 @pytest.mark.asyncio
 async def test_launcher_diagnostics_omit_env_values_and_auth_paths(
     tmp_path: Path,
@@ -702,7 +683,6 @@ async def test_launcher_diagnostics_omit_env_values_and_auth_paths(
     assert auth_path not in workload_metadata_text
     assert "envOverrides" not in diagnostics
 
-
 @pytest.mark.asyncio
 async def test_launcher_redacts_secret_like_runtime_output_and_metadata(
     tmp_path: Path,
@@ -751,7 +731,6 @@ async def test_launcher_redacts_secret_like_runtime_output_and_metadata(
     assert result.metadata["stdout"] == stdout_text
     assert result.metadata["stderr"] == stderr_text
 
-
 @pytest.mark.asyncio
 async def test_launcher_publishes_failure_artifacts_with_session_association(
     tmp_path: Path,
@@ -797,7 +776,6 @@ async def test_launcher_publishes_failure_artifacts_with_session_association(
     assert "session.summary" not in result.output_refs
     assert "session.step_checkpoint" not in result.output_refs
 
-
 @pytest.mark.asyncio
 async def test_launcher_reports_artifact_publication_failure_in_result_metadata(
     tmp_path: Path,
@@ -835,7 +813,6 @@ async def test_launcher_reports_artifact_publication_failure_in_result_metadata(
         "runtime.diagnostics": "artifact store unavailable",
     }
     assert result.metadata["stdout"] == "before publish failure\n"
-
 
 @pytest.mark.asyncio
 async def test_launcher_preserves_refs_when_artifact_publication_partly_fails(
@@ -892,7 +869,6 @@ async def test_launcher_preserves_refs_when_artifact_publication_partly_fails(
         "runtime.stderr": "stderr store unavailable"
     }
 
-
 @pytest.mark.asyncio
 async def test_launcher_links_declared_output_artifacts_under_artifacts_dir(
     tmp_path: Path,
@@ -938,7 +914,6 @@ async def test_launcher_links_declared_output_artifacts_under_artifacts_dir(
         "output.summary": "summary.json"
     }
 
-
 @pytest.mark.asyncio
 async def test_launcher_timeout_stops_kills_and_removes_container(
     tmp_path: Path,
@@ -968,7 +943,6 @@ async def test_launcher_timeout_stops_kills_and_removes_container(
     assert ["docker", "stop", "-t", "3", "mm-workload-task-1-step-test-2"] in created
     assert ["docker", "kill", "mm-workload-task-1-step-test-2"] in created
     assert ["docker", "rm", "-f", "mm-workload-task-1-step-test-2"] in created
-
 
 @pytest.mark.asyncio
 async def test_launcher_cancel_stops_kills_removes_and_propagates_cancel(
@@ -1005,7 +979,6 @@ async def test_launcher_cancel_stops_kills_removes_and_propagates_cancel(
     assert run_process is not None
     assert run_process.terminated
 
-
 @pytest.mark.asyncio
 async def test_launcher_captures_bounded_process_output(
     tmp_path: Path,
@@ -1027,7 +1000,6 @@ async def test_launcher_captures_bounded_process_output(
 
     assert len(result.metadata["stdout"]) == 64_000
     assert result.metadata["stdout"].endswith("tail\n")
-
 
 @pytest.mark.asyncio
 async def test_launcher_runs_unrestricted_requests_without_profile_concurrency_metadata(
@@ -1073,8 +1045,6 @@ async def test_launcher_runs_unrestricted_requests_without_profile_concurrency_m
     assert result.metadata["workload"]["labels"]["moonmind.workflow_docker_mode"] == (
         "unrestricted"
     )
-
-
 
 @pytest.mark.asyncio
 async def test_launcher_enforces_profile_concurrency_limit(
@@ -1139,7 +1109,6 @@ async def test_launcher_enforces_profile_concurrency_limit(
     result = await first
     assert result.status == "succeeded"
 
-
 @pytest.mark.asyncio
 async def test_container_janitor_lists_orphans_by_labels(
     monkeypatch: pytest.MonkeyPatch,
@@ -1176,7 +1145,6 @@ async def test_container_janitor_lists_orphans_by_labels(
         "{{.ID}}",
     ]
 
-
 @pytest.mark.asyncio
 async def test_container_janitor_sweeps_expired_workload_orphans(
     monkeypatch: pytest.MonkeyPatch,
@@ -1210,7 +1178,6 @@ async def test_container_janitor_sweeps_expired_workload_orphans(
     assert ["docker", "rm", "-f", "expired123"] in created
     assert ["docker", "rm", "-f", "fresh456"] not in created
     assert ["docker", "rm", "-f", "missing789"] not in created
-
 
 @pytest.mark.asyncio
 async def test_launcher_starts_bounded_helper_detached_and_waits_for_readiness(
@@ -1264,7 +1231,6 @@ async def test_launcher_starts_bounded_helper_detached_and_waits_for_readiness(
     assert result.metadata["helper"]["ttlSeconds"] == 300
     assert result.metadata["helper"]["sessionContext"] is None
 
-
 @pytest.mark.asyncio
 async def test_launcher_holds_helper_concurrency_lease_until_stop(
     tmp_path: Path,
@@ -1306,7 +1272,6 @@ async def test_launcher_holds_helper_concurrency_lease_until_stop(
     second_result = await launcher.start_helper(second)
     assert second_result.status == "ready"
 
-
 @pytest.mark.asyncio
 async def test_launcher_reports_unhealthy_helper_after_bounded_readiness_retries(
     tmp_path: Path,
@@ -1340,7 +1305,6 @@ async def test_launcher_reports_unhealthy_helper_after_bounded_readiness_retries
     assert result.status == "unhealthy"
     assert result.metadata["helper"]["readiness"]["status"] == "unhealthy"
     assert result.metadata["helper"]["readiness"]["attempts"] == 3
-
 
 @pytest.mark.asyncio
 async def test_launcher_kills_timed_out_readiness_probe_process(
@@ -1400,7 +1364,6 @@ async def test_launcher_kills_timed_out_readiness_probe_process(
     assert len(timed_out_processes) == 1
     assert all(process.killed for process in timed_out_processes)
 
-
 @pytest.mark.asyncio
 async def test_launcher_omits_raw_readiness_output_from_helper_metadata(
     tmp_path: Path,
@@ -1439,7 +1402,6 @@ async def test_launcher_omits_raw_readiness_output_from_helper_metadata(
     assert readiness["stdoutBytes"] == len(secret_value)
     assert secret_value not in serialized
 
-
 @pytest.mark.asyncio
 async def test_launcher_publishes_helper_declared_outputs(
     tmp_path: Path,
@@ -1475,7 +1437,6 @@ async def test_launcher_publishes_helper_declared_outputs(
 
     assert result.output_refs["ready"].endswith("/ready.json")
     assert result.metadata["helper"]["artifactPublication"]["status"] == "complete"
-
 
 @pytest.mark.asyncio
 async def test_launcher_tears_down_bounded_helper_after_multiple_sub_steps(
@@ -1527,7 +1488,6 @@ async def test_launcher_tears_down_bounded_helper_after_multiple_sub_steps(
     assert stop_result.metadata["helper"]["teardown"]["reason"] == (
         "bounded_window_complete"
     )
-
 
 @pytest.mark.asyncio
 async def test_container_janitor_sweeps_expired_bounded_helpers(

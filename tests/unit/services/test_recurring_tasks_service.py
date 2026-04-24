@@ -26,7 +26,6 @@ from api_service.services.recurring_tasks_service import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 @asynccontextmanager
 async def recurring_db(tmp_path: Path):
     db_path = tmp_path / "recurring_tasks.db"
@@ -45,7 +44,6 @@ async def recurring_db(tmp_path: Path):
     finally:
         await engine.dispose()
 
-
 @pytest.fixture
 def mock_temporal_adapter():
     adapter = MagicMock()
@@ -56,7 +54,6 @@ def mock_temporal_adapter():
     adapter.trigger_schedule = AsyncMock()
     adapter.delete_schedule = AsyncMock()
     return adapter
-
 
 async def test_create_definition_creates_temporal_schedule(
     tmp_path: Path, mock_temporal_adapter
@@ -109,7 +106,6 @@ async def test_create_definition_creates_temporal_schedule(
             assert call_kwargs["timezone"] == "UTC"
             assert call_kwargs["workflow_type"] == "MoonMind.Run"
 
-
 async def test_create_definition_rejects_invalid_policy(tmp_path: Path, mock_temporal_adapter) -> None:
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -143,7 +139,6 @@ async def test_create_definition_rejects_invalid_policy(tmp_path: Path, mock_tem
                     policy={"catchup": {"mode": "invalid"}},
                 )
 
-
 async def test_target_kind_housekeeping_is_rejected(tmp_path: Path, mock_temporal_adapter) -> None:
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -162,7 +157,6 @@ async def test_target_kind_housekeeping_is_rejected(tmp_path: Path, mock_tempora
                     target={"kind": "housekeeping", "action": "prune_artifacts"},
                     policy={},
                 )
-
 
 async def test_update_definition_updates_temporal_schedule(
     tmp_path: Path, mock_temporal_adapter
@@ -217,7 +211,6 @@ async def test_update_definition_updates_temporal_schedule(
             assert call_kwargs["definition_id"] == definition.id
             assert call_kwargs["cron_expression"] == "0 12 * * *"
             assert call_kwargs["enabled"] is False
-
 
 async def test_create_manual_run_triggers_temporal_schedule(
     tmp_path: Path, mock_temporal_adapter

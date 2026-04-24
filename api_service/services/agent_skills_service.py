@@ -18,14 +18,11 @@ from api_service.db.models import (
 )
 from moonmind.workflows.temporal import TemporalArtifactService
 
-
 class AgentSkillDuplicateError(ValueError):
     """Raised when creating a skill or skillset with a duplicate slug."""
 
-
 class AgentSkillNotFoundError(ValueError):
     """Raised when the requested agent skill definition is not found."""
-
 
 class AgentSkillsService:
     """Orchestrates CRUD and version immutable storage for agent skills."""

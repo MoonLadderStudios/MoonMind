@@ -5,7 +5,7 @@
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
 
-**Source Traceability**: MM-383 Jira preset brief is preserved in `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-383-moonspec-orchestration-input.md`. Tasks cover FR-001 through FR-012, acceptance scenarios 1-6, SC-001 through SC-005, and DESIGN-REQ-001 through DESIGN-REQ-010 plus DESIGN-REQ-025 and DESIGN-REQ-026.
+**Source Traceability**: MM-383 Jira preset brief is preserved in `spec.md` and `spec.md` (Input). Tasks cover FR-001 through FR-012, acceptance scenarios 1-6, SC-001 through SC-005, and DESIGN-REQ-001 through DESIGN-REQ-010 plus DESIGN-REQ-025 and DESIGN-REQ-026.
 
 **Test Commands**:
 

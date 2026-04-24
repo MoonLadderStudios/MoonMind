@@ -3,7 +3,7 @@
 ## Story Classification
 
 Decision: Treat MM-503 as a single-story runtime verification-first feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-503-moonspec-orchestration-input.md`; `specs/252-route-docker-workload-plane/spec.md`.
+Evidence: `spec.md` (Input); `specs/252-route-docker-workload-plane/spec.md`.
 Rationale: The Jira preset brief defines one independently testable runtime outcome: all Docker-backed MoonMind tools execute through one trusted workload plane with shared routing, metadata, timeout, cancellation, and cleanup behavior.
 Alternatives considered: Broad design breakdown was rejected because the Jira brief already selects one bounded story rather than multiple independently testable stories.
 Test implications: Unit tests plus hermetic integration verification are required because the story spans tool definitions, activity routing, launcher metadata, and cleanup behavior.
@@ -59,7 +59,7 @@ Test implications: Focus on unit verification of capability-based bindings and f
 ## FR-007 Traceability
 
 Decision: implemented_verified.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-503-moonspec-orchestration-input.md`; `specs/252-route-docker-workload-plane/spec.md`; `plan.md`; `research.md`; `contracts/shared-docker-workload-plane-contract.md`; `quickstart.md`.
+Evidence: `spec.md` (Input); `specs/252-route-docker-workload-plane/spec.md`; `plan.md`; `research.md`; `contracts/shared-docker-workload-plane-contract.md`; `quickstart.md`.
 Rationale: The feature-local MoonSpec artifact set preserves MM-503 and the original Jira preset brief for downstream planning and final verification.
 Alternatives considered: Preserve the Jira key only in the orchestration brief. Rejected because the story explicitly requires downstream spec and verification traceability.
 Test implications: Final traceability review only.

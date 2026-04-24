@@ -3,7 +3,7 @@
 **Feature Branch**: `226-canonical-remediation-submissions`
 **Created**: 2026-04-22
 **Status**: Draft
-**Input**: Use the Jira preset brief for MM-451 as the canonical Moon Spec orchestration input: `docs/tmp/jira-orchestration-inputs/MM-451-moonspec-orchestration-input.md`.
+**Input**: Use the Jira preset brief for MM-451 as the canonical Moon Spec orchestration input: `spec.md` (Input).
 
 ## Original Preset Brief
 

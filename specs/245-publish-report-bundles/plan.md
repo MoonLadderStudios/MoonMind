@@ -30,15 +30,15 @@ Plan MM-493 as a verification-first runtime story. The current repository alread
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 and TypeScript/React for existing Mission Control verification surfaces  
-**Primary Dependencies**: Pydantic v2, Temporal Python SDK, SQLAlchemy async ORM, existing temporal artifact service/helpers, React, Vitest  
-**Storage**: Existing temporal artifact metadata tables and configured artifact store; no new persistent storage  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` with focused pytest and UI targets during verification  
-**Integration Testing**: `./tools/test_integration.sh` for hermetic `integration_ci` escalation when persistence, activity publication, or API linkage changes are required  
-**Target Platform**: MoonMind API service, Temporal worker runtime, and Mission Control UI  
-**Project Type**: Full-stack runtime verification story with backend artifact publication and frontend canonical report consumption  
-**Performance Goals**: Keep workflow-visible bundle payloads bounded to refs and metadata only; latest report lookup remains server-driven and inexpensive  
-**Constraints**: No inline report/evidence/log payloads in workflow history, no browser-side latest-report heuristics, no new storage system, preserve MM-493 traceability  
+**Language/Version**: Python 3.12 and TypeScript/React for existing Mission Control verification surfaces 
+**Primary Dependencies**: Pydantic v2, Temporal Python SDK, SQLAlchemy async ORM, existing temporal artifact service/helpers, React, Vitest 
+**Storage**: Existing temporal artifact metadata tables and configured artifact store; no new persistent storage 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` with focused pytest and UI targets during verification 
+**Integration Testing**: `./tools/test_integration.sh` for hermetic `integration_ci` escalation when persistence, activity publication, or API linkage changes are required 
+**Target Platform**: MoonMind API service, Temporal worker runtime, and Mission Control UI 
+**Project Type**: Full-stack runtime verification story with backend artifact publication and frontend canonical report consumption 
+**Performance Goals**: Keep workflow-visible bundle payloads bounded to refs and metadata only; latest report lookup remains server-driven and inexpensive 
+**Constraints**: No inline report/evidence/log payloads in workflow history, no browser-side latest-report heuristics, no new storage system, preserve MM-493 traceability 
 **Scale/Scope**: One story covering immutable report-bundle publication and canonical final/latest report behavior across existing workflow families
 
 ## Constitution Check
@@ -56,7 +56,7 @@ Plan MM-493 as a verification-first runtime story. The current repository alread
 - IX. Resilient by Default: PASS - durable artifact publication and latest-report queries remain compact and deterministic.
 - X. Facilitate Continuous Improvement: PASS - downstream verification will record concrete evidence and remaining drift if any exists.
 - XI. Spec-Driven Development: PASS - MM-493 is preserved through spec, plan, and later tasks/verification.
-- XII. Canonical Documentation Separation: PASS - the Jira brief remains under `docs/tmp`, while feature-local artifacts capture the desired state for this story.
+- XII. Canonical Documentation Separation: PASS - the Jira brief remains under `local-only handoffs`, while feature-local artifacts capture the desired state for this story.
 - XIII. Pre-release Compatibility Policy: PASS - verification-first planning does not introduce compatibility shims or aliasing.
 
 ## Project Structure
@@ -71,7 +71,7 @@ specs/245-publish-report-bundles/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── report-bundle-publication-contract.md
+│ └── report-bundle-publication-contract.md
 └── tasks.md
 ```
 

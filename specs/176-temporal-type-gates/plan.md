@@ -1,6 +1,6 @@
 # Implementation Plan: Temporal Type-Safety Gates
 
-**Branch**: `mm-331-from-tool-board-39bd254c` | **Date**: 2026-04-15 | **Spec**: [spec.md](./spec.md)  
+**Branch**: `mm-331-from-tool-board-39bd254c` | **Date**: 2026-04-15 | **Spec**: [spec.md](./spec.md) 
 **Input**: Single-story feature specification from `/specs/176-temporal-type-gates/spec.md`
 
 ## Summary
@@ -9,15 +9,15 @@ Add enforceable Temporal type-safety review gates for Jira issue MM-331 from TOO
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers  
-**Storage**: No new persistent storage; review findings are produced as deterministic validation output and test evidence  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`; targeted pytest for Temporal gate/rule, schema, and workflow unit tests during iteration  
-**Integration Testing**: `./tools/test_integration.sh` for the required hermetic `integration_ci` suite when Docker is available; targeted Temporal workflow-boundary or replay-style tests for compatibility-sensitive cases  
-**Target Platform**: MoonMind backend Temporal workflow runtime and repository review/test surface  
-**Project Type**: Backend Python service and Temporal workflow runtime in a single repository  
-**Performance Goals**: Review-gate checks complete within normal unit-test runtime and add no network calls or workflow runtime polling  
-**Constraints**: Preserve Temporal workflow/activity/message names; keep compatibility handling at public boundaries; do not introduce compatibility aliases that change billing-relevant or execution semantics; keep source-design migration notes out of canonical docs  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers 
+**Storage**: No new persistent storage; review findings are produced as deterministic validation output and test evidence 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`; targeted pytest for Temporal gate/rule, schema, and workflow unit tests during iteration 
+**Integration Testing**: `./tools/test_integration.sh` for the required hermetic `integration_ci` suite when Docker is available; targeted Temporal workflow-boundary or replay-style tests for compatibility-sensitive cases 
+**Target Platform**: MoonMind backend Temporal workflow runtime and repository review/test surface 
+**Project Type**: Backend Python service and Temporal workflow runtime in a single repository 
+**Performance Goals**: Review-gate checks complete within normal unit-test runtime and add no network calls or workflow runtime polling 
+**Constraints**: Preserve Temporal workflow/activity/message names; keep compatibility handling at public boundaries; do not introduce compatibility aliases that change billing-relevant or execution semantics; keep source-design migration notes out of canonical docs 
 **Scale/Scope**: Representative high-risk Temporal boundaries covered by existing schema, managed-session, activity, typed-execution, and workflow tests; no full boundary inventory implementation in this story
 
 ## Constitution Check
@@ -35,7 +35,7 @@ Add enforceable Temporal type-safety review gates for Jira issue MM-331 from TOO
 - **IX. Resilient by Default**: PASS. Replay and in-flight safety evidence is required for compatibility-sensitive changes.
 - **X. Facilitate Continuous Improvement**: PASS. Failures produce actionable review findings that improve future migrations.
 - **XI. Spec-Driven Development Is the Source of Truth**: PASS. This plan derives from the single-story spec for MM-331.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Canonical docs are treated as source requirements; implementation tracking remains in spec artifacts or docs/tmp.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Canonical docs are treated as source requirements; implementation tracking remains in spec artifacts or local-only handoffs.
 - **XIII. Pre-Release Compatibility Policy**: PASS. The plan rejects hidden compatibility aliases and preserves stable Temporal-facing names unless an explicit cutover plan exists.
 
 ## Project Structure
@@ -50,10 +50,10 @@ specs/176-temporal-type-gates/
 ├── data-model.md
 ├── quickstart.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 ├── contracts/
-│   └── temporal-type-safety-gates.md
-└── tasks.md             # Phase 2 output; not created by /speckit.plan
+│ └── temporal-type-safety-gates.md
+└── tasks.md # Phase 2 output; not created by /speckit.plan
 ```
 
 ### Source Code (repository root)
@@ -61,36 +61,36 @@ specs/176-temporal-type-gates/
 ```text
 moonmind/
 ├── schemas/
-│   ├── temporal_activity_models.py
-│   ├── temporal_payload_policy.py
-│   ├── temporal_signal_contracts.py
-│   └── managed_session_models.py
+│ ├── temporal_activity_models.py
+│ ├── temporal_payload_policy.py
+│ ├── temporal_signal_contracts.py
+│ └── managed_session_models.py
 └── workflows/
-    └── temporal/
-        ├── activity_catalog.py
-        ├── typed_execution.py
-        └── workflows/
-            └── agent_session.py
+ └── temporal/
+ ├── activity_catalog.py
+ ├── typed_execution.py
+ └── workflows/
+ └── agent_session.py
 
 tools/
 └── validate_temporal_type_safety.py
 
 tests/
 ├── unit/
-│   ├── schemas/
-│   │   ├── test_temporal_activity_models.py
-│   │   ├── test_temporal_payload_policy.py
-│   │   ├── test_temporal_signal_contracts.py
-│   │   └── test_managed_session_models.py
-│   └── workflows/
-│       └── temporal/
-│           ├── test_activity_catalog.py
-│           ├── test_temporal_type_safety_gates.py
-│           └── workflows/
-│               └── test_agent_session.py
+│ ├── schemas/
+│ │ ├── test_temporal_activity_models.py
+│ │ ├── test_temporal_payload_policy.py
+│ │ ├── test_temporal_signal_contracts.py
+│ │ └── test_managed_session_models.py
+│ └── workflows/
+│ └── temporal/
+│ ├── test_activity_catalog.py
+│ ├── test_temporal_type_safety_gates.py
+│ └── workflows/
+│ └── test_agent_session.py
 └── integration/
-    └── temporal/
-        └── test_temporal_type_safety_gates.py
+ └── temporal/
+ └── test_temporal_type_safety_gates.py
 ```
 
 **Structure Decision**: Use the existing Temporal schema, payload policy, activity catalog, typed execution, and workflow test layout. Add a narrowly scoped validation entry point only if implementation needs a reusable review gate outside normal pytest assertions.

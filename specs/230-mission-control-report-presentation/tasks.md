@@ -49,7 +49,7 @@ Integration/contract test plan: API contract coverage verifies the execution art
 
 - [X] T017 Run `./tools/test_unit.sh --dashboard-only --ui-args frontend/src/entrypoints/task-detail.test.tsx` and fix failures (FR-001 through FR-007).
 - [X] T018 Run `./tools/test_unit.sh tests/contract/test_temporal_artifact_api.py` and fix failures (FR-001, FR-006).
-- [X] T019 Run traceability check `rg -n "MM-494|DESIGN-REQ-005|DESIGN-REQ-014|DESIGN-REQ-015|DESIGN-REQ-016" specs/230-mission-control-report-presentation docs/tmp/jira-orchestration-inputs/MM-494-moonspec-orchestration-input.md` (FR-008, SC-006).
+- [X] T019 Run traceability check `rg -n "MM-494|DESIGN-REQ-005|DESIGN-REQ-014|DESIGN-REQ-015|DESIGN-REQ-016" specs/230-mission-control-report-presentation` (FR-008, SC-006).
 - [X] T020 Run final `./tools/test_unit.sh` unless blocked by environment constraints.
 
 ## Phase 5: Verify

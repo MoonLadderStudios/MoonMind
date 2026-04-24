@@ -1,8 +1,8 @@
 # Feature Specification: Temporal Boundary Models
 
-**Feature Branch**: `177-temporal-boundary-models`  
-**Created**: 2026-04-15  
-**Status**: Draft  
+**Feature Branch**: `177-temporal-boundary-models` 
+**Created**: 2026-04-15 
+**Status**: Draft 
 **Input**:
 
 ```text
@@ -41,7 +41,7 @@ Coverage IDs
 Story Metadata
 - Story ID: STORY-001
 - Short name: temporal-boundary-models
-- Breakdown JSON: docs/tmp/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json
+- Breakdown JSON: artifacts/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json
 
 Acceptance Criteria
 - Every inventoried public Temporal boundary has an owning named request model and, where applicable, named response or snapshot model.
@@ -54,7 +54,7 @@ Requirements
 - Model workflow, activity, message, query, and continuation payloads as serialized contracts.
 - Default to one structured request argument and one structured response model for public Temporal entrypoints.
 - Use strict Pydantic v2 configuration and concrete collection element types.
-- Keep canonical docs desired-state-only while any implementation tracking remains in docs/tmp.
+- Keep canonical docs desired-state-only while any implementation tracking remains in local-only handoffs.
 
 Independent Test
 Run focused schema tests that instantiate representative boundary models, verify aliases and normalization, reject unknown fields, exercise enum/literal validation, and confirm no unresolved generic or raw dict model fields are introduced for known workflow-control data.
@@ -98,14 +98,14 @@ This establishes the canonical contract surface and schema homes that all later 
 2. **Given** a covered boundary has no typed response or uses a compatibility shape, **When** the inventory is validated, **Then** the entry must include an explicit rationale rather than silently treating the boundary as fully modeled.
 3. **Given** a boundary contract model is instantiated with extra unknown fields or blank identifiers, **When** validation runs, **Then** the model rejects the invalid payload unless the field is an explicitly bounded metadata escape hatch.
 4. **Given** the activity catalog and workflow message names already exist, **When** the boundary inventory is compared against those names, **Then** this story does not rename or remove any existing activity, workflow, signal, update, or query type.
-5. **Given** implementation-tracking notes are needed for unmigrated or compatibility-sensitive surfaces, **When** the inventory documents them, **Then** the notes live under `docs/tmp/` and canonical docs remain desired-state only.
+5. **Given** implementation-tracking notes are needed for unmigrated or compatibility-sensitive surfaces, **When** the inventory documents them, **Then** the notes live under `local-only handoffs` and canonical docs remain desired-state only.
 
 ### Edge Cases
 
 - Boundaries that are intentionally bytes contracts must identify the explicit binary model or serializer instead of embedding raw bytes in a JSON-shaped payload.
 - Bounded metadata bags may remain only as annotated metadata and cannot hide workflow-control fields.
 - Existing compatibility shims may be listed only when their boundary status and rationale are explicit.
-- The referenced Jira breakdown path may be stale; the current repository handoff path is `docs/tmp/story-breakdowns/breakdown-docs-temporal-temporaltypesafety-md-in-9e0bd9a2/stories.json`.
+- The referenced Jira breakdown path may be stale; the current repository handoff path is `artifacts/story-breakdowns/breakdown-docs-temporal-temporaltypesafety-md-in-9e0bd9a2/stories.json`.
 
 ## Assumptions
 
@@ -120,7 +120,7 @@ This establishes the canonical contract surface and schema homes that all later 
 - **DESIGN-REQ-003**: Source sections 3.3 and 4.2 require Pydantic v2 boundary models with strict defaults, stable aliases, nonblank identifier normalization, and enum/literal validation where applicable. Scope: in scope. Maps to FR-004.
 - **DESIGN-REQ-007**: Source sections 4.1 and 14 define approved schema homes and implementation anchors for Temporal boundary models and review surfaces. Scope: in scope. Maps to FR-005.
 - **DESIGN-REQ-008**: Source sections 4.3 and 4.4 prohibit anonymous JSON islands and unresolved generics for known workflow-control data. Scope: in scope. Maps to FR-006.
-- **DESIGN-REQ-021**: Source header and section 14 require canonical docs to remain desired-state-only while implementation tracking stays under `docs/tmp/`. Scope: in scope. Maps to FR-007.
+- **DESIGN-REQ-021**: Source header and section 14 require canonical docs to remain desired-state-only while implementation tracking stays under `local-only handoffs`. Scope: in scope. Maps to FR-007.
 
 ## Requirements *(mandatory)*
 
@@ -132,7 +132,7 @@ This establishes the canonical contract surface and schema homes that all later 
 - **FR-004**: New or updated boundary contract models MUST use Pydantic v2, stable aliases, nonblank normalization for identifiers, strict extra-field rejection by default, and enum/literal validation for closed values.
 - **FR-005**: Inventory entries MUST place request, response, and snapshot models in approved schema homes or state a precise domain schema module rationale.
 - **FR-006**: Covered workflow-control data MUST be represented by named fields instead of anonymous `parameters`, `options`, or `payload` blobs unless the inventory marks a bounded compatibility escape hatch.
-- **FR-007**: Implementation tracking for incomplete or compatibility-sensitive boundary migration MUST be written under `docs/tmp/` and MUST NOT turn canonical `docs/Temporal/TemporalTypeSafety.md` into a migration checklist.
+- **FR-007**: Implementation tracking for incomplete or compatibility-sensitive boundary migration MUST be written under `local-only handoffs` and MUST NOT turn canonical `docs/Temporal/TemporalTypeSafety.md` into a migration checklist.
 - **FR-008**: Existing Temporal activity, workflow, signal, update, query, and Continue-As-New type names MUST remain unchanged by this story.
 
 ### Key Entities
@@ -148,4 +148,4 @@ This establishes the canonical contract surface and schema homes that all later 
 - **SC-001**: Boundary-inventory tests verify at least one covered workflow input, workflow message/query contract, activity input/output contract, and Continue-As-New state contract.
 - **SC-002**: Schema tests demonstrate strict extra-field rejection and identifier normalization for new boundary inventory models and representative contract references.
 - **SC-003**: A regression test confirms covered Temporal activity and workflow/message names in the inventory match the existing catalog or workflow constants and are not renamed.
-- **SC-004**: A docs/tmp implementation tracker records incomplete or compatibility-sensitive boundary modeling work without modifying canonical desired-state documentation.
+- **SC-004**: A local-only handoffs implementation tracker records incomplete or compatibility-sensitive boundary modeling work without modifying canonical desired-state documentation.

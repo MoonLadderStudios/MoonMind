@@ -1,6 +1,6 @@
 # Canonical Return Phase 0 (Plan)
 
-Following the spec requirements and the strategy outlined in [`010-CanonicalReturnPlan.md`](../../docs/tmp/010-CanonicalReturnPlan.md), we catalog the exact normalization touchpoints and clarify our deployment/playback constraints.
+Following the spec requirements and the strategy outlined in [`010-CanonicalReturnPlan.md`](../../docs/Temporal/WorkflowTypeCatalogAndLifecycle.md), we catalog the exact normalization touchpoints and clarify our deployment/playback constraints.
 
 ## 1. Inventory
 
@@ -35,4 +35,4 @@ The approved cutover strategy demands:
 - We deliberately refuse soft wrapper aliases outside of the patched boundary to keep adherence to MoonMind's pre-release policy tight. New activity loops or executions will strictly reject non-typed dictionary returns directly.
 
 ## 3. Plan Modifications (DOC-REQ-CANON-004)
-We append these specific deliverables directly into [`010-CanonicalReturnPlan.md`](../../docs/tmp/010-CanonicalReturnPlan.md) and mark `Phase 0` complete.
+We append these specific deliverables directly into [`010-CanonicalReturnPlan.md`](../../docs/Temporal/WorkflowTypeCatalogAndLifecycle.md) and mark `Phase 0` complete.

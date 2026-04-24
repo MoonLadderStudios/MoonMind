@@ -23,7 +23,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-378 source input and single-story traceability in `docs/tmp/jira-orchestration-inputs/MM-378-moonspec-orchestration-input.md` and `specs/196-preset-application-reapply-state/spec.md`.
+- [X] T001 Confirm MM-378 source input and single-story traceability in `spec.md` (Input) and `specs/196-preset-application-reapply-state/spec.md`.
 - [X] T002 Confirm existing Create page preset, Jira import, attachment, and submission surfaces in `frontend/src/entrypoints/task-create.tsx`.
 
 ## Phase 2: Foundational

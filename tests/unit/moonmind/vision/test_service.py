@@ -11,7 +11,6 @@ from moonmind.vision.service import (
 )
 from moonmind.vision.settings import VisionConfig
 
-
 @pytest.fixture
 def base_config():
     return VisionConfig(
@@ -21,7 +20,6 @@ def base_config():
         max_tokens=4000,
         ocr_enabled=True,
     )
-
 
 @pytest.fixture
 def sample_attachment():
@@ -35,7 +33,6 @@ def sample_attachment():
         user_caption_hint=None,
     )
 
-
 def test_render_context_no_attachments(base_config):
     service = VisionService(config=base_config)
     context = service.render_context([])
@@ -45,7 +42,6 @@ def test_render_context_no_attachments(base_config):
     assert not context.attachments
     assert "IMAGE ATTACHMENTS (0)" in context.markdown
     assert "No attachments were provided" in context.markdown
-
 
 def test_render_context_disabled_flag(base_config, sample_attachment):
     disabled_config = VisionConfig(
@@ -67,7 +63,6 @@ def test_render_context_disabled_flag(base_config, sample_attachment):
         in context.markdown
     )
 
-
 def test_render_context_provider_off(base_config, sample_attachment):
     off_config = VisionConfig(
         enabled=True,
@@ -81,7 +76,6 @@ def test_render_context_provider_off(base_config, sample_attachment):
 
     assert not context.enabled
     assert context.status is VisionContextStatus.DISABLED
-
 
 @patch("moonmind.vision.service.settings")
 def test_render_context_provider_unavailable(mock_settings, sample_attachment):
@@ -110,7 +104,6 @@ def test_render_context_provider_unavailable(mock_settings, sample_attachment):
         )
         assert "NOTE: Vision provider credentials are unavailable" in context.markdown
 
-
 @patch("moonmind.vision.service.settings")
 def test_render_context_ok_gemini(mock_settings, sample_attachment):
     mock_settings.google.google_api_key = "fake_key"
@@ -123,7 +116,6 @@ def test_render_context_ok_gemini(mock_settings, sample_attachment):
     assert context.enabled
     assert context.status is VisionContextStatus.OK
 
-
 @patch("moonmind.vision.service.settings")
 def test_render_context_ok_openai(mock_settings, sample_attachment):
     mock_settings.openai.openai_api_key = "fake_key"
@@ -135,7 +127,6 @@ def test_render_context_ok_openai(mock_settings, sample_attachment):
 
     assert context.enabled
     assert context.status is VisionContextStatus.OK
-
 
 @patch("moonmind.vision.service.settings")
 def test_render_context_ok_anthropic(mock_settings, sample_attachment):
@@ -152,7 +143,6 @@ def test_render_context_ok_anthropic(mock_settings, sample_attachment):
 
     assert context.enabled
     assert context.status is VisionContextStatus.OK
-
 
 @patch("moonmind.vision.service.settings")
 def test_render_context_attachment_parsing_and_markdown(
@@ -218,7 +208,6 @@ def test_render_context_attachment_parsing_and_markdown(
     )  # digest omitted if None
     assert "     User specifically asked to check this chart." in md
 
-
 @patch("moonmind.vision.service.settings")
 def test_render_context_ocr_disabled(mock_settings, sample_attachment):
     mock_settings.google.google_api_key = "fake_key"
@@ -231,7 +220,6 @@ def test_render_context_ocr_disabled(mock_settings, sample_attachment):
     assert context.attachments[0].ocr_text == "OCR disabled"
     assert "     OCR disabled" in context.markdown
 
-
 def test_vision_service_default_config():
     with patch("moonmind.vision.service.get_vision_config") as mock_get_config:
         mock_get_config.return_value = VisionConfig(
@@ -240,7 +228,6 @@ def test_vision_service_default_config():
         service = VisionService()
         assert service._config.provider == "test"
         mock_get_config.assert_called_once()
-
 
 @patch("moonmind.vision.service.settings")
 def test_render_target_contexts_preserves_objective_and_step_targets(
@@ -305,7 +292,6 @@ def test_render_target_contexts_preserves_objective_and_step_targets(
         ".moonmind/vision/steps/review/image_context.md"
     )
 
-
 def test_render_target_contexts_disabled_records_status_and_traceability(
     base_config,
 ):
@@ -348,7 +334,6 @@ def test_render_target_contexts_disabled_records_status_and_traceability(
         ".moonmind/vision/task/image_context.md"
     )
 
-
 def test_render_target_contexts_sanitizes_step_ref_for_context_path(base_config):
     service = VisionService(config=base_config)
     bundle = service.render_target_contexts(
@@ -381,7 +366,6 @@ def test_render_target_contexts_sanitizes_step_ref_for_context_path(base_config)
         ".moonmind/vision/steps/review-step/image_context.md"
     )
 
-
 @patch("moonmind.vision.service.settings")
 def test_render_target_contexts_failed_diagnostics_for_provider_unavailable(
     mock_settings, base_config
@@ -412,7 +396,6 @@ def test_render_target_contexts_failed_diagnostics_for_provider_unavailable(
     assert failed["attachmentRefs"] == ["artifact-provider-missing"]
     assert "provider credentials unavailable" in str(failed["error"])
 
-
 def test_render_target_contexts_rejects_colliding_sanitized_step_refs(base_config):
     service = VisionService(config=base_config)
     attachment_a = AttachmentContextInput(
@@ -439,7 +422,6 @@ def test_render_target_contexts_rejects_colliding_sanitized_step_refs(base_confi
                 VisionContextTargetInput.step("A-B", [attachment_b]),
             ]
         )
-
 
 def test_render_target_contexts_rejects_unusable_step_ref_with_value(base_config):
     service = VisionService(config=base_config)

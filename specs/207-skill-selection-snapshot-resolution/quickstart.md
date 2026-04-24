@@ -33,7 +33,7 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/services/test_skill
 4. Run source traceability check:
 
 ```bash
-rg -n "MM-406|DESIGN-REQ-006|DESIGN-REQ-007|DESIGN-REQ-008|DESIGN-REQ-009|DESIGN-REQ-010|DESIGN-REQ-019" specs/207-skill-selection-snapshot-resolution docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md
+rg -n "MM-406|DESIGN-REQ-006|DESIGN-REQ-007|DESIGN-REQ-008|DESIGN-REQ-009|DESIGN-REQ-010|DESIGN-REQ-019" specs/207-skill-selection-snapshot-resolution
 ```
 
 5. Run final unit verification:

@@ -18,9 +18,7 @@ from moonmind.schemas import (
     validate_claude_team_message_membership,
 )
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def test_subagent_child_context_is_parent_owned_not_peer_session() -> None:
     usage = ClaudeChildWorkUsage(
@@ -52,7 +50,6 @@ def test_subagent_child_context_is_parent_owned_not_peer_session() -> None:
     assert "sessionId" not in wire
     assert wire["childContextId"] == "child-subagent-1"
 
-
 def test_subagent_rejects_peer_session_collapse_and_promotion_metadata() -> None:
     with pytest.raises(ValidationError):
         ClaudeChildContext(
@@ -78,7 +75,6 @@ def test_subagent_rejects_peer_session_collapse_and_promotion_metadata() -> None
             metadata={"promotedSessionId": "claude-peer-session"},
         )
 
-
 def test_child_work_usage_rejects_underreported_total_tokens() -> None:
     with pytest.raises(ValidationError, match="totalTokens"):
         ClaudeChildWorkUsage(
@@ -86,7 +82,6 @@ def test_child_work_usage_rejects_underreported_total_tokens() -> None:
             outputTokens=50,
             totalTokens=149,
         )
-
 
 def test_team_group_members_and_message_keep_distinct_session_identities() -> None:
     group = ClaudeSessionGroup(
@@ -131,7 +126,6 @@ def test_team_group_members_and_message_keep_distinct_session_identities() -> No
         members=(lead, teammate),
     )
 
-
 def test_team_message_rejects_self_and_cross_group_messages() -> None:
     with pytest.raises(ValidationError, match="peerSessionId"):
         ClaudeTeamMessage(
@@ -168,7 +162,6 @@ def test_team_message_rejects_self_and_cross_group_messages() -> None:
             members=(lead, outsider),
         )
 
-
 @pytest.mark.parametrize(
     "event_name",
     [
@@ -200,7 +193,6 @@ def test_child_work_event_names_are_documented_and_valid(event_name: str) -> Non
     )
 
     assert event.event_name == event_name
-
 
 def test_child_work_event_requires_shape_specific_identifiers() -> None:
     with pytest.raises(ValidationError, match="childContextId"):
@@ -236,7 +228,6 @@ def test_child_work_event_requires_shape_specific_identifiers() -> None:
             eventName="team.message.sent",
             occurredAt=NOW,
         )
-
 
 def test_child_work_rejects_large_payload_metadata() -> None:
     with pytest.raises(ValidationError):

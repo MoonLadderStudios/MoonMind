@@ -10,7 +10,6 @@ from moonmind.integrations.jira.errors import JiraToolError
 
 pytestmark = [pytest.mark.asyncio]
 
-
 def _build_settings(
     *,
     jira: JiraSettings | None = None,
@@ -20,7 +19,6 @@ def _build_settings(
         jira=jira or JiraSettings(jira_tool_enabled=True),
         **overrides,
     )
-
 
 async def test_resolve_service_account_connection_from_secret_refs(
     monkeypatch: pytest.MonkeyPatch,
@@ -66,7 +64,6 @@ async def test_resolve_service_account_connection_from_secret_refs(
     assert connection.retry_attempts == 2
     assert "token-123" in connection.redaction_values
 
-
 async def test_resolve_basic_connection_from_raw_values() -> None:
     settings = _build_settings(
         atlassian_auth_mode="basic",
@@ -81,7 +78,6 @@ async def test_resolve_basic_connection_from_raw_values() -> None:
     assert connection.base_url == "https://example.atlassian.net/rest/api/3"
     assert connection.headers["Authorization"].startswith("Basic ")
     assert "bot@example.com:token-456" in connection.redaction_values
-
 
 async def test_secret_ref_resolution_failure_is_sanitized(
     monkeypatch: pytest.MonkeyPatch,

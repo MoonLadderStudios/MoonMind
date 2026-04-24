@@ -18,7 +18,7 @@
 | FR-008 | Reduced-motion media query suppresses transform on shared routine controls. | VERIFIED | Covered by CSS contract tests. |
 | FR-009 | Existing app-shell and task-list behavior tests pass. | VERIFIED | Focused task-list regressions cover filters, sorting, pagination, mobile cards, and composition. |
 | FR-010 | New MM-427 tests cover tokens, no-lift routine control behavior, compact controls, focus, disabled, and reduced motion. | VERIFIED | Red-first failure was observed before CSS implementation. |
-| FR-011 | The trusted MM-427 Jira preset brief is preserved in `spec.md`, `tasks.md`, this verification file, and `docs/tmp/jira-orchestration-inputs/MM-427-moonspec-orchestration-input.md`. | VERIFIED | Commit and PR metadata must preserve MM-427 when those outputs are requested. |
+| FR-011 | The trusted MM-427 Jira preset brief is preserved in `spec.md`, `tasks.md`, this verification file, and `spec.md` (Input). | VERIFIED | Commit and PR metadata must preserve MM-427 when those outputs are requested. |
 
 ## Test Results
 

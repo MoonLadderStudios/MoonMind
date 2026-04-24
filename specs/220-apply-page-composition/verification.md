@@ -6,7 +6,7 @@
 
 ## Scope
 
-Verified the MM-428 single-story runtime feature request from the trusted Jira preset brief in `docs/tmp/jira-orchestration-inputs/MM-428-moonspec-orchestration-input.md`.
+Verified the MM-428 single-story runtime feature request from the trusted Jira preset brief in `spec.md` (Input).
 
 The implementation preserves MM-428 and source design coverage IDs DESIGN-REQ-014, DESIGN-REQ-017, DESIGN-REQ-019, DESIGN-REQ-020, and DESIGN-REQ-021 in MoonSpec artifacts.
 

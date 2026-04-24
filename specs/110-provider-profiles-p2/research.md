@@ -9,7 +9,7 @@
 ## Technical Clarifications
 
 ### 1. Database Model Additions
-**Decision**: Add `default_model` and `model_overrides` using `JSONB` or structured types in the SQLAlchemy `ManagedAgentProviderProfile` model, aligned with `docs/tmp/005-ProviderProfilesPlan.md`.
+**Decision**: Add `default_model` and `model_overrides` using `JSONB` or structured types in the SQLAlchemy `ManagedAgentProviderProfile` model, aligned with `docs/Tasks/SkillAndPlanContracts.md`.
 **Rationale**: Pydantic schemas already expect JSON representations for these dictionaries or objects.
 **Alternatives considered**: Multiple relational tables rather than JSONB. Rejected because the structure of model overrides is profile-specific and deeply nested, making JSONB the natural PostgreSQL feature fit.
 

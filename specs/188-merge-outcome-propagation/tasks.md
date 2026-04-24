@@ -19,7 +19,7 @@
 
 **Purpose**: Confirm active artifacts and current workflow test surfaces.
 
-- [X] T001 Confirm MM-353 is preserved in specs/188-merge-outcome-propagation/spec.md, plan.md, research.md, data-model.md, contracts/merge-outcome-propagation.md, quickstart.md, and docs/tmp/jira-orchestration-inputs/MM-353-moonspec-orchestration-input.md (FR-010, SC-005)
+- [X] T001 Confirm MM-353 is preserved in specs/188-merge-outcome-propagation/spec.md, plan.md, research.md, data-model.md, contracts/merge-outcome-propagation.md, quickstart.md, and (FR-010, SC-005)
 - [X] T002 Confirm focused test targets exist and are runnable or have exact environment blockers recorded: tests/unit/workflows/temporal/test_run_parent_owned_merge_automation.py, tests/unit/workflows/temporal/workflows/test_run_parent_owned_merge_automation_boundary.py, tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py, tests/unit/workflows/temporal/workflows/test_run_dependency_signals.py (SC-001, SC-002, SC-003)
 
 ## Phase 2: Foundational

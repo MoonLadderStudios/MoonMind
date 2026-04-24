@@ -47,15 +47,12 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 pytestmark = [pytest.mark.asyncio]
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-
 def _make_store(tmp_path: Path) -> ManagedRunStore:
     return ManagedRunStore(tmp_path / "run_store")
-
 
 def _save_record(
     store: ManagedRunStore,
@@ -80,7 +77,6 @@ def _save_record(
         )
     )
 
-
 def _session_record(session_id: str, *, status: str) -> dict[str, Any]:
     return CodexManagedSessionRecord(
         sessionId=session_id,
@@ -98,11 +94,9 @@ def _session_record(session_id: str, *, status: str) -> dict[str, Any]:
         startedAt=datetime.now(tz=UTC),
     ).model_dump(mode="json", by_alias=True)
 
-
 # ---------------------------------------------------------------------------
 # T1: agent_runtime_status — typed AgentRunStatus return
 # ---------------------------------------------------------------------------
-
 
 async def test_status_running_record_returns_typed_model(tmp_path: Path) -> None:
     """T1.1 — running record yields typed AgentRunStatus."""
@@ -116,7 +110,6 @@ async def test_status_running_record_returns_typed_model(tmp_path: Path) -> None
     assert result.status == "running"
     assert result.agent_kind == "managed"
 
-
 async def test_status_completed_record_returns_typed_model(tmp_path: Path) -> None:
     """T1.2 — completed record yields typed AgentRunStatus with correct status."""
     store = _make_store(tmp_path)
@@ -127,7 +120,6 @@ async def test_status_completed_record_returns_typed_model(tmp_path: Path) -> No
 
     assert isinstance(result, AgentRunStatus)
     assert result.status == "completed"
-
 
 async def test_status_failed_record_returns_typed_model_with_metadata(tmp_path: Path) -> None:
     """T1.3 — failed record yields typed AgentRunStatus with runtimeId in metadata."""
@@ -149,7 +141,6 @@ async def test_status_failed_record_returns_typed_model_with_metadata(tmp_path: 
     assert result.metadata is not None
     assert result.metadata.get("runtimeId") == "gemini_cli"
 
-
 async def test_status_no_record_returns_optimistic_running(tmp_path: Path) -> None:
     """T1.4 — missing record in store yields stub AgentRunStatus with status='running'."""
     store = _make_store(tmp_path)
@@ -161,7 +152,6 @@ async def test_status_no_record_returns_optimistic_running(tmp_path: Path) -> No
     assert result.status == "running"
     assert result.agent_kind == "managed"
 
-
 async def test_status_missing_run_id_raises_error(tmp_path: Path) -> None:
     """T1.5 — missing run_id raises TemporalActivityRuntimeError."""
     store = _make_store(tmp_path)
@@ -169,7 +159,6 @@ async def test_status_missing_run_id_raises_error(tmp_path: Path) -> None:
 
     with pytest.raises(TemporalActivityRuntimeError):
         await activities.agent_runtime_status({"agent_id": "codex_cli"})
-
 
 async def test_status_accepts_typed_request_model(tmp_path: Path) -> None:
     store = _make_store(tmp_path)
@@ -182,7 +171,6 @@ async def test_status_accepts_typed_request_model(tmp_path: Path) -> None:
 
     assert isinstance(result, AgentRunStatus)
     assert result.run_id == "typed-status-1"
-
 
 async def test_fetch_result_validates_legacy_dict_to_typed_request(
     tmp_path: Path,
@@ -202,7 +190,6 @@ async def test_fetch_result_validates_legacy_dict_to_typed_request(
 
     assert isinstance(result, AgentRunResult)
 
-
 async def test_cancel_accepts_typed_request_model() -> None:
     activities = TemporalAgentRuntimeActivities()
 
@@ -213,7 +200,6 @@ async def test_cancel_accepts_typed_request_model() -> None:
     assert isinstance(result, AgentRunStatus)
     assert result.run_id == "external-run-1"
 
-
 async def test_external_agent_run_activity_wrapper_rejects_unknown_fields() -> None:
     activities = TemporalAgentRuntimeActivities()
 
@@ -222,11 +208,9 @@ async def test_external_agent_run_activity_wrapper_rejects_unknown_fields() -> N
             {"runId": "jules-1", "rawProviderPayload": {"status": "done"}}
         )
 
-
 # ---------------------------------------------------------------------------
 # T2: agent_runtime_cancel — typed AgentRunStatus return (not None)
 # ---------------------------------------------------------------------------
-
 
 async def test_cancel_with_supervisor_returns_typed_status(tmp_path: Path) -> None:
     """T2.1 — cancel with supervisor returns AgentRunStatus with status='canceled'."""
@@ -242,7 +226,6 @@ async def test_cancel_with_supervisor_returns_typed_status(tmp_path: Path) -> No
     assert result.status == "canceled"
     assert result.agent_kind == "managed"
 
-
 async def test_cancel_supervisor_exception_still_returns_typed_status(tmp_path: Path) -> None:
     """T2.2 — supervisor.cancel raising an exception still yields AgentRunStatus."""
     mock_supervisor = AsyncMock()
@@ -256,7 +239,6 @@ async def test_cancel_supervisor_exception_still_returns_typed_status(tmp_path: 
     assert isinstance(result, AgentRunStatus)
     assert result.status == "canceled"
 
-
 async def test_cancel_no_supervisor_store_path_returns_typed_status(tmp_path: Path) -> None:
     """T2.3 — no supervisor but store update still returns AgentRunStatus."""
     store = _make_store(tmp_path)
@@ -268,7 +250,6 @@ async def test_cancel_no_supervisor_store_path_returns_typed_status(tmp_path: Pa
     assert isinstance(result, AgentRunStatus)
     assert result.status == "canceled"
 
-
 async def test_cancel_external_kind_returns_typed_status(tmp_path: Path) -> None:
     """T2.4 — external/unknown kind path still returns AgentRunStatus (best-effort)."""
     activities = TemporalAgentRuntimeActivities()
@@ -277,11 +258,9 @@ async def test_cancel_external_kind_returns_typed_status(tmp_path: Path) -> None
     assert isinstance(result, AgentRunStatus)
     assert result.status == "canceled"
 
-
 # ---------------------------------------------------------------------------
 # T3: agent_runtime_publish_artifacts — typed AgentRunResult return
 # ---------------------------------------------------------------------------
-
 
 async def test_publish_artifacts_no_service_returns_result_unchanged() -> None:
     """T3.1 — no artifact service configured → passthrough (returns input model)."""
@@ -293,13 +272,11 @@ async def test_publish_artifacts_no_service_returns_result_unchanged() -> None:
     assert isinstance(result, AgentRunResult)
     assert result.summary == "done"
 
-
 async def test_publish_artifacts_none_input_returns_none() -> None:
     """T3.3 — None input returns None."""
     activities = TemporalAgentRuntimeActivities()
     result = await activities.agent_runtime_publish_artifacts(None)
     assert result is None
-
 
 async def test_publish_artifacts_stamps_step_metadata_when_context_exists(
     monkeypatch: pytest.MonkeyPatch,
@@ -347,7 +324,6 @@ async def test_publish_artifacts_stamps_step_metadata_when_context_exists(
     assert captured_metadata[0]["scope"] == "step"
     assert captured_metadata[1]["step_id"] == "delegate-agent"
 
-
 async def test_fetch_result_exposes_task_run_and_runtime_artifact_metadata(
     tmp_path: Path,
 ) -> None:
@@ -379,11 +355,9 @@ async def test_fetch_result_exposes_task_run_and_runtime_artifact_metadata(
     assert result.metadata["mergedLogArtifactRef"] == "art_merged_1"
     assert result.metadata["diagnosticsRef"] == "art_diag_1"
 
-
 # ---------------------------------------------------------------------------
 # T4: session-oriented agent_runtime activities — typed managed-session returns
 # ---------------------------------------------------------------------------
-
 
 async def test_launch_session_requires_session_controller() -> None:
     activities = TemporalAgentRuntimeActivities()
@@ -404,7 +378,6 @@ async def test_launch_session_requires_session_controller() -> None:
                 "imageRef": "moonmind:latest",
             }
         )
-
 
 async def test_launch_session_delegates_to_remote_session_controller() -> None:
     controller = AsyncMock()
@@ -438,7 +411,6 @@ async def test_launch_session_delegates_to_remote_session_controller() -> None:
     assert isinstance(result, CodexManagedSessionHandle)
     assert result.session_state.container_id == "ctr-1"
     controller.launch_session.assert_awaited_once()
-
 
 async def test_launch_session_uses_github_descriptor_from_activity_environment(
     monkeypatch: pytest.MonkeyPatch,
@@ -482,7 +454,6 @@ async def test_launch_session_uses_github_descriptor_from_activity_environment(
     assert launched_request.github_credential.source == "environment"
     assert launched_request.github_credential.env_var == "GITHUB_TOKEN"
 
-
 async def test_launch_session_preserves_request_scoped_github_token_for_controller() -> None:
     token = "ghp_request_scoped_token_12345678901234567890"
     controller = AsyncMock()
@@ -522,7 +493,6 @@ async def test_launch_session_preserves_request_scoped_github_token_for_controll
     assert launched_request.github_credential.source == "environment"
     assert launched_request.github_credential.env_var == "GITHUB_TOKEN"
 
-
 async def test_launch_session_injects_moonmind_url_from_activity_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -559,7 +529,6 @@ async def test_launch_session_injects_moonmind_url_from_activity_environment(
     launched_request = controller.launch_session.await_args.args[0]
     assert launched_request.environment["PATH"] == "/usr/bin"
     assert launched_request.environment["MOONMIND_URL"] == "http://api:8000"
-
 
 async def test_launch_session_uses_github_descriptor_for_managed_secret_store(
     monkeypatch: pytest.MonkeyPatch,
@@ -603,7 +572,6 @@ async def test_launch_session_uses_github_descriptor_for_managed_secret_store(
     assert launched_request.github_credential is not None
     assert launched_request.github_credential.source == "managed_secret"
     assert launched_request.github_credential.required is False
-
 
 async def test_launch_session_preserves_explicit_github_secret_ref_descriptor(
     monkeypatch: pytest.MonkeyPatch,
@@ -654,7 +622,6 @@ async def test_launch_session_preserves_explicit_github_secret_ref_descriptor(
     )
     assert "GITHUB_TOKEN" not in launched_request.environment
 
-
 async def test_launch_session_redacts_github_token_in_failure_details() -> None:
     controller = AsyncMock()
     controller.launch_session = AsyncMock(
@@ -685,7 +652,6 @@ async def test_launch_session_redacts_github_token_in_failure_details() -> None:
     message = str(exc_info.value)
     assert "ghp_inline_secret_token_12345678901234567890" not in message
     assert "[REDACTED]" in message
-
 
 async def test_launch_session_materializes_profile_into_request_environment(
     monkeypatch: pytest.MonkeyPatch,
@@ -759,7 +725,6 @@ async def test_launch_session_materializes_profile_into_request_environment(
         encoding="utf-8"
     )
 
-
 async def test_launch_session_returns_safe_auth_diagnostics_metadata(
     tmp_path: Path,
 ) -> None:
@@ -822,7 +787,6 @@ async def test_launch_session_returns_safe_auth_diagnostics_metadata(
     assert "auth.json" not in str(result.metadata)
     assert "token=" not in str(result.metadata)
 
-
 async def test_launch_session_accepts_mapping_response_before_auth_diagnostics(
     tmp_path: Path,
 ) -> None:
@@ -872,7 +836,6 @@ async def test_launch_session_accepts_mapping_response_before_auth_diagnostics(
     assert result.metadata["authDiagnostics"]["profileRef"] == "codex-oauth"
     assert result.metadata["authDiagnostics"]["readiness"] == "ready"
 
-
 async def test_launch_session_failure_reports_sanitized_auth_diagnostics(
     tmp_path: Path,
 ) -> None:
@@ -921,7 +884,6 @@ async def test_launch_session_failure_reports_sanitized_auth_diagnostics(
     assert "[REDACTED]" in message
     assert "[REDACTED_AUTH_PATH]" in message
 
-
 async def test_launch_session_rejects_structured_secret_ref_values(
     tmp_path: Path,
 ) -> None:
@@ -964,7 +926,6 @@ async def test_launch_session_rejects_structured_secret_ref_values(
         )
 
     controller.launch_session.assert_not_awaited()
-
 
 async def test_load_session_snapshot_queries_session_workflow_via_client_boundary(
     monkeypatch: pytest.MonkeyPatch,
@@ -1021,7 +982,6 @@ async def test_load_session_snapshot_queries_session_workflow_via_client_boundar
     assert len(created_adapters) == 1
     workflow_handle.query.assert_awaited_once_with("get_status")
 
-
 async def test_load_session_snapshot_reuses_client_adapter_across_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1075,7 +1035,6 @@ async def test_load_session_snapshot_reuses_client_adapter_across_calls(
     assert len(created_adapters) == 1
     assert workflow_handle.query.await_count == 2
 
-
 async def test_session_status_delegates_to_remote_session_controller() -> None:
     controller = AsyncMock()
     controller.session_status = AsyncMock(
@@ -1102,7 +1061,6 @@ async def test_session_status_delegates_to_remote_session_controller() -> None:
 
     assert isinstance(result, CodexManagedSessionHandle)
     assert result.status == "busy"
-
 
 async def test_send_turn_accepts_base_model_payloads_and_preserves_concrete_type() -> None:
     class _SendTurnEnvelope(BaseModel):
@@ -1144,7 +1102,6 @@ async def test_send_turn_accepts_base_model_payloads_and_preserves_concrete_type
     assert validated_request.instructions == "Inspect the workspace"
     assert result.turn_id == "turn-1"
 
-
 async def test_send_turn_delegates_to_remote_session_controller() -> None:
     controller = AsyncMock()
     controller.send_turn = AsyncMock(
@@ -1174,7 +1131,6 @@ async def test_send_turn_delegates_to_remote_session_controller() -> None:
 
     assert isinstance(result, CodexManagedSessionTurnResponse)
     assert result.turn_id == "turn-1"
-
 
 async def test_send_turn_heartbeats_while_waiting_for_remote_session_controller(
     monkeypatch: pytest.MonkeyPatch,
@@ -1229,7 +1185,6 @@ async def test_send_turn_heartbeats_while_waiting_for_remote_session_controller(
         for heartbeat in heartbeats
     )
 
-
 async def test_await_with_activity_heartbeats_accepts_existing_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1248,7 +1203,6 @@ async def test_await_with_activity_heartbeats_accepts_existing_task(
     )
 
     assert result == "done"
-
 
 async def test_steer_turn_delegates_to_remote_session_controller() -> None:
     controller = AsyncMock()
@@ -1281,7 +1235,6 @@ async def test_steer_turn_delegates_to_remote_session_controller() -> None:
     assert isinstance(result, CodexManagedSessionTurnResponse)
     assert result.status == "running"
 
-
 async def test_interrupt_turn_delegates_to_remote_session_controller() -> None:
     controller = AsyncMock()
     controller.interrupt_turn = AsyncMock(
@@ -1311,7 +1264,6 @@ async def test_interrupt_turn_delegates_to_remote_session_controller() -> None:
     assert isinstance(result, CodexManagedSessionTurnResponse)
     assert result.status == "interrupted"
 
-
 async def test_clear_session_delegates_to_remote_session_controller() -> None:
     controller = AsyncMock()
     controller.clear_session = AsyncMock(
@@ -1340,7 +1292,6 @@ async def test_clear_session_delegates_to_remote_session_controller() -> None:
     assert isinstance(result, CodexManagedSessionHandle)
     assert result.session_state.session_epoch == 2
 
-
 async def test_terminate_session_delegates_to_remote_session_controller() -> None:
     controller = AsyncMock()
     controller.terminate_session = AsyncMock(
@@ -1367,7 +1318,6 @@ async def test_terminate_session_delegates_to_remote_session_controller() -> Non
 
     assert isinstance(result, CodexManagedSessionHandle)
     assert result.status == "terminated"
-
 
 async def test_fetch_session_summary_delegates_to_remote_session_controller() -> None:
     controller = AsyncMock()
@@ -1399,7 +1349,6 @@ async def test_fetch_session_summary_delegates_to_remote_session_controller() ->
     assert result.latest_summary_ref == "art-summary"
     assert result.latest_checkpoint_ref == "art-checkpoint"
     assert result.latest_control_event_ref == "art-control"
-
 
 async def test_publish_session_artifacts_delegates_to_remote_session_controller() -> None:
     controller = AsyncMock()
@@ -1433,11 +1382,9 @@ async def test_publish_session_artifacts_delegates_to_remote_session_controller(
     assert result.latest_checkpoint_ref == "art-checkpoint"
     assert result.latest_control_event_ref == "art-control"
 
-
 # ---------------------------------------------------------------------------
 # T5: agent_runtime_fetch_result — typed AgentRunResult return
 # ---------------------------------------------------------------------------
-
 
 async def test_fetch_result_completed_returns_typed_model(tmp_path: Path) -> None:
     """T5.1 — completed run returns typed AgentRunResult with failure_class=None."""
@@ -1449,7 +1396,6 @@ async def test_fetch_result_completed_returns_typed_model(tmp_path: Path) -> Non
 
     assert isinstance(result, AgentRunResult), f"Expected AgentRunResult, got {type(result)}"
     assert result.failure_class is None
-
 
 async def test_fetch_result_failed_returns_typed_model(tmp_path: Path) -> None:
     """T5.2 — failed run returns typed AgentRunResult with correct failure_class."""
@@ -1467,7 +1413,6 @@ async def test_fetch_result_failed_returns_typed_model(tmp_path: Path) -> None:
 
     assert isinstance(result, AgentRunResult)
     assert result.failure_class == "execution_error"
-
 
 async def test_fetch_result_forwards_pr_resolver_expected_flag(tmp_path: Path) -> None:
     """T5.3 — pr-resolver expectation reaches the managed adapter."""
@@ -1497,7 +1442,6 @@ async def test_fetch_result_forwards_pr_resolver_expected_flag(tmp_path: Path) -
             "fr-pr", pr_resolver_expected=True
         )
         assert result.failure_class == "user_error"
-
 
 async def test_fetch_result_reverifies_and_clears_pr_not_found_when_merged(
     tmp_path: Path,
@@ -1568,7 +1512,6 @@ async def test_fetch_result_reverifies_and_clears_pr_not_found_when_merged(
         result.metadata.get("prResolverStaleSummary") or ""
     )
 
-
 async def test_fetch_result_preserves_failure_when_reverify_returns_none(
     tmp_path: Path,
 ) -> None:
@@ -1611,7 +1554,6 @@ async def test_fetch_result_preserves_failure_when_reverify_returns_none(
     assert result.failure_class == "execution_error"
     assert "pr_not_found" in (result.summary or "")
     assert result.metadata.get("prResolverReverified") is None
-
 
 async def test_fetch_result_reverifies_blocked_resolver_by_pr_number_when_merged(
     tmp_path: Path,
@@ -1674,7 +1616,6 @@ async def test_fetch_result_reverifies_blocked_resolver_by_pr_number_when_merged
         result.metadata.get("prResolverStaleSummary") or ""
     )
 
-
 async def test_fetch_result_skips_reverify_without_head_branch(
     tmp_path: Path,
 ) -> None:
@@ -1711,7 +1652,6 @@ async def test_fetch_result_skips_reverify_without_head_branch(
 
     mock_reverify.assert_not_called()
     assert result.failure_class == "execution_error"
-
 
 async def test_reverify_pr_merged_state_queries_pr_number_from_run_id(
     tmp_path: Path,
@@ -1762,7 +1702,6 @@ async def test_reverify_pr_merged_state_queries_pr_number_from_run_id(
     assert merged_pr is not None
     assert merged_pr["number"] == 1727
     assert calls[0][:4] == ["gh", "pr", "view", "1727"]
-
 
 async def test_reverify_pr_merged_state_queries_head_and_base_branch(
     tmp_path: Path,
@@ -1817,7 +1756,6 @@ async def test_reverify_pr_merged_state_queries_head_and_base_branch(
     assert gh_args[gh_args.index("--head") + 1] == "mm-398-e3573b0c"
     assert gh_args[gh_args.index("--base") + 1] == "main"
 
-
 async def test_reverify_pr_merged_state_rejects_malformed_json(
     tmp_path: Path,
 ) -> None:
@@ -1858,7 +1796,6 @@ async def test_reverify_pr_merged_state_rejects_malformed_json(
 
     assert merged_pr is None
 
-
 async def test_fetch_result_string_request_defaults_pr_resolver_expected_false(
     tmp_path: Path,
 ) -> None:
@@ -1883,7 +1820,6 @@ async def test_fetch_result_string_request_defaults_pr_resolver_expected_false(
         )
         assert result.summary == "ok"
 
-
 async def test_fetch_result_no_record_returns_empty_typed_model(tmp_path: Path) -> None:
     """T5.5 — no record in store returns empty AgentRunResult (not None, not dict)."""
     store = _make_store(tmp_path)
@@ -1893,7 +1829,6 @@ async def test_fetch_result_no_record_returns_empty_typed_model(tmp_path: Path) 
 
     assert isinstance(result, AgentRunResult)
 
-
 async def test_fetch_result_missing_run_id_raises_error(tmp_path: Path) -> None:
     """T5.6 — missing run_id raises TemporalActivityRuntimeError."""
     store = _make_store(tmp_path)
@@ -1901,7 +1836,6 @@ async def test_fetch_result_missing_run_id_raises_error(tmp_path: Path) -> None:
 
     with pytest.raises(TemporalActivityRuntimeError):
         await activities.agent_runtime_fetch_result({"agent_id": "codex_cli"})
-
 
 # ---------------------------------------------------------------------------
 # Boundary & Serialization tests
@@ -1931,7 +1865,6 @@ class AgentRuntimeFetchResultBoundaryTest:
             input_dict,
             start_to_close_timeout=timedelta(minutes=1),
         )
-
 
 @workflow.defn(name="AgentRuntimeBuildLaunchContextBoundaryTest")
 class AgentRuntimeBuildLaunchContextBoundaryTest:
@@ -1997,7 +1930,6 @@ async def test_agent_runtime_status_temporal_boundary(tmp_path: Path) -> None:
             assert isinstance(result, AgentRunStatus)
             assert result.status == "completed"
 
-
 @pytest.mark.asyncio
 async def test_agent_runtime_build_launch_context_temporal_boundary(
     monkeypatch: pytest.MonkeyPatch,
@@ -2042,7 +1974,6 @@ async def test_agent_runtime_build_launch_context_temporal_boundary(
             assert result["profile_id"] == "proxy-prof"
             assert "MOONMIND_PROXY_TOKEN" in result["delta_env_overrides"]
             assert "GITHUB_TOKEN" in result["passthrough_env_keys"]
-
 
 @pytest.mark.asyncio
 async def test_agent_runtime_fetch_result_temporal_boundary(tmp_path: Path) -> None:
@@ -2090,7 +2021,6 @@ async def test_agent_runtime_fetch_result_temporal_boundary(tmp_path: Path) -> N
                     "boundary-1", pr_resolver_expected=True
                 )
 
-
 @pytest.mark.asyncio
 async def test_agent_runtime_cancel_temporal_boundary() -> None:
     from unittest.mock import MagicMock
@@ -2124,7 +2054,6 @@ async def test_agent_runtime_cancel_temporal_boundary() -> None:
             assert isinstance(result, AgentRunStatus)
             assert result.status == "canceled"
 
-
 @pytest.mark.asyncio
 async def test_agent_runtime_publish_temporal_boundary() -> None:
     from unittest.mock import MagicMock
@@ -2152,7 +2081,6 @@ async def test_agent_runtime_publish_temporal_boundary() -> None:
 
             assert result is None
 
-
 @workflow.defn(name="AgentRuntimeLaunchSessionBoundaryTest")
 class AgentRuntimeLaunchSessionBoundaryTest:
     @workflow.run
@@ -2162,7 +2090,6 @@ class AgentRuntimeLaunchSessionBoundaryTest:
             input_dict,
             start_to_close_timeout=timedelta(minutes=1),
         )
-
 
 @workflow.defn(name="AgentRuntimeSendTurnBoundaryTest")
 class AgentRuntimeSendTurnBoundaryTest:
@@ -2174,7 +2101,6 @@ class AgentRuntimeSendTurnBoundaryTest:
             start_to_close_timeout=timedelta(minutes=1),
         )
 
-
 @workflow.defn(name="AgentRuntimePrepareTurnInstructionsBoundaryTest")
 class AgentRuntimePrepareTurnInstructionsBoundaryTest:
     @workflow.run
@@ -2184,7 +2110,6 @@ class AgentRuntimePrepareTurnInstructionsBoundaryTest:
             input_dict,
             start_to_close_timeout=timedelta(minutes=1),
         )
-
 
 @pytest.mark.asyncio
 async def test_agent_runtime_launch_session_temporal_boundary(
@@ -2254,7 +2179,6 @@ async def test_agent_runtime_launch_session_temporal_boundary(
             assert launch_request.github_credential.source == "environment"
             assert launch_request.github_credential.env_var == "GITHUB_TOKEN"
 
-
 @pytest.mark.asyncio
 async def test_agent_runtime_send_turn_temporal_boundary() -> None:
     from temporalio import activity
@@ -2305,7 +2229,6 @@ async def test_agent_runtime_send_turn_temporal_boundary() -> None:
             assert isinstance(result, CodexManagedSessionTurnResponse)
             assert result.turn_id == "turn-1"
 
-
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_injects_context(
     monkeypatch: pytest.MonkeyPatch,
@@ -2344,7 +2267,6 @@ async def test_agent_runtime_prepare_turn_instructions_injects_context(
     assert result.startswith("Injected context instruction")
     assert "Managed Codex CLI note:" in result
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "skill_parameters",
@@ -2376,7 +2298,7 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint(
                 "parameters": {
                     "instructions": "Create Jira stories from the breakdown.",
                     "publishMode": "none",
-                    "storyBreakdownPath": "docs/tmp/story-breakdowns/demo/stories.json",
+                    "storyBreakdownPath": "artifacts/story-breakdowns/demo/stories.json",
                     **skill_parameters,
                 },
             },
@@ -2384,12 +2306,11 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint(
     )
 
     assert "MoonMind trusted Jira tools:" in result
-    assert "docs/tmp/story-breakdowns/demo/stories.json" in result
+    assert "artifacts/story-breakdowns/demo/stories.json" in result
     assert "`$MOONMIND_URL`" in result
     assert "POST $MOONMIND_URL/mcp/tools/call" in result
     assert "jira.create_issue" in result
     assert "Managed Codex CLI note:" in result
-
 
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_adds_jira_pr_verify_tool_hint() -> None:
@@ -2421,7 +2342,6 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_pr_verify_tool_
     assert "jira.get_issue" in result
     assert "Verify KANDY-2558 against PR #635." in result
     assert "Managed Codex CLI note:" in result
-
 
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_adds_jira_verify_tool_hint() -> None:
@@ -2456,7 +2376,6 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_verify_tool_hin
     assert "Verify KANDY-3607 against this branch." in result
     assert "Managed Codex CLI note:" in result
 
-
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_requires_workspace_for_instruction_ref() -> None:
     activities = TemporalAgentRuntimeActivities()
@@ -2480,7 +2399,6 @@ async def test_agent_runtime_prepare_turn_instructions_requires_workspace_for_in
                 }
             }
         )
-
 
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_temporal_boundary(
@@ -2539,7 +2457,6 @@ async def test_agent_runtime_prepare_turn_instructions_temporal_boundary(
             assert result.startswith("Injected context instruction")
             assert "Managed Codex CLI note:" in result
 
-
 async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary() -> None:
     class _Controller:
         async def reconcile(self) -> list[dict[str, Any]]:
@@ -2563,7 +2480,6 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
         ],
         "truncated": False,
     }
-
 
 @pytest.mark.asyncio
 async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeating(
@@ -2604,7 +2520,6 @@ async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeatin
     assert result["degradedSessionRecords"] == 60
     assert len(result["sessionIds"]) == 50
     assert result["truncated"] is True
-
 
 async def test_agent_runtime_session_request_logs_bounded_telemetry_context(
     monkeypatch: pytest.MonkeyPatch,
@@ -2658,7 +2573,6 @@ async def test_agent_runtime_session_request_logs_bounded_telemetry_context(
     assert "terminal scrollback" not in rendered
     assert "ghp_secret_token" not in rendered
 
-
 async def test_managed_session_telemetry_context_uses_trusted_activity_type() -> None:
     raw_context = activity_runtime_module._managed_session_telemetry_context(
         {
@@ -2672,7 +2586,6 @@ async def test_managed_session_telemetry_context_uses_trusted_activity_type() ->
         "activityType": "agent_runtime.send_turn",
         "sessionId": "sess:wf-run-1:codex_cli",
     }
-
 
 async def test_launch_session_materializes_claude_oauth_home_environment(
     tmp_path: Path,
@@ -2742,7 +2655,6 @@ async def test_launch_session_materializes_claude_oauth_home_environment(
     assert diagnostics["volumeRef"] == "claude_auth_volume"
     assert diagnostics["authMountTarget"] == "/home/app/.claude"
 
-
 async def test_launch_session_failure_redacts_claude_auth_paths(
     tmp_path: Path,
 ) -> None:
@@ -2789,7 +2701,6 @@ async def test_launch_session_failure_redacts_claude_auth_paths(
     assert "/home/app/.claude/credentials.json" not in message
     assert "[REDACTED]" in message
     assert "[REDACTED_AUTH_PATH]" in message
-
 
 async def test_launch_session_claude_auth_diagnostics_do_not_alias_workspace_or_artifacts(
     tmp_path: Path,

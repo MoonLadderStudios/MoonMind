@@ -3,11 +3,11 @@
 **Feature Branch**: `224-remediation-mission-control`
 **Created**: 2026-04-22
 **Status**: Draft
-**Input**: Jira Orchestrate for MM-457 using the Jira preset brief preserved below from `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
+**Input**: Jira Orchestrate for MM-457 using the Jira preset brief preserved below from `spec.md` (Input).
 
 Source summary: Show task remediation creation, evidence, locks, approvals, and links in Mission Control.
 Source Jira issue: MM-457.
-Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-457-moonspec-orchestration-input.md`.
+Original brief reference: `spec.md` (Input).
 Source coverage IDs: DESIGN-REQ-005, DESIGN-REQ-020, DESIGN-REQ-021, DESIGN-REQ-022, DESIGN-REQ-023.
 
 Use the Jira preset brief for MM-457 as the canonical Moon Spec orchestration input. Runtime mode is selected, so implementation and verification work should proceed from this artifact set.

@@ -146,8 +146,8 @@ The `default_auth_mode` property on strategies is named for the legacy concept. 
 
 ```python
 _LEGACY_AUTH_TO_CREDENTIAL_SOURCE = {
-    "api_key": "secret_ref",
-    "oauth": "oauth_volume",
+ "api_key": "secret_ref",
+ "oauth": "oauth_volume",
 }
 ```
 
@@ -233,7 +233,7 @@ Existing tests use `authMode="oauth"` in `ManagedAgentProviderProfile` construct
 | IX. Resilient by Default | **PASS** — Invalid values fail fast with clear errors. |
 | X. Facilitate Continuous Improvement | **N/A** |
 | XI. Spec-Driven Development | **PASS** — This plan is derived from the spec with traceability to DOC-REQ-* IDs. |
-| XII. Canonical Documentation | **PASS** — Implementation tracking belongs in `docs/tmp/`. |
+| XII. Canonical Documentation | **PASS** — Implementation tracking belongs in `local-only handoffs`. |
 | XIII. Pre-Release: Delete, Don't Deprecate | **PASS** — `auth_mode` is removed entirely, not aliased. |
 
 ---

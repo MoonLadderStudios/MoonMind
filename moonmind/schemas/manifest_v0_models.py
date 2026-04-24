@@ -16,11 +16,9 @@ from typing import Any, Dict, List, Literal, Optional
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-
 # ---------------------------------------------------------------------------
 # Sub-models
 # ---------------------------------------------------------------------------
-
 
 class ManifestMetadata(BaseModel):
     """Manifest identity and ownership."""
@@ -30,14 +28,12 @@ class ManifestMetadata(BaseModel):
     owner: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
 
-
 class LLMConfig(BaseModel):
     """Optional LLM provider for answer generation."""
 
     provider: str
     model: str
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-
 
 class EmbeddingsConfig(BaseModel):
     """Mandatory embedding provider settings."""
@@ -46,12 +42,10 @@ class EmbeddingsConfig(BaseModel):
     model: str
     batchSize: int = Field(default=128, ge=1)
 
-
 class VectorStoreConnection(BaseModel):
     """Flexible connection parameters for a vector store."""
 
     model_config = {"extra": "allow"}
-
 
 class VectorStoreConfig(BaseModel):
     """Vector store destination."""
@@ -60,12 +54,10 @@ class VectorStoreConfig(BaseModel):
     indexName: str
     connection: VectorStoreConnection = Field(default_factory=VectorStoreConnection)
 
-
 class DataSourceAuth(BaseModel):
     """Secret references for a data source (``${ENV}`` interpolated)."""
 
     model_config = {"extra": "allow"}
-
 
 class DataSourceConfig(BaseModel):
     """A single data source reader definition."""
@@ -76,14 +68,12 @@ class DataSourceConfig(BaseModel):
     auth: Optional[DataSourceAuth] = None
     schedule: Optional[str] = None
 
-
 class SplitterConfig(BaseModel):
     """Text splitter / chunker settings."""
 
     type: str = "TokenTextSplitter"
     chunkSize: int = Field(default=1000, ge=1)
     chunkOverlap: int = Field(default=100, ge=0)
-
 
 class TransformsConfig(BaseModel):
     """Document transforms applied before indexing."""
@@ -92,12 +82,10 @@ class TransformsConfig(BaseModel):
     splitter: Optional[SplitterConfig] = None
     enrichMetadata: List[Dict[str, Any]] = Field(default_factory=list)
 
-
 class IndexPersist(BaseModel):
     """Persistence target for an index."""
 
     path: Optional[str] = None
-
 
 class IndexConfig(BaseModel):
     """A vector/summary/keyword index definition."""
@@ -107,20 +95,17 @@ class IndexConfig(BaseModel):
     sources: List[str] = Field(default_factory=list)
     persist: Optional[IndexPersist] = None
 
-
 class RerankerConfig(BaseModel):
     """Optional reranker for retrieval."""
 
     type: str
     topK: int = Field(default=5, ge=1)
 
-
 class RetrieverParams(BaseModel):
     """Retriever tuning knobs."""
 
     topK: int = Field(default=8, ge=1)
     alpha: float = Field(default=0.5, ge=0.0, le=1.0)
-
 
 class RetrieverConfig(BaseModel):
     """Named retriever (Vector or Hybrid)."""
@@ -131,13 +116,11 @@ class RetrieverConfig(BaseModel):
     params: Optional[RetrieverParams] = None
     reranker: Optional[RerankerConfig] = None
 
-
 class EvaluationDataset(BaseModel):
     """A golden dataset for retrieval evaluation."""
 
     name: str
     path: str
-
 
 class EvaluationMetric(BaseModel):
     """A retrieval metric with optional threshold gate."""
@@ -145,13 +128,11 @@ class EvaluationMetric(BaseModel):
     name: str
     threshold: Optional[float] = None
 
-
 class EvaluationConfig(BaseModel):
     """Evaluation settings."""
 
     datasets: List[EvaluationDataset] = Field(default_factory=list)
     metrics: List[EvaluationMetric] = Field(default_factory=list)
-
 
 class RunConfig(BaseModel):
     """Execution parameters."""
@@ -161,18 +142,15 @@ class RunConfig(BaseModel):
     errorPolicy: str = "continue"  # continue | stopOnFirstError
     dryRun: bool = False
 
-
 class SecurityConfig(BaseModel):
     """Security and compliance settings."""
 
     piiRedaction: bool = False
     allowlistMetadata: List[str] = Field(default_factory=list)
 
-
 # ---------------------------------------------------------------------------
 # Top-level v0 manifest
 # ---------------------------------------------------------------------------
-
 
 class ManifestV0(BaseModel):
     """Top-level v0 manifest document.
@@ -244,7 +222,6 @@ class ManifestV0(BaseModel):
         """Load and validate a v0 manifest from a YAML string."""
         parsed = yaml.safe_load(content)
         return cls.model_validate(parsed)
-
 
 def export_v0_schema(path: PathLike) -> None:
     """Write the v0 JSON Schema to *path*."""

@@ -15,7 +15,6 @@ from moonmind.workflows.skills.skill_plan_contracts import (
 )
 from moonmind.workloads.registry import RunnerProfileRegistry, WorkloadPolicyError
 
-
 WorkloadToolHandler = Callable[
     [Mapping[str, Any], Mapping[str, Any] | None],
     SkillResult | Awaitable[SkillResult],
@@ -47,7 +46,6 @@ UNRESTRICTED_DOOD_TOOL_NAMES = frozenset(
 )
 DOOD_TOOL_NAMES = frozenset({*CURATED_DOOD_TOOL_NAMES, *UNRESTRICTED_DOOD_TOOL_NAMES})
 
-
 def tool_allowed_for_workflow_docker_mode(*, tool_name: str, workflow_docker_mode: str) -> bool:
     normalized_mode = normalize_workflow_docker_mode(workflow_docker_mode)
     normalized_tool = str(tool_name or "").strip()
@@ -57,10 +55,8 @@ def tool_allowed_for_workflow_docker_mode(*, tool_name: str, workflow_docker_mod
         return normalized_tool in CURATED_DOOD_TOOL_NAMES
     return normalized_tool in DOOD_TOOL_NAMES
 
-
 def is_dood_tool(name: str) -> bool:
     return str(name or "").strip() in DOOD_TOOL_NAMES
-
 
 def _resources_schema() -> dict[str, Any]:
     return {
@@ -73,13 +69,11 @@ def _resources_schema() -> dict[str, Any]:
         "additionalProperties": False,
     }
 
-
 def _declared_outputs_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": {"type": "string", "minLength": 1},
     }
-
 
 def _unreal_report_paths_schema() -> dict[str, Any]:
     return {
@@ -91,7 +85,6 @@ def _unreal_report_paths_schema() -> dict[str, Any]:
         },
         "additionalProperties": False,
     }
-
 
 def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, Any]:
     """Return the pinned ToolDefinition payload for a Docker workload tool."""
@@ -354,7 +347,6 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
         "security": {"allowed_roles": ["user", "admin"]},
     }
 
-
 def register_workload_tool_handlers(
     dispatcher: Any,
     *,
@@ -381,7 +373,6 @@ def register_workload_tool_handlers(
                 version=version,
                 handler=handler,
             )
-
 
 def build_workload_tool_handler(
     *,
@@ -468,7 +459,6 @@ def build_workload_tool_handler(
 
     return _handler
 
-
 def _build_workload_request(
     *,
     tool_name: str,
@@ -528,12 +518,10 @@ def _build_workload_request(
 
     return parse_workload_request(request_payload)
 
-
 def _request_payload_reason(inputs: Mapping[str, Any]) -> str | None:
     value = inputs.get("reason")
     normalized = str(value or "").strip()
     return normalized or None
-
 
 def _unreal_report_paths(value: Any) -> dict[str, str]:
     if value is None:
@@ -554,7 +542,6 @@ def _unreal_report_paths(value: Any) -> dict[str, str]:
         ),
     }
 
-
 def _normalize_unreal_report_path(value: Any) -> str:
     normalized = str(value).strip().replace("\\", "/")
     normalized = posixpath.normpath(normalized)
@@ -570,14 +557,12 @@ def _normalize_unreal_report_path(value: Any) -> str:
         )
     return normalized
 
-
 def _unreal_declared_outputs(report_paths: Mapping[str, str]) -> dict[str, str]:
     return {
         "output.primary": report_paths["primary"],
         "output.summary": report_paths["summary"],
         "output.logs.junit": report_paths["junit"],
     }
-
 
 def _unreal_env_overrides(
     inputs: Mapping[str, Any],
@@ -601,7 +586,6 @@ def _unreal_env_overrides(
     env["UE_JUNIT_PATH"] = report_paths["junit"]
     return {str(key): str(value) for key, value in env.items()}
 
-
 def _unreal_command(
     inputs: Mapping[str, Any],
     *,
@@ -622,14 +606,12 @@ def _unreal_command(
     command.extend(["--junit", report_paths["junit"]])
     return tuple(command)
 
-
 def _context_text(context: Mapping[str, Any] | None, key: str) -> str:
     value = context.get(key) if isinstance(context, Mapping) else None
     normalized = str(value or "").strip()
     if normalized:
         return normalized
     raise ValueError(f"context.{key} is required for workload tool execution")
-
 
 def _context_int(
     context: Mapping[str, Any] | None,
@@ -641,7 +623,6 @@ def _context_int(
     if value is None or value == "":
         return default
     return int(value)
-
 
 def _to_skill_result(result: WorkloadResult) -> SkillResult:
     payload = result.model_dump(mode="json", by_alias=True)
@@ -685,7 +666,6 @@ def _to_skill_result(result: WorkloadResult) -> SkillResult:
             "workloadMetadata": workload_metadata,
         },
     )
-
 
 __all__ = [
     "CONTAINER_RUN_WORKLOAD_TOOL",

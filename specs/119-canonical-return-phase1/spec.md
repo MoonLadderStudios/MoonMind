@@ -3,7 +3,7 @@
 **Feature Branch**: `119-canonical-return-phase1`
 **Created**: 2026-03-31
 **Status**: Draft
-**Input**: User description: "Fully implement Phase 1 of docs/tmp/010-CanonicalReturnPlan.md using test-driven development."
+**Input**: User description: "Fully implement Phase 1 of docs/Temporal/WorkflowTypeCatalogAndLifecycle.md using test-driven development."
 
 ## Source Document Requirements
 

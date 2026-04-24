@@ -25,7 +25,6 @@ from moonmind.workflows.temporal.runtime.output_parser import (
 )
 from moonmind.workflows.temporal.runtime.self_heal import FailureClass, is_failure_retryable
 
-
 @dataclass(frozen=True, slots=True)
 class ManagedRuntimeExitResult:
     """Structured managed-runtime exit classification."""
@@ -33,7 +32,6 @@ class ManagedRuntimeExitResult:
     status: AgentRunState
     failure_class: RuntimeFailureClass | None
     provider_error_code: str | None = None
-
 
 class ManagedRuntimeStrategy(ABC):
     """Per-runtime strategy for managed agent lifecycle.

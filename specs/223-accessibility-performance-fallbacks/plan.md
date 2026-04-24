@@ -54,7 +54,7 @@ Implement and verify the MM-429 accessibility, reduced-motion, fallback, and per
 - **IX. Resilient by Default**: PASS. The story improves graceful degradation and quiet-mode behavior.
 - **X. Continuous Improvement**: PASS. Verification evidence will record outcome and remaining gaps.
 - **XI. Spec-Driven Development**: PASS. Runtime changes proceed from this one-story spec, plan, and tasks.
-- **XII. Canonical Documentation Separation**: PASS. Migration/run artifacts remain under `docs/tmp` and `specs/`.
+- **XII. Canonical Documentation Separation**: PASS. Migration/run artifacts remain under `local-only handoffs` and `specs/`.
 - **XIII. Pre-release Compatibility Policy**: PASS. No internal contract aliases or compatibility transforms are introduced.
 
 ## Project Structure
@@ -68,9 +68,9 @@ specs/223-accessibility-performance-fallbacks/
 ├── research.md
 ├── quickstart.md
 ├── contracts/
-│   └── accessibility-fallbacks.md
+│ └── accessibility-fallbacks.md
 ├── checklists/
-│   └── requirements.md
+│ └── requirements.md
 └── tasks.md
 ```
 

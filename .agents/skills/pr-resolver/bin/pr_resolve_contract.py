@@ -34,20 +34,16 @@ EXIT_CODE_BLOCKED = 2
 EXIT_CODE_ATTEMPTS_EXHAUSTED = 3
 EXIT_CODE_FAILED = 4
 
-
 def now_utc_iso() -> str:
     return datetime.now(UTC).isoformat()
 
-
 def normalize_text(value: Any) -> str:
     return str(value or "").strip()
-
 
 def parse_reason(result_payload: dict[str, Any]) -> str:
     return normalize_text(
         result_payload.get("final_reason") or result_payload.get("reason")
     )
-
 
 def classify_retry_action(
     reason: str,
@@ -65,7 +61,6 @@ def classify_retry_action(
         return "finalize_only_retry"
     return "stop"
 
-
 def compute_backoff_seconds(
     retry_index: int,
     *,
@@ -78,7 +73,6 @@ def compute_backoff_seconds(
         return 0
     value = base * (2 ** max(0, int(retry_index)))
     return min(max_sleep, value)
-
 
 def remediation_next_step(reason: str) -> str:
     normalized = normalize_text(reason)

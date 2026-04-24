@@ -1,10 +1,10 @@
 # Visibility and UI Query Model
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-VisibilityAndUiQueryModel.md`](../tmp/remaining-work/Temporal-VisibilityAndUiQueryModel.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
-**Status:** Draft  
-**Owner:** MoonMind Platform  
-**Last updated:** 2026-04-04  
+**Status:** Draft 
+**Owner:** MoonMind Platform 
+**Last updated:** 2026-04-04 
 **Audience:** backend, dashboard, API, workflow authors
 
 ---
@@ -256,9 +256,9 @@ Rules:
 
 - `mm_state` must be set immediately on workflow start
 - terminal mapping must remain consistent with Temporal close status:
-  - completed → `completed`
-  - failed / terminated / timed out → `failed`
-  - canceled → `canceled`
+ - completed → `completed`
+ - failed / terminated / timed out → `failed`
+ - canceled → `canceled`
 
 ### `mm_owner_type`
 
@@ -671,7 +671,7 @@ This document specifies the **desired** Visibility, Memo, adapter list/detail, a
 
 Current implementation gaps, Visibility-native query work, and items to retire after substrate cutover belong in:
 
-- `docs/tmp/remaining-work/Temporal-VisibilityAndUiQueryModel.md`
+- `docs/Temporal/VisibilityAndUiQueryModel.md`
 
 This document should remain the normative semantics source rather than a live gap tracker.
 

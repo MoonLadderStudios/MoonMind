@@ -24,9 +24,7 @@ from moonmind.schemas.managed_session_models import (
     create_claude_rewind_work_items,
 )
 
-
 NOW = datetime(2026, 4, 16, tzinfo=UTC)
-
 
 def _checkpoint(**overrides: object) -> ClaudeCheckpoint:
     payload: dict[str, object] = {
@@ -45,7 +43,6 @@ def _checkpoint(**overrides: object) -> ClaudeCheckpoint:
     }
     payload.update(overrides)
     return ClaudeCheckpoint(**payload)
-
 
 def test_documented_checkpoint_triggers_and_capture_modes_are_exported() -> None:
     assert CLAUDE_CHECKPOINT_TRIGGERS == (
@@ -75,7 +72,6 @@ def test_documented_checkpoint_triggers_and_capture_modes_are_exported() -> None
     )
     assert EXPORTED_CLAUDE_REWIND_MODES == CLAUDE_REWIND_MODES
 
-
 @pytest.mark.parametrize(
     ("trigger", "should_create", "capture_mode"),
     [
@@ -97,7 +93,6 @@ def test_checkpoint_capture_decision_follows_documented_defaults(
     assert decision.capture_mode == capture_mode
     assert decision.reason
 
-
 def test_checkpoint_rejects_bash_side_effect_code_state_capture() -> None:
     with pytest.raises(ValidationError, match="Bash side effects"):
         _checkpoint(
@@ -105,14 +100,12 @@ def test_checkpoint_rejects_bash_side_effect_code_state_capture() -> None:
             captureMode="code_and_conversation",
         )
 
-
 def test_checkpoint_rejects_manual_edit_without_best_effort_mode() -> None:
     with pytest.raises(ValidationError, match="Manual external edits"):
         _checkpoint(
             trigger="external_manual_edit",
             captureMode="code_and_conversation",
         )
-
 
 def test_checkpoint_index_requires_active_cursor_to_be_listed() -> None:
     checkpoint = _checkpoint()
@@ -134,7 +127,6 @@ def test_checkpoint_index_requires_active_cursor_to_be_listed() -> None:
             generatedAt=NOW,
         )
 
-
 def test_checkpoint_index_allows_empty_fresh_session_results() -> None:
     index = ClaudeCheckpointIndex(
         sessionId="claude-session-1",
@@ -145,11 +137,9 @@ def test_checkpoint_index_allows_empty_fresh_session_results() -> None:
     assert index.checkpoints == ()
     assert index.active_checkpoint_id is None
 
-
 def test_checkpoint_metadata_rejects_large_payloads() -> None:
     with pytest.raises(ValidationError):
         _checkpoint(metadata={"payload": "x" * 9000})
-
 
 def test_rewind_request_accepts_only_documented_modes() -> None:
     request = ClaudeRewindRequest(
@@ -171,7 +161,6 @@ def test_rewind_request_accepts_only_documented_modes() -> None:
             requestedAt=NOW,
         )
 
-
 def test_rewind_result_preserves_lineage_and_event_log_reference() -> None:
     result = ClaudeRewindResult(
         resultId="rewind-result-1",
@@ -192,7 +181,6 @@ def test_rewind_result_preserves_lineage_and_event_log_reference() -> None:
     assert result.rewound_from_checkpoint_id == "checkpoint-2"
     assert result.preserved_event_log_ref == "artifact://events/pre-rewind"
 
-
 def test_rewind_result_defers_restore_invariants_until_completed() -> None:
     started = ClaudeRewindResult(
         resultId="rewind-result-started",
@@ -211,7 +199,6 @@ def test_rewind_result_defers_restore_invariants_until_completed() -> None:
     )
 
     assert started.status == "started"
-
 
 @pytest.mark.parametrize(
     ("mode", "code_restored", "conversation_restored", "message"),
@@ -264,7 +251,6 @@ def test_completed_rewind_result_requires_requested_state_to_be_restored(
             conversationStateRestored=conversation_restored,
             createdAt=NOW,
         )
-
 
 def test_summarize_from_here_requires_summary_ref_and_never_restores_code() -> None:
     with pytest.raises(ValidationError, match="summaryRef"):
@@ -320,7 +306,6 @@ def test_summarize_from_here_requires_summary_ref_and_never_restores_code() -> N
     )
 
     assert result.summary_ref == "artifact://summaries/from-checkpoint-1"
-
 
 def test_checkpoint_and_rewind_work_item_events_are_validated() -> None:
     assert CLAUDE_CHECKPOINT_WORK_EVENT_NAMES == (

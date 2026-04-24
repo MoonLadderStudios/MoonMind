@@ -17,7 +17,7 @@ Implement MM-387 by updating the canonical Mission Control architecture contract
 **Target Platform**: Mission Control task list, detail, create/edit, and submit surfaces
 **Project Type**: Runtime UI architecture contract documentation
 **Performance Goals**: No runtime performance impact; provenance explanations remain metadata and do not add runtime preset expansion work
-**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `docs/tmp/` or `specs/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-387 in artifacts
+**Constraints**: Preserve canonical docs as desired-state documentation, keep volatile planning under `local-only handoffs` or `specs/`, do not introduce compatibility aliases or hidden runtime fallback behavior, and preserve Jira issue key MM-387 in artifacts
 **Scale/Scope**: One canonical documentation file plus MoonSpec artifacts for one independently testable story
 
 ## Constitution Check
@@ -48,11 +48,11 @@ specs/200-mission-control-preset-provenance/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── mission-control-preset-provenance.md
+│ └── mission-control-preset-provenance.md
 ├── tasks.md
 ├── verification.md
 └── checklists/
-    └── requirements.md
+ └── requirements.md
 ```
 
 ### Source Code (repository root)
@@ -60,11 +60,10 @@ specs/200-mission-control-preset-provenance/
 ```text
 docs/
 └── UI/
-    └── MissionControlArchitecture.md
+ └── MissionControlArchitecture.md
 
-docs/tmp/
 └── jira-orchestration-inputs/
-    └── MM-387-moonspec-orchestration-input.md
+ └── MM-387-moonspec-orchestration-input.md
 ```
 
 **Structure Decision**: Update `docs/UI/MissionControlArchitecture.md` because MM-387 targets Mission Control preview, edit, list, detail, submit, evidence, and vocabulary behavior. Do not create replacement canonical docs or move volatile planning into `docs/`.
@@ -75,5 +74,5 @@ No constitution violations.
 
 ## Setup Notes
 
-- The input was classified as a single-story feature request from `docs/tmp/jira-orchestration-inputs/MM-387-moonspec-orchestration-input.md`.
+- The input was classified as a single-story feature request from `spec.md` (Input).
 - `.specify/feature.json` points to `specs/200-mission-control-preset-provenance`.

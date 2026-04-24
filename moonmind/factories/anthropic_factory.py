@@ -3,7 +3,6 @@ from llama_index.llms.anthropic import Anthropic
 
 from moonmind.config.settings import settings
 
-
 class AnthropicFactory:
     """
     Factory class for creating Anthropic models.
@@ -17,7 +16,6 @@ class AnthropicFactory:
         Args:
             api_key (str, optional): The API key to use. Defaults to None (uses settings).
             model_name (str, optional): The model name to use. Defaults to None (uses settings).
-
 
         Returns:
             LLM: An instance of the Anthropic model.

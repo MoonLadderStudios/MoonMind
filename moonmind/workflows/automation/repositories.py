@@ -19,7 +19,6 @@ from moonmind.workflows.automation import models
 _UNSET: object = object()
 _DEFAULT_ARTIFACT_RETENTION = timedelta(days=7)
 
-
 @dataclass(slots=True)
 class CodexShardHealth:
     """Aggregate view combining Codex shard and auth volume metadata."""
@@ -39,14 +38,12 @@ class CodexShardHealth:
     latest_preflight_message: Optional[str]
     latest_preflight_checked_at: Optional[datetime]
 
-
 @dataclass(slots=True)
 class PaginatedWorkflowRuns:
     """Cursor-paginated response for workflow run listings."""
 
     items: list[models.WorkflowRun]
     next_cursor: Optional[str]
-
 
 def _coerce_phase(
     value: models.AutomationPhase | str,
@@ -57,7 +54,6 @@ def _coerce_phase(
         return value
     return models.AutomationPhase(str(value))
 
-
 def _coerce_status(
     value: models.AutomationTaskStatus | str,
 ) -> models.AutomationTaskStatus:
@@ -66,7 +62,6 @@ def _coerce_status(
     if isinstance(value, models.AutomationTaskStatus):
         return value
     return models.AutomationTaskStatus(str(value))
-
 
 def _coerce_run_status(
     value: models.AutomationRunStatus | str,
@@ -77,7 +72,6 @@ def _coerce_run_status(
         return value
     return models.AutomationRunStatus(str(value))
 
-
 def _coerce_artifact_type(
     value: models.WorkflowArtifactType | str,
 ) -> models.WorkflowArtifactType:
@@ -86,7 +80,6 @@ def _coerce_artifact_type(
     if isinstance(value, models.WorkflowArtifactType):
         return value
     return models.WorkflowArtifactType(str(value))
-
 
 def _encode_run_cursor(created_at: datetime, run_id: UUID) -> str:
     """Encode a cursor token for pagination using created timestamp and id."""
@@ -98,7 +91,6 @@ def _encode_run_cursor(created_at: datetime, run_id: UUID) -> str:
         }
     ).encode()
     return base64.urlsafe_b64encode(payload).decode().rstrip("=")
-
 
 def _decode_run_cursor(cursor: str) -> tuple[datetime, UUID]:
     """Decode a cursor token into created_at and run_id components."""
@@ -124,7 +116,6 @@ def _decode_run_cursor(cursor: str) -> tuple[datetime, UUID]:
         created_at = created_at.replace(tzinfo=UTC)
 
     return created_at, run_id
-
 
 class WorkflowRepository:
     """Repository exposing CRUD helpers for workflow runs and related records."""
@@ -843,7 +834,6 @@ class WorkflowRepository:
         result = await self._session.execute(stmt)
         return result.scalars().all()
 
-
 class AutomationRepository:
     """Persistence helpers for workflow automation runs and related entities."""
 
@@ -1258,6 +1248,5 @@ class AutomationRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
-
 
 __all__ = ["WorkflowRepository", "AutomationRepository"]

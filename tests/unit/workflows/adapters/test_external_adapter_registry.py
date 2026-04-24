@@ -11,18 +11,15 @@ from moonmind.workflows.adapters.external_adapter_registry import (
     build_default_registry,
 )
 
-
 class _StubAdapter:
     """Minimal stub satisfying the AgentAdapter protocol shape."""
 
     def __init__(self, *, agent_id: str = "stub") -> None:
         self.agent_id = agent_id
 
-
 # ---------------------------------------------------------------------------
 # ExternalAdapterRegistry core behaviour
 # ---------------------------------------------------------------------------
-
 
 class TestExternalAdapterRegistry:
     def test_register_and_create_returns_adapter(self):
@@ -67,11 +64,9 @@ class TestExternalAdapterRegistry:
         registry.register("a", _StubAdapter)
         assert len(registry) == 1
 
-
 # ---------------------------------------------------------------------------
 # build_default_registry with runtime gates
 # ---------------------------------------------------------------------------
-
 
 class TestBuildDefaultRegistry:
     def test_empty_env_has_no_adapters(self):

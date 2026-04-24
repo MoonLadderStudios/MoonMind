@@ -4,7 +4,7 @@ Status: Active
 Owners: MoonMind Engineering
 Last Updated: 2026-04-14
 Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Api/ExecutionsApiContract.md`, `docs/UI/MissionControlArchitecture.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/Tasks/AgentSkillSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`
-Implementation tracking: `docs/tmp/015-TaskProposalSystemPlan.md`
+Implementation tracking: `docs/Tasks/TaskProposalSystem.md`
 
 ---
 
@@ -542,7 +542,7 @@ control-plane writes must not share an undifferentiated activity boundary.
 ## 10. Current Implementation Snapshot
 
 This feature is partially implemented. Phase tracking lives in
-`docs/tmp/015-TaskProposalSystemPlan.md`.
+`docs/Tasks/TaskProposalSystem.md`.
 
 ### 10.1 Already implemented
 

@@ -11,14 +11,11 @@ from .secret_providers import (
     SecretProviderManager,
 )
 
-
 class InterpolationError(Exception):
     """Raised when an interpolation reference cannot be resolved."""
 
-
 _PATTERN = re.compile(r"^\$\{([^}]+)\}$")
 _ALLOWED_ROOTS = {"auth", "defaults", "env"}
-
 
 def interpolate(
     model: Manifest,
@@ -36,7 +33,6 @@ def interpolate(
     resolved = _apply(data, model, env, manager)
     return Manifest.model_validate(resolved)
 
-
 def _apply(
     value: Any,
     model: Manifest,
@@ -53,7 +49,6 @@ def _apply(
     if isinstance(value, dict):
         return {k: _apply(v, model, env, manager) for k, v in value.items()}
     return value
-
 
 def _resolve(
     path: str,
@@ -100,7 +95,6 @@ def _resolve(
         else:
             raise InterpolationError(f"unresolved path '{path}'")
     return cur
-
 
 def _resolve_auth_item(item: AuthItem, manager: SecretProviderManager) -> Any:
     if item.value is not None:

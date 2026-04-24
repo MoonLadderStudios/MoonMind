@@ -15,33 +15,26 @@ _VAULT_MOUNT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _VAULT_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
 _VAULT_FIELD_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
-
 class SecretReferenceError(RuntimeError):
     """Raised when secret references are invalid or cannot be resolved safely."""
-
 
 class SecretMissingError(SecretReferenceError):
     """Raised when a secret reference points to a resource that does not exist or is empty."""
 
-
 class SecretAccessDeniedError(SecretReferenceError):
     """Raised when the process or resolver lacks permission to read the secret."""
-
 
 class SecretUnsupportedBackendError(SecretReferenceError):
     """Raised when the requested backend is not supported or not configured."""
 
-
 class SecretDecryptionError(SecretReferenceError):
     """Raised when an encrypted secret cannot be securely decrypted."""
-
 
 class SecretBackend(str, Enum):
     ENV = "env"
     DB_ENCRYPTED = "db"
     EXEC = "exec"
     VAULT = "vault"
-
 
 @dataclass(frozen=True, slots=True)
 class ParsedSecretRef:
@@ -50,7 +43,6 @@ class ParsedSecretRef:
     backend: SecretBackend
     locator: str
     normalized_ref: str
-
 
 def parse_secret_ref(ref: str) -> ParsedSecretRef:
     """Parse and validate ``<backend>://<locator>`` reference values."""
@@ -96,7 +88,6 @@ def parse_secret_ref(ref: str) -> ParsedSecretRef:
         normalized_ref=f"{scheme}://{locator}",
     )
 
-
 @dataclass(frozen=True, slots=True)
 class ResolvedGitHubAuth:
     """Resolved GitHub auth material from Vault secret data."""
@@ -106,7 +97,6 @@ class ResolvedGitHubAuth:
     host: str
     source_ref: str
 
-
 @dataclass(frozen=True, slots=True)
 class ParsedVaultReference:
     """Normalized Vault KV-v2 secret reference."""
@@ -115,7 +105,6 @@ class ParsedVaultReference:
     path: str
     field: str
     normalized_ref: str
-
 
 def parse_vault_reference(
     ref: str,
@@ -165,7 +154,6 @@ def parse_vault_reference(
         normalized_ref=normalized_ref,
     )
 
-
 def load_vault_token(*, token: str | None, token_file: Path | None) -> str | None:
     """Resolve Vault token from explicit value or file path."""
 
@@ -179,7 +167,6 @@ def load_vault_token(*, token: str | None, token_file: Path | None) -> str | Non
     except OSError as exc:  # pragma: no cover - defensive path
         raise SecretReferenceError(f"unable to read Vault token file: {exc}") from exc
     return candidate or None
-
 
 class VaultSecretResolver:
     """Resolve GitHub auth material from Vault KV-v2 references."""
@@ -283,7 +270,6 @@ class VaultSecretResolver:
                 f"vault field '{parsed.field}' is missing or empty for {parsed.normalized_ref}"
             )
         return value
-
 
 __all__ = [
     "ParsedVaultReference",

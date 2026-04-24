@@ -16,7 +16,7 @@
   - `tests/unit/workflows/temporal/workflows/test_merge_automation_temporal.py`
   - `tests/unit/workflows/temporal/workflows/test_run_dependency_signals.py`
 - MoonSpec artifacts preserve MM-353:
-  - `docs/tmp/jira-orchestration-inputs/MM-353-moonspec-orchestration-input.md`
+  - `spec.md` (Input)
   - `specs/188-merge-outcome-propagation/spec.md`
   - `specs/188-merge-outcome-propagation/plan.md`
   - `specs/188-merge-outcome-propagation/tasks.md`

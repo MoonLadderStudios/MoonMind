@@ -20,7 +20,6 @@ _SECRET_LIKE_METADATA_PATTERN = re.compile(
     """
 )
 
-
 def sanitize_publish_subject(
     value: str,
     *,
@@ -40,7 +39,6 @@ def sanitize_publish_subject(
     if len(sanitized) <= max_chars:
         return sanitized
     return f"{sanitized[: max_chars - 3].rstrip()}..."
-
 
 def sanitize_metadata_footer_value(
     value: str | None, *, fallback: str = "unknown"

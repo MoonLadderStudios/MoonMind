@@ -1,10 +1,10 @@
 # Workflow Artifact System Design
 
-Status: Draft  
-Owners: MoonMind Platform  
+Status: Draft 
+Owners: MoonMind Platform 
 Last updated: 2026-04-04
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md`](../tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 ## Related docs
 
@@ -45,26 +45,26 @@ This document defines the artifact system: storage, identity, linkage, authoriza
 
 ## 2. Goals
 
-1. **Reference-based IO**  
-   Workflows and activities exchange `ArtifactRef` values, not large byte blobs.
+1. **Reference-based IO** 
+ Workflows and activities exchange `ArtifactRef` values, not large byte blobs.
 
-2. **Reproducible execution context**  
-   Artifact-backed refs capture immutable inputs so retries and reruns do not silently drift.
+2. **Reproducible execution context** 
+ Artifact-backed refs capture immutable inputs so retries and reruns do not silently drift.
 
-3. **Immutable artifacts**  
-   Artifacts are write-once, read-many. Any “update” creates a new artifact.
+3. **Immutable artifacts** 
+ Artifacts are write-once, read-many. Any “update” creates a new artifact.
 
-4. **Secure access**  
-   Strong authorization, short-lived grants, and auditable access.
+4. **Secure access** 
+ Strong authorization, short-lived grants, and auditable access.
 
-5. **Operational clarity**  
-   Retention classes, lifecycle deletion, and predictable storage behavior.
+5. **Operational clarity** 
+ Retention classes, lifecycle deletion, and predictable storage behavior.
 
-6. **Execution linkage**  
-   First-class linkage between artifacts and Temporal executions.
+6. **Execution linkage** 
+ First-class linkage between artifacts and Temporal executions.
 
-7. **Canonical runtime result discipline**  
-   True agent-runtime activities return compact canonical contracts, while large outputs and diagnostics live in artifacts referenced by those contracts.
+7. **Canonical runtime result discipline** 
+ True agent-runtime activities return compact canonical contracts, while large outputs and diagnostics live in artifacts referenced by those contracts.
 
 ---
 
@@ -130,29 +130,29 @@ An artifact containing large operational details that must not be placed in work
 ## 5.1 Components
 
 1. **Artifact Store (blob storage)**
-   - primary storage for bytes
-   - default backend is MinIO (S3-compatible) for local/dev and default Compose environments
+ - primary storage for bytes
+ - default backend is MinIO (S3-compatible) for local/dev and default Compose environments
 
 2. **Artifact Index**
-   - stores artifact metadata and execution relationships
-   - enables listing by execution, latest-output queries, retention queries, and access checks
+ - stores artifact metadata and execution relationships
+ - enables listing by execution, latest-output queries, retention queries, and access checks
 
 3. **Artifact API**
-   - used by UI clients for upload/download flows
-   - used by workers for internal read/write flows
-   - used by lifecycle management and cleanup
+ - used by UI clients for upload/download flows
+ - used by workers for internal read/write flows
+ - used by lifecycle management and cleanup
 
 4. **Artifact Activities**
-   - deterministic workflow-facing activity family for artifact IO, including:
-     - `artifact.create`
-     - `artifact.read`
-     - `artifact.write_complete`
-     - `artifact.list_for_execution`
-     - `artifact.compute_preview`
-     - `artifact.link`
-     - `artifact.pin`
-     - `artifact.unpin`
-     - `artifact.lifecycle_sweep`
+ - deterministic workflow-facing activity family for artifact IO, including:
+ - `artifact.create`
+ - `artifact.read`
+ - `artifact.write_complete`
+ - `artifact.list_for_execution`
+ - `artifact.compute_preview`
+ - `artifact.link`
+ - `artifact.pin`
+ - `artifact.unpin`
+ - `artifact.lifecycle_sweep`
 
 ## 5.2 High-level flows
 
@@ -186,8 +186,8 @@ When a true agent-runtime activity finishes:
 - the large payloads stay in artifact storage
 - the activity returns a compact canonical contract such as `AgentRunResult`
 - that result contains refs like:
-  - `output_refs[]`
-  - `diagnostics_ref`
+ - `output_refs[]`
+ - `diagnostics_ref`
 
 This is a core architecture rule: **large execution outputs belong in artifacts, not runtime payloads or workflow history**.
 
@@ -380,8 +380,8 @@ Representative rules:
 * for a given step attempt, group by `(namespace, workflow_id, run_id, metadata.step_id, metadata.attempt, link_type)`
 * for a workflow across runs, define UI behavior explicitly:
 
-  * latest by `created_at`, or
-  * latest run only
+ * latest by `created_at`, or
+ * latest run only
 
 Client rule:
 
@@ -444,10 +444,10 @@ Log at minimum:
 
 Artifact API auth behavior must follow the app-level auth mode.
 
-| App auth setting         | Artifact API behavior                                                | Intended environment    |
+| App auth setting | Artifact API behavior | Intended environment |
 | ------------------------ | -------------------------------------------------------------------- | ----------------------- |
-| `AUTH_PROVIDER=disabled` | no end-user auth required for user-facing metadata/presign endpoints | one-click local/dev     |
-| authenticated modes      | require authenticated identity and execution-linked authorization    | shared dev/staging/prod |
+| `AUTH_PROVIDER=disabled` | no end-user auth required for user-facing metadata/presign endpoints | one-click local/dev |
+| authenticated modes | require authenticated identity and execution-linked authorization | shared dev/staging/prod |
 
 This is an API-layer auth choice. It does **not** require public object-storage buckets.
 
@@ -677,12 +677,12 @@ The API is split into:
 
 ```json
 {
-  "artifact_ref_v": 1,
-  "artifact_id": "art_01J9Z9F7QZK2K0YQ3B1T2N0R4P",
-  "sha256": "9b74c9897bac770ffc029102a200c5de...",
-  "size_bytes": 123456,
-  "content_type": "application/json",
-  "encryption": "sse-kms"
+ "artifact_ref_v": 1,
+ "artifact_id": "art_01J9Z9F7QZK2K0YQ3B1T2N0R4P",
+ "sha256": "9b74c9897bac770ffc029102a200c5de...",
+ "size_bytes": 123456,
+ "content_type": "application/json",
+ "encryption": "sse-kms"
 }
 ```
 
@@ -700,20 +700,20 @@ Request may include:
 * `retention_class`
 * optional execution link info:
 
-  * `namespace`
-  * `workflow_id`
-  * `run_id`
-  * `link_type`
-  * `label`
+ * `namespace`
+ * `workflow_id`
+ * `run_id`
+ * `link_type`
+ * `label`
 
 Response:
 
 * `artifact_ref`
 * upload instructions:
 
-  * single or multipart mode
-  * presigned URL(s)
-  * upload ID if multipart
+ * single or multipart mode
+ * presigned URL(s)
+ * upload ID if multipart
 
 ### Complete multipart upload
 

@@ -17,4 +17,4 @@ Verdict: PASS
 
 ## Notes
 
-The original Jira preset brief references `docs/tmp/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json`. The current repository contains the equivalent STORY-004 handoff at `docs/tmp/story-breakdowns/breakdown-docs-temporal-temporaltypesafety-md-in-9e0bd9a2/stories.json`; preserve the Jira brief text verbatim in `spec.md` while using the current repository path when reading the breakdown artifact.
+The original Jira preset brief references `artifacts/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json`. The current repository contains the equivalent STORY-004 handoff at `artifacts/story-breakdowns/breakdown-docs-temporal-temporaltypesafety-md-in-9e0bd9a2/stories.json`; preserve the Jira brief text verbatim in `spec.md` while using the current repository path when reading the breakdown artifact.

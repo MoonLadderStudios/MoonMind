@@ -15,7 +15,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-373 is a runtime single-story request in docs/tmp/jira-orchestration-inputs/MM-373-moonspec-orchestration-input.md.
+- [X] T001 Confirm MM-373 is a runtime single-story request in.
 - [X] T002 Create Moon Spec artifacts in specs/201-preview-download-task-images/.
 
 ## Phase 2: Foundational

@@ -5,7 +5,6 @@ from __future__ import annotations
 from moonmind.rag.qdrant_client import RagQdrantClient
 from moonmind.rag.settings import RagRuntimeSettings
 
-
 def clean_overlay_run(
     *, run_id: str, settings: RagRuntimeSettings, qdrant: RagQdrantClient
 ) -> None:

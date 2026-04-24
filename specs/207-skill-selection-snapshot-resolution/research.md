@@ -3,7 +3,7 @@
 ## Classification
 
 Decision: Treat MM-406 as a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md`; `specs/207-skill-selection-snapshot-resolution/spec.md`.
+Evidence: `spec.md` (Input); `specs/207-skill-selection-snapshot-resolution/spec.md`.
 Rationale: The Jira brief contains one actor, one operational goal, and one independently testable behavior: resolve task/step skill intent into an immutable snapshot before runtime launch.
 Alternatives considered: Treating `docs/Tasks/AgentSkillSystem.md` as a broad design was rejected because the Jira brief selected a bounded story from that design.
 Test implications: Unit and workflow-boundary tests are required.
@@ -83,7 +83,7 @@ Test implications: None beyond final verification.
 ## FR-012 / SC-006
 
 Decision: Implemented and verified at Specify/Plan stages.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-406-moonspec-orchestration-input.md`; `specs/207-skill-selection-snapshot-resolution/spec.md`; this plan.
+Evidence: `spec.md` (Input); `specs/207-skill-selection-snapshot-resolution/spec.md`; this plan.
 Rationale: MM-406 and source coverage IDs are preserved.
 Alternatives considered: Link only to Jira; rejected because downstream verification needs local artifact traceability.
 Test implications: Traceability `rg` check.

@@ -12,7 +12,7 @@
 |-------|---------|--------|-------|
 | Red-first doc contract | `rg -n "Preset compilation\|authoredPresets\|source\\?\|include-tree\|detachment state\|live preset catalog" docs/Tasks/TaskArchitecture.md` before doc edits | PASS | Command exited 1 before implementation, confirming required contract language was missing. |
 | Focused documentation contract | `rg -n "Preset compilation\|authoredPresets\|source\\?\|include-tree\|detachment state\|live preset catalog" docs/Tasks/TaskArchitecture.md` | PASS | Required contract terms are present in `docs/Tasks/TaskArchitecture.md`. |
-| Source traceability | `rg -n "MM-385\|DESIGN-REQ-015\|DESIGN-REQ-017\|DESIGN-REQ-018\|DESIGN-REQ-019\|DESIGN-REQ-025\|DESIGN-REQ-026" specs/198-document-task-snapshot-boundary docs/tmp/jira-orchestration-inputs/MM-385-moonspec-orchestration-input.md` | PASS | Jira key and all in-scope design IDs are preserved. |
+| Source traceability | `rg -n "MM-385\|DESIGN-REQ-015\|DESIGN-REQ-017\|DESIGN-REQ-018\|DESIGN-REQ-019\|DESIGN-REQ-025\|DESIGN-REQ-026" specs/198-document-task-snapshot-boundary` | PASS | Jira key and all in-scope design IDs are preserved. |
 | Unit | `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` | PASS | 3501 Python tests passed, 1 xpassed, 16 subtests passed; frontend Vitest suite passed 10 files / 258 tests. |
 | Hermetic integration | `./tools/test_integration.sh` | NOT RUN | Not required for this Markdown-only runtime contract change; no executable workflow, API, persistence, or compose-backed behavior changed. |
 
@@ -28,7 +28,7 @@
 | FR-006 | `docs/Tasks/TaskArchitecture.md` lines 301-310, 410-411 | VERIFIED | Execution-plane boundary states workers consume resolved payloads and do not expand presets or rely on live preset catalog correctness. |
 | FR-007 | `docs/Tasks/TaskArchitecture.md` lines 173, 295, 309-310 | VERIFIED | Submitted work remains reconstructible without live preset catalog lookup after catalog changes. |
 | FR-008 | `docs/Tasks/TaskArchitecture.md` lines 1-22; `specs/198-document-task-snapshot-boundary/plan.md` | VERIFIED | Canonical doc remains desired-state architecture; planning and migration evidence stays in specs/docs tmp. |
-| FR-009 | `specs/198-document-task-snapshot-boundary/spec.md`; `docs/tmp/jira-orchestration-inputs/MM-385-moonspec-orchestration-input.md`; this report | VERIFIED | MM-385 and original Jira preset brief are preserved. |
+| FR-009 | `specs/198-document-task-snapshot-boundary/spec.md`; `spec.md` (Input); this report | VERIFIED | MM-385 and original Jira preset brief are preserved. |
 
 ## Acceptance Scenario Coverage
 
@@ -38,7 +38,7 @@
 | Scenario 2: Snapshot preserves authored preset bindings and final order | `docs/Tasks/TaskArchitecture.md` lines 175-180, 280-292 | VERIFIED | Snapshot fields cover required reconstruction data. |
 | Scenario 3: Runtime worker receives resolved steps and does not expand presets | `docs/Tasks/TaskArchitecture.md` lines 301-310 | VERIFIED | Worker boundary is explicit. |
 | Scenario 4: Submitted task remains reconstructible after catalog changes | `docs/Tasks/TaskArchitecture.md` lines 173, 295, 309-310 | VERIFIED | Live catalog dependency is explicitly rejected. |
-| Scenario 5: MM-385 traceability remains present | `specs/198-document-task-snapshot-boundary/spec.md`; `docs/tmp/jira-orchestration-inputs/MM-385-moonspec-orchestration-input.md` | VERIFIED | Traceability check passed. |
+| Scenario 5: MM-385 traceability remains present | `specs/198-document-task-snapshot-boundary/spec.md`; `spec.md` (Input) | VERIFIED | Traceability check passed. |
 
 ## Constitution And Source Design Coverage
 
@@ -51,7 +51,7 @@
 | DESIGN-REQ-025 | `docs/Tasks/TaskArchitecture.md` lines 175-180, 280-292, 413-414 | VERIFIED | Snapshot durability covers required provenance and order fields. |
 | DESIGN-REQ-026 | `docs/Tasks/TaskArchitecture.md` lines 301-310 | VERIFIED | Workers avoid preset expansion and live catalog dependency. |
 | Constitution XI | `specs/198-document-task-snapshot-boundary/` artifacts | VERIFIED | Spec, plan, tasks, implementation, and verification artifacts exist for this non-trivial change. |
-| Constitution XII | `docs/Tasks/TaskArchitecture.md`; `docs/tmp/jira-orchestration-inputs/MM-385-moonspec-orchestration-input.md` | VERIFIED | Canonical docs stay desired-state; volatile Jira/orchestration material stays under tmp/specs. |
+| Constitution XII | `docs/Tasks/TaskArchitecture.md`; `spec.md` (Input) | VERIFIED | Canonical docs stay desired-state; volatile Jira/orchestration material stays under tmp/specs. |
 
 ## Original Request Alignment
 

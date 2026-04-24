@@ -60,7 +60,6 @@ frontend/src/entrypoints/
 ├── task-create.tsx
 └── task-create.test.tsx
 
-docs/tmp/jira-orchestration-inputs/
 └── MM-379-moonspec-orchestration-input.md
 ```
 

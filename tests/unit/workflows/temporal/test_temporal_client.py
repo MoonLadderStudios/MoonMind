@@ -13,19 +13,16 @@ from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CO
 
 pytestmark = [pytest.mark.asyncio]
 
-
 class _FakeWorkflowExecution:
     """Stub mimicking a Temporal WorkflowExecution list result item."""
 
     def __init__(self, workflow_id: str) -> None:
         self.id = workflow_id
 
-
 @pytest.fixture
 def adapter() -> TemporalClientAdapter:
     mock_client = AsyncMock()
     return TemporalClientAdapter(client=mock_client)
-
 
 async def test_temporal_client_uses_shared_pydantic_data_converter(monkeypatch):
     captured: dict[str, object] = {}
@@ -42,9 +39,7 @@ async def test_temporal_client_uses_shared_pydantic_data_converter(monkeypatch):
 
     assert captured["data_converter"] is MOONMIND_TEMPORAL_DATA_CONVERTER
 
-
 # ---- get_drain_metrics ----
-
 
 async def test_get_drain_metrics_counts_running_workflows(adapter):
     """get_drain_metrics should use count_workflows and return the count."""
@@ -60,7 +55,6 @@ async def test_get_drain_metrics_counts_running_workflows(adapter):
     assert result["stale_running"] == 0
     adapter._client.count_workflows.assert_awaited_once()
 
-
 async def test_get_drain_metrics_with_task_queue_filter(adapter):
     """get_drain_metrics should include TaskQueue filter in Visibility query."""
 
@@ -73,7 +67,6 @@ async def test_get_drain_metrics_with_task_queue_filter(adapter):
     called_query = adapter._client.count_workflows.await_args.kwargs["query"]
     assert 'TaskQueue IN ("mm.workflow", "mm.activity")' in called_query
 
-
 async def test_get_drain_metrics_empty_namespace(adapter):
     """With no running workflows, counts should all be zero."""
 
@@ -85,9 +78,7 @@ async def test_get_drain_metrics_empty_namespace(adapter):
 
     assert result == {"running": 0, "queued": 0, "stale_running": 0}
 
-
 # ---- send_batch_pause_signal / send_batch_resume_signal ----
-
 
 async def test_send_batch_pause_signal_sends_to_all(adapter):
     """Batch pause signal should signal each running workflow with 'pause'."""
@@ -111,7 +102,6 @@ async def test_send_batch_pause_signal_sends_to_all(adapter):
     for handle in mock_handles.values():
         handle.signal.assert_awaited_once_with("pause")
 
-
 async def test_send_batch_resume_signal_sends_to_all(adapter):
     """Batch resume signal should signal each running workflow with 'resume'."""
 
@@ -129,7 +119,6 @@ async def test_send_batch_resume_signal_sends_to_all(adapter):
 
     assert signaled == 1
     mock_handle.signal.assert_awaited_once_with("resume")
-
 
 async def test_send_batch_signal_skips_failed_workflows(adapter):
     """Signal dispatch should continue when individual workflows fail."""

@@ -19,7 +19,6 @@ from moonmind.workflows.temporal.artifacts import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_artifacts_lifecycle.db"
@@ -33,7 +32,6 @@ async def temporal_db(tmp_path: Path):
         yield session_maker
     finally:
         await engine.dispose()
-
 
 async def test_lifecycle_sweep_is_idempotent_across_soft_and_hard_delete(
     tmp_path: Path,
@@ -90,7 +88,6 @@ async def test_lifecycle_sweep_is_idempotent_across_soft_and_hard_delete(
             assert refreshed.status is TemporalArtifactStatus.DELETED
             assert refreshed.hard_deleted_at is not None
             assert refreshed.tombstoned_at is not None
-
 
 async def test_lifecycle_sweep_skips_pinned_artifacts(tmp_path: Path) -> None:
     """Pinned artifacts should remain undeleted during lifecycle sweeps."""

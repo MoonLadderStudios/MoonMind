@@ -8,5 +8,5 @@
 | DOC-REQ-004 | FR2 | `moonmind/agents/managed/` | Integration tests verifying process launcher does not attempt to bind any live server hooks for legacy sessions |
 | DOC-REQ-005 | FR1 | `ui/src/hooks/` and `api_service/` | Ensure no UI code attempts to query `web_ro` metadata objects |
 | DOC-REQ-006 | FR6 | `docs/` | Read manual to ensure terminal assumptions are wiped out |
-| DOC-REQ-007 | FR6 | `docs/tmp/` | Release log updates mention operator cut-offs |
+| DOC-REQ-007 | FR6 | `local-only handoffs` | Release log updates mention operator cut-offs |
 | DOC-REQ-008 | FR5 | `tests/integration/` | Check legacy compatibility via unit tests with mock payloads |

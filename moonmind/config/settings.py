@@ -40,7 +40,6 @@ _JIRA_ALLOWED_ACTIONS = frozenset(
     }
 )
 
-
 class DatabaseSettings(BaseSettings):
     """Database settings"""
 
@@ -67,7 +66,6 @@ class DatabaseSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
 
 class TemporalSettings(BaseSettings):
     """Temporal runtime lifecycle settings."""
@@ -282,7 +280,6 @@ class TemporalDashboardSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
 
 class WorkflowSettings(BaseSettings):
     """Settings specific to workflow automation."""
@@ -1231,10 +1228,8 @@ class WorkflowSettings(BaseSettings):
                 f"Allowed values: {allowed_display or '<none>'}"
             )
 
-
 # Workflow overrides rely on pydantic ``env`` fallbacks and
 # ``AppSettings.model_post_init`` to populate sensible defaults.
-
 
 class AppWorkflowSettings(WorkflowSettings):
     """App-level variant used by `AppSettings` to avoid legacy alias overrides."""
@@ -1243,7 +1238,6 @@ class AppWorkflowSettings(WorkflowSettings):
         "MoonLadderStudios/MoonMind",
         validation_alias=AliasChoices("WORKFLOW_GITHUB_REPOSITORY"),
     )
-
 
 class SecuritySettings(BaseSettings):
     """Security settings"""
@@ -1257,9 +1251,7 @@ class SecuritySettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
-
 DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS: int = 3072
-
 
 class GoogleSettings(BaseSettings):
     """Google/Gemini API settings"""
@@ -1283,7 +1275,6 @@ class GoogleSettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
-
 class AnthropicSettings(BaseSettings):
     """Anthropic API settings"""
 
@@ -1297,7 +1288,6 @@ class AnthropicSettings(BaseSettings):
     anthropic_enabled: bool = Field(True, alias="ANTHROPIC_ENABLED")
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
-
 
 class GitHubSettings(BaseSettings):
     """GitHub settings"""
@@ -1317,7 +1307,6 @@ class GitHubSettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
-
 class GoogleDriveSettings(BaseSettings):
     """Google Drive settings"""
 
@@ -1328,7 +1317,6 @@ class GoogleDriveSettings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
-
 
 class OpenAISettings(BaseSettings):
     """OpenAI API settings"""
@@ -1342,7 +1330,6 @@ class OpenAISettings(BaseSettings):
     openai_enabled: bool = Field(True, alias="OPENAI_ENABLED")
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
-
 
 class OllamaSettings(BaseSettings):
     """Ollama settings"""
@@ -1362,7 +1349,6 @@ class OllamaSettings(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
-
 class ConfluenceSettings(BaseSettings):
     """Confluence specific settings"""
 
@@ -1378,7 +1364,6 @@ class ConfluenceSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
 
 class JiraSettings(BaseSettings):
     """Jira specific settings"""
@@ -1453,7 +1438,6 @@ class JiraSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
 
 class AtlassianSettings(BaseSettings):
     """Atlassian base settings"""
@@ -1535,7 +1519,6 @@ class AtlassianSettings(BaseSettings):
                 jira_transition_env.lower() == "true"
             )
 
-
 class QdrantSettings(BaseSettings):
     """Qdrant settings"""
 
@@ -1545,7 +1528,6 @@ class QdrantSettings(BaseSettings):
     qdrant_enabled: bool = Field(True, alias="QDRANT_ENABLED")
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
-
 class RAGSettings(BaseSettings):
     """RAG (Retrieval-Augmented Generation) settings"""
 
@@ -1554,7 +1536,6 @@ class RAGSettings(BaseSettings):
     max_context_length_chars: int = Field(8000, alias="RAG_MAX_CONTEXT_LENGTH_CHARS")
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
-
 
 class LocalDataSettings(BaseSettings):
     """Settings for local data indexing"""
@@ -1573,7 +1554,6 @@ class LocalDataSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
 
 class OIDCSettings(BaseSettings):
     """OIDC settings"""
@@ -1607,7 +1587,6 @@ class OIDCSettings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
-
 
 class FeatureFlagsSettings(BaseSettings):
     """Feature flag toggles for runtime surfaces."""
@@ -1749,7 +1728,6 @@ class FeatureFlagsSettings(BaseSettings):
         extra="ignore",
     )
 
-
 class TaskProposalSettings(BaseSettings):
     """Task proposal queue runtime knobs."""
 
@@ -1883,7 +1861,6 @@ class TaskProposalSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
 
 class AppSettings(BaseSettings):
     """Main application settings"""
@@ -2254,7 +2231,6 @@ class AppSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
 
 # Create a global settings instance
 settings = AppSettings()

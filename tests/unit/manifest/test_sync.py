@@ -12,7 +12,6 @@ spec:
 
 YAML2 = YAML1.replace("Dummy", "Other")
 
-
 def test_detect_change_states():
     m1 = Manifest.model_validate_yaml(YAML1)
     m2 = Manifest.model_validate_yaml(YAML2)

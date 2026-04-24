@@ -2,7 +2,7 @@
 
 **Feature**: Inject Attachment Context Into Runtimes  
 **Spec**: `/work/agent_jobs/mm:0618ada0-cd23-4b1c-be82-265e9ae4db82/repo/specs/200-inject-attachment-context-into-runtimes/spec.md`  
-**Original Request Source**: `spec.md` `Input` and canonical Jira brief `docs/tmp/jira-orchestration-inputs/MM-372-moonspec-orchestration-input.md`  
+**Original Request Source**: `spec.md` `Input` and canonical Jira brief `spec.md` (Input)  
 **Verdict**: FULLY_IMPLEMENTED  
 **Confidence**: HIGH
 

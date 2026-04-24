@@ -3,7 +3,6 @@ from moonmind.rag.qdrant_client import SearchResult
 from moonmind.rag.service import ContextRetrievalService, RetrievalBudgetExceededError
 from moonmind.rag.settings import RagRuntimeSettings
 
-
 class StubEmbedder:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -11,7 +10,6 @@ class StubEmbedder:
     def embed(self, text: str):
         self.calls.append(text)
         return [0.1, 0.2]
-
 
 class StubQdrant:
     def __init__(self) -> None:
@@ -25,7 +23,6 @@ class StubQdrant:
         self.calls.append(kwargs)
         item = ContextItem(score=0.8, source="src/file.py", text="snippet")
         return SearchResult(items=[item], latency_ms=5.0)
-
 
 def test_context_retrieval_service_direct_flow(monkeypatch):
     env = {
@@ -52,7 +49,6 @@ def test_context_retrieval_service_direct_flow(monkeypatch):
     assert pack.items
     assert pack.transport == "direct"
     assert "Retrieved Context" in pack.context_text
-
 
 def test_context_retrieval_service_honors_overlay_mode_non_collection():
     env = {
@@ -83,7 +79,6 @@ def test_context_retrieval_service_honors_overlay_mode_non_collection():
     assert qdrant.calls
     assert qdrant.calls[0]["overlay_collection"] is None
 
-
 def test_context_retrieval_service_enforces_token_budget():
     env = {
         "QDRANT_HOST": "localhost",
@@ -111,7 +106,6 @@ def test_context_retrieval_service_enforces_token_budget():
         assert exc.budget_type == "tokens"
     else:
         raise AssertionError("expected RetrievalBudgetExceededError")
-
 
 def test_context_retrieval_service_gateway_does_not_initialize_embedding(monkeypatch):
     env = {

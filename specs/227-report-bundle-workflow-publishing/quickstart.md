@@ -39,5 +39,5 @@ The required integration suite is compose-backed and limited to `integration_ci`
 Confirm MM-461 and source requirement IDs remain visible:
 
 ```bash
-rg -n "MM-461|DESIGN-REQ-006|DESIGN-REQ-008|DESIGN-REQ-010|DESIGN-REQ-014|DESIGN-REQ-017|DESIGN-REQ-018|report_bundle_v" specs/227-report-bundle-workflow-publishing docs/tmp/jira-orchestration-inputs/MM-461-moonspec-orchestration-input.md moonmind/workflows/temporal tests/unit/workflows/temporal
+rg -n "MM-461|DESIGN-REQ-006|DESIGN-REQ-008|DESIGN-REQ-010|DESIGN-REQ-014|DESIGN-REQ-017|DESIGN-REQ-018|report_bundle_v" specs/227-report-bundle-workflow-publishing moonmind/workflows/temporal tests/unit/workflows/temporal
 ```

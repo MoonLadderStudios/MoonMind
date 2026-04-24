@@ -57,11 +57,9 @@ RETIRED_SEARCH_ATTRIBUTES = {
     "mm_dependency_state",
 }
 
-
 def _write_executable(path: Path, contents: str) -> None:
     path.write_text(contents, encoding="utf-8")
     path.chmod(0o755)
-
 
 def _write_search_attributes(state_dir: Path, search_attributes: dict[str, str]) -> None:
     if not search_attributes:
@@ -70,7 +68,6 @@ def _write_search_attributes(state_dir: Path, search_attributes: dict[str, str])
     (state_dir / "search-attributes.txt").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
-
 
 TEMPORAL_STUB = """#!/usr/bin/env sh
 set -eu
@@ -175,7 +172,6 @@ esac
 exit 0
 """
 
-
 def test_namespace_bootstrap_is_idempotent_and_storage_cap_aware(tmp_path: Path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -226,7 +222,6 @@ def test_namespace_bootstrap_is_idempotent_and_storage_cap_aware(tmp_path: Path)
     assert "namespace update" in calls
     assert calls.count("search-attribute create") == len(REQUIRED_SEARCH_ATTRIBUTES)
 
-
 def test_namespace_bootstrap_updates_existing_default_namespace_retention(tmp_path: Path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -261,7 +256,6 @@ def test_namespace_bootstrap_updates_existing_default_namespace_retention(tmp_pa
     assert "namespace update" in calls
     assert "--retention 2160h" in calls
     assert "search-attribute create" in calls
-
 
 def test_namespace_bootstrap_retries_default_namespace_visibility_before_update(tmp_path: Path):
     fake_bin = tmp_path / "bin"
@@ -298,7 +292,6 @@ def test_namespace_bootstrap_retries_default_namespace_visibility_before_update(
     assert "namespace update" in calls
     assert "--retention 2160h" in calls
     assert "search-attribute create" in calls
-
 
 def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     tmp_path: Path,
@@ -343,7 +336,6 @@ def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     registered = (state_dir / "search-attributes.txt").read_text(encoding="utf-8")
     for name, attr_type in REQUIRED_SEARCH_ATTRIBUTES.items():
         assert f"{name} {attr_type}" in registered
-
 
 def test_namespace_bootstrap_retire_old_keyword_attributes_before_sql_limit_upgrade(
     tmp_path: Path,

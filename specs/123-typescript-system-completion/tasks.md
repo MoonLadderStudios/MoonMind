@@ -6,5 +6,5 @@
 - [x] T004 Move shared Mission Control CSS into the frontend-owned Vite pipeline and remove standalone `dashboard:css` scripts/build steps
 - [x] T005 Delete `task_dashboard.html`, `dashboard.js`, and stale legacy runtime tests/tooling
 - [x] T006 Update browser/unit verification paths and ensure `./tools/test_unit.sh` targets the current frontend test surface
-- [x] T007 Update canonical docs plus `docs/tmp/063-UI-TypeScriptSystem.md` to reflect the completed migration
+- [x] T007 Update canonical docs plus `docs/UI/TypeScriptSystem.md` to reflect the completed migration
 - [x] T008 Verify, commit, push, and open the pull request

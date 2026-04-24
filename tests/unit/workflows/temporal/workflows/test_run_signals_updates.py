@@ -16,7 +16,6 @@ from moonmind.workflows.temporal.workflows.run import (
     MoonMindRunWorkflow,
 )
 
-
 async def fake_execute_activity(activity_name, *args, **kwargs):
     if activity_name == "artifact.read":
         import json
@@ -64,7 +63,6 @@ async def fake_execute_activity(activity_name, *args, **kwargs):
         return {"artifact_id": "art-123"}, {"url": "test"}
     return {}
 
-
 @pytest.fixture
 def mock_run_environment(monkeypatch):
     monkeypatch.setattr(
@@ -98,7 +96,6 @@ def mock_run_environment(monkeypatch):
         MoonMindRunWorkflow, "_run_execution_stage", fake_execution_stage
     )
 
-
 @pytest.mark.asyncio
 async def test_run_workflow_pause_resume(mock_run_environment):
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -128,7 +125,6 @@ async def test_run_workflow_pause_resume(mock_run_environment):
             await handle.execute_update("Resume")
             result = await handle.result()
             assert result["status"] == "success"
-
 
 @pytest.mark.asyncio
 async def test_run_workflow_update_parameters(mock_run_environment):
@@ -160,7 +156,6 @@ async def test_run_workflow_update_parameters(mock_run_environment):
             result = await handle.result()
             assert result["status"] == "success"
 
-
 @pytest.mark.asyncio
 async def test_run_workflow_cancel_signal(mock_run_environment):
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -185,7 +180,6 @@ async def test_run_workflow_cancel_signal(mock_run_environment):
             await handle.execute_update("Cancel")
             result = await handle.result()
             assert result["status"] == "canceled"
-
 
 @pytest.mark.asyncio
 async def test_resume_forwards_operator_message_to_active_jules_child(monkeypatch):
@@ -213,7 +207,6 @@ async def test_resume_forwards_operator_message_to_active_jules_child(monkeypatc
     )
     assert workflow_instance._resume_requested is True
 
-
 @pytest.mark.asyncio
 async def test_send_message_forwards_operator_message_without_resuming(monkeypatch):
     workflow_instance = MoonMindRunWorkflow()
@@ -237,7 +230,6 @@ async def test_send_message_forwards_operator_message_without_resuming(monkeypat
         {"message": "Please use Provider Profiles."},
     )
     assert workflow_instance._resume_requested is False
-
 
 @pytest.mark.asyncio
 async def test_run_workflow_send_message_update_uses_temporal_boundary(
@@ -286,7 +278,6 @@ async def test_run_workflow_send_message_update_uses_temporal_boundary(
             result = await handle.result()
             assert result["status"] == "canceled"
 
-
 @pytest.mark.asyncio
 async def test_run_workflow_send_message_update_rejects_non_canonical_payload(
     mock_run_environment,
@@ -323,7 +314,6 @@ async def test_run_workflow_send_message_update_rejects_non_canonical_payload(
             result = await handle.result()
             assert result["status"] == "canceled"
 
-
 @pytest.mark.asyncio
 async def test_run_workflow_send_message_update_rejects_blank_message(
     mock_run_environment,
@@ -357,7 +347,6 @@ async def test_run_workflow_send_message_update_rejects_blank_message(
             result = await handle.result()
             assert result["status"] == "canceled"
 
-
 def test_update_inputs_extracts_clarification_message_from_parameters_patch():
     workflow_instance = MoonMindRunWorkflow()
 
@@ -370,7 +359,6 @@ def test_update_inputs_extracts_clarification_message_from_parameters_patch():
     )
 
     assert message == "Use the Workers page copy for now."
-
 
 @pytest.mark.asyncio
 async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
@@ -423,7 +411,6 @@ async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
         for memo in memo_updates
     )
 
-
 def test_child_state_changed_sets_provider_profile_waiting_reason(monkeypatch):
     workflow_instance = MoonMindRunWorkflow()
     monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
@@ -450,7 +437,6 @@ def test_child_state_changed_sets_provider_profile_waiting_reason(monkeypatch):
 
     assert workflow_instance._waiting_reason is None
     assert workflow_instance._attention_required is False
-
 
 @pytest.mark.asyncio
 async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypatch):
@@ -492,7 +478,6 @@ async def test_wait_for_dependencies_raises_dependency_specific_failure(monkeypa
 
     with pytest.raises(ValueError, match="prerequisite failed"):
         await workflow_instance._wait_for_dependencies(["dep-1"])
-
 
 @pytest.mark.asyncio
 async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypatch):
@@ -559,7 +544,6 @@ async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypa
         for memo in memo_updates
     )
 
-
 @pytest.mark.asyncio
 async def test_wait_for_dependencies_reconciles_again_after_timeout(monkeypatch):
     workflow_instance = MoonMindRunWorkflow()
@@ -608,7 +592,6 @@ async def test_wait_for_dependencies_reconciles_again_after_timeout(monkeypatch)
 
     assert reconcile_calls == [["dep-1"], ["dep-1"]]
     assert wait_timeouts == [DEPENDENCY_RECONCILE_INTERVAL]
-
 
 @pytest.mark.asyncio
 async def test_skip_dependency_wait_unblocks_dependency_gate(monkeypatch):

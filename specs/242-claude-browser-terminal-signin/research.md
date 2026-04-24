@@ -3,7 +3,7 @@
 ## Classification
 
 Decision: Treat MM-479 as a single-story runtime feature request.
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-479-moonspec-orchestration-input.md` defines one operator story: complete Claude OAuth in a MoonMind browser terminal by opening Claude's URL externally and pasting the returned token or code.
+Evidence: `spec.md` (Input) defines one operator story: complete Claude OAuth in a MoonMind browser terminal by opening Claude's URL externally and pasting the returned token or code.
 Rationale: The brief is independently testable through one OAuth terminal ceremony and references bounded source sections from `docs/ManagedAgents/ClaudeAnthropicOAuth.md`.
 Alternatives considered: Treating the source document as a broad design was rejected because MM-479 selects one story from that design.
 Test implications: Unit, route-level, and UI integration-style tests are required.

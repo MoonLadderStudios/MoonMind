@@ -1,6 +1,6 @@
 # Implementation Plan: Edit and Rerun Attachment Reconstruction
 
-**Feature ID**: `202-edit-rerun-attachment-reconstruction` | **Managed PR Branch**: `mm-382-8aa2c304` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md)  
+**Feature ID**: `202-edit-rerun-attachment-reconstruction` | **Managed PR Branch**: `mm-382-8aa2c304` | **Date**: 2026-04-17 | **Spec**: [spec.md](spec.md) 
 **Input**: Single-story feature specification from `specs/202-edit-rerun-attachment-reconstruction/spec.md`
 
 ## Summary
@@ -9,15 +9,15 @@ Implement MM-382 by validating and, where necessary, completing Create page edit
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control Create page behavior; Python 3.12 for API and contract tests  
-**Primary Dependencies**: React, Vite/Vitest, Testing Library, FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal artifact service  
-**Storage**: Existing Temporal artifact metadata tables and original task input snapshot artifacts; no new persistent storage  
-**Unit Testing**: Vitest through `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`; pytest through `pytest tests/unit/api/routers/test_executions.py -q`; final `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
-**Integration Testing**: `pytest tests/contract/test_temporal_execution_api.py -q` for API contract evidence; `./tools/test_integration.sh` when Docker is available  
-**Target Platform**: MoonMind API service and Mission Control browser UI  
-**Project Type**: Web service with React frontend and Temporal workflow orchestration backend  
-**Performance Goals**: Draft reconstruction remains linear in task steps plus attachment refs; reconstruction must not load binary attachment bytes  
-**Constraints**: Use runtime mode; do not infer target binding from filenames, artifact links, or metadata; do not silently drop attachments; local images upload before create/edit/rerun submission; preserve MM-382 in artifacts and PR metadata  
+**Language/Version**: TypeScript/React for Mission Control Create page behavior; Python 3.12 for API and contract tests 
+**Primary Dependencies**: React, Vite/Vitest, Testing Library, FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal artifact service 
+**Storage**: Existing Temporal artifact metadata tables and original task input snapshot artifacts; no new persistent storage 
+**Unit Testing**: Vitest through `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/entrypoints/task-create.test.tsx`; pytest through `pytest tests/unit/api/routers/test_executions.py -q`; final `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` 
+**Integration Testing**: `pytest tests/contract/test_temporal_execution_api.py -q` for API contract evidence; `./tools/test_integration.sh` when Docker is available 
+**Target Platform**: MoonMind API service and Mission Control browser UI 
+**Project Type**: Web service with React frontend and Temporal workflow orchestration backend 
+**Performance Goals**: Draft reconstruction remains linear in task steps plus attachment refs; reconstruction must not load binary attachment bytes 
+**Constraints**: Use runtime mode; do not infer target binding from filenames, artifact links, or metadata; do not silently drop attachments; local images upload before create/edit/rerun submission; preserve MM-382 in artifacts and PR metadata 
 **Scale/Scope**: One Create page edit/rerun story covering task snapshots with objective and step attachments across existing configured attachment limits
 
 ## Constitution Check
@@ -35,7 +35,7 @@ Implement MM-382 by validating and, where necessary, completing Create page edit
 - **IX. Resilient by Default**: PASS. Missing reconstruction state fails explicitly instead of silently dropping attachments.
 - **X. Facilitate Continuous Improvement**: PASS. Failure cases produce actionable reconstruction blockers.
 - **XI. Spec-Driven Development**: PASS. MM-382 is preserved as the canonical source in spec artifacts.
-- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Canonical docs are source requirements; implementation planning remains under `specs/` and Jira input under `docs/tmp/`.
+- **XII. Canonical Documentation Separates Desired State from Migration Backlog**: PASS. Canonical docs are source requirements; implementation planning remains under `specs/` and Jira input under `local-only handoffs`.
 - **XIII. Pre-release Compatibility Policy**: PASS. Unsupported internal payload shapes fail rather than being compatibility-transformed.
 
 ## Project Structure
@@ -50,10 +50,10 @@ specs/202-edit-rerun-attachment-reconstruction/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── edit-rerun-attachment-reconstruction.md
+│ └── edit-rerun-attachment-reconstruction.md
 ├── tasks.md
 └── checklists/
-    └── requirements.md
+ └── requirements.md
 ```
 
 ### Source Code (repository root)
@@ -64,7 +64,6 @@ frontend/src/entrypoints/task-create.tsx
 frontend/src/entrypoints/task-create.test.tsx
 tests/unit/api/routers/test_executions.py
 tests/contract/test_temporal_execution_api.py
-docs/tmp/jira-orchestration-inputs/MM-382-moonspec-orchestration-input.md
 ```
 
 **Structure Decision**: Use the existing original task input snapshot and Create page reconstruction path. Backend coverage protects snapshot shape and action availability; frontend coverage protects user-visible edit/rerun behavior and payload preservation.

@@ -18,7 +18,6 @@ from api_service.db.models import (
     RecurringTaskScopeType,
 )
 
-
 def _definition(**overrides):
     now = datetime.now(UTC)
     base = {
@@ -45,7 +44,6 @@ def _definition(**overrides):
     base.update(overrides)
     return SimpleNamespace(**base)
 
-
 def _run(**overrides):
     now = datetime.now(UTC)
     base = {
@@ -67,7 +65,6 @@ def _run(**overrides):
     base.update(overrides)
     return SimpleNamespace(**base)
 
-
 @pytest.mark.asyncio
 async def test_list_recurring_tasks_global_requires_operator() -> None:
     service = AsyncMock()
@@ -82,7 +79,6 @@ async def test_list_recurring_tasks_global_requires_operator() -> None:
         )
 
     assert exc.value.status_code == 403
-
 
 @pytest.mark.asyncio
 async def test_create_recurring_task_returns_serialized_definition() -> None:
@@ -119,7 +115,6 @@ async def test_create_recurring_task_returns_serialized_definition() -> None:
     assert response.schedule_type == "cron"
     assert response.scope_type == "personal"
     service.create_definition.assert_awaited_once()
-
 
 @pytest.mark.asyncio
 async def test_run_recurring_task_now_returns_run_row() -> None:

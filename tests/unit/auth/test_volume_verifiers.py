@@ -14,7 +14,6 @@ from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
     verify_volume_credentials,
 )
 
-
 class TestProviderCredentialPaths:
     """Verify per-provider credential path definitions."""
 
@@ -35,7 +34,6 @@ class TestProviderCredentialPaths:
             "credentials.json",
             "settings.json",
         )
-
 
 class TestCredentialCheckCommand:
     """Verify shell command construction for volume checks."""
@@ -150,7 +148,6 @@ class TestCredentialCheckCommand:
 
         assert "QUALIFIED:settings.json" in lines
         assert "UNQUALIFIED:settings.json" not in lines
-
 
 class TestVerifyVolumeCredentials:
     """Test volume credential verification logic."""

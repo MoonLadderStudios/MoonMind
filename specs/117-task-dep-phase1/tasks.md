@@ -55,15 +55,15 @@
 
 ## Phase 4: User Story 2 / Plan Tracking Update (Priority: P2)
 
-**Goal**: Update `docs/tmp/011-TaskDependenciesPlan.md` to mark Phase 1 as complete.
+**Goal**: Update `docs/Tasks/TaskDependencies.md` to mark Phase 1 as complete.
 
 ### Implementation
 
-- [ ] T006 [US2] Update `docs/tmp/011-TaskDependenciesPlan.md` to mark Phase 1 as complete
+- [ ] T006 [US2] Update `docs/Tasks/TaskDependencies.md` to mark Phase 1 as complete
 
 ### Validation
 
-- [ ] T007 [US2] Confirm `docs/tmp/011-TaskDependenciesPlan.md` Phase 1 entry shows completed status and Phases 2–5 remain open
+- [ ] T007 [US2] Confirm `docs/Tasks/TaskDependencies.md` Phase 1 entry shows completed status and Phases 2–5 remain open
 
 **Checkpoint**: Plan doc updated.
 

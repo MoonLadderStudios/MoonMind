@@ -1,4 +1,4 @@
-# Specification: Fully implement Phase 5 from docs/tmp/009-LiveLogsPlan.md
+# Specification: Fully implement Phase 5 from docs/ManagedAgents/LiveLogs.md
 
 ## High-Level Objective
 Decouple task run observation (live logs) from task run intervention. Establish explicit, separate channels for executing operator controls (such as pause, resume, cancel, or approve) apart from the log streaming surface, ensuring logs remain purely passive observability surfaces.

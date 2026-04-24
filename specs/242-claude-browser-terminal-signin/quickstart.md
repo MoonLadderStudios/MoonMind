@@ -27,5 +27,5 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh
 ## Traceability Check
 
 ```bash
-rg -n "MM-479|DESIGN-REQ-006|DESIGN-REQ-017|Claude Browser Terminal Sign-In Ceremony" specs/242-claude-browser-terminal-signin docs/tmp/jira-orchestration-inputs/MM-479-moonspec-orchestration-input.md
+rg -n "MM-479|DESIGN-REQ-006|DESIGN-REQ-017|Claude Browser Terminal Sign-In Ceremony" specs/242-claude-browser-terminal-signin
 ```

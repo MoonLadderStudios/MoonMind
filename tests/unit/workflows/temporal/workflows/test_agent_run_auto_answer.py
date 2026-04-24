@@ -12,9 +12,7 @@ from moonmind.workflows.temporal.workflows.agent_run import (
 
 pytestmark = [pytest.mark.asyncio]
 
-
 # --- T021: RunStatus has awaiting_feedback ---
-
 
 class TestRunStatusAwaitingFeedback:
     """T021: Verify awaiting_feedback is in RunStatus and status maps."""
@@ -39,9 +37,7 @@ class TestRunStatusAwaitingFeedback:
         )
         assert result == RunStatus.awaiting_feedback
 
-
 # --- T021: Auto-answer state variables ---
-
 
 class TestAgentRunAutoAnswerState:
     """T021: Verify auto-answer state is initialized in __init__."""
@@ -57,9 +53,7 @@ class TestAgentRunAutoAnswerState:
         assert hasattr(run, "_auto_answer_count")
         assert run._auto_answer_count == 0
 
-
 # --- T025: Max-cycle enforcement ---
-
 
 class TestAutoAnswerMaxCycle:
     """T025: Max-cycle enforcement via _auto_answer_count."""
@@ -79,9 +73,7 @@ class TestAutoAnswerMaxCycle:
         # The workflow checks: self._auto_answer_count >= aa_max
         assert run._auto_answer_count >= 3
 
-
 # --- T028: Opt-out behavior ---
-
 
 class TestAutoAnswerOptOut:
     """T028: get_auto_answer_config controls opt-out."""
@@ -114,12 +106,9 @@ class TestAutoAnswerOptOut:
             config = await jules_get_auto_answer_config_activity()
         assert config["enabled"] is True
 
-
 # --- T030: Deduplication ---
 
-
 # --- Question probe triggers on running status ---
-
 
 class TestAutoAnswerRunningStatusProbe:
     """Verify the auto-answer sub-flow triggers for both awaiting_feedback and running status.
@@ -143,7 +132,6 @@ class TestAutoAnswerRunningStatusProbe:
     async def test_failed_status_is_not_eligible(self):
         eligible_statuses = {RunStatus.awaiting_feedback, RunStatus.running}
         assert RunStatus.failed not in eligible_statuses
-
 
 class TestAutoAnswerDeduplication:
     """T030: Deduplication via _answered_activity_ids set."""
@@ -171,7 +159,6 @@ class TestAutoAnswerDeduplication:
         act_id = "act-2"
         should_answer = act_id not in run._answered_activity_ids
         assert should_answer is True
-
 
 class TestOperatorMessageQueue:
     """Operator clarification replies should be queued for explicit sendMessage flows."""

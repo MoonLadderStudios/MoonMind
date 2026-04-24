@@ -6,7 +6,6 @@ from llama_index.llms.anthropic import Anthropic as LlamaAnthropic
 from moonmind.config.settings import AppSettings
 from moonmind.factories.anthropic_factory import AnthropicFactory
 
-
 @pytest.fixture
 def mock_settings():
     """Fixture to mock application settings."""
@@ -15,7 +14,6 @@ def mock_settings():
     settings_instance.anthropic.anthropic_chat_model = "claude-test-model"
     settings_instance.anthropic.anthropic_enabled = True
     return settings_instance
-
 
 def test_create_anthropic_model_success(mock_settings):
     """Test successful creation of an Anthropic model instance."""
@@ -35,7 +33,6 @@ def test_create_anthropic_model_success(mock_settings):
                 model="claude-test-model",
             )
 
-
 def test_create_anthropic_model_no_api_key(mock_settings):
     """Test ValueError is raised if Anthropic API key is not configured."""
     mock_settings.anthropic.anthropic_api_key = None
@@ -43,7 +40,6 @@ def test_create_anthropic_model_no_api_key(mock_settings):
         with pytest.raises(ValueError) as excinfo:
             AnthropicFactory.create_anthropic_model()
         assert "Anthropic API key not configured" in str(excinfo.value)
-
 
 def test_create_anthropic_model_provider_disabled(mock_settings):
     """
@@ -68,7 +64,6 @@ def test_create_anthropic_model_provider_disabled(mock_settings):
                 api_key="test_anthropic_api_key",
                 model="claude-test-model",
             )
-
 
 @patch("moonmind.factories.anthropic_factory.settings")
 def test_factory_uses_default_model_name_if_not_overridden(mock_global_settings):

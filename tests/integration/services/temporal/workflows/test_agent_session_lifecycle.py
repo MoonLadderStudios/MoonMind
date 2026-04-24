@@ -16,14 +16,11 @@ from moonmind.workflows.temporal.workflows.agent_session import (
     MoonMindAgentSessionWorkflow,
 )
 
-
 # NOTE: This test uses the Temporal time-skipping test server and is not
 # suitable for the required integration_ci suite.
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
-
 RUNTIME_EVENTS: list[tuple[str, dict[str, Any]]] = []
-
 
 async def _register_session_search_attributes(env: WorkflowEnvironment) -> None:
     await env.client.operator_service.add_search_attributes(
@@ -40,7 +37,6 @@ async def _register_session_search_attributes(env: WorkflowEnvironment) -> None:
         )
     )
 
-
 async def _wait_for_status(
     handle: Any,
     predicate: Any,
@@ -56,7 +52,6 @@ async def _wait_for_status(
             raise AssertionError(f"Timed out waiting for status; last={status!r}")
         await asyncio.sleep(0.05)
 
-
 def _session_state(payload: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     state = {
         "sessionId": payload["sessionId"],
@@ -67,7 +62,6 @@ def _session_state(payload: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     }
     state.update(overrides)
     return state
-
 
 @activity.defn(name="agent_runtime.send_turn")
 async def mock_send_turn(payload: dict[str, Any]) -> dict[str, Any]:
@@ -80,7 +74,6 @@ async def mock_send_turn(payload: dict[str, Any]) -> dict[str, Any]:
         "metadata": {},
     }
 
-
 @activity.defn(name="agent_runtime.interrupt_turn")
 async def mock_interrupt_turn(payload: dict[str, Any]) -> dict[str, Any]:
     RUNTIME_EVENTS.append(("interrupt_turn", dict(payload)))
@@ -91,7 +84,6 @@ async def mock_interrupt_turn(payload: dict[str, Any]) -> dict[str, Any]:
         "outputRefs": ["artifact://turn/interrupted"],
         "metadata": {"event": "turn_interrupted"},
     }
-
 
 @activity.defn(name="agent_runtime.clear_session")
 async def mock_clear_session(payload: dict[str, Any]) -> dict[str, Any]:
@@ -109,7 +101,6 @@ async def mock_clear_session(payload: dict[str, Any]) -> dict[str, Any]:
         "metadata": {},
     }
 
-
 @activity.defn(name="agent_runtime.terminate_session")
 async def mock_terminate_session(payload: dict[str, Any]) -> dict[str, Any]:
     RUNTIME_EVENTS.append(("terminate_session", dict(payload)))
@@ -120,7 +111,6 @@ async def mock_terminate_session(payload: dict[str, Any]) -> dict[str, Any]:
         "controlUrl": f"docker-exec://{payload['containerId']}",
         "metadata": {"containerRemoved": True, "supervisionFinalized": True},
     }
-
 
 @activity.defn(name="agent_runtime.fetch_session_summary")
 async def mock_fetch_session_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -133,7 +123,6 @@ async def mock_fetch_session_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "latestResetBoundaryRef": None,
         "metadata": {},
     }
-
 
 @activity.defn(name="agent_runtime.publish_session_artifacts")
 async def mock_publish_session_artifacts(payload: dict[str, Any]) -> dict[str, Any]:
@@ -153,7 +142,6 @@ async def mock_publish_session_artifacts(payload: dict[str, Any]) -> dict[str, A
         ),
         "metadata": {},
     }
-
 
 async def test_agent_session_lifecycle_updates_preserve_clear_cancel_and_terminate_contracts() -> None:
     RUNTIME_EVENTS.clear()

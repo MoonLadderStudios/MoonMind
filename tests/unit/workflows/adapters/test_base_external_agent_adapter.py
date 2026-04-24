@@ -27,7 +27,6 @@ _STUB_CAPABILITY = ProviderCapabilityDescriptor(
     defaultPollHintSeconds=10,
 )
 
-
 class _StubAdapter(BaseExternalAgentAdapter):
     """Concrete stub for testing the base class."""
 
@@ -101,7 +100,6 @@ class _StubAdapter(BaseExternalAgentAdapter):
             extra_metadata={"cancelAccepted": True},
         )
 
-
 def _request(
     *,
     agent_id: str = "stub",
@@ -120,11 +118,9 @@ def _request(
         },
     )
 
-
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
-
 
 async def test_start_rejects_wrong_agent_kind():
     adapter = _StubAdapter()
@@ -138,18 +134,15 @@ async def test_start_rejects_wrong_agent_kind():
     with pytest.raises(ValueError, match="only supports external"):
         await adapter.start(req)
 
-
 async def test_start_rejects_wrong_agent_id():
     adapter = _StubAdapter()
     req = _request(agent_id="other")
     with pytest.raises(ValueError, match="only supports agent_id"):
         await adapter.start(req)
 
-
 # ---------------------------------------------------------------------------
 # Idempotency cache
 # ---------------------------------------------------------------------------
-
 
 async def test_start_idempotency_cache_prevents_duplicate_calls():
     adapter = _StubAdapter()
@@ -159,7 +152,6 @@ async def test_start_idempotency_cache_prevents_duplicate_calls():
     assert first.run_id == second.run_id
     assert len(adapter.do_start_calls) == 1
 
-
 async def test_start_different_keys_create_separate_runs():
     adapter = _StubAdapter(start_run_id="run-X")
     await adapter.start(_request(idempotency_key="key-a"))
@@ -167,11 +159,9 @@ async def test_start_different_keys_create_separate_runs():
 
     assert len(adapter.do_start_calls) == 2
 
-
 # ---------------------------------------------------------------------------
 # Correlation metadata injection
 # ---------------------------------------------------------------------------
-
 
 async def test_start_injects_correlation_metadata():
     adapter = _StubAdapter()
@@ -182,11 +172,9 @@ async def test_start_injects_correlation_metadata():
     assert moonmind.get("correlationId") == "corr-1"
     assert moonmind.get("idempotencyKey") == "idem-1"
 
-
 # ---------------------------------------------------------------------------
 # Forwarding to provider hooks
 # ---------------------------------------------------------------------------
-
 
 async def test_status_delegates_to_do_status():
     adapter = _StubAdapter()
@@ -194,7 +182,6 @@ async def test_status_delegates_to_do_status():
 
     assert result.run_id == "run-42"
     assert adapter.do_status_calls == ["run-42"]
-
 
 async def test_fetch_result_delegates_to_do_fetch_result():
     adapter = _StubAdapter()
@@ -204,7 +191,6 @@ async def test_fetch_result_delegates_to_do_fetch_result():
     assert "completed" in result.summary
     assert adapter.do_fetch_result_calls == ["run-42"]
 
-
 async def test_cancel_delegates_to_do_cancel():
     adapter = _StubAdapter()
     result = await adapter.cancel("run-42")
@@ -212,11 +198,9 @@ async def test_cancel_delegates_to_do_cancel():
     assert result.metadata.get("cancelAccepted") is True
     assert adapter.do_cancel_calls == ["run-42"]
 
-
 # ---------------------------------------------------------------------------
 # Build helpers
 # ---------------------------------------------------------------------------
-
 
 async def test_build_handle_populates_canonical_fields():
     handle = BaseExternalAgentAdapter.build_handle(
@@ -231,7 +215,6 @@ async def test_build_handle_populates_canonical_fields():
     assert handle.agent_kind == "external"
     assert handle.metadata["externalUrl"] == "https://example.test"
 
-
 async def test_build_result_sets_failure_class_for_failed():
     result = BaseExternalAgentAdapter.build_result(
         run_id="r1",
@@ -242,7 +225,6 @@ async def test_build_result_sets_failure_class_for_failed():
     assert result.failure_class == "integration_error"
     assert result.provider_error_code == "error"
 
-
 async def test_build_result_sets_failure_class_for_canceled():
     result = BaseExternalAgentAdapter.build_result(
         run_id="r1",
@@ -251,7 +233,6 @@ async def test_build_result_sets_failure_class_for_canceled():
         provider_name="Test",
     )
     assert result.failure_class == "execution_error"
-
 
 async def test_build_result_no_failure_for_succeeded():
     result = BaseExternalAgentAdapter.build_result(
@@ -263,12 +244,9 @@ async def test_build_result_no_failure_for_succeeded():
     assert result.failure_class is None
     assert result.provider_error_code is None
 
-
 # ---------------------------------------------------------------------------
 # Provider capability descriptor
 # ---------------------------------------------------------------------------
-
-
 
 async def test_provider_capability_returns_descriptor():
     adapter = _StubAdapter()
@@ -277,11 +255,9 @@ async def test_provider_capability_returns_descriptor():
     assert cap.provider_name == "stub"
     assert cap.supports_cancel is True
 
-
 # ---------------------------------------------------------------------------
 # Capability-aware poll_hint_seconds auto-population (DOC-REQ-010, FR-008)
 # ---------------------------------------------------------------------------
-
 
 async def test_start_populates_poll_hint_from_capability():
     """start() should set poll_hint_seconds from defaultPollHintSeconds when
@@ -289,7 +265,6 @@ async def test_start_populates_poll_hint_from_capability():
     adapter = _StubAdapter()
     handle = await adapter.start(_request())
     assert handle.poll_hint_seconds == _STUB_CAPABILITY.default_poll_hint_seconds
-
 
 async def test_start_preserves_explicit_poll_hint():
     """If do_start returns a handle with poll_hint_seconds already set,
@@ -309,11 +284,9 @@ async def test_start_preserves_explicit_poll_hint():
     handle = await adapter.start(_request())
     assert handle.poll_hint_seconds == 99, "explicit value must not be overwritten"
 
-
 # ---------------------------------------------------------------------------
 # Capability-aware cancel fallback (DOC-REQ-006, FR-006)
 # ---------------------------------------------------------------------------
-
 
 _NO_CANCEL_CAPABILITY = ProviderCapabilityDescriptor(
     providerName="no_cancel_stub",
@@ -323,14 +296,12 @@ _NO_CANCEL_CAPABILITY = ProviderCapabilityDescriptor(
     defaultPollHintSeconds=10,
 )
 
-
 class _NoCancelStubAdapter(_StubAdapter):
     """Stub adapter that declares supportsCancel=False."""
 
     @property
     def provider_capability(self) -> ProviderCapabilityDescriptor:
         return _NO_CANCEL_CAPABILITY
-
 
 async def test_cancel_returns_fallback_when_unsupported():
     """cancel() should return a fallback status without calling do_cancel
@@ -343,7 +314,6 @@ async def test_cancel_returns_fallback_when_unsupported():
     assert result.metadata.get("unsupported") is True
     assert adapter.do_cancel_calls == [], "do_cancel must NOT be called"
 
-
 async def test_cancel_delegates_when_supported():
     """cancel() should still delegate to do_cancel when the provider
     supports cancellation (default behaviour)."""
@@ -353,14 +323,12 @@ async def test_cancel_delegates_when_supported():
     assert result.metadata.get("cancelAccepted") is True
     assert adapter.do_cancel_calls == ["run-42"]
 
-
 class _ExplodingCancelAdapter(_StubAdapter):
     """Stub adapter whose do_cancel raises an unexpected exception."""
 
     async def do_cancel(self, run_id: str) -> AgentRunStatus:
         self.do_cancel_calls.append(run_id)
         raise RuntimeError("transient provider error")
-
 
 async def test_cancel_returns_fallback_on_do_cancel_exception():
     """cancel() should return a safe fallback status when do_cancel()
@@ -372,5 +340,4 @@ async def test_cancel_returns_fallback_on_do_cancel_exception():
     assert result.metadata.get("cancelAccepted") is False
     assert result.metadata.get("error") is True
     assert adapter.do_cancel_calls == ["run-boom"]
-
 

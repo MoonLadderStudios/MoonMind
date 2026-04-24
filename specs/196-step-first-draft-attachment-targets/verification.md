@@ -7,7 +7,7 @@
 
 ## Evidence
 
-- Canonical source input: `docs/tmp/jira-orchestration-inputs/MM-377-moonspec-orchestration-input.md`
+- Canonical source input: `spec.md` (Input)
 - Runtime implementation: `frontend/src/entrypoints/task-create.tsx`
 - Focused tests: `frontend/src/entrypoints/task-create.test.tsx`
 - Typecheck: `./node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json` passed

@@ -2,7 +2,6 @@ from datetime import timedelta
 
 from temporalio import workflow
 
-
 @workflow.defn
 class Task514Workflow:
     """Workflow implementation for task 5.14"""

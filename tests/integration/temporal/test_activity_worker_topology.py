@@ -40,7 +40,6 @@ from moonmind.workflows.temporal.workers import build_worker_activity_bindings
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-
 @asynccontextmanager
 async def _db(tmp_path: Path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_worker_topology.db"
@@ -53,11 +52,9 @@ async def _db(tmp_path: Path):
     finally:
         await engine.dispose()
 
-
 class _UnusedIntegrationClient:
     async def aclose(self) -> None:
         return None
-
 
 def _registry_payload() -> dict[str, object]:
     return {
@@ -84,7 +81,6 @@ def _registry_payload() -> dict[str, object]:
         ]
     }
 
-
 def _planner(_inputs, _parameters, _snapshot):
     return {
         "plan_version": "1.0",
@@ -106,7 +102,6 @@ def _planner(_inputs, _parameters, _snapshot):
         ],
         "edges": [],
     }
-
 
 async def test_activity_worker_topology_routes_one_activity_per_family(
     tmp_path: Path,

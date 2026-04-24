@@ -14,14 +14,12 @@ from .skill_plan_contracts import (
 )
 from .skill_registry import SkillRegistrySnapshot
 
-
 class PlanValidationError(ValueError):
     """Raised when a plan violates structural or schema contracts."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
-
 
 @dataclass(frozen=True, slots=True)
 class ValidatedPlan:
@@ -34,14 +32,12 @@ class ValidatedPlan:
     def node_map(self) -> dict[str, SkillInvocation]:
         return {node.id: node for node in self.plan.nodes}
 
-
 def _is_ref_object(value: Any) -> bool:
     return (
         isinstance(value, Mapping)
         and set(value.keys()) == {"ref"}
         and isinstance(value.get("ref"), Mapping)
     )
-
 
 def _json_pointer_tokens(pointer: str) -> list[str]:
     if pointer == "":
@@ -53,7 +49,6 @@ def _json_pointer_tokens(pointer: str) -> list[str]:
         )
     tokens = pointer.split("/")[1:]
     return [token.replace("~1", "/").replace("~0", "~") for token in tokens]
-
 
 def _schema_pointer_exists(schema: Mapping[str, Any], pointer: str) -> bool:
     try:
@@ -92,7 +87,6 @@ def _schema_pointer_exists(schema: Mapping[str, Any], pointer: str) -> bool:
 
     return current is not None
 
-
 def _validate_schema_shape(schema: Mapping[str, Any], *, path: str) -> None:
     schema_type = schema.get("type")
     if schema_type is None:
@@ -128,7 +122,6 @@ def _validate_schema_shape(schema: Mapping[str, Any], *, path: str) -> None:
             )
         if isinstance(items, Mapping):
             _validate_schema_shape(items, path=f"{path}/items")
-
 
 def _validate_json_value(
     *,
@@ -220,7 +213,6 @@ def _validate_json_value(
     if schema_type == "boolean" and not isinstance(value, bool):
         raise PlanValidationError("invalid_input", f"Value at {path} must be a boolean")
 
-
 def _collect_refs(value: Any, *, path: str = "/") -> list[tuple[str, str, str]]:
     refs: list[tuple[str, str, str]] = []
 
@@ -239,7 +231,6 @@ def _collect_refs(value: Any, *, path: str = "/") -> list[tuple[str, str, str]]:
             refs.extend(_collect_refs(item, path=f"{path}{index}/"))
 
     return refs
-
 
 def _topological_sort(
     *,
@@ -271,7 +262,6 @@ def _topological_sort(
 
     return tuple(order)
 
-
 def _is_reachable(
     *,
     start: str,
@@ -293,7 +283,6 @@ def _is_reachable(
                 return True
             queue.append(successor)
     return False
-
 
 def validate_plan(
     *,
@@ -406,7 +395,6 @@ def validate_plan(
 
     return ValidatedPlan(plan=plan, topological_order=order)
 
-
 def validate_plan_payload(
     *,
     payload: Mapping[str, Any],
@@ -416,7 +404,6 @@ def validate_plan_payload(
 
     parsed = parse_plan_definition(payload)
     return validate_plan(plan=parsed, registry_snapshot=registry_snapshot)
-
 
 __all__ = [
     "PlanValidationError",

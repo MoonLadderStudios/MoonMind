@@ -34,7 +34,6 @@ _SYSTEM_PROMPT = (
     "by MoonMind. Follow instructions precisely."
 )
 
-
 def build_openclaw_chat_messages(request: AgentExecutionRequest) -> list[dict[str, Any]]:
     """Map an execution request to OpenAI-style chat messages."""
 
@@ -62,7 +61,6 @@ def build_openclaw_chat_messages(request: AgentExecutionRequest) -> list[dict[st
         {"role": "user", "content": "\n\n".join(user_parts)},
     ]
 
-
 def openclaw_success_result(*, full_text: str, request: AgentExecutionRequest) -> AgentRunResult:
     """Build a successful ``AgentRunResult`` from aggregated stream text."""
 
@@ -78,7 +76,6 @@ def openclaw_success_result(*, full_text: str, request: AgentExecutionRequest) -
             "correlationId": request.correlation_id,
         },
     )
-
 
 class OpenClawExternalAdapter(BaseExternalAgentAdapter):
     """Registry entry for OpenClaw; poll-based hooks are not used."""
@@ -110,7 +107,6 @@ class OpenClawExternalAdapter(BaseExternalAgentAdapter):
 
     async def do_cancel(self, run_id: str) -> AgentRunStatus:
         raise RuntimeError("OpenClaw cancels via activity cancellation on execute.")
-
 
 __all__ = [
     "OpenClawExternalAdapter",

@@ -21,10 +21,8 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
 _DEFAULT_OAUTH_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind:latest"
 _DEFAULT_OAUTH_RUNNER_USER = "1000:1000"
 
-
 class TerminalBridgeFrameError(ValueError):
     """Raised when a browser terminal frame is unsupported or unsafe."""
-
 
 class PtyAdapter(Protocol):
     """Runtime adapter for one OAuth auth-runner PTY connection."""
@@ -43,7 +41,6 @@ class PtyAdapter(Protocol):
 
     async def close(self) -> None:
         """Close PTY resources."""
-
 
 class InMemoryPtyAdapter:
     """Deterministic PTY adapter for unit tests."""
@@ -71,7 +68,6 @@ class InMemoryPtyAdapter:
     async def close(self) -> None:
         self.closed = True
 
-
 def _provider_bootstrap_shell_command(runtime_id: str) -> str:
     from moonmind.workflows.temporal.runtime.providers.registry import get_provider
 
@@ -83,7 +79,6 @@ def _provider_bootstrap_shell_command(runtime_id: str) -> str:
         raise ValueError(f"OAuth runtime {runtime_id} has no bootstrap command")
     return " ".join(shlex.quote(str(part)) for part in command)
 
-
 def _redact_startup_output(output: bytes) -> str:
     text = output.decode("utf-8", errors="replace").strip()
     if not text:
@@ -92,14 +87,12 @@ def _redact_startup_output(output: bytes) -> str:
     redacted = redact_sensitive_text(redacted)
     return redacted[-_MAX_STARTUP_ERROR_OUTPUT_CHARS:]
 
-
 def _oauth_runner_user() -> str:
     configured = os.environ.get("MOONMIND_OAUTH_RUNNER_USER")
     if configured is None:
         return _DEFAULT_OAUTH_RUNNER_USER
     normalized = configured.strip()
     return normalized or _DEFAULT_OAUTH_RUNNER_USER
-
 
 def _runner_environment_args(runtime_id: str, volume_mount_path: str) -> list[str]:
     args = ["-e", "HOME=/home/app"]
@@ -129,7 +122,6 @@ def _runner_environment_args(runtime_id: str, volume_mount_path: str) -> list[st
             ]
         )
     return args
-
 
 class DockerExecPtyAdapter:
     """Docker exec PTY adapter for the OAuth auth-runner container."""
@@ -187,12 +179,10 @@ class DockerExecPtyAdapter:
         if self._client is not None and hasattr(self._client, "close"):
             self._client.close()
 
-
 def create_docker_exec_pty_adapter(
     *, container_name: str, runtime_id: str
 ) -> DockerExecPtyAdapter:
     return DockerExecPtyAdapter(container_name=container_name, runtime_id=runtime_id)
-
 
 @dataclass
 class TerminalBridgeConnection:
@@ -287,7 +277,6 @@ class TerminalBridgeConnection:
             metadata["terminal_last_cols"] = cols
             metadata["terminal_last_rows"] = rows
         return metadata
-
 
 async def start_terminal_bridge_container(
     session_id: str,

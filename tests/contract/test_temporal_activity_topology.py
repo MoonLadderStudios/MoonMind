@@ -14,7 +14,6 @@ from moonmind.workflows.temporal import (
     build_default_activity_catalog,
 )
 
-
 def test_temporal_activity_topology_contract_uses_canonical_v1_queue_set() -> None:
     catalog = build_default_activity_catalog()
 
@@ -42,7 +41,6 @@ def test_temporal_activity_topology_contract_uses_canonical_v1_queue_set() -> No
         "mm.activity.agent_runtime",
     }
 
-
 def test_shared_envelope_contract_requires_idempotency_for_side_effecting_inputs() -> (
     None
 ):
@@ -58,7 +56,6 @@ def test_shared_envelope_contract_requires_idempotency_for_side_effecting_inputs
         diagnostics_ref="art_01HJ4M3Y7RM4C5S2P3Q8G6T7VA",
     )
     assert result.to_payload()["diagnostics_ref"] == "art_01HJ4M3Y7RM4C5S2P3Q8G6T7VA"
-
 
 def test_explicit_skill_binding_requires_declared_operational_reason() -> None:
     with pytest.raises(ContractValidationError, match="binding_reason"):

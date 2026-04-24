@@ -17,7 +17,7 @@
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm MM-410 orchestration input exists in `docs/tmp/jira-orchestration-inputs/MM-410-moonspec-orchestration-input.md` and is preserved in `specs/207-visible-step-attachments/spec.md` (MM-410, FR-012)
+- [X] T001 Confirm MM-410 orchestration input exists in `spec.md` (Input) and is preserved in `specs/207-visible-step-attachments/spec.md` (MM-410, FR-012)
 - [X] T002 Confirm Moon Spec artifacts exist in `specs/207-visible-step-attachments/` for spec, plan, research, data model, contract, quickstart, checklist, and tasks (FR-012)
 
 ## Phase 2: Foundational

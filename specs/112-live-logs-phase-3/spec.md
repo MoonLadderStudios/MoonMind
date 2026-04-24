@@ -3,18 +3,18 @@
 **Feature Branch**: `112-live-logs-phase-3`
 **Created**: 2026-03-29
 **Status**: Draft
-**Input**: User description: "Fully implement Phase 3 from docs/tmp/009-LiveLogsPlan.md"
+**Input**: User description: "Fully implement Phase 3 from docs/ManagedAgents/LiveLogs.md"
 
 ## Source Document Requirements
 
-- **DOC-REQ-001**: Use Server-Sent Events (SSE) over `text/event-stream` for live log delivery. (Source: `docs/tmp/009-LiveLogsPlan.md` Phase 3 Tasks)
-- **DOC-REQ-002**: Implement a live log publisher fanning out log chunks to subscribers. (Source: `docs/tmp/009-LiveLogsPlan.md` Phase 3 Tasks)
-- **DOC-REQ-003**: Emitted log records must include monotonically increasing sequence values, `stream`, `offset`, `timestamp`, and raw `text`. (Source: `docs/tmp/009-LiveLogsPlan.md` Phase 3 Tasks)
-- **DOC-REQ-004**: Expose a `GET /api/task-runs/{id}/logs/stream` endpoint supporting resume semantics (`since`) and stream filtering. (Source: `docs/tmp/009-LiveLogsPlan.md` Phase 3 Tasks)
-- **DOC-REQ-005**: Closed or collapsed clients must promptly stop receiving updates; disconnects should cleanly resume state. (Source: `docs/tmp/009-LiveLogsPlan.md` Phase 3 Tasks)
-- **DOC-REQ-006**: Stream lifecycle metadata must be reflected in the task run observability summary. (Source: `docs/tmp/009-LiveLogsPlan.md` Phase 3 Tasks)
-- **DOC-REQ-007**: Must gracefully fallback to artifact-backed tail retrieval when live streaming is unavailable or unsupported. (Source: `docs/tmp/009-LiveLogsPlan.md` Phase 3 Tasks)
-- **DOC-REQ-008**: Supervisor/system events must be clearly identified as `system` entries in the merged stream. (Source: `docs/tmp/009-LiveLogsPlan.md` Phase 3 Tasks)
+- **DOC-REQ-001**: Use Server-Sent Events (SSE) over `text/event-stream` for live log delivery. (Source: `docs/ManagedAgents/LiveLogs.md` Phase 3 Tasks)
+- **DOC-REQ-002**: Implement a live log publisher fanning out log chunks to subscribers. (Source: `docs/ManagedAgents/LiveLogs.md` Phase 3 Tasks)
+- **DOC-REQ-003**: Emitted log records must include monotonically increasing sequence values, `stream`, `offset`, `timestamp`, and raw `text`. (Source: `docs/ManagedAgents/LiveLogs.md` Phase 3 Tasks)
+- **DOC-REQ-004**: Expose a `GET /api/task-runs/{id}/logs/stream` endpoint supporting resume semantics (`since`) and stream filtering. (Source: `docs/ManagedAgents/LiveLogs.md` Phase 3 Tasks)
+- **DOC-REQ-005**: Closed or collapsed clients must promptly stop receiving updates; disconnects should cleanly resume state. (Source: `docs/ManagedAgents/LiveLogs.md` Phase 3 Tasks)
+- **DOC-REQ-006**: Stream lifecycle metadata must be reflected in the task run observability summary. (Source: `docs/ManagedAgents/LiveLogs.md` Phase 3 Tasks)
+- **DOC-REQ-007**: Must gracefully fallback to artifact-backed tail retrieval when live streaming is unavailable or unsupported. (Source: `docs/ManagedAgents/LiveLogs.md` Phase 3 Tasks)
+- **DOC-REQ-008**: Supervisor/system events must be clearly identified as `system` entries in the merged stream. (Source: `docs/ManagedAgents/LiveLogs.md` Phase 3 Tasks)
 
 ## User Scenarios & Testing *(mandatory)*
 

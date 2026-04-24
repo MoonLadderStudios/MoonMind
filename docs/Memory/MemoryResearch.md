@@ -1,6 +1,6 @@
 # Memory Strategies for LLM Agents and Recommendations for MoonMind
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Memory-MemoryResearch.md`](../tmp/remaining-work/Memory-MemoryResearch.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Prioritized experiments, schema/API follow-ups, and effort estimates are listed in the tracker; this document stays **research and recommendations**, not a delivery backlog in prose.
 
@@ -30,9 +30,9 @@ Long-context models (including 200k–1M token contexts in commercial APIs) are 
 Based on direct inspection of repository source files and configuration (Docker Compose, API routers, workflows, and DB models), MoonMind appears to be:
 - A self-hosted “AI orchestration hub” exposing OpenAI-compatible endpoints and routing requests to multiple model providers (including entity["company","Anthropic","ai model vendor"], entity["company","Google","tech company"] and entity["company","OpenAI","ai company"]) while supporting local runtimes.
 - A hybrid of:
-  - **Interactive chat** (OpenAI-style `/v1/chat/completions`) with optional retrieval injection from a vector index.
-  - **Document ingestion** into the vector store from sources such as entity["company","GitHub","code hosting platform"], Confluence, and Google Drive (via LlamaIndex readers).
-  - **Workflow automation** using durable Temporal-backed runs (with step artifacts and persisted identity/configuration snapshots where applicable).
+ - **Interactive chat** (OpenAI-style `/v1/chat/completions`) with optional retrieval injection from a vector index.
+ - **Document ingestion** into the vector store from sources such as entity["company","GitHub","code hosting platform"], Confluence, and Google Drive (via LlamaIndex readers).
+ - **Workflow automation** using durable Temporal-backed runs (with step artifacts and persisted identity/configuration snapshots where applicable).
 
 Even without assuming any specific production scale (repo does not specify user counts, request rates, latency SLOs, or corpus size), the architecture implies MoonMind will benefit from memory that is:
 - **Durable across sessions and runs** (project memory that survives restarts and supports “what did we decide last sprint?” queries).
@@ -209,13 +209,13 @@ This shortlist is prioritized for MoonMind’s apparent architecture (FastAPI + 
 
 **Implementation notes (MoonMind-aligned):**
 - Extend ingestion pipeline to store:
-  - dense embeddings for semantic meaning,
-  - sparse representations for lexical strength,
-  - rich metadata: `source_type` (code/doc/ticket/log), `repo_path`, `branch`, `commit`, `doc_updated_at`, `security_scope`, `project`, `feature`, `owner`.
+ - dense embeddings for semantic meaning,
+ - sparse representations for lexical strength,
+ - rich metadata: `source_type` (code/doc/ticket/log), `repo_path`, `branch`, `commit`, `doc_updated_at`, `security_scope`, `project`, `feature`, `owner`.
 - Add a retrieval service abstraction (`MemoryRetrievalService`) that:
-  - runs hybrid retrieval,
-  - reranks top-N,
-  - returns context with provenance (document IDs + offsets).
+ - runs hybrid retrieval,
+ - reranks top-N,
+ - returns context with provenance (document IDs + offsets).
 - Integrate “contextual compression” (summarize or extract only relevant spans) as a post-retrieval step to minimize prompt costs.
 
 **Required components:**
@@ -237,14 +237,14 @@ This shortlist is prioritized for MoonMind’s apparent architecture (FastAPI + 
 
 **Implementation notes:**
 - Define a unified `MemoryEvent` schema (append-only):
-  - identifiers: `thread_id`, `run_id`, `task_id`, `actor` (agent/user/service), `timestamp`,
-  - event type: `TOOL_CALL`, `TOOL_RESULT`, `DECISION`, `PATCH_APPLIED`, `BUILD_LOG`, `TEST_FAILURE`, `ASSET_GENERATED`,
-  - references to artifacts (paths/digests) rather than raw content by default.
+ - identifiers: `thread_id`, `run_id`, `task_id`, `actor` (agent/user/service), `timestamp`,
+ - event type: `TOOL_CALL`, `TOOL_RESULT`, `DECISION`, `PATCH_APPLIED`, `BUILD_LOG`, `TEST_FAILURE`, `ASSET_GENERATED`,
+ - references to artifacts (paths/digests) rather than raw content by default.
 - Embed *summaries* of events (not raw logs) into the vector store for semantic retrieval; keep raw artifacts in artifact storage.
 - Run consolidation jobs:
-  - per-feature rollups (daily/weekly),
-  - “failure playbooks” (e.g., common build errors and fix patterns),
-  - “decision register” entries.
+ - per-feature rollups (daily/weekly),
+ - “failure playbooks” (e.g., common build errors and fix patterns),
+ - “decision register” entries.
 
 **Required components:**
 - Relational store tables (likely Postgres) as source of truth for events.
@@ -264,14 +264,14 @@ This shortlist is prioritized for MoonMind’s apparent architecture (FastAPI + 
 
 **Implementation notes:**
 - Define canonical summary documents:
-  - “Game pillars and constraints”
-  - “Current combat system rules”
-  - “Asset pipeline conventions”
-  - “Narrative canon + glossary”
+ - “Game pillars and constraints”
+ - “Current combat system rules”
+ - “Asset pipeline conventions”
+ - “Narrative canon + glossary”
 - Each summary includes provenance pointers:
-  - source document IDs, PR numbers, ticket references, artifact digests.
+ - source document IDs, PR numbers, ticket references, artifact digests.
 - Refresh policy:
-  - trigger on new merged PRs, updated design docs, or sprint closeout.
+ - trigger on new merged PRs, updated design docs, or sprint closeout.
 
 **Effort:** ~2–8 engineer-weeks (depends on how automated you want refreshing to be).
 **Risks:**
@@ -287,8 +287,8 @@ This shortlist is prioritized for MoonMind’s apparent architecture (FastAPI + 
 **Implementation notes:**
 - Introduce `thread_id` as a first-class field across chat + workflows.
 - Add a “Memory Store API”:
-  - `PUT /memory/{namespace}/{key}` for structured memory objects,
-  - `SEARCH /memory/{namespace}` with optional semantic query and filter.
+ - `PUT /memory/{namespace}/{key}` for structured memory objects,
+ - `SEARCH /memory/{namespace}` with optional semantic query and filter.
 - Adopt MCP for tool calls and record tool-call results as part of the thread checkpoint and episodic ledger. citeturn24search0turn24search1
 
 **Effort:** ~4–12 engineer-weeks (API changes, migrations, UI updates, and integration across services).
@@ -302,24 +302,24 @@ This shortlist is prioritized for MoonMind’s apparent architecture (FastAPI + 
 
 ```mermaid
 flowchart TB
-  U[User / Studio Tools] --> UI[MoonMind UI]
-  UI --> API[MoonMind API Service]
+ U[User / Studio Tools] --> UI[MoonMind UI]
+ UI --> API[MoonMind API Service]
 
-  API -->|chat request + thread_id| AR[Agent Runtime]
-  AR -->|retrieve context| MS[Memory Service]
-  AR -->|tool calls| MCP[MCP Client]
+ API -->|chat request + thread_id| AR[Agent Runtime]
+ AR -->|retrieve context| MS[Memory Service]
+ AR -->|tool calls| MCP[MCP Client]
 
-  MCP --> TOOLS[External Tools & Data\n(repo, tickets, builds, asset pipeline)]
+ MCP --> TOOLS[External Tools & Data\n(repo, tickets, builds, asset pipeline)]
 
-  MS --> VS[Vector Store\n(dense+sparse+rerank)]
-  MS --> SQL[(Relational DB\n(events, threads, ACLs))]
-  MS --> OBJ[(Artifact Store\nlogs/patches/assets)]
+ MS --> VS[Vector Store\n(dense+sparse+rerank)]
+ MS --> SQL[(Relational DB\n(events, threads, ACLs))]
+ MS --> OBJ[(Artifact Store\nlogs/patches/assets)]
 
-  AR -->|write events| SQL
-  AR -->|write artifacts refs| OBJ
-  SQL --> CONS[Consolidation Jobs\nsummaries/reflections]
-  CONS --> VS
-  CONS --> SQL
+ AR -->|write events| SQL
+ AR -->|write artifacts refs| OBJ
+ SQL --> CONS[Consolidation Jobs\nsummaries/reflections]
+ CONS --> VS
+ CONS --> SQL
 ```
 
 Key lifecycle:
@@ -331,16 +331,16 @@ Key lifecycle:
 
 ```mermaid
 flowchart LR
-  PR[PR merged / Asset update / Doc change] --> TRIG[Refresh Trigger]
-  TRIG --> EVT[Write Episodic Event]
-  EVT --> SUM[Summarize & Attribute]
-  SUM --> SREG[Summary Registry\n(project/system/feature)]
-  SREG --> VS[Vector Index]
-  SREG --> UI[Query UI / Agents]
+ PR[PR merged / Asset update / Doc change] --> TRIG[Refresh Trigger]
+ TRIG --> EVT[Write Episodic Event]
+ EVT --> SUM[Summarize & Attribute]
+ SUM --> SREG[Summary Registry\n(project/system/feature)]
+ SREG --> VS[Vector Index]
+ SREG --> UI[Query UI / Agents]
 
-  UI --> Q[Question\n(e.g., 'combat stamina rules?')]
-  Q --> RET[Retrieve:\ncanonical summary + supporting evidence]
-  RET --> UI
+ UI --> Q[Question\n(e.g., 'combat stamina rules?')]
+ Q --> RET[Retrieve:\ncanonical summary + supporting evidence]
+ RET --> UI
 ```
 
 Key lifecycle:
@@ -397,15 +397,15 @@ A memory system is only as good as its measured outcomes. For MoonMind, the eval
 
 **Stage A: Retrieval evaluation harness**
 - Build a labeled dataset of ~200–1,000 queries drawn from real studio workflows:
-  - Code navigation Qs (“where is X implemented?”)
-  - Build troubleshooting Qs (“why is CI failing with error Y?”)
-  - Design consistency Qs (lore constraints, gameplay rule clarifications)
-  - Asset pipeline Qs (naming conventions, import settings, compression rules)
+ - Code navigation Qs (“where is X implemented?”)
+ - Build troubleshooting Qs (“why is CI failing with error Y?”)
+ - Design consistency Qs (lore constraints, gameplay rule clarifications)
+ - Asset pipeline Qs (naming conventions, import settings, compression rules)
 - Label ground-truth documents/snippets (or at least “relevant file set”) by humans.
 - Run retrieval-only benchmarks comparing:
-  - dense-only vs hybrid vs hybrid+rerank,
-  - chunking strategies,
-  - metadata filtering policies.
+ - dense-only vs hybrid vs hybrid+rerank,
+ - chunking strategies,
+ - metadata filtering policies.
 
 **Stage B: End-to-end “agent tasks” benchmark**
 Create a standardized suite of tasks that mirror game development:
@@ -421,9 +421,9 @@ Then run A/B:
 
 **Stage C: Human-in-the-loop validation**
 - For “memory writes” (new canonical summaries, new “rules”), require review workflows:
-  - measure reviewer time,
-  - memory drift incidents,
-  - rollback frequency.
+ - measure reviewer time,
+ - memory drift incidents,
+ - rollback frequency.
 
 ### Datasets suited to game development
 
@@ -457,24 +457,24 @@ Game studios operate under strong IP constraints. Memory systems amplify risk be
 **Redaction and minimization**
 - Default to storing **references/digests** to artifacts (logs/patches) rather than raw content in episodic memory.
 - Run secret scanners on:
-  - ingested documents,
-  - logs before indexing,
-  - retrieved context before prompt assembly.
+ - ingested documents,
+ - logs before indexing,
+ - retrieved context before prompt assembly.
 - Keep raw secrets in a dedicated secret manager; in memory objects store only opaque handles.
 
 **Retrieval safety**
 - Separate “retrieved content” from “instructions” in the prompt template (system prompt explicitly states retrieved text is *data*, not instructions).
 - Add a filtering stage that removes:
-  - credential-like patterns,
-  - untrusted instruction blocks,
-  - overly large chunks with low relevance scores.
+ - credential-like patterns,
+ - untrusted instruction blocks,
+ - overly large chunks with low relevance scores.
 
 **Audit logging and replay**
 - For every agent run, persist:
-  - model identifiers, parameters, and tool configuration,
-  - retrieval results (doc IDs, scores, hashes; not necessarily full text),
-  - tool calls and outputs (or redacted versions),
-  - final outputs and any side effects (PR URLs, artifact paths).
+ - model identifiers, parameters, and tool configuration,
+ - retrieval results (doc IDs, scores, hashes; not necessarily full text),
+ - tool calls and outputs (or redacted versions),
+ - final outputs and any side effects (PR URLs, artifact paths).
 - MCP usage should be included in these logs so tool-mediated actions are replayable and attributable. citeturn24search0turn24search1
 
 **Long-context governance**

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-
 def selected_agent_skill(parameters: Mapping[str, Any] | None) -> str:
     """Return the selected agent skill from supported request metadata shapes."""
 

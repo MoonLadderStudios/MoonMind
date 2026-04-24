@@ -107,7 +107,6 @@ _JIRA_CREATED_ISSUE_KEYS_PATTERN = re.compile(
 )
 logger = logging.getLogger(__name__)
 
-
 def _result_ref_metadata(
     *,
     instruction_ref: str | None,
@@ -120,14 +119,12 @@ def _result_ref_metadata(
     )
     return metadata
 
-
 def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
     normalized = str(summary or "").strip() or default
     if len(normalized) <= _MAX_AGENT_RUN_RESULT_SUMMARY_CHARS:
         return normalized
     truncated = normalized[:_MAX_AGENT_RUN_RESULT_SUMMARY_CHARS].rstrip()
     return truncated or normalized[:_MAX_AGENT_RUN_RESULT_SUMMARY_CHARS]
-
 
 def _jira_skill_blocker_summary(
     *,
@@ -198,14 +195,12 @@ def _jira_skill_blocker_summary(
         )
     return None
 
-
 class CodexSessionRunFailedError(RuntimeError):
     """Raised when a Codex session run persisted a structured failed result."""
 
     def __init__(self, message: str, *, result: AgentRunResult) -> None:
         super().__init__(message)
         self.agent_run_result = result
-
 
 class CodexSessionExecutionState(BaseModel):
     """Persisted step-scoped execution state for one session-backed managed run."""
@@ -224,7 +219,6 @@ class CodexSessionExecutionState(BaseModel):
     active_turn_id: str | None = Field(None, alias="activeTurnId")
     profile_id: str | None = Field(None, alias="profileId")
     result: AgentRunResult = Field(..., alias="result")
-
 
 class CodexSessionAdapter(ManagedAgentAdapter):
     """Managed-session-backed ``AgentAdapter`` for Codex."""
@@ -1453,6 +1447,5 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             if isinstance(payload, CodexManagedSessionArtifactsPublication)
             else CodexManagedSessionArtifactsPublication.model_validate(payload)
         )
-
 
 __all__ = ["CodexSessionAdapter", "CodexSessionExecutionState"]

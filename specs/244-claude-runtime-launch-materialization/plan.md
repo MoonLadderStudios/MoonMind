@@ -32,16 +32,16 @@ Implement MM-481 by closing the Claude OAuth-backed runtime launch gap after pro
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: FastAPI, Pydantic v2, Temporal Python SDK, pytest, existing managed-runtime launcher/session services  
-**Storage**: Existing provider-profile rows, managed session payloads, managed run workspace/runtime support directories, existing artifact surfaces; no new persistent tables  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and focused pytest targets under `tests/unit/services/temporal/runtime/`, `tests/unit/workflows/temporal/`, and Claude worker preflight tests  
-**Integration Testing**: `./tools/test_integration.sh` when launch-surface behavior changes could affect hermetic managed runtime, artifact, or worker-topology seams  
-**Target Platform**: Linux API and worker containers, managed runtime launch/session execution in MoonMind-managed environments  
-**Project Type**: FastAPI control plane plus Temporal-backed managed runtime/session orchestration  
-**Performance Goals**: Launch shaping remains bounded to existing environment/materialization work; no new network round-trips or persistent storage; diagnostics stay compact and sanitized  
-**Constraints**: No raw credential file contents, secret-bearing paths, environment dumps, or auth-volume listings in workflow history, logs, diagnostics, or artifacts; no compatibility wrappers; preserve existing non-Claude and non-OAuth launch behavior  
-**Scale/Scope**: One runtime (`claude_code`), one OAuth-backed profile (`claude_anthropic`), one launch materialization path, one independently testable story  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: FastAPI, Pydantic v2, Temporal Python SDK, pytest, existing managed-runtime launcher/session services 
+**Storage**: Existing provider-profile rows, managed session payloads, managed run workspace/runtime support directories, existing artifact surfaces; no new persistent tables 
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` and focused pytest targets under `tests/unit/services/temporal/runtime/`, `tests/unit/workflows/temporal/`, and Claude worker preflight tests 
+**Integration Testing**: `./tools/test_integration.sh` when launch-surface behavior changes could affect hermetic managed runtime, artifact, or worker-topology seams 
+**Target Platform**: Linux API and worker containers, managed runtime launch/session execution in MoonMind-managed environments 
+**Project Type**: FastAPI control plane plus Temporal-backed managed runtime/session orchestration 
+**Performance Goals**: Launch shaping remains bounded to existing environment/materialization work; no new network round-trips or persistent storage; diagnostics stay compact and sanitized 
+**Constraints**: No raw credential file contents, secret-bearing paths, environment dumps, or auth-volume listings in workflow history, logs, diagnostics, or artifacts; no compatibility wrappers; preserve existing non-Claude and non-OAuth launch behavior 
+**Scale/Scope**: One runtime (`claude_code`), one OAuth-backed profile (`claude_anthropic`), one launch materialization path, one independently testable story 
 
 ## Constitution Check
 
@@ -56,7 +56,7 @@ Implement MM-481 by closing the Claude OAuth-backed runtime launch gap after pro
 - IX. Resilient by Default: PASS. The plan adds boundary tests for fail-closed auth handling and sanitized diagnostics.
 - X. Continuous Improvement: PASS. Requirement-status evidence and quickstart commands capture verification paths.
 - XI. Spec-Driven Development: PASS. This plan follows one story from the active MM-481 spec.
-- XII. Canonical Docs vs Tmp: PASS. Canonical docs remain source requirements; Jira brief remains under `docs/tmp`.
+- XII. Canonical Docs vs Tmp: PASS. Canonical docs remain source requirements; Jira brief remains under `local-only handoffs`.
 - XIII. Pre-Release Velocity: PASS. No compatibility aliases, hidden fallbacks, or partial migrations are proposed.
 
 ## Project Structure
@@ -71,7 +71,7 @@ specs/244-claude-runtime-launch-materialization/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── claude-runtime-launch.md
+│ └── claude-runtime-launch.md
 └── tasks.md
 ```
 

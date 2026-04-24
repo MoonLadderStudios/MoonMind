@@ -2,7 +2,7 @@
 
 **Feature**: Surface Hierarchy and liquidGL Fallback Contract
 **Spec**: `/work/agent_jobs/mm:4677eedb-b306-40f0-ab8f-5594709d0a52/repo/specs/217-surface-hierarchy-liquidgl/spec.md`
-**Original Request Source**: `spec.md` `Input` preserving Jira issue `MM-425` and `docs/tmp/jira-orchestration-inputs/MM-425-moonspec-orchestration-input.md`
+**Original Request Source**: `spec.md` `Input` preserving Jira issue `MM-425` and `spec.md` (Input)
 **Verdict**: FULLY_IMPLEMENTED
 **Confidence**: HIGH
 
@@ -53,7 +53,7 @@
 | DESIGN-REQ-018 | `.surface--liquidgl-hero`, `.queue-floating-bar--liquid-glass` | VERIFIED | liquidGL has bounded target shell and fallback. |
 | DESIGN-REQ-027 | task-list data slab tests and dense CSS rules | VERIFIED | Dense table/data surfaces remain matte or near-opaque. |
 | Constitution XI | `spec.md`, `plan.md`, `tasks.md`, tests | VERIFIED | Work followed spec-driven artifacts and verification. |
-| Constitution XII | Jira input under `docs/tmp`, implementation evidence under `specs/` | VERIFIED | Canonical docs were not turned into implementation backlog. |
+| Constitution XII | Jira input under `local-only handoffs`, implementation evidence under `specs/` | VERIFIED | Canonical docs were not turned into implementation backlog. |
 
 ## Original Request Alignment
 

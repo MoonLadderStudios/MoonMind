@@ -39,7 +39,7 @@
 
 - **Purpose**: Represents the temporary implementation tracker linked from the canonical DooD doc.
 - **Required attributes**:
-  - `path`: `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`
+  - `path`: `docs/ManagedAgents/DockerOutOfDocker.md`
   - `role`: phased rollout checklist after Phase 0
   - `canonical_relationship`: linked from the canonical DooD doc, not duplicated inside it
 

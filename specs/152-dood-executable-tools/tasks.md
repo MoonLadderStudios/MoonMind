@@ -22,7 +22,7 @@
 
 ## Phase 3: Tracking and Verification
 
-- [X] T010 Update Phase 3 completion notes in `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`.
+- [X] T010 Update Phase 3 completion notes in `docs/ManagedAgents/DockerOutOfDocker.md`.
 - [X] T011 Run focused verification with `./tools/test_unit.sh --python-only tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_catalog.py tests/unit/workflows/temporal/test_temporal_workers.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workflows/temporal/test_activity_runtime.py::test_default_skill_registry_payload_uses_dood_tool_definitions tests/unit/workflows/temporal/workflows/test_run_integration.py::test_run_execution_stage_routes_dood_skill_tool_to_agent_runtime_activity`.
 - [X] T012 Run full unit verification with `./tools/test_unit.sh`.
 - [X] T013 Run runtime scope validation with `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime`.

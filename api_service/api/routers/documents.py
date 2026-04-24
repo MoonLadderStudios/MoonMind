@@ -19,7 +19,6 @@ from moonmind.schemas.documents_models import (  # Updated import path with Goog
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
 @router.post("/confluence/load")  # Path relative to the /v1/documents prefix
 async def load_confluence_documents(
     request: ConfluenceLoadRequest,
@@ -90,7 +89,6 @@ async def load_confluence_documents(
         logger.exception(f"Error loading Confluence documents: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @router.post("/documents/github/load")
 async def load_github_repo(
     request: GitHubLoadRequest,
@@ -136,7 +134,6 @@ async def load_github_repo(
             status_code=500,
             detail=f"An unexpected error occurred while processing {request.repo}: {str(e)}",
         )
-
 
 @router.post("/documents/google_drive/load")
 async def load_google_drive_documents(

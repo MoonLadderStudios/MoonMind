@@ -123,7 +123,6 @@
 - [x] T023 [P] Run `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` and record result (DOC-REQ-012).
 - [x] T024 [P] Run `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main` and record result (DOC-REQ-012).
 
-
 ---
 
 ## Dependencies & Execution Order

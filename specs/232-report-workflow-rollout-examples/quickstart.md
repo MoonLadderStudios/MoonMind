@@ -26,5 +26,5 @@ Expected behavior:
 Traceability check:
 
 ```bash
-rg -n "MM-464|DESIGN-REQ-003|DESIGN-REQ-007|DESIGN-REQ-019|DESIGN-REQ-020|DESIGN-REQ-021|DESIGN-REQ-022|report_workflow" specs/232-report-workflow-rollout-examples docs/tmp/jira-orchestration-inputs/MM-464-moonspec-orchestration-input.md moonmind/workflows/temporal tests/unit/workflows/temporal
+rg -n "MM-464|DESIGN-REQ-003|DESIGN-REQ-007|DESIGN-REQ-019|DESIGN-REQ-020|DESIGN-REQ-021|DESIGN-REQ-022|report_workflow" specs/232-report-workflow-rollout-examples moonmind/workflows/temporal tests/unit/workflows/temporal
 ```

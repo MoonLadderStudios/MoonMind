@@ -12,11 +12,9 @@ from moonmind.workflows.recurring_tasks.cron import (
     parse_cron_expression,
 )
 
-
 def test_parse_cron_expression_rejects_invalid_field_count() -> None:
     with pytest.raises(CronExpressionError, match="exactly 5 fields"):
         parse_cron_expression("0 0 * *")
-
 
 def test_parse_cron_expression_accepts_lists_ranges_and_steps() -> None:
     spec = parse_cron_expression("*/15 9-17 * * 1,2,3")
@@ -24,7 +22,6 @@ def test_parse_cron_expression_accepts_lists_ranges_and_steps() -> None:
     assert 45 in spec.minute.values
     assert 9 in spec.hour.values
     assert 17 in spec.hour.values
-
 
 def test_compute_next_occurrence_handles_dst_gap() -> None:
     next_run = compute_next_occurrence(

@@ -9,14 +9,11 @@ from api_service.api.dependencies import (  # Moved import
 )
 from api_service.main import app  # Assuming your FastAPI app instance is here
 
-
 @pytest.fixture(scope="module")
 def client():
     """Module-scoped TestClient: boots the full FastAPI app once for this module."""
     with TestClient(app) as c:
         yield c
-
-
 
 @pytest.fixture
 def mock_confluence_indexer():
@@ -27,7 +24,6 @@ def mock_confluence_indexer():
         mock_indexer_instance.index.return_value = {"total_nodes_indexed": 5}
         mock_indexer_class.return_value = mock_indexer_instance
         yield mock_indexer_instance
-
 
 @pytest.fixture
 def mock_dependencies():
@@ -71,7 +67,6 @@ def mock_dependencies():
         else:
             del app.dependency_overrides[get_service_context]
 
-
 def test_load_confluence_documents_by_page_id(
     client, mock_confluence_indexer, mock_dependencies
 ):
@@ -93,7 +88,6 @@ def test_load_confluence_documents_by_page_id(
     assert (
         call_args["max_pages_to_fetch"] is None
     )  # Default from Pydantic model if not provided
-
 
 def test_load_confluence_documents_by_space_and_title(
     client, mock_confluence_indexer, mock_dependencies
@@ -118,7 +112,6 @@ def test_load_confluence_documents_by_space_and_title(
     assert call_args["page_id"] is None
     assert call_args["cql_query"] is None
 
-
 def test_load_confluence_documents_by_cql_query(
     client, mock_confluence_indexer, mock_dependencies
 ):
@@ -140,7 +133,6 @@ def test_load_confluence_documents_by_cql_query(
     assert call_args["page_id"] is None
     assert call_args["space_key"] is None
     assert call_args["page_title"] is None
-
 
 def test_load_confluence_documents_by_space_key(
     client, mock_confluence_indexer, mock_dependencies
@@ -166,14 +158,12 @@ def test_load_confluence_documents_by_space_key(
     assert call_args["page_title"] is None
     assert call_args["cql_query"] is None
 
-
 def test_load_confluence_documents_confluence_disabled(client, mock_dependencies):
     # Override confluence_enabled for this specific test
     mock_dependencies.confluence.confluence_enabled = False
     response = client.post("/v1/documents/confluence/load", json={"page_id": "12345"})
     assert response.status_code == 500
     assert response.json()["detail"] == "Confluence is not enabled"
-
 
 def test_load_confluence_documents_indexer_exception(
     client, mock_confluence_indexer, mock_dependencies
@@ -182,7 +172,6 @@ def test_load_confluence_documents_indexer_exception(
     response = client.post("/v1/documents/confluence/load", json={"page_id": "12345"})
     assert response.status_code == 500
     assert response.json()["detail"] == "Indexer failed miserably"
-
 
 # Tests for Pydantic validation errors (handled by FastAPI automatically, but good to be aware)
 def test_load_confluence_invalid_payload_no_identifiers(client, mock_dependencies):
@@ -194,7 +183,6 @@ def test_load_confluence_invalid_payload_no_identifiers(client, mock_dependencie
     # Pydantic model's custom validator message:
     assert "A loading method must be specified" in response.text
 
-
 def test_load_confluence_invalid_payload_multiple_identifiers(client, mock_dependencies):
     response = client.post(
         "/v1/documents/confluence/load",
@@ -202,7 +190,6 @@ def test_load_confluence_invalid_payload_multiple_identifiers(client, mock_depen
     )
     assert response.status_code == 422
     assert "Only one loading method can be specified" in response.text
-
 
 def test_load_confluence_page_title_without_space_key(client, mock_dependencies):
     response = client.post(

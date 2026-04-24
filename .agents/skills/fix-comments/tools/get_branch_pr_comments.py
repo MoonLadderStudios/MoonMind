@@ -17,10 +17,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 def eprint(message: str) -> None:
     print(message, file=sys.stderr)
-
 
 def is_retryable_command_error(output: str) -> bool:
     message = output.lower()
@@ -40,7 +38,6 @@ def is_retryable_command_error(output: str) -> bool:
             "tls",
         )
     )
-
 
 def sanitized_command(command: list[str]) -> str:
     sanitized: list[str] = []
@@ -63,7 +60,6 @@ def sanitized_command(command: list[str]) -> str:
         sanitized.append(argument)
 
     return " ".join(shlex.quote(argument) for argument in sanitized)
-
 
 def run_json_command(
     command: list[str],
@@ -116,7 +112,6 @@ def run_json_command(
             f"Command returned invalid JSON for `{sanitized_command(command)}`."
         ) from exc
 
-
 def detect_current_branch() -> str | None:
     try:
         branch = subprocess.check_output(
@@ -130,7 +125,6 @@ def detect_current_branch() -> str | None:
     if not branch or branch == "HEAD":
         return None
     return branch
-
 
 def resolve_pr_metadata(selector: str | None) -> dict[str, Any]:
     command = ["gh", "pr", "view"]
@@ -169,7 +163,6 @@ def resolve_pr_metadata(selector: str | None) -> dict[str, Any]:
 
     return payload
 
-
 def discover_pr_number_from_head_branch(selector: str | None) -> int | None:
     branch = (selector or "").strip()
     if not branch:
@@ -206,7 +199,6 @@ def discover_pr_number_from_head_branch(selector: str | None) -> int | None:
     except (TypeError, ValueError):
         return None
 
-
 def fetch_comments(
     pr_number: int,
     repo: str | None,
@@ -233,7 +225,6 @@ def fetch_comments(
         raise RuntimeError("Unexpected payload while loading PR comments.")
 
     return payload
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -321,7 +312,6 @@ def main() -> int:
         print(json_output)
 
     return 0
-
 
 if __name__ == "__main__":
     try:

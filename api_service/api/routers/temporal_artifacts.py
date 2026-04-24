@@ -41,7 +41,6 @@ from moonmind.workflows.temporal.artifacts import (
 
 router = APIRouter(tags=["temporal-artifacts"])
 
-
 def _attachment_upload_diagnostic_event(
     *,
     event: str,
@@ -73,7 +72,6 @@ def _attachment_upload_diagnostic_event(
             payload["stepRef"] = step_ref
     return payload
 
-
 def _attachment_upload_diagnostics(
     *,
     event: str,
@@ -90,7 +88,6 @@ def _attachment_upload_diagnostics(
     if diagnostic_event is None:
         return None
     return {"events": [diagnostic_event]}
-
 
 def _raise_temporal_artifact_http(error: Exception) -> None:
     if isinstance(error, TemporalArtifactNotFoundError):
@@ -120,7 +117,6 @@ def _raise_temporal_artifact_http(error: Exception) -> None:
             detail={"code": code, "message": str(error)},
         ) from error
     raise error
-
 
 def _serialize_metadata(
     *,
@@ -193,12 +189,10 @@ def _serialize_metadata(
         download_expires_at=download_expires_at,
     )
 
-
 async def _get_temporal_artifact_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TemporalArtifactService:
     return TemporalArtifactService(TemporalArtifactRepository(session))
-
 
 async def _resolve_principal(
     user: Optional[User] = Depends(get_current_user_optional()),
@@ -216,7 +210,6 @@ async def _resolve_principal(
             },
         )
     return str(user.id)
-
 
 @router.post(
     "/api/artifacts",
@@ -267,7 +260,6 @@ async def create_artifact(
         ),
     )
 
-
 @router.put("/api/artifacts/{artifact_id}/content", response_model=ArtifactRefModel)
 async def upload_artifact_content(
     artifact_id: str,
@@ -297,7 +289,6 @@ async def upload_artifact_content(
         ),
     )
 
-
 @router.post(
     "/api/artifacts/{artifact_id}/presign-upload-part",
     response_model=PresignUploadPartResponse,
@@ -324,7 +315,6 @@ async def presign_artifact_upload_part(
         required_headers=grant.required_headers,
     )
 
-
 @router.post("/api/artifacts/{artifact_id}/complete", response_model=ArtifactRefModel)
 async def complete_artifact_upload(
     artifact_id: str,
@@ -342,7 +332,6 @@ async def complete_artifact_upload(
         _raise_temporal_artifact_http(exc)
         raise
     return ArtifactRefModel(**asdict(build_artifact_ref(artifact)))
-
 
 @router.get("/api/artifacts/{artifact_id}", response_model=ArtifactMetadataModel)
 async def get_artifact_metadata(
@@ -377,7 +366,6 @@ async def get_artifact_metadata(
         download_expires_at=download_expires_at,
     )
 
-
 @router.post(
     "/api/artifacts/{artifact_id}/presign-download",
     response_model=PresignDownloadResponse,
@@ -396,7 +384,6 @@ async def presign_artifact_download(
         _raise_temporal_artifact_http(exc)
         raise
     return PresignDownloadResponse(url=url, expires_at=expires_at)
-
 
 @router.get("/api/artifacts/{artifact_id}/download")
 async def download_artifact(
@@ -441,7 +428,6 @@ async def download_artifact(
         },
     )
 
-
 @router.post("/api/artifacts/{artifact_id}/links", response_model=ArtifactMetadataModel)
 async def link_artifact(
     artifact_id: str,
@@ -468,7 +454,6 @@ async def link_artifact(
         pinned=pinned,
         read_policy=read_policy,
     )
-
 
 @router.get(
     "/api/executions/{namespace}/{workflow_id}/{run_id}/artifacts",
@@ -511,7 +496,6 @@ async def list_execution_artifacts(
         raise
     return ArtifactListResponse(artifacts=serialized)
 
-
 @router.post("/api/artifacts/{artifact_id}/pin", response_model=ArtifactMetadataModel)
 async def pin_artifact(
     artifact_id: str,
@@ -539,7 +523,6 @@ async def pin_artifact(
         read_policy=read_policy,
     )
 
-
 @router.delete("/api/artifacts/{artifact_id}/pin", response_model=ArtifactMetadataModel)
 async def unpin_artifact(
     artifact_id: str,
@@ -561,7 +544,6 @@ async def unpin_artifact(
         pinned=pinned,
         read_policy=read_policy,
     )
-
 
 @router.delete("/api/artifacts/{artifact_id}", response_model=ArtifactMetadataModel)
 async def delete_artifact(

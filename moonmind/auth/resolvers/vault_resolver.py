@@ -5,7 +5,6 @@ from moonmind.auth.secret_refs import ParsedSecretRef, VaultSecretResolver
 
 logger = structlog.get_logger(__name__)
 
-
 class AdapterVaultSecretResolver(SecretBackendResolver):
     """
     Adapter that wraps the legacy `VaultSecretResolver` to adhere

@@ -35,7 +35,7 @@ Test implications: Run targeted UI test suite and final unit wrapper when feasib
 ## FR-010 / FR-011
 
 Decision: Preserve MM-428 traceability in all MoonSpec artifacts and verification; add tests that cover all three page families.  
-Evidence: `docs/tmp/jira-orchestration-inputs/MM-428-moonspec-orchestration-input.md` and `spec.md` preserve the trusted Jira brief.  
+Evidence: `spec.md` (Input) and `spec.md` preserve the trusted Jira brief.  
 Rationale: Jira Orchestrate requires the issue key to flow into downstream artifacts and PR metadata.  
 Alternatives considered: Relying only on final PR text; rejected because MoonSpec verification needs artifact-level evidence.  
 Test implications: Final verification checks artifacts and source IDs.

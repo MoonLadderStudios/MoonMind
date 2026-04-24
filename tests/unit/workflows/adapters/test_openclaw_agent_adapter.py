@@ -9,7 +9,6 @@ from moonmind.workflows.adapters.openclaw_agent_adapter import (
     openclaw_success_result,
 )
 
-
 def test_build_openclaw_chat_messages_includes_workspace_and_description() -> None:
     req = AgentExecutionRequest(
         agentKind="external",
@@ -31,7 +30,6 @@ def test_build_openclaw_chat_messages_includes_workspace_and_description() -> No
     assert "Patch the null check" in user
     assert "main" in user
 
-
 def test_openclaw_success_result_truncates_long_summary() -> None:
     req = AgentExecutionRequest(
         agentKind="external",
@@ -44,7 +42,6 @@ def test_openclaw_success_result_truncates_long_summary() -> None:
     result = openclaw_success_result(full_text=text, request=req)
     assert result.summary is not None
     assert len(result.summary) <= 4096
-
 
 def test_openclaw_external_adapter_capability_is_streaming() -> None:
     adapter = OpenClawExternalAdapter()

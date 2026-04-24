@@ -36,5 +36,5 @@
 
 ## Notes
 
-- Input classified as a single-story runtime feature request from `docs/tmp/jira-orchestration-inputs/MM-388-moonspec-orchestration-input.md`.
+- Input classified as a single-story runtime feature request from `spec.md` (Input).
 - The source brief references `docs/Tasks/PresetComposability.md`, which is absent in this checkout; the preserved Jira brief and `docs/Tasks/TaskProposalSystem.md` are the active sources.

@@ -17,7 +17,7 @@ Internal developers integrating new provider runtimes and Devops engineers maint
 
 ## 2. Source Document Requirements
 
-*Extracted from docs/tmp/005-ProviderProfilesPlan.md (Phase 3)*
+*Extracted from docs/Tasks/SkillAndPlanContracts.md (Phase 3)*
 
 | Requirement ID | Source Section | Requirement Summary |
 | --- | --- | --- |

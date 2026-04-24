@@ -1,6 +1,6 @@
 # Technical Design: Jules Provider Adapter
 
-**Implementation tracking:** [`docs/tmp/remaining-work/ExternalAgents-JulesClientAdapter.md`](../tmp/remaining-work/ExternalAgents-JulesClientAdapter.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 Status: **Implemented as reference poll-based provider**
 Last updated: 2026-03-30
@@ -248,9 +248,9 @@ The adapter should follow the same shared behaviors expected of all external pro
 - preserve stable idempotency behavior
 - inject MoonMind correlation metadata
 - assemble canonical metadata fields such as:
-  - `providerStatus`
-  - `normalizedStatus`
-  - `externalUrl`
+ - `providerStatus`
+ - `normalizedStatus`
+ - `externalUrl`
 - return canonical runtime contracts only
 
 These behaviors should remain aligned with `BaseExternalAgentAdapter`.
@@ -381,15 +381,15 @@ It should avoid using `sendMessage` as the normal way to drive step-by-step work
 
 ```text id="01026"
 MoonMind plan
-  ↓ identify Jules-targeted work
-  ↓ bundle compatible ordered steps
-  ↓ compile one-shot execution brief
-  ↓ integration.jules.start
-  ↓ Jules runs one cohesive session
-  ↓ MoonMind polls / processes callbacks
-  ↓ integration.jules.fetch_result
-  ↓ optional branch publication steps
-  ↓ final MoonMind outcome
+ ↓ identify Jules-targeted work
+ ↓ bundle compatible ordered steps
+ ↓ compile one-shot execution brief
+ ↓ integration.jules.start
+ ↓ Jules runs one cohesive session
+ ↓ MoonMind polls / processes callbacks
+ ↓ integration.jules.fetch_result
+ ↓ optional branch publication steps
+ ↓ final MoonMind outcome
 ````
 
 ## 9.4 Bundling rule

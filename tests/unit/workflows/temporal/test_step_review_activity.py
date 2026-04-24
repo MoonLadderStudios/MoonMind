@@ -8,7 +8,6 @@ from moonmind.workflows.temporal.activities.step_review import (
     step_review_activity,
 )
 
-
 @pytest.mark.asyncio
 async def test_step_review_activity_returns_pass():
     """The placeholder implementation always returns PASS."""
@@ -29,7 +28,6 @@ async def test_step_review_activity_returns_pass():
     assert result["verdict"] == "PASS"
     assert result["confidence"] == 1.0
 
-
 @pytest.mark.asyncio
 async def test_step_review_activity_with_minimal_payload():
     """Activity handles sparse payloads gracefully."""
@@ -44,7 +42,6 @@ async def test_step_review_activity_with_minimal_payload():
         }
     )
     assert result["verdict"] == "PASS"
-
 
 @pytest.mark.asyncio
 async def test_step_review_activity_with_previous_feedback():

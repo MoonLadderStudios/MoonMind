@@ -4,7 +4,6 @@ from typing import Dict, Optional, AsyncGenerator
 
 from .models import LogStreamEvent
 
-
 class ObservabilityPublisher:
     """
     In-memory publisher managing pub/sub channels for active managed runs.

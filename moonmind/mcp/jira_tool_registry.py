@@ -31,16 +31,13 @@ from moonmind.mcp.tool_registry import (
     _ToolDefinition,
 )
 
-
 @dataclass(frozen=True, slots=True)
 class JiraToolExecutionContext:
     """Dependencies available to Jira tool handlers."""
 
     service: JiraToolService
 
-
 JiraToolHandler = Callable[[BaseModel, JiraToolExecutionContext], Awaitable[Any]]
-
 
 class JiraToolRegistry:
     """Registry for trusted Jira-related MCP tools."""
@@ -296,6 +293,5 @@ class JiraToolRegistry:
                 "jira.verify_connection", detail="Invalid payload type"
             )
         return await context.service.verify_connection(args)
-
 
 __all__ = ["JiraToolExecutionContext", "JiraToolRegistry"]

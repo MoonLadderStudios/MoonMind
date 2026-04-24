@@ -23,7 +23,6 @@ from moonmind.schemas.temporal_payload_policy import (
     validate_compact_temporal_mapping,
 )
 
-
 HandoffSeedArtifactRef = Annotated[
     str,
     StringConstraints(
@@ -33,7 +32,6 @@ HandoffSeedArtifactRef = Annotated[
     ),
 ]
 
-
 def _validate_absolute_posix_path(value: str, *, field_name: str) -> str:
     normalized = require_non_blank(value, field_name=field_name).replace("\\", "/")
     normalized = posixpath.normpath(normalized)
@@ -41,9 +39,7 @@ def _validate_absolute_posix_path(value: str, *, field_name: str) -> str:
         raise ValueError(f"{field_name} must be an absolute path")
     return normalized
 
-
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
-
 
 ManagedSessionControlAction = Literal[
     "start_session",
@@ -771,7 +767,6 @@ CodexManagedSessionWorkflowStatus = Literal[
     "terminated",
 ]
 
-
 def canonical_codex_managed_runtime_id(runtime_id: str) -> str | None:
     """Return the canonical managed-session runtime ID for Codex."""
 
@@ -780,17 +775,14 @@ def canonical_codex_managed_runtime_id(runtime_id: str) -> str | None:
         return "codex_cli"
     return None
 
-
 _ASSISTANT_TEXT_METADATA_KEYS = frozenset({"assistantText", "lastAssistantText"})
 _ASSISTANT_TEXT_METADATA_MAX_BYTES = 8 * 1024
-
 
 def _truncate_utf8_text(value: str, *, max_bytes: int) -> str:
     encoded = value.encode("utf-8")
     if len(encoded) <= max_bytes:
         return value
     return encoded[:max_bytes].decode("utf-8", errors="ignore")
-
 
 def _truncate_json_text(value: str, *, max_bytes: int) -> str:
     if len(json.dumps(value, allow_nan=False).encode("utf-8")) <= max_bytes:
@@ -806,7 +798,6 @@ def _truncate_json_text(value: str, *, max_bytes: int) -> str:
         else:
             high = midpoint - 1
     return value[:low]
-
 
 def _compact_managed_session_metadata(
     value: dict[str, Any],
@@ -833,7 +824,6 @@ def _compact_managed_session_metadata(
             normalized[f"{key}Truncated"] = True
             normalized[f"{key}OriginalChars"] = original_chars
     return normalized
-
 
 class CodexManagedSessionPlaneContract(BaseModel):
     """Frozen Phase 1 MVP contract for the Codex managed session plane."""
@@ -868,7 +858,6 @@ class CodexManagedSessionPlaneContract(BaseModel):
             )
         return self
 
-
 class CodexManagedSessionState(BaseModel):
     """Identity and continuity state for one task-scoped Codex session."""
 
@@ -896,7 +885,6 @@ class CodexManagedSessionState(BaseModel):
             }
         )
 
-
 class _CodexManagedSessionRemoteContract(BaseModel):
     """Base model that freezes the remote-container managed-session boundary."""
 
@@ -921,7 +909,6 @@ class _CodexManagedSessionRemoteContract(BaseModel):
             field_name="metadata",
         )
 
-
 class CodexManagedSessionLocator(_CodexManagedSessionRemoteContract):
     """Canonical bounded identity for addressing one managed session remotely."""
 
@@ -929,7 +916,6 @@ class CodexManagedSessionLocator(_CodexManagedSessionRemoteContract):
     session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
     container_id: NonBlankStr = Field(..., alias="containerId")
     thread_id: NonBlankStr = Field(..., alias="threadId")
-
 
 class ManagedGitHubCredentialDescriptor(BaseModel):
     """Non-sensitive launch-time GitHub credential materialization descriptor."""
@@ -959,7 +945,6 @@ class ManagedGitHubCredentialDescriptor(BaseModel):
                 "githubCredential.envVar is only valid for source=environment"
             )
         return self
-
 
 class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     """Launch contract for a task-scoped remote Codex session container."""
@@ -1033,13 +1018,11 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
         )
         return self
 
-
 class SendCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Send a new turn to the remote session container."""
 
     instructions: NonBlankStr = Field(..., alias="instructions")
     reason: NonBlankStr | None = Field(None, alias="reason")
-
 
 class SteerCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Provide follow-up steering to an in-flight turn."""
@@ -1048,13 +1031,11 @@ class SteerCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     instructions: NonBlankStr = Field(..., alias="instructions")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
-
 class InterruptCodexManagedSessionTurnRequest(CodexManagedSessionLocator):
     """Interrupt an in-flight turn on the remote session container."""
 
     turn_id: NonBlankStr = Field(..., alias="turnId")
     reason: NonBlankStr | None = Field(None, alias="reason")
-
 
 class CodexManagedSessionClearRequest(CodexManagedSessionLocator):
     """Explicit session clear/reset request with a new thread boundary."""
@@ -1068,18 +1049,15 @@ class CodexManagedSessionClearRequest(CodexManagedSessionLocator):
             raise ValueError("newThreadId must differ from threadId")
         return self
 
-
 class TerminateCodexManagedSessionRequest(CodexManagedSessionLocator):
     """Terminate a remote managed session container."""
 
     reason: NonBlankStr | None = Field(None, alias="reason")
 
-
 class FetchCodexManagedSessionSummaryRequest(CodexManagedSessionLocator):
     """Fetch the latest continuity summary/checkpoint refs for one session."""
 
     include_artifact_refs: bool = Field(True, alias="includeArtifactRefs")
-
 
 class PublishCodexManagedSessionArtifactsRequest(CodexManagedSessionLocator):
     """Publish continuity artifacts for the remote session container."""
@@ -1087,7 +1065,6 @@ class PublishCodexManagedSessionArtifactsRequest(CodexManagedSessionLocator):
     task_run_id: NonBlankStr | None = Field(None, alias="taskRunId")
     step_run_id: NonBlankStr | None = Field(None, alias="stepRunId")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
-
 
 class CodexManagedSessionHandle(_CodexManagedSessionRemoteContract):
     """Remote managed-session handle returned by launch/status/clear/terminate."""
@@ -1098,7 +1075,6 @@ class CodexManagedSessionHandle(_CodexManagedSessionRemoteContract):
     control_url: NonBlankStr | None = Field(None, alias="controlUrl")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
-
 class CodexManagedSessionTurnResponse(_CodexManagedSessionRemoteContract):
     """Typed response for turn send/steer/interrupt activity calls."""
 
@@ -1107,7 +1083,6 @@ class CodexManagedSessionTurnResponse(_CodexManagedSessionRemoteContract):
     status: ManagedSessionTurnStatus = Field(..., alias="status")
     output_refs: tuple[NonBlankStr, ...] = Field(default=(), alias="outputRefs")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
-
 
 class CodexManagedSessionSummary(_CodexManagedSessionRemoteContract):
     """Latest continuity projection refs for one managed session."""
@@ -1124,7 +1099,6 @@ class CodexManagedSessionSummary(_CodexManagedSessionRemoteContract):
         None, alias="latestResetBoundaryRef"
     )
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
-
 
 class CodexManagedSessionArtifactsPublication(_CodexManagedSessionRemoteContract):
     """Artifact publication result for one managed session."""
@@ -1144,7 +1118,6 @@ class CodexManagedSessionArtifactsPublication(_CodexManagedSessionRemoteContract
         None, alias="latestResetBoundaryRef"
     )
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
-
 
 class CodexManagedSessionRecord(BaseModel):
     """Durable session-level supervision record for one managed session."""
@@ -1287,7 +1260,6 @@ class CodexManagedSessionRecord(BaseModel):
                 refs.append(ref)
         return tuple(refs)
 
-
 class CodexManagedSessionBinding(BaseModel):
     """Bounded task-scoped session binding passed across workflow boundaries."""
 
@@ -1333,7 +1305,6 @@ class CodexManagedSessionBinding(BaseModel):
             runtimeId=runtime_id,
             executionProfileRef=session_input.execution_profile_ref,
         )
-
 
 class CodexManagedSessionWorkflowInput(BaseModel):
     """Workflow input for one task-scoped Codex managed session."""
@@ -1416,7 +1387,6 @@ class CodexManagedSessionWorkflowInput(BaseModel):
             )
         return self
 
-
 class CodexManagedSessionRequestTrackingEntry(BaseModel):
     """Compact metadata for an identified mutating control request."""
 
@@ -1435,7 +1405,6 @@ class CodexManagedSessionRequestTrackingEntry(BaseModel):
             self.result_ref = require_non_blank(self.result_ref, field_name="resultRef")
         return self
 
-
 class CodexManagedSessionSendFollowUpRequest(BaseModel):
     """Typed workflow update request for sending a follow-up turn."""
 
@@ -1453,7 +1422,6 @@ class CodexManagedSessionSendFollowUpRequest(BaseModel):
             self.request_id = require_non_blank(self.request_id, field_name="requestId")
         return self
 
-
 class CodexManagedSessionInterruptRequest(BaseModel):
     """Typed workflow update request for interrupting an active turn."""
 
@@ -1470,7 +1438,6 @@ class CodexManagedSessionInterruptRequest(BaseModel):
         if self.request_id is not None:
             self.request_id = require_non_blank(self.request_id, field_name="requestId")
         return self
-
 
 class CodexManagedSessionSteerRequest(BaseModel):
     """Typed workflow update request for steering an active turn."""
@@ -1490,7 +1457,6 @@ class CodexManagedSessionSteerRequest(BaseModel):
             self.request_id = require_non_blank(self.request_id, field_name="requestId")
         return self
 
-
 class CodexManagedSessionWorkflowControlRequest(BaseModel):
     """Typed workflow update request for clear/cancel/terminate operations."""
 
@@ -1506,7 +1472,6 @@ class CodexManagedSessionWorkflowControlRequest(BaseModel):
         if self.request_id is not None:
             self.request_id = require_non_blank(self.request_id, field_name="requestId")
         return self
-
 
 class CodexManagedSessionAttachRuntimeHandlesSignal(BaseModel):
     """Typed workflow signal for attaching bounded runtime handles."""
@@ -1543,18 +1508,14 @@ class CodexManagedSessionAttachRuntimeHandlesSignal(BaseModel):
             )
         return self
 
-
 class CodexManagedSessionClearUpdateRequest(CodexManagedSessionWorkflowControlRequest):
     """Typed workflow update request for clearing session context."""
-
 
 class CodexManagedSessionCancelUpdateRequest(CodexManagedSessionWorkflowControlRequest):
     """Typed workflow update request for canceling the active session turn."""
 
-
 class CodexManagedSessionTerminateUpdateRequest(CodexManagedSessionWorkflowControlRequest):
     """Typed workflow update request for terminating the managed session."""
-
 
 class CodexManagedSessionSnapshot(BaseModel):
     """Workflow-owned snapshot of one task-scoped Codex session."""
@@ -1579,7 +1540,6 @@ class CodexManagedSessionSnapshot(BaseModel):
         default=(), alias="requestTrackingState"
     )
 
-
 class ClaudeSurfaceBinding(BaseModel):
     """Durable representation of one surface attached to a Claude session."""
 
@@ -1602,7 +1562,6 @@ class ClaudeSurfaceBinding(BaseModel):
         if self.last_seen_at is not None and self.last_seen_at.tzinfo is None:
             self.last_seen_at = self.last_seen_at.replace(tzinfo=UTC)
         return self
-
 
 class ClaudeManagedSession(BaseModel):
     """Canonical Claude Code session record for the shared session plane."""
@@ -1852,7 +1811,6 @@ class ClaudeManagedSession(BaseModel):
             updatedAt=created_at,
         )
 
-
 class ClaudeSurfaceLifecycleEvent(BaseModel):
     """Normalized event for Claude surface lifecycle and handoff activity."""
 
@@ -1904,7 +1862,6 @@ class ClaudeSurfaceLifecycleEvent(BaseModel):
             )
         return self
 
-
 class ClaudeSurfaceHandoffFixtureFlow(BaseModel):
     """Deterministic provider-free fixture flow for MM-348 boundaries."""
 
@@ -1920,7 +1877,6 @@ class ClaudeSurfaceHandoffFixtureFlow(BaseModel):
     cloud_session: ClaudeManagedSession = Field(..., alias="cloudSession")
     events: tuple[ClaudeSurfaceLifecycleEvent, ...]
 
-
 def classify_claude_execution_security_mode(
     session: ClaudeManagedSession,
 ) -> ClaudeExecutionSecurityMode:
@@ -1934,7 +1890,6 @@ def classify_claude_execution_security_mode(
     ):
         return "remote_control_projection"
     return "local_execution"
-
 
 def build_claude_surface_handoff_fixture_flow(
     *,
@@ -2065,7 +2020,6 @@ def build_claude_surface_handoff_fixture_flow(
         events=events,
     )
 
-
 class ClaudeManagedTurn(BaseModel):
     """Bounded input turn processed within a Claude managed session."""
 
@@ -2086,7 +2040,6 @@ class ClaudeManagedTurn(BaseModel):
         if self.completed_at is not None and self.completed_at.tzinfo is None:
             self.completed_at = self.completed_at.replace(tzinfo=UTC)
         return self
-
 
 class ClaudeManagedWorkItem(BaseModel):
     """Event-bearing work unit emitted during a Claude managed turn."""
@@ -2133,7 +2086,6 @@ class ClaudeManagedWorkItem(BaseModel):
             )
         return self
 
-
 class ClaudeCheckpointCaptureDecision(BaseModel):
     """Documented checkpoint capture decision for one Claude runtime trigger."""
 
@@ -2143,7 +2095,6 @@ class ClaudeCheckpointCaptureDecision(BaseModel):
     should_create_checkpoint: bool = Field(..., alias="shouldCreateCheckpoint")
     capture_mode: ClaudeCheckpointCaptureMode = Field(..., alias="captureMode")
     reason: NonBlankStr
-
 
 def claude_checkpoint_capture_decision(
     trigger: ClaudeCheckpointTrigger,
@@ -2183,7 +2134,6 @@ def claude_checkpoint_capture_decision(
         captureMode=capture_mode,
         reason=reason,
     )
-
 
 class ClaudeCheckpoint(BaseModel):
     """Bounded metadata for one Claude session checkpoint."""
@@ -2234,7 +2184,6 @@ class ClaudeCheckpoint(BaseModel):
             raise ValueError("Manual external edits must use best_effort capture")
         return self
 
-
 class ClaudeCheckpointIndex(BaseModel):
     """Operator-visible checkpoint metadata for one Claude session."""
 
@@ -2267,7 +2216,6 @@ class ClaudeCheckpointIndex(BaseModel):
                 raise ValueError("CheckpointIndex cannot mix sessionId values")
         return self
 
-
 class ClaudeRewindRequest(BaseModel):
     """Validated request to restore or summarize from a Claude checkpoint."""
 
@@ -2298,7 +2246,6 @@ class ClaudeRewindRequest(BaseModel):
         if self.requested_at.tzinfo is None:
             self.requested_at = self.requested_at.replace(tzinfo=UTC)
         return self
-
 
 class ClaudeRewindResult(BaseModel):
     """Provenance-preserving result for a Claude rewind operation."""
@@ -2367,7 +2314,6 @@ class ClaudeRewindResult(BaseModel):
             )
         return self
 
-
 def create_claude_checkpoint_work_item(
     *,
     item_id: str,
@@ -2392,7 +2338,6 @@ def create_claude_checkpoint_work_item(
         startedAt=created_at,
         endedAt=created_at,
     )
-
 
 def create_claude_rewind_work_items(
     *,
@@ -2439,7 +2384,6 @@ def create_claude_rewind_work_items(
     )
     return started, completed
 
-
 def claude_default_reinjection_policy(
     kind: ClaudeContextSourceKind,
 ) -> ClaudeContextReinjectionPolicy:
@@ -2463,7 +2407,6 @@ def claude_default_reinjection_policy(
         "transcript_summary": "always",
     }
     return policies[kind]
-
 
 class ClaudeContextSegment(BaseModel):
     """Bounded metadata for one Claude context source."""
@@ -2499,7 +2442,6 @@ class ClaudeContextSegment(BaseModel):
             )
         return self
 
-
 class ClaudeContextSnapshot(BaseModel):
     """Immutable context metadata for a Claude managed session epoch."""
 
@@ -2523,7 +2465,6 @@ class ClaudeContextSnapshot(BaseModel):
         if self.created_at.tzinfo is None:
             self.created_at = self.created_at.replace(tzinfo=UTC)
         return self
-
 
 class ClaudeContextEvent(BaseModel):
     """Normalized event for Claude context loading and compaction."""
@@ -2550,7 +2491,6 @@ class ClaudeContextEvent(BaseModel):
             self.occurred_at = self.occurred_at.replace(tzinfo=UTC)
         return self
 
-
 class ClaudeContextCompactionResult(BaseModel):
     """Deterministic output for a Claude context compaction boundary."""
 
@@ -2559,7 +2499,6 @@ class ClaudeContextCompactionResult(BaseModel):
     snapshot: ClaudeContextSnapshot
     work_item: ClaudeManagedWorkItem = Field(..., alias="workItem")
     events: tuple[ClaudeContextEvent, ...]
-
 
 class ClaudeChildWorkUsage(BaseModel):
     """Bounded usage accounting for Claude child work."""
@@ -2584,7 +2523,6 @@ class ClaudeChildWorkUsage(BaseModel):
                 "inputTokens + outputTokens"
             )
         return self
-
 
 class ClaudeChildContext(BaseModel):
     """Parent-owned subagent child context for one Claude turn."""
@@ -2629,7 +2567,6 @@ class ClaudeChildContext(BaseModel):
                 raise ValueError("completedAt cannot precede startedAt")
         return self
 
-
 class ClaudeSessionGroup(BaseModel):
     """Grouped sibling sessions for a Claude agent team."""
 
@@ -2659,7 +2596,6 @@ class ClaudeSessionGroup(BaseModel):
                 raise ValueError("completedAt cannot precede createdAt")
         return self
 
-
 class ClaudeTeamMemberSession(BaseModel):
     """Distinct managed session participating in a Claude agent team."""
 
@@ -2676,7 +2612,6 @@ class ClaudeTeamMemberSession(BaseModel):
     @classmethod
     def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="metadata")
-
 
 class ClaudeTeamMessage(BaseModel):
     """Direct peer message exchanged inside one Claude session group."""
@@ -2702,7 +2637,6 @@ class ClaudeTeamMessage(BaseModel):
         if self.sent_at.tzinfo is None:
             self.sent_at = self.sent_at.replace(tzinfo=UTC)
         return self
-
 
 class ClaudeChildWorkEvent(BaseModel):
     """Normalized event for Claude subagent and team child work."""
@@ -2739,7 +2673,6 @@ class ClaudeChildWorkEvent(BaseModel):
             self.occurred_at = self.occurred_at.replace(tzinfo=UTC)
         return self
 
-
 class ClaudeChildWorkFixtureFlow(BaseModel):
     """Deterministic provider-free fixture flow for child-work boundaries."""
 
@@ -2753,7 +2686,6 @@ class ClaudeChildWorkFixtureFlow(BaseModel):
     )
     team_message: ClaudeTeamMessage = Field(..., alias="teamMessage")
     events: tuple[ClaudeChildWorkEvent, ...]
-
 
 _PAYLOAD_LIGHT_FORBIDDEN_KEYS: frozenset[str] = frozenset(
     {
@@ -2769,7 +2701,6 @@ _PAYLOAD_LIGHT_FORBIDDEN_KEYS: frozenset[str] = frozenset(
     }
 )
 
-
 def _validate_payload_light_metadata(
     value: dict[str, Any],
     *,
@@ -2778,7 +2709,6 @@ def _validate_payload_light_metadata(
     compact = validate_compact_temporal_mapping(value, field_name=field_name)
     _reject_payload_light_keys(compact, path=field_name)
     return compact
-
 
 def _reject_payload_light_keys(value: Any, *, path: str) -> None:
     if isinstance(value, dict):
@@ -2799,7 +2729,6 @@ def _reject_payload_light_keys(value: Any, *, path: str) -> None:
     if isinstance(value, (list, tuple)):
         for index, nested in enumerate(value):
             _reject_payload_light_keys(nested, path=f"{path}[{index}]")
-
 
 class ClaudeEventSubscription(BaseModel):
     """Bounded subscription request for Claude evidence streams."""
@@ -2827,7 +2756,6 @@ class ClaudeEventSubscription(BaseModel):
         if self.created_at.tzinfo is None:
             self.created_at = self.created_at.replace(tzinfo=UTC)
         return self
-
 
 class ClaudeEventEnvelope(BaseModel):
     """Append-only normalized event envelope for Claude governance telemetry."""
@@ -2880,7 +2808,6 @@ class ClaudeEventEnvelope(BaseModel):
                 raise ValueError("childContextId is required for child events")
         return self
 
-
 class ClaudeStorageEvidence(BaseModel):
     """Payload-light evidence describing Claude central and runtime-local stores."""
 
@@ -2916,7 +2843,6 @@ class ClaudeStorageEvidence(BaseModel):
             )
         return self
 
-
 class ClaudeRetentionClass(BaseModel):
     """One policy-controlled Claude retention class."""
 
@@ -2931,7 +2857,6 @@ class ClaudeRetentionClass(BaseModel):
         if not self.policy_controlled:
             raise ValueError("retention classes must be policy-controlled")
         return self
-
 
 class ClaudeRetentionEvidence(BaseModel):
     """Policy-controlled retention evidence for Claude governance telemetry."""
@@ -2966,7 +2891,6 @@ class ClaudeRetentionEvidence(BaseModel):
             raise ValueError("; ".join(error_messages))
         return self
 
-
 class ClaudeTelemetryMetric(BaseModel):
     """Normalized Claude OpenTelemetry metric in the shared schema."""
 
@@ -2981,7 +2905,6 @@ class ClaudeTelemetryMetric(BaseModel):
     def _validate_dimensions(cls, value: dict[str, Any]) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="dimensions")
 
-
 class ClaudeTelemetrySpan(BaseModel):
     """Normalized Claude OpenTelemetry trace span."""
 
@@ -2995,7 +2918,6 @@ class ClaudeTelemetrySpan(BaseModel):
     @classmethod
     def _validate_attributes(cls, value: dict[str, Any]) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="attributes")
-
 
 class ClaudeTelemetryEvidence(BaseModel):
     """Normalized telemetry evidence derived from Claude observations."""
@@ -3018,7 +2940,6 @@ class ClaudeTelemetryEvidence(BaseModel):
         if self.created_at.tzinfo is None:
             self.created_at = self.created_at.replace(tzinfo=UTC)
         return self
-
 
 class ClaudeUsageRollup(BaseModel):
     """Usage rollup across Claude governance dimensions."""
@@ -3059,7 +2980,6 @@ class ClaudeUsageRollup(BaseModel):
                 "cannot mark an independent parent rollup"
             )
         return self
-
 
 class ClaudeGovernanceEvidence(BaseModel):
     """Auditor-facing governance evidence for one Claude managed session."""
@@ -3110,7 +3030,6 @@ class ClaudeGovernanceEvidence(BaseModel):
             )
         return self
 
-
 class ClaudeComplianceExportView(BaseModel):
     """Compliance export view over bounded governance telemetry evidence."""
 
@@ -3137,7 +3056,6 @@ class ClaudeComplianceExportView(BaseModel):
         if self.created_at.tzinfo is None:
             self.created_at = self.created_at.replace(tzinfo=UTC)
         return self
-
 
 class ClaudeProviderDashboardSummary(BaseModel):
     """Provider-mode-aware dashboard summary derived from governance evidence."""
@@ -3169,7 +3087,6 @@ class ClaudeProviderDashboardSummary(BaseModel):
             self.created_at = self.created_at.replace(tzinfo=UTC)
         return self
 
-
 class ClaudeGovernanceTelemetryFixtureFlow(BaseModel):
     """Deterministic provider-free fixture flow for MM-349 boundaries."""
 
@@ -3188,7 +3105,6 @@ class ClaudeGovernanceTelemetryFixtureFlow(BaseModel):
     dashboard_summary: ClaudeProviderDashboardSummary = Field(
         ..., alias="dashboardSummary"
     )
-
 
 def build_claude_governance_telemetry_fixture_flow(
     *,
@@ -3459,7 +3375,6 @@ def build_claude_governance_telemetry_fixture_flow(
         dashboardSummary=dashboard_summary,
     )
 
-
 def validate_claude_team_message_membership(
     *,
     message: ClaudeTeamMessage,
@@ -3477,7 +3392,6 @@ def validate_claude_team_message_membership(
         or peer.session_group_id != message.session_group_id
     ):
         raise ValueError("sender and peer must belong to the same session group")
-
 
 def build_claude_child_work_fixture_flow(
     *,
@@ -3647,7 +3561,6 @@ def build_claude_child_work_fixture_flow(
         events=events,
     )
 
-
 def compact_claude_context_snapshot(
     *,
     snapshot: ClaudeContextSnapshot,
@@ -3736,7 +3649,6 @@ def compact_claude_context_snapshot(
         events=events,
     )
 
-
 def _decision_event_for_outcome(
     outcome: ClaudeDecisionOutcome,
 ) -> ClaudeDecisionEventName:
@@ -3755,7 +3667,6 @@ def _decision_event_for_outcome(
     if outcome == "proposed":
         return "decision.proposed"
     return "decision.resolved"
-
 
 class ClaudeDecisionPoint(BaseModel):
     """Normalized decision-stage record for Claude managed sessions."""
@@ -3936,7 +3847,6 @@ class ClaudeDecisionPoint(BaseModel):
             createdAt=created_at,
         )
 
-
 class ClaudeHookAudit(BaseModel):
     """Normalized Claude hook execution audit record."""
 
@@ -3965,7 +3875,6 @@ class ClaudeHookAudit(BaseModel):
             self.created_at = self.created_at.replace(tzinfo=UTC)
         return self
 
-
 class ClaudePolicyPermissions(BaseModel):
     """Compiled Claude permission controls."""
 
@@ -3981,7 +3890,6 @@ class ClaudePolicyPermissions(BaseModel):
     auto_mode_enabled: bool = Field(False, alias="autoModeEnabled")
     bypass_disabled: bool = Field(False, alias="bypassDisabled")
     auto_disabled: bool = Field(False, alias="autoDisabled")
-
 
 class ClaudePolicySandbox(BaseModel):
     """Compiled Claude sandbox controls."""
@@ -4001,7 +3909,6 @@ class ClaudePolicySandbox(BaseModel):
     def _validate_scope(cls, value: dict[str, Any]) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="scope")
 
-
 class ClaudePolicyHooks(BaseModel):
     """Compiled Claude hook controls."""
 
@@ -4009,7 +3916,6 @@ class ClaudePolicyHooks(BaseModel):
 
     allow_managed_only: bool = Field(False, alias="allowManagedOnly")
     registry_hash: str | None = Field(None, alias="registryHash")
-
 
 class ClaudePolicyMcp(BaseModel):
     """Compiled Claude MCP controls."""
@@ -4022,7 +3928,6 @@ class ClaudePolicyMcp(BaseModel):
     denied_servers: tuple[str, ...] = Field(default=(), alias="deniedServers")
     allow_managed_only: bool = Field(False, alias="allowManagedOnly")
 
-
 class ClaudePolicyMemory(BaseModel):
     """Compiled Claude memory controls."""
 
@@ -4034,7 +3939,6 @@ class ClaudePolicyMemory(BaseModel):
     )
     excludes: tuple[str, ...] = ()
 
-
 class ClaudePolicyBootstrapTemplate(BaseModel):
     """Claude BootstrapPreferences represented as bootstrap templates only."""
 
@@ -4043,7 +3947,6 @@ class ClaudePolicyBootstrapTemplate(BaseModel):
     kind: Literal["bootstrap_template"] = "bootstrap_template"
     name: NonBlankStr
     value: Any
-
 
 class ClaudePolicySource(BaseModel):
     """Candidate policy source for Claude managed policy resolution."""
@@ -4063,7 +3966,6 @@ class ClaudePolicySource(BaseModel):
     @classmethod
     def _validate_settings(cls, value: dict[str, Any]) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="settings")
-
 
 class ClaudePolicyEnvelope(BaseModel):
     """Versioned effective policy attached to a Claude managed session."""
@@ -4122,7 +4024,6 @@ class ClaudePolicyEnvelope(BaseModel):
     def _validate_mapping(cls, value: dict[str, Any]) -> dict[str, Any]:
         return validate_compact_temporal_mapping(value, field_name="policy")
 
-
 class ClaudePolicyHandshake(BaseModel):
     """Startup readiness after Claude policy resolution."""
 
@@ -4135,7 +4036,6 @@ class ClaudePolicyHandshake(BaseModel):
     state: ClaudePolicyHandshakeState
     reason: str | None = None
     interactive: bool
-
 
 class ClaudePolicyEvent(BaseModel):
     """Append-only Claude policy lifecycle event."""
@@ -4162,7 +4062,6 @@ class ClaudePolicyEvent(BaseModel):
             self.occurred_at = self.occurred_at.replace(tzinfo=UTC)
         return self
 
-
 _MANAGED_SOURCE_ORDER: tuple[ClaudePolicySourceKind, ...] = (
     "server_managed",
     "endpoint_managed",
@@ -4170,7 +4069,6 @@ _MANAGED_SOURCE_ORDER: tuple[ClaudePolicySourceKind, ...] = (
 _LOWER_SCOPE_SOURCE_KINDS: frozenset[ClaudePolicySourceKind] = frozenset(
     {"local_project", "shared_project", "user", "cli"}
 )
-
 
 def _selected_managed_source(
     sources: tuple[ClaudePolicySource, ...],
@@ -4184,7 +4082,6 @@ def _selected_managed_source(
             ):
                 return source
     return None
-
 
 def _fail_closed_managed_source(
     sources: tuple[ClaudePolicySource, ...],
@@ -4218,7 +4115,6 @@ def _fail_closed_managed_source(
         return endpoint_source
     return None
 
-
 def _bootstrap_templates(
     settings: dict[str, Any],
 ) -> tuple[ClaudePolicyBootstrapTemplate, ...]:
@@ -4237,7 +4133,6 @@ def _bootstrap_templates(
             )
     return tuple(templates)
 
-
 def _effective_settings(settings: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
@@ -4245,13 +4140,11 @@ def _effective_settings(settings: dict[str, Any]) -> dict[str, Any]:
         if key not in {"bootstrapPreferences", "managedDefaults"}
     }
 
-
 def _policy_permissions(settings: dict[str, Any]) -> ClaudePolicyPermissions:
     permissions = settings.get("permissions")
     if isinstance(permissions, dict):
         return ClaudePolicyPermissions.model_validate(permissions)
     return ClaudePolicyPermissions()
-
 
 def _policy_sandbox(settings: dict[str, Any]) -> ClaudePolicySandbox:
     sandbox = settings.get("sandbox")
@@ -4259,13 +4152,11 @@ def _policy_sandbox(settings: dict[str, Any]) -> ClaudePolicySandbox:
         return ClaudePolicySandbox.model_validate(sandbox)
     return ClaudePolicySandbox()
 
-
 def _policy_hooks(settings: dict[str, Any]) -> ClaudePolicyHooks:
     hooks = settings.get("hooks")
     if isinstance(hooks, dict):
         return ClaudePolicyHooks.model_validate(hooks)
     return ClaudePolicyHooks()
-
 
 def _policy_mcp(settings: dict[str, Any]) -> ClaudePolicyMcp:
     mcp = settings.get("mcp")
@@ -4273,13 +4164,11 @@ def _policy_mcp(settings: dict[str, Any]) -> ClaudePolicyMcp:
         return ClaudePolicyMcp.model_validate(mcp)
     return ClaudePolicyMcp()
 
-
 def _policy_memory(settings: dict[str, Any]) -> ClaudePolicyMemory:
     memory = settings.get("memory")
     if isinstance(memory, dict):
         return ClaudePolicyMemory.model_validate(memory)
     return ClaudePolicyMemory()
-
 
 def _policy_trust_level(
     managed_source_kind: ClaudeManagedSourceKind,
@@ -4289,7 +4178,6 @@ def _policy_trust_level(
     if managed_source_kind == "server_managed":
         return "server_managed_best_effort"
     return "unmanaged"
-
 
 def _policy_event(
     *,
@@ -4309,7 +4197,6 @@ def _policy_event(
         occurredAt=occurred_at,
         metadata=metadata or {},
     )
-
 
 def resolve_claude_policy_envelope(
     *,
@@ -4491,7 +4378,6 @@ def resolve_claude_policy_envelope(
         ),
         tuple(events),
     )
-
 
 __all__ = [
     "CODEX_MANAGED_SESSION_CONTROL_ACTIONS",

@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
 def _load_module() -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
     return runpy.run_path(
@@ -21,7 +20,6 @@ def _load_module() -> dict[str, Any]:
             / "batch_pr_resolver.py"
         )
     )
-
 
 def _expected_child_idempotency_key(
     *,
@@ -43,7 +41,6 @@ def _expected_child_idempotency_key(
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return f"batch-pr-resolver:pr:{pr_number}:sha256:{digest}"
 
-
 def test_is_local_head_uses_cross_repository_flag():
     module = _load_module()
     is_local_head = module["_is_local_head"]
@@ -55,7 +52,6 @@ def test_is_local_head_uses_cross_repository_flag():
     }
 
     assert is_local_head(pr, "MoonLadderStudios/MoonMind") is False
-
 
 def test_is_local_head_accepts_same_repo_without_name_with_owner():
     module = _load_module()
@@ -69,7 +65,6 @@ def test_is_local_head_accepts_same_repo_without_name_with_owner():
 
     assert is_local_head(pr, "MoonLadderStudios/MoonMind") is True
 
-
 def test_is_local_head_rejects_fork_owner_mismatch():
     module = _load_module()
     is_local_head = module["_is_local_head"]
@@ -81,7 +76,6 @@ def test_is_local_head_rejects_fork_owner_mismatch():
     }
 
     assert is_local_head(pr, "MoonLadderStudios/MoonMind") is False
-
 
 def test_build_queue_request_sets_none_publish_with_matching_branches():
     module = _load_module()
@@ -114,7 +108,6 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert git["startingBranch"] == "feature/example"
     assert git["targetBranch"] == "feature/example"
 
-
 def test_build_queue_request_adds_batch_scoped_idempotency_key() -> None:
     module = _load_module()
     build_queue_request = module["_build_queue_request"]
@@ -139,7 +132,6 @@ def test_build_queue_request_adds_batch_scoped_idempotency_key() -> None:
         branch="feature/example",
     )
 
-
 def test_child_idempotency_key_is_fixed_length_and_collision_resistant() -> None:
     module = _load_module()
     child_idempotency_key = module["_child_idempotency_key"]
@@ -162,7 +154,6 @@ def test_child_idempotency_key_is_fixed_length_and_collision_resistant() -> None
     assert len(key_one) <= 128
     assert len(key_two) <= 128
 
-
 def test_build_queue_request_omits_idempotency_without_batch_scope() -> None:
     module = _load_module()
     build_queue_request = module["_build_queue_request"]
@@ -180,7 +171,6 @@ def test_build_queue_request_omits_idempotency_without_batch_scope() -> None:
     )
 
     assert "idempotencyKey" not in request["payload"]
-
 
 def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
     module = _load_module()
@@ -204,7 +194,6 @@ def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
     # dedicated contract tests below.
     assert request["payload"]["task"]["publish"]["mode"] == "none"
 
-
 def test_resolve_artifacts_dir_prefers_managed_session_spool(
     monkeypatch: Any,
     tmp_path: Path,
@@ -216,7 +205,6 @@ def test_resolve_artifacts_dir_prefers_managed_session_spool(
     monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
 
     assert resolve_artifacts_dir("artifacts") == spool
-
 
 def test_resolve_artifacts_dir_treats_default_aliases_as_managed_spool(
     monkeypatch: Any,
@@ -230,7 +218,6 @@ def test_resolve_artifacts_dir_treats_default_aliases_as_managed_spool(
 
     assert resolve_artifacts_dir("./artifacts") == spool
     assert resolve_artifacts_dir("artifacts/") == spool
-
 
 def test_resolve_artifacts_dir_respects_explicit_path(
     monkeypatch: Any,
@@ -247,7 +234,6 @@ def test_resolve_artifacts_dir_respects_explicit_path(
 
     assert resolve_artifacts_dir(str(explicit)) == explicit
 
-
 def test_parent_run_scope_uses_managed_session_spool(
     monkeypatch: Any,
     tmp_path: Path,
@@ -262,7 +248,6 @@ def test_parent_run_scope_uses_managed_session_spool(
 
     assert parent_run_scope() == "mm:parent-run"
 
-
 def test_parent_run_scope_hashes_nonstandard_session_spool_path(
     monkeypatch: Any,
     tmp_path: Path,
@@ -275,7 +260,6 @@ def test_parent_run_scope_hashes_nonstandard_session_spool_path(
     monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
 
     assert parent_run_scope() == stable_scope_from_path(spool)
-
 
 def test_parent_run_scope_reuses_task_context_artifacts_helper(
     monkeypatch: Any,
@@ -297,7 +281,6 @@ def test_parent_run_scope_reuses_task_context_artifacts_helper(
 
     assert parent_run_scope(str(task_context)) == "task-parent"
 
-
 def test_load_parent_repository_reads_task_context(tmp_path: Path):
     module = _load_module()
     load_parent_repository = module["_load_parent_repository"]
@@ -309,7 +292,6 @@ def test_load_parent_repository_reads_task_context(tmp_path: Path):
     )
 
     assert load_parent_repository(str(task_context)) == "MoonLadderStudios/Tactics"
-
 
 def test_resolve_repo_prefers_task_context_over_env(monkeypatch, tmp_path: Path):
     module = _load_module()
@@ -326,7 +308,6 @@ def test_resolve_repo_prefers_task_context_over_env(monkeypatch, tmp_path: Path)
         resolve_repo(raw_repo=None, task_context_path=str(task_context))
         == "MoonLadderStudios/Tactics"
     )
-
 
 def test_resolve_repo_prefers_remote_over_env(monkeypatch):
     module = _load_module()
@@ -345,7 +326,6 @@ def test_resolve_repo_prefers_remote_over_env(monkeypatch):
     assert resolve_repo(raw_repo=None, task_context_path=None) == (
         "MoonLadderStudios/Tactics"
     )
-
 
 def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
     module = _load_module()
@@ -369,7 +349,6 @@ def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
     assert runtime.effort == "medium"
     assert runtime.provider_profile == "inherited-profile"
 
-
 def test_load_parent_runtime_selection_accepts_profile_id_fallback(tmp_path: Path):
     module = _load_module()
     load_parent_runtime_selection = module["_load_parent_runtime_selection"]
@@ -391,7 +370,6 @@ def test_load_parent_runtime_selection_accepts_profile_id_fallback(tmp_path: Pat
     assert runtime.model == "gpt-5-codex"
     assert runtime.effort == "high"
     assert runtime.provider_profile == "profile-from-id"
-
 
 def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
     module = _load_module()
@@ -424,7 +402,6 @@ def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
     assert runtime.effort == "low"
     assert runtime.provider_profile == "inherited-profile"
 
-
 def test_resolve_runtime_selection_uses_execution_profile_env(
     monkeypatch: Any,
 ) -> None:
@@ -451,7 +428,6 @@ def test_resolve_runtime_selection_uses_execution_profile_env(
     assert runtime.mode == "codex_cli"
     assert runtime.provider_profile == "codex_default"
 
-
 def test_resolve_runtime_selection_ignores_env_profile_for_other_runtime(
     monkeypatch: Any,
 ) -> None:
@@ -476,7 +452,6 @@ def test_resolve_runtime_selection_ignores_env_profile_for_other_runtime(
     runtime = resolve_runtime_selection(args)
     assert runtime.mode == "gemini_cli"
     assert runtime.provider_profile is None
-
 
 def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Path):
     module = _load_module()
@@ -505,7 +480,6 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
     assert runtime.effort == "high"
     assert runtime.provider_profile == "explicit-profile"
 
-
 def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypatch: Any):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
@@ -532,7 +506,6 @@ def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypa
     assert runtime.effort is None
     assert runtime.provider_profile is None
 
-
 def test_resolve_runtime_selection_uses_default_runtime_env(monkeypatch: Any):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
@@ -557,11 +530,9 @@ def test_resolve_runtime_selection_uses_default_runtime_env(monkeypatch: Any):
     assert runtime.effort is None
     assert runtime.provider_profile is None
 
-
 # ---------------------------------------------------------------------------
 # HTTP submission path tests
 # ---------------------------------------------------------------------------
-
 
 def _make_submission(module: dict[str, Any]) -> Any:
     """Build a minimal JobSubmission for testing."""
@@ -579,7 +550,6 @@ def _make_submission(module: dict[str, Any]) -> Any:
         max_attempts=3,
     )
     return _JobSubmission(queue_request=req, pr_number=42, branch="feature/test")
-
 
 def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
     """When MOONMIND_URL is set, _submit_jobs should POST to /api/executions."""
@@ -628,7 +598,6 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
     call_path = mock_post.await_args[0][0]
     assert call_path == "/api/executions"
 
-
 def test_submit_jobs_records_temporal_workflow_id(monkeypatch: Any) -> None:
     """The Temporal executions API returns workflowId rather than legacy taskId."""
     module = _load_module()
@@ -670,7 +639,6 @@ def test_submit_jobs_records_temporal_workflow_id(monkeypatch: Any) -> None:
     assert errors == []
     assert created[0]["jobId"] == "mm:wf-123"
 
-
 def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     """_submit_jobs dispatches to HTTP when MOONMIND_URL is configured."""
     module = _load_module()
@@ -699,7 +667,6 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     assert len(created) == 1
     assert errors == []
 
-
 def test_submit_jobs_errors_when_no_url(monkeypatch: Any) -> None:
     """The removed legacy DB queue fallback must not be used."""
     module = _load_module()
@@ -717,7 +684,6 @@ def test_submit_jobs_errors_when_no_url(monkeypatch: Any) -> None:
     assert "MOONMIND_URL is not set" in errors[0]["error"]
     assert "removed legacy DB queue" in errors[0]["error"]
 
-
 def test_read_worker_token_from_file(monkeypatch: Any, tmp_path: Path) -> None:
     """_read_worker_token reads from MOONMIND_WORKER_TOKEN_FILE when TOKEN env is absent."""
     module = _load_module()
@@ -730,7 +696,6 @@ def test_read_worker_token_from_file(monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setenv("MOONMIND_WORKER_TOKEN_FILE", str(token_file))
 
     assert read_worker_token() == "my-file-token"
-
 
 def test_read_worker_token_prefers_env_over_file(
     monkeypatch: Any, tmp_path: Path
@@ -747,11 +712,9 @@ def test_read_worker_token_prefers_env_over_file(
 
     assert read_worker_token() == "env-token"
 
-
 # ---------------------------------------------------------------------------
 # SkillInvocation payload contract tests
 # ---------------------------------------------------------------------------
-
 
 def _build_request(module: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     """Call _build_queue_request with sensible defaults, returning the raw dict."""
@@ -766,7 +729,6 @@ def _build_request(module: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     )
     kwargs.update(overrides)
     return build("MoonLadderStudios/MoonMind", 42, "feature/test", **kwargs)
-
 
 def test_build_queue_request_skill_contract() -> None:
     """skill.name + skill.version are present; legacy skill.id and skill.args are absent."""
@@ -796,7 +758,6 @@ def test_build_queue_request_skill_contract() -> None:
     assert inputs.get("mergeMethod") == "squash"
     assert inputs.get("maxIterations") == 3
 
-
 def test_build_queue_request_required_capabilities_toplevel() -> None:
     """requiredCapabilities must live at payload level, not inside skill."""
     module = _load_module()
@@ -812,7 +773,6 @@ def test_build_queue_request_required_capabilities_toplevel() -> None:
     assert (
         "requiredCapabilities" not in skill
     ), "requiredCapabilities must not be nested inside skill"
-
 
 def test_build_queue_request_skill_version_passthrough() -> None:
     """--skill-version value is forwarded to the payload."""

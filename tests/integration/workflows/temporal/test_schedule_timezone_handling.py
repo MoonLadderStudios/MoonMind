@@ -9,7 +9,6 @@ from temporalio.testing import WorkflowEnvironment
 # NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping consistently exceed CI timeout thresholds. Kept for local dev verification.
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
-
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_schedule_timezone_handling_dst_boundaries():
@@ -54,7 +53,6 @@ async def test_schedule_timezone_handling_dst_boundaries():
         # Mar 10 2030 is Spring Forward, 2:30 AM does not exist, so it skips to Mar 11
         # Mar 11 2030 is EDT (UTC-4), 2:30 AM = 06:30 UTC
         assert next_times_spring[1] == datetime(2030, 3, 11, 6, 30, tzinfo=timezone.utc)
-
 
         # FALL BACK (1:30 AM happens twice on Nov 3. Temporal cron evaluator handles this natively)
         schedule_id_fall = f"test-fall-{uuid.uuid4()}"

@@ -7,7 +7,7 @@
 > credential sources, runtime materialization modes, provider-aware selection, and
 > concurrency/cooldown policy.
 
-**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-ManagedAgentsAuthentication.md`](../tmp/remaining-work/ManagedAgents-ManagedAgentsAuthentication.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 ---
 

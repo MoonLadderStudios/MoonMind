@@ -3,7 +3,7 @@
 ## Validate Source Traceability
 
 ```bash
-rg -n "MM-384|AppliedPresetBinding|StepDraft.source|DESIGN-REQ-016" specs/197-create-page-composed-drafts docs/tmp/jira-orchestration-inputs/MM-384-moonspec-orchestration-input.md
+rg -n "MM-384|AppliedPresetBinding|StepDraft.source|DESIGN-REQ-016" specs/197-create-page-composed-drafts
 ```
 
 Expected result: MM-384 appears in the canonical input and MoonSpec artifacts; `AppliedPresetBinding`, `StepDraft.source`, and the required design coverage appear in the spec artifacts.

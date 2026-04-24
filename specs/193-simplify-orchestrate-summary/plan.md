@@ -9,15 +9,15 @@ Deliver MM-366 by removing generic final narrative report steps from the seeded 
 
 ## Technical Context
 
-**Language/Version**: Python 3.12 backend tests plus YAML seed templates  
-**Primary Dependencies**: Existing task template catalog service, PyYAML seed loading, pytest, Temporal workflow finish summary implementation  
-**Storage**: Existing seeded task template rows and artifact-backed `reports/run_summary.json`; no new persistent storage  
-**Unit Testing**: Pytest through `./tools/test_unit.sh tests/unit/api/test_task_step_templates_service.py` during iteration and `./tools/test_unit.sh` for final verification  
-**Integration Testing**: Existing template expansion unit boundary covers seed catalog behavior; required compose-backed integration suite remains `./tools/test_integration.sh` when workflow runtime behavior changes beyond seeds  
-**Target Platform**: MoonMind API service and Temporal-backed task execution  
-**Project Type**: Backend control-plane seed configuration with workflow contract verification  
-**Performance Goals**: No extra runtime steps for generic orchestration completion summaries  
-**Constraints**: Preserve MM-366 traceability; keep pull request and Jira Code Review gates intact for `jira-orchestrate`; keep MoonSpec publish handoff facts available without a final narrative report step; do not redesign finish summary system  
+**Language/Version**: Python 3.12 backend tests plus YAML seed templates 
+**Primary Dependencies**: Existing task template catalog service, PyYAML seed loading, pytest, Temporal workflow finish summary implementation 
+**Storage**: Existing seeded task template rows and artifact-backed `reports/run_summary.json`; no new persistent storage 
+**Unit Testing**: Pytest through `./tools/test_unit.sh tests/unit/api/test_task_step_templates_service.py` during iteration and `./tools/test_unit.sh` for final verification 
+**Integration Testing**: Existing template expansion unit boundary covers seed catalog behavior; required compose-backed integration suite remains `./tools/test_integration.sh` when workflow runtime behavior changes beyond seeds 
+**Target Platform**: MoonMind API service and Temporal-backed task execution 
+**Project Type**: Backend control-plane seed configuration with workflow contract verification 
+**Performance Goals**: No extra runtime steps for generic orchestration completion summaries 
+**Constraints**: Preserve MM-366 traceability; keep pull request and Jira Code Review gates intact for `jira-orchestrate`; keep MoonSpec publish handoff facts available without a final narrative report step; do not redesign finish summary system 
 **Scale/Scope**: Two global task presets and their seed expansion tests, plus contract documentation for summary ownership
 
 ## Constitution Check
@@ -35,7 +35,7 @@ Deliver MM-366 by removing generic final narrative report steps from the seeded 
 - IX. Resilient by Default: PASS. Failure and cancellation summaries rely on finalization, which still runs when late preset steps do not.
 - X. Facilitate Continuous Improvement: PASS. Finish summary remains the consistent outcome surface.
 - XI. Spec-Driven Development: PASS. Spec, plan, tasks, implementation, and verification are produced for MM-366.
-- XII. Canonical Documentation Separation: PASS. Runtime implementation notes live under `specs/` and transient Jira input under `docs/tmp/`; canonical docs only need targeted contract clarification if touched.
+- XII. Canonical Documentation Separation: PASS. Runtime implementation notes live under `specs/` and transient Jira input under `local-only handoffs`; canonical docs only need targeted contract clarification if touched.
 - XIII. Pre-Release Compatibility Policy: PASS. No compatibility aliases or hidden transforms are introduced.
 
 ## Project Structure
@@ -50,7 +50,7 @@ specs/193-simplify-orchestrate-summary/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── preset-summary-ownership.md
+│ └── preset-summary-ownership.md
 └── tasks.md
 ```
 

@@ -43,7 +43,6 @@ _GITHUB_AUTH_FAILURE_MARKERS = (
     "could not read username for \"https://github.com\"",
 )
 
-
 def _check_pr_merged(selector: str | None) -> bool:
     """Best-effort check whether the PR identified by *selector* is merged.
 
@@ -69,7 +68,6 @@ def _check_pr_merged(selector: str | None) -> bool:
         and normalize_text(payload.get("state")).upper() == "MERGED"
     )
 
-
 def _called_process_detail(exc: subprocess.CalledProcessError) -> str:
     parts = [
         normalize_text(getattr(exc, "output", "")),
@@ -79,13 +77,11 @@ def _called_process_detail(exc: subprocess.CalledProcessError) -> str:
     ]
     return "\n".join(part for part in parts if part)
 
-
 def _snapshot_failed_reason(exc: subprocess.CalledProcessError) -> str:
     detail = _called_process_detail(exc).lower()
     if any(marker in detail for marker in _GITHUB_AUTH_FAILURE_MARKERS):
         return "publish_unavailable"
     return "pr_not_found"
-
 
 def _is_conflicting(pr: dict[str, Any]) -> bool:
     mergeable = pr.get("mergeable")
@@ -96,7 +92,6 @@ def _is_conflicting(pr: dict[str, Any]) -> bool:
         return mergeable is False
     mergeable_text = normalize_text(mergeable).upper()
     return mergeable_text in CONFLICTING_MERGEABLE
-
 
 def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
     pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
@@ -136,7 +131,6 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
 
     return {"action": "blocked", "reason": "merge_not_ready"}
 
-
 def _run_snapshot(snapshot_script: Path, pr: str | None, snapshot_path: Path) -> None:
     cmd = [sys.executable, str(snapshot_script)]
     cmd.extend(["--snapshot-path", str(snapshot_path)])
@@ -146,7 +140,6 @@ def _run_snapshot(snapshot_script: Path, pr: str | None, snapshot_path: Path) ->
     # CalledProcessError attributes; _snapshot_failed_reason inspects them
     # to distinguish publish_unavailable (auth) from pr_not_found.
     subprocess.run(cmd, check=True, capture_output=True, text=True)
-
 
 def _read_snapshot(path: Path) -> dict[str, Any]:
     try:
@@ -159,11 +152,9 @@ def _read_snapshot(path: Path) -> dict[str, Any]:
         raise RuntimeError(f"snapshot must be a JSON object: {path}")
     return payload
 
-
 def _merge_pr(pr_selector: str, merge_method: str) -> None:
     cmd = ["gh", "pr", "merge", pr_selector, f"--{merge_method}"]
     subprocess.run(cmd, check=True)
-
 
 def _write_result(
     result_path: Path,
@@ -202,7 +193,6 @@ def _write_result(
         payload["final_reason"] = reason
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -381,7 +371,6 @@ def main() -> None:
         result_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         print(str(exc), file=sys.stderr)
         sys.exit(EXIT_CODE_FAILED)
-
 
 if __name__ == "__main__":
     main()

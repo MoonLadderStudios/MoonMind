@@ -1,6 +1,6 @@
 # Temporal Scheduling
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-TemporalScheduling.md`](../tmp/remaining-work/Temporal-TemporalScheduling.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 **Status:** Active
 **Owner:** MoonMind Platform
@@ -46,11 +46,11 @@ For "run this workflow once at time T," MoonMind uses the `start_delay` paramete
 
 ```python
 await client.start_workflow(
-    "MoonMind.Run",
-    args=[workflow_input],
-    id=workflow_id,
-    task_queue="mm.workflow",
-    start_delay=scheduled_for - datetime.now(UTC),
+ "MoonMind.Run",
+ args=[workflow_input],
+ id=workflow_id,
+ task_queue="mm.workflow",
+ start_delay=scheduled_for - datetime.now(UTC),
 )
 ```
 
@@ -75,13 +75,13 @@ If the product requires the user to **change** the scheduled time after creation
 ```json
 POST /api/executions
 {
-  "workflowType": "MoonMind.Run",
-  "title": "Deploy staging at 2 AM",
-  "initialParameters": { ... },
-  "schedule": {
-    "mode": "once",
-    "scheduledFor": "2026-03-24T09:00:00Z"
-  }
+ "workflowType": "MoonMind.Run",
+ "title": "Deploy staging at 2 AM",
+ "initialParameters": { ... },
+ "schedule": {
+ "mode": "once",
+ "scheduledFor": "2026-03-24T09:00:00Z"
+ }
 }
 ```
 
@@ -96,12 +96,12 @@ POST /api/executions
 
 ```json
 {
-  "workflowId": "mm:01HX...",
-  "runId": "temporal-run-uuid",
-  "workflowType": "MoonMind.Run",
-  "state": "scheduled",
-  "scheduledFor": "2026-03-24T09:00:00Z",
-  "title": "Deploy staging at 2 AM"
+ "workflowId": "mm:01HX...",
+ "runId": "temporal-run-uuid",
+ "workflowType": "MoonMind.Run",
+ "state": "scheduled",
+ "scheduledFor": "2026-03-24T09:00:00Z",
+ "title": "Deploy staging at 2 AM"
 }
 ```
 
@@ -115,33 +115,33 @@ For recurring work, MoonMind uses **Temporal Schedules** — server-owned schedu
 
 ```python
 await client.create_schedule(
-    id=f"mm-schedule:{definition_id}",
-    schedule=Schedule(
-        action=ScheduleActionStartWorkflow(
-            "MoonMind.Run",
-            args=[workflow_input],
-            id=f"mm:{{{{.ScheduleTime}}}}-{definition_id}",
-            task_queue="mm.workflow",
-            memo={"title": schedule_name},
-            search_attributes=TypedSearchAttributes([
-                SearchAttributePair(SearchAttributeKey.for_keyword("mm_owner_id"), owner_id),
-                SearchAttributePair(SearchAttributeKey.for_keyword("mm_state"), "initializing"),
-            ]),
-        ),
-        spec=ScheduleSpec(
-            cron_expressions=[cron_expression],
-            jitter=timedelta(seconds=jitter_seconds),
-            time_zone_name=timezone,
-        ),
-        policy=SchedulePolicy(
-            overlap=ScheduleOverlapPolicy.SKIP,
-            catchup_window=timedelta(minutes=15),
-        ),
-        state=ScheduleState(
-            paused=not enabled,
-            note=f"MoonMind schedule: {schedule_name}",
-        ),
-    ),
+ id=f"mm-schedule:{definition_id}",
+ schedule=Schedule(
+ action=ScheduleActionStartWorkflow(
+ "MoonMind.Run",
+ args=[workflow_input],
+ id=f"mm:{{{{.ScheduleTime}}}}-{definition_id}",
+ task_queue="mm.workflow",
+ memo={"title": schedule_name},
+ search_attributes=TypedSearchAttributes([
+ SearchAttributePair(SearchAttributeKey.for_keyword("mm_owner_id"), owner_id),
+ SearchAttributePair(SearchAttributeKey.for_keyword("mm_state"), "initializing"),
+ ]),
+ ),
+ spec=ScheduleSpec(
+ cron_expressions=[cron_expression],
+ jitter=timedelta(seconds=jitter_seconds),
+ time_zone_name=timezone,
+ ),
+ policy=SchedulePolicy(
+ overlap=ScheduleOverlapPolicy.SKIP,
+ catchup_window=timedelta(minutes=15),
+ ),
+ state=ScheduleState(
+ paused=not enabled,
+ note=f"MoonMind schedule: {schedule_name}",
+ ),
+ ),
 )
 ```
 
@@ -174,14 +174,14 @@ The Temporal Schedule is the execution-side truth. The MoonMind definition is th
 ### 5.4 Reconciliation Model
 
 ```
-User action          MoonMind DB                    Temporal Schedule
+User action MoonMind DB Temporal Schedule
 ─────────────────────────────────────────────────────────────────────
-Create schedule  →   INSERT definition row      →   client.create_schedule()
-Update cron      →   UPDATE definition row      →   handle.update(spec=...)
-Pause            →   UPDATE enabled=false       →   handle.pause()
-Resume           →   UPDATE enabled=true        →   handle.unpause()
-Trigger now      →   (no DB change needed)      →   handle.trigger()
-Delete schedule  →   DELETE/soft-delete row     →   handle.delete()
+Create schedule → INSERT definition row → client.create_schedule()
+Update cron → UPDATE definition row → handle.update(spec=...)
+Pause → UPDATE enabled=false → handle.pause()
+Resume → UPDATE enabled=true → handle.unpause()
+Trigger now → (no DB change needed) → handle.trigger()
+Delete schedule → DELETE/soft-delete row → handle.delete()
 ```
 
 **Invariant:** If the Temporal Schedule and MoonMind DB disagree (e.g., after a failed update), the reconciliation favors the MoonMind DB — the next successful reconciliation pass re-applies the desired state to Temporal.
@@ -216,9 +216,9 @@ Temporal Schedules start workflows. The workflow input payload carries the targe
 
 1. Schedule fires → starts `MoonMind.Run` or `MoonMind.ManifestIngest` with the target payload in the workflow input.
 2. The workflow's initialization phase resolves the target:
-   - `queue_task` → use payload directly
-   - `queue_task_template` → expand the template via an Activity
-   - `manifest_run` → resolve the manifest via an Activity
+ - `queue_task` → use payload directly
+ - `queue_task_template` → expand the template via an Activity
+ - `manifest_run` → resolve the manifest via an Activity
 
 This avoids needing the Temporal Schedule to know about MoonMind's template or manifest systems.
 
@@ -263,40 +263,40 @@ Instead of `start_delay` (which is immutable), the workflow starts immediately a
 ```python
 @workflow.defn(name="MoonMind.Run")
 class MoonMindRun:
-    def __init__(self):
-        self._target_run_time: datetime | None = None
+ def __init__(self):
+ self._target_run_time: datetime | None = None
 
-    @workflow.signal(name="reschedule")
-    async def handle_reschedule(self, new_time: datetime) -> None:
-        self._target_run_time = new_time
+ @workflow.signal(name="reschedule")
+ async def handle_reschedule(self, new_time: datetime) -> None:
+ self._target_run_time = new_time
 
-    @workflow.run
-    async def run(self, input: RunInput) -> RunResult:
-        if input.scheduled_for is not None:
-            self._target_run_time = input.scheduled_for
-            workflow.upsert_search_attributes([
-                SearchAttributePair(mm_state_key, "scheduled"),
-                SearchAttributePair(mm_scheduled_for_key, input.scheduled_for),
-            ])
+ @workflow.run
+ async def run(self, input: RunInput) -> RunResult:
+ if input.scheduled_for is not None:
+ self._target_run_time = input.scheduled_for
+ workflow.upsert_search_attributes([
+ SearchAttributePair(mm_state_key, "scheduled"),
+ SearchAttributePair(mm_scheduled_for_key, input.scheduled_for),
+ ])
 
-            # Wait until target time or reschedule signal
-            while self._target_run_time is not None:
-                delay = (self._target_run_time - workflow.now()).total_seconds()
-                if delay <= 0:
-                    break
-                await workflow.wait_condition(
-                    lambda: self._target_run_time != input.scheduled_for,
-                    timeout=timedelta(seconds=delay),
-                )
-                if self._target_run_time != input.scheduled_for:
-                    input.scheduled_for = self._target_run_time
-                    continue
+ # Wait until target time or reschedule signal
+ while self._target_run_time is not None:
+ delay = (self._target_run_time - workflow.now()).total_seconds()
+ if delay <= 0:
+ break
+ await workflow.wait_condition(
+ lambda: self._target_run_time != input.scheduled_for,
+ timeout=timedelta(seconds=delay),
+ )
+ if self._target_run_time != input.scheduled_for:
+ input.scheduled_for = self._target_run_time
+ continue
 
-            workflow.upsert_search_attributes([
-                SearchAttributePair(mm_state_key, "initializing"),
-            ])
+ workflow.upsert_search_attributes([
+ SearchAttributePair(mm_state_key, "initializing"),
+ ])
 
-        # ... proceed to normal execution ...
+ # ... proceed to normal execution ...
 ```
 
 **Key properties:**
@@ -310,7 +310,7 @@ class MoonMindRun:
 ```json
 POST /api/executions/{workflowId}/reschedule
 {
-  "scheduledFor": "2026-03-24T12:00:00Z"
+ "scheduledFor": "2026-03-24T12:00:00Z"
 }
 ```
 
@@ -336,9 +336,9 @@ The `mm_scheduled_for` search attribute is registered by the namespace init job 
 
 ```bash
 temporal operator search-attribute create \
-  --namespace "$TEMPORAL_NAMESPACE" \
-  --name mm_scheduled_for \
-  --type Datetime
+ --namespace "$TEMPORAL_NAMESPACE" \
+ --name mm_scheduled_for \
+ --type Datetime
 ```
 
 ---
@@ -372,48 +372,48 @@ With Temporal Schedules as the execution backend, MoonMind removes the following
 
 ```mermaid
 flowchart TD
-    subgraph "Mission Control UI"
-        UI_SCHEDULE["Schedule panel<br/>(create/edit/pause)"]
-        UI_DEFERRED["Deferred submit<br/>(schedule for later)"]
-    end
+ subgraph "Mission Control UI"
+ UI_SCHEDULE["Schedule panel<br/>(create/edit/pause)"]
+ UI_DEFERRED["Deferred submit<br/>(schedule for later)"]
+ end
 
-    subgraph "MoonMind API"
-        API_EXEC["/api/executions"]
-        API_RECUR["/api/recurring-tasks"]
-    end
+ subgraph "MoonMind API"
+ API_EXEC["/api/executions"]
+ API_RECUR["/api/recurring-tasks"]
+ end
 
-    subgraph "MoonMind Backend"
-        SVC_EXEC["TemporalExecutionService"]
-        SVC_RECUR["RecurringTasksService<br/>(product layer)"]
-        ADAPTER["TemporalClientAdapter"]
-    end
+ subgraph "MoonMind Backend"
+ SVC_EXEC["TemporalExecutionService"]
+ SVC_RECUR["RecurringTasksService<br/>(product layer)"]
+ ADAPTER["TemporalClientAdapter"]
+ end
 
-    subgraph "Temporal Server"
-        T_WF["Workflow Execution<br/>(start_delay or updatable timer)"]
-        T_SCHED["Temporal Schedule<br/>(cron + policy)"]
-        T_VIS["Visibility<br/>(mm_state, mm_scheduled_for)"]
-    end
+ subgraph "Temporal Server"
+ T_WF["Workflow Execution<br/>(start_delay or updatable timer)"]
+ T_SCHED["Temporal Schedule<br/>(cron + policy)"]
+ T_VIS["Visibility<br/>(mm_state, mm_scheduled_for)"]
+ end
 
-    UI_DEFERRED --> API_EXEC
-    UI_SCHEDULE --> API_RECUR
+ UI_DEFERRED --> API_EXEC
+ UI_SCHEDULE --> API_RECUR
 
-    API_EXEC -->|"mode=once"| SVC_EXEC
-    API_RECUR --> SVC_RECUR
+ API_EXEC -->|"mode=once"| SVC_EXEC
+ API_RECUR --> SVC_RECUR
 
-    SVC_EXEC -->|"start_workflow(start_delay=...)"| ADAPTER
-    SVC_RECUR -->|"create_schedule() / update() / trigger()"| ADAPTER
+ SVC_EXEC -->|"start_workflow(start_delay=...)"| ADAPTER
+ SVC_RECUR -->|"create_schedule() / update() / trigger()"| ADAPTER
 
-    ADAPTER --> T_WF
-    ADAPTER --> T_SCHED
-    T_SCHED -->|"auto-dispatches at cron time"| T_WF
-    T_WF --> T_VIS
+ ADAPTER --> T_WF
+ ADAPTER --> T_SCHED
+ T_SCHED -->|"auto-dispatches at cron time"| T_WF
+ T_WF --> T_VIS
 ```
 
 ---
 
 ## 10. Scheduling implementation notes
 
-Phased work (adapter wiring, recurring dispatch reconciliation, search attributes) is tracked in [`docs/tmp/TemporalSchedulingPlan.md`](../tmp/TemporalSchedulingPlan.md) and [`docs/tmp/remaining-work/Temporal-TemporalScheduling.md`](../tmp/remaining-work/Temporal-TemporalScheduling.md).
+Phased work (adapter wiring, recurring dispatch reconciliation, search attributes) is tracked in MoonSpec feature artifacts or local planning notes when needed.
 
 ## 11. Canonical Scheduling Semantics
 

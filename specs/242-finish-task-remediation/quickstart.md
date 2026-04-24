@@ -3,7 +3,7 @@
 1. Confirm the MM-483 source input is preserved:
 
    ```bash
-   rg -n "MM-483|Canonical Jira Brief|DESIGN-REQ-|FR-001" specs/242-finish-task-remediation docs/tmp/jira-orchestration-inputs/MM-483-moonspec-orchestration-input.md
+   rg -n "MM-483|Canonical Jira Brief|DESIGN-REQ-|FR-001" specs/242-finish-task-remediation
    ```
 
 2. Run focused remediation action tests:

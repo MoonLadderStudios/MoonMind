@@ -9,7 +9,6 @@ from api_service.db.models import ManagedSecret, SecretStatus
 
 logger = structlog.get_logger(__name__)
 
-
 class SecretsService:
     """Service layer for managing securely encrypted secrets."""
 

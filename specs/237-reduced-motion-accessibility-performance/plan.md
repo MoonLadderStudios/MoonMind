@@ -1,6 +1,6 @@
 # Implementation Plan: Reduced Motion, Accessibility, and Performance Guardrails
 
-**Branch**: `237-reduced-motion-accessibility-performance` | **Date**: 2026-04-22 | **Spec**: [spec.md](./spec.md)  
+**Branch**: `237-reduced-motion-accessibility-performance` | **Date**: 2026-04-22 | **Spec**: [spec.md](./spec.md) 
 **Input**: Single-story feature specification from `specs/237-reduced-motion-accessibility-performance/spec.md`
 
 ## Summary
@@ -36,15 +36,15 @@ Implement MM-468 by tightening reduced-motion, accessibility, and performance gu
 
 ## Technical Context
 
-**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains present but is not expected in this story  
-**Primary Dependencies**: React, Vitest, Testing Library, PostCSS test parsing, existing Mission Control stylesheet  
-**Storage**: No new persistent storage  
-**Unit Testing**: `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/components/MaskedConicBorderBeam.test.tsx` and final `./tools/test_unit.sh`  
-**Integration Testing**: Component-level integration in `frontend/src/components/MaskedConicBorderBeam.test.tsx`; required hermetic integration suite is not expected because this is isolated frontend visual behavior  
-**Target Platform**: Mission Control web UI in modern browsers  
-**Project Type**: Frontend component and stylesheet refinement  
-**Performance Goals**: Preserve transform-based linear orbit animation, avoid layout-triggering animation, and disable optional glow first in reduced/degraded modes  
-**Constraints**: Preserve border-only mask and content readability; no new package or service dependency; runtime mode only; no docs-only substitution  
+**Language/Version**: TypeScript/React for Mission Control UI; Python 3.12 remains present but is not expected in this story 
+**Primary Dependencies**: React, Vitest, Testing Library, PostCSS test parsing, existing Mission Control stylesheet 
+**Storage**: No new persistent storage 
+**Unit Testing**: `./node_modules/.bin/vitest run --config frontend/vite.config.ts frontend/src/components/MaskedConicBorderBeam.test.tsx` and final `./tools/test_unit.sh` 
+**Integration Testing**: Component-level integration in `frontend/src/components/MaskedConicBorderBeam.test.tsx`; required hermetic integration suite is not expected because this is isolated frontend visual behavior 
+**Target Platform**: Mission Control web UI in modern browsers 
+**Project Type**: Frontend component and stylesheet refinement 
+**Performance Goals**: Preserve transform-based linear orbit animation, avoid layout-triggering animation, and disable optional glow first in reduced/degraded modes 
+**Constraints**: Preserve border-only mask and content readability; no new package or service dependency; runtime mode only; no docs-only substitution 
 **Scale/Scope**: One reusable component, one focused test file, and existing Mission Control CSS
 
 ## Constitution Check
@@ -60,7 +60,7 @@ Implement MM-468 by tightening reduced-motion, accessibility, and performance gu
 - IX. Resilient by Default: PASS - no workflow/runtime contract changes.
 - X. Facilitate Continuous Improvement: PASS - final verification artifact required.
 - XI. Spec-Driven Development: PASS - spec, plan, tasks, and verification artifacts are created.
-- XII. Canonical Documentation Separation: PASS - implementation notes stay under `specs/` and `docs/tmp`.
+- XII. Canonical Documentation Separation: PASS - implementation notes stay under `specs/` and `local-only handoffs`.
 - XIII. Pre-Release Compatibility: PASS - no compatibility shims; the component contract is updated directly.
 
 ## Project Structure

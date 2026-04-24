@@ -8,7 +8,7 @@
 For a broad technical or declarative design, run moonspec-breakdown first, then select the recommended first generated spec unless the issue brief explicitly requires processing all specs.
 Preserve Jira issue MM-390 and the original preset brief in spec.md so final verification can compare against them."
 
-**Canonical Jira Brief**: `docs/tmp/jira-orchestration-inputs/MM-390-moonspec-orchestration-input.md`
+**Canonical Jira Brief**: `spec.md` (Input)
 
 ## Original Jira Preset Brief
 

@@ -3,11 +3,11 @@
 **Feature Branch**: `114-task-proposal-updates`  
 **Created**: 2026-03-28  
 **Status**: Draft  
-**Input**: User description: "Fully implement Phase 1 and Phase 3 of docs/tmp/015-TaskProposalSystemPlan.md"
+**Input**: User description: "Fully implement Phase 1 and Phase 3 of docs/Tasks/TaskProposalSystem.md"
 
 ## Source Document Requirements
 
-*Note: As instructed by speckit-specify for document-backed intents, these requirements are extracted from `docs/tmp/015-TaskProposalSystemPlan.md`.*
+*Note: As instructed by speckit-specify for document-backed intents, these requirements are extracted from `docs/Tasks/TaskProposalSystem.md`.*
 
 ### Phase 1: Contract Alignment
 

@@ -42,20 +42,16 @@ StoryFetcher = Callable[
 JiraServiceFactory = Callable[[], JiraToolService]
 ExecutionCreator = Callable[..., Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
 
-
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
-
 def _string(value: Any) -> str:
     return str(value or "").strip()
-
 
 def _list(value: Any) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return list(value)
     return []
-
 
 def _coerce_story_payload(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, str) and value.strip():
@@ -71,14 +67,12 @@ def _coerce_story_payload(value: Any) -> list[dict[str, Any]]:
         return [dict(value)] if value.get("summary") or value.get("title") else []
     return [dict(story) for story in _list(value) if isinstance(story, Mapping)]
 
-
 def _story_summary(story: Mapping[str, Any], *, index: int) -> str:
     for key in ("summary", "title", "name", "userStory", "user_story"):
         value = _string(story.get(key))
         if value:
             return value[:255]
     return f"Story {index}"
-
 
 def _format_story_section(title: str, value: Any) -> str:
     if value is None or value == "":
@@ -90,7 +84,6 @@ def _format_story_section(title: str, value: Any) -> str:
     else:
         text = json.dumps(value, indent=2, sort_keys=True)
     return f"\n\n{title}\n{text}" if text else ""
-
 
 def _story_description(story: Mapping[str, Any]) -> str:
     description = _string(
@@ -113,7 +106,6 @@ def _story_description(story: Mapping[str, Any]) -> str:
     ]
     return (description + "".join(sections)).strip() or _story_summary(story, index=1)
 
-
 def _breakdown_source_path(value: Any) -> str:
     if not isinstance(value, Mapping):
         return ""
@@ -123,7 +115,6 @@ def _breakdown_source_path(value: Any) -> str:
         if path:
             return path
     return ""
-
 
 def _story_source_reference(
     story: Mapping[str, Any],
@@ -140,7 +131,6 @@ def _story_source_reference(
         reference["path"] = path
     return reference
 
-
 def _missing_source_reference_story_ids(
     stories: Sequence[Mapping[str, Any]],
     *,
@@ -152,7 +142,6 @@ def _missing_source_reference_story_ids(
         if not _string(reference.get("path")):
             missing.append(_story_id(story, index=index))
     return missing
-
 
 def _story_description_with_source(
     story: Mapping[str, Any],
@@ -193,13 +182,11 @@ def _story_description_with_source(
         return source_block
     return (source_block + "\n\n" + description).strip()
 
-
 def _truncate_jira_description(description: str) -> str:
     if len(description) <= JIRA_DESCRIPTION_MAX_CHARS:
         return description
     limit = JIRA_DESCRIPTION_MAX_CHARS - len(JIRA_DESCRIPTION_TRUNCATION_SUFFIX)
     return description[:limit].rstrip() + JIRA_DESCRIPTION_TRUNCATION_SUFFIX
-
 
 def _parent_issue_key(
     *,
@@ -218,7 +205,6 @@ def _parent_issue_key(
     if isinstance(parent, Mapping):
         return _string(parent.get("key") or parent.get("issueKey"))
     return _string(parent)
-
 
 def _workflow_marker_label(
     *,
@@ -243,13 +229,11 @@ def _workflow_marker_label(
                     return f"moonmind-workflow-{sanitized}"[:255]
     return ""
 
-
 def _issue_matches_summary(issue: Mapping[str, Any], summary: str) -> bool:
     fields = issue.get("fields")
     if isinstance(fields, Mapping):
         return _string(fields.get("summary")) == summary
     return _string(issue.get("summary")) == summary
-
 
 def _extract_search_issues(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, Mapping):
@@ -258,14 +242,12 @@ def _extract_search_issues(payload: Any) -> list[dict[str, Any]]:
         candidates = payload
     return [dict(issue) for issue in _list(candidates) if isinstance(issue, Mapping)]
 
-
 def _story_id(story: Mapping[str, Any], *, index: int) -> str:
     for key in ("id", "storyId", "story_id", "key"):
         value = _string(story.get(key))
         if value:
             return value
     return f"STORY-{index:03d}"
-
 
 def _issue_mappings_from_inputs(
     inputs: Mapping[str, Any],
@@ -305,7 +287,6 @@ def _issue_mappings_from_inputs(
 
     return sorted(mappings, key=sort_key)
 
-
 def _source_issue_key(
     *,
     inputs: Mapping[str, Any],
@@ -316,7 +297,6 @@ def _source_issue_key(
         if value:
             return _string(value)
     return ""
-
 
 def _stable_idempotency_key(
     *,
@@ -329,7 +309,6 @@ def _stable_idempotency_key(
         return raw
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
     return f"jira-orchestrate:{source_issue_key}:{digest}"[:128]
-
 
 def _downstream_task_payload(
     *,
@@ -401,7 +380,6 @@ def _downstream_task_payload(
     if depends_on:
         task["dependsOn"] = list(depends_on)
     return task["title"], task
-
 
 async def create_jira_orchestrate_tasks_from_issue_mappings(
     inputs: Mapping[str, Any],
@@ -594,7 +572,6 @@ async def create_jira_orchestrate_tasks_from_issue_mappings(
         },
     )
 
-
 def _dependency_mode(
     *,
     inputs: Mapping[str, Any],
@@ -616,7 +593,6 @@ def _dependency_mode(
                 )
             return normalized, ""
     return JIRA_DEPENDENCY_MODE_NONE, ""
-
 
 async def _find_existing_issue_for_story(
     *,
@@ -649,7 +625,6 @@ async def _find_existing_issue_for_story(
             }
     return None
 
-
 def _merge_fields(
     *,
     story: Mapping[str, Any],
@@ -669,7 +644,6 @@ def _merge_fields(
         fields["labels"] = list(dict.fromkeys(labels))
     return fields
 
-
 async def _default_github_story_fetcher(repo: str, ref: str, path: str) -> str:
     token, _resolution_error = await GitHubService.resolve_github_token()
     headers = GitHubService._github_headers(token) if token else {}
@@ -687,7 +661,6 @@ async def _default_github_story_fetcher(repo: str, ref: str, path: str) -> str:
         response = await client.get(raw_url)
         response.raise_for_status()
         return response.text
-
 
 def _fallback_result(
     *,
@@ -729,7 +702,6 @@ def _fallback_result(
         },
     )
 
-
 def _issue_mapping(
     *,
     story: Mapping[str, Any],
@@ -742,7 +714,6 @@ def _issue_mapping(
     mapping["storyIndex"] = index
     mapping["summary"] = summary
     return mapping
-
 
 async def _create_dependency_links(
     *,
@@ -806,7 +777,6 @@ async def _create_dependency_links(
     )
     return link_results, chain_complete
 
-
 def _extract_issue_type_items(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, Mapping):
         candidates = (
@@ -819,7 +789,6 @@ def _extract_issue_type_items(payload: Any) -> list[dict[str, Any]]:
     else:
         candidates = payload
     return [dict(item) for item in _list(candidates) if isinstance(item, Mapping)]
-
 
 async def _resolve_issue_type_id(
     *,
@@ -841,7 +810,6 @@ async def _resolve_issue_type_id(
             return _string(item.get("id"))
     return ""
 
-
 async def create_jira_issues_from_stories(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -849,7 +817,7 @@ async def create_jira_issues_from_stories(
     jira_service_factory: JiraServiceFactory = JiraToolService,
     story_fetcher: StoryFetcher = _default_github_story_fetcher,
 ) -> ToolResult:
-    """Create one Jira issue per story, or report docs/tmp fallback metadata."""
+    """Create one Jira issue per story, or report story-breakdown fallback metadata."""
 
     story_output = _mapping(inputs.get("storyOutput") or inputs.get("story_output"))
     story_output_mode = str(
@@ -1139,7 +1107,6 @@ async def create_jira_issues_from_stories(
         },
     )
 
-
 def register_story_output_tool_handlers(
     dispatcher: Any,
     *,
@@ -1166,7 +1133,6 @@ def register_story_output_tool_handlers(
         version="1.0",
         handler=_create_jira_orchestrate_tasks,
     )
-
 
 __all__ = [
     "JIRA_STORY_TOOL_NAMES",

@@ -11,7 +11,6 @@ from moonmind.vision.settings import VisionConfig
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-
 def test_write_target_context_artifacts_creates_expected_workspace_files(tmp_path):
     service = VisionService(
         config=VisionConfig(

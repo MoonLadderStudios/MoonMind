@@ -3,7 +3,7 @@
 **Feature Branch**: `113-provider-profiles-p5`  
 **Created**: 2026-03-28  
 **Status**: Draft  
-**Input**: User description: "Fully implement Phase 5 of docs/tmp/005-ProviderProfilesPlan.md: OAuth Terminal and OAuth-Backed Provider Profile Completion"
+**Input**: User description: "Fully implement Phase 5 of docs/Tasks/SkillAndPlanContracts.md: OAuth Terminal and OAuth-Backed Provider Profile Completion"
 
 ## Source Document Requirements
 

@@ -28,7 +28,6 @@ async def test_database_secret_resolver():
     assert "ANTHROPIC_API_KEY" in resolved
     assert resolved["ANTHROPIC_API_KEY"] == "encrypted_super_secret_key"
 
-
 @pytest.mark.asyncio
 async def test_database_secret_resolver_invalid_uuid():
     db_session_mock = AsyncMock()
@@ -39,7 +38,6 @@ async def test_database_secret_resolver_invalid_uuid():
 
     assert resolved == {}
     db_session_mock.execute.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_database_secret_resolver_supports_db_slug_refs():

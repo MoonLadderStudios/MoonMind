@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, mock_open, patch
 
 from moonmind.summarization.summarization import summarize_text_gemini, update_summaries
 
-
 class TestSummarizeTextGemini(unittest.TestCase):
     def setUp(self):
         self.mock_model = MagicMock()
@@ -77,7 +76,6 @@ class TestSummarizeTextGemini(unittest.TestCase):
         )
 
         self.assertIsNone(result)
-
 
 class TestUpdateSummaries(unittest.TestCase):
     def setUp(self):
@@ -504,7 +502,6 @@ class TestUpdateSummaries(unittest.TestCase):
             self.mock_text_summarizer,
         )
         self.mock_text_summarizer.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()

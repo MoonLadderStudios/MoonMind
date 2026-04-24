@@ -32,11 +32,9 @@ _CODEX_CLOUD_TO_AGENT_RUN_STATUS: dict[str, str] = {
     "unknown": "awaiting_callback",
 }
 
-
 def _to_agent_status(raw_status: str | None) -> str:
     normalized = normalize_codex_cloud_status(raw_status)
     return _CODEX_CLOUD_TO_AGENT_RUN_STATUS.get(normalized, "awaiting_callback")
-
 
 _CODEX_CLOUD_CAPABILITY = ProviderCapabilityDescriptor(
     providerName="codex_cloud",
@@ -45,7 +43,6 @@ _CODEX_CLOUD_CAPABILITY = ProviderCapabilityDescriptor(
     supportsResultFetch=True,
     defaultPollHintSeconds=15,
 )
-
 
 class CodexCloudAgentAdapter(BaseExternalAgentAdapter):
     """Normalize Codex Cloud provider interactions into canonical agent contracts.
@@ -152,6 +149,5 @@ class CodexCloudAgentAdapter(BaseExternalAgentAdapter):
             external_url=str(response.get("url") or "").strip() or None,
             extra_metadata={"cancelAccepted": True},
         )
-
 
 __all__ = ["CodexCloudAgentAdapter"]

@@ -18,7 +18,7 @@ Alternatives considered: Modeling every catalog entry in one change was rejected
 
 ## Documentation Placement
 
-Decision: Keep implementation backlog and compatibility-sensitive notes in `docs/tmp/177-TemporalBoundaryModels.md`.
+Decision: Keep implementation backlog and compatibility-sensitive notes in `specs/177-temporal-boundary-models/research.md`.
 
 Rationale: Constitution principle XII and DESIGN-REQ-021 require canonical docs to remain desired-state descriptions. The tracker can be removed when the migration work completes.
 

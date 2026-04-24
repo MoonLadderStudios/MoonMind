@@ -120,7 +120,7 @@ The plan (Section 3.3) proposes keeping the `default_auth_mode` property name on
 | T006 dependency (T001) corrected from original "None" | PASS |
 | T007 edge case audit + DB check matches remediation commitments | PASS |
 | DOC-REQ traceability consistent across all three artifacts | PASS |
-| Migration tracker (`docs/tmp/remaining-work/127-codex-openrouter-phase3.md`) created per Constitution XII | PASS |
+| Migration tracker (`specs/127-codex-openrouter-phase3/spec.md`) created per Constitution XII | PASS |
 
 ---
 

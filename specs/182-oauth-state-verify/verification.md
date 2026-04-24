@@ -1,9 +1,9 @@
 # MoonSpec Verification Report
 
-**Feature**: OAuth Session State and Verification Boundaries  
-**Spec**: `/work/agent_jobs/mm:3b53847c-b1b9-4c79-bfde-ed32f326693e/repo/specs/182-oauth-state-verify/spec.md`  
-**Original Request Source**: `spec.md` `Input` with Jira issue `MM-359`  
-**Verdict**: FULLY_IMPLEMENTED  
+**Feature**: OAuth Session State and Verification Boundaries 
+**Spec**: `/work/agent_jobs/mm:3b53847c-b1b9-4c79-bfde-ed32f326693e/repo/specs/182-oauth-state-verify/spec.md` 
+**Original Request Source**: `spec.md` `Input` with Jira issue `MM-359` 
+**Verdict**: FULLY_IMPLEMENTED 
 **Confidence**: HIGH
 
 ## Test Results
@@ -26,7 +26,7 @@
 | FR-003 | `moonmind/workflows/temporal/activities/oauth_session_activities.py:206`, `moonmind/workflows/temporal/workflows/oauth_session.py:297`, `moonmind/workflows/temporal/activities/oauth_session_activities.py:339` | VERIFIED | OAuth finalize verifies volume credentials before registration and registration rejects failed verification metadata. |
 | FR-004 | `moonmind/workflows/temporal/activities/oauth_session_activities.py:379`, `moonmind/workflows/temporal/runtime/codex_session_runtime.py:389`, `tests/unit/services/temporal/runtime/test_codex_session_runtime.py:2239` | VERIFIED | Provider profile refs are validated before profile registration, and Codex launch rejects missing/invalid materialized auth volume paths before ready state. |
 | FR-005 | `moonmind/workflows/temporal/runtime/providers/volume_verifiers.py:47`, `tests/unit/auth/test_volume_verifiers.py:116`, `tests/unit/auth/test_volume_verifiers.py:181` | VERIFIED | Verification output contains compact status/reason/count metadata and omits found/missing path lists. |
-| FR-006 | `specs/182-oauth-state-verify/spec.md:9`, `specs/182-oauth-state-verify/tasks.md:13`, `docs/tmp/jira-orchestration-inputs/MM-359-moonspec-orchestration-input.md:1` | VERIFIED | Jira issue `MM-359` and the preset brief are preserved in source input, tasks, and orchestration input. |
+| FR-006 | `specs/182-oauth-state-verify/spec.md:9`, `specs/182-oauth-state-verify/tasks.md:13`, `spec.md (Input):1` | VERIFIED | Jira issue `MM-359` and the preset brief are preserved in source input, tasks, and orchestration input. |
 
 ## Acceptance Scenario Coverage
 
@@ -48,7 +48,7 @@
 | DESIGN-REQ-018 | `moonmind/workflows/temporal/activities/oauth_session_activities.py:232`, `moonmind/workflows/temporal/runtime/codex_session_runtime.py:389` | VERIFIED | Credential readiness is checked at OAuth/profile and launch materialization boundaries. |
 | DESIGN-REQ-020 | `moonmind/workflows/temporal/workflows/oauth_session.py:297`, `moonmind/workflows/temporal/activities/oauth_session_activities.py:309`, `moonmind/workflows/temporal/runtime/providers/volume_verifiers.py:66` | VERIFIED | Workflow, activity, provider verification, and runtime materialization boundaries remain separate. |
 | Constitution IX | `tests/integration/temporal/test_oauth_session.py:298`, full unit run evidence | VERIFIED | Workflow-boundary behavior is covered and in-flight payload shape remains additive via `session_transport`. |
-| Constitution XII | `docs/tmp/jira-orchestration-inputs/MM-359-moonspec-orchestration-input.md` and `specs/182-oauth-state-verify/*` | VERIFIED | Migration/run artifacts remain in `docs/tmp` and `specs/`, not canonical architecture docs. |
+| Constitution XII | `spec.md` (Input) and `specs/182-oauth-state-verify/*` | VERIFIED | Migration/run artifacts remain in `local-only handoffs` and `specs/`, not canonical architecture docs. |
 | Constitution XIII | `moonmind/workflows/temporal/runtime/providers/registry.py:86`, `moonmind/workflows/temporal/activities/oauth_session_activities.py:272` | VERIFIED | Unsupported internal values fail through existing validation rather than compatibility aliases. |
 
 ## Original Request Alignment

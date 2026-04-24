@@ -12,31 +12,24 @@ from llama_index.core import (
 from api_service.db.models import User
 from moonmind.config.settings import settings
 
-
 def get_chat_provider(request: Request):
     return request.app.state.chat_provider
-
 
 def get_embed_model(request: Request):
     return request.app.state.embed_model
 
-
 def get_embed_dimensions(request: Request):
     return request.app.state.embed_dimensions
-
 
 def get_vector_store(request: Request):
     return request.app.state.vector_store
 
-
 def get_storage_context(request: Request):
     return request.app.state.storage_context
-
 
 def get_service_context(request: Request):
     # Return the global Settings object instead of ServiceContext
     return request.app.state.settings
-
 
 def get_vector_index(request: Request) -> Optional[VectorStoreIndex]:
     logger_dep = logging.getLogger(__name__)
@@ -74,7 +67,6 @@ def get_vector_index(request: Request) -> Optional[VectorStoreIndex]:
         )
         return None
 
-
 def ensure_task_template_catalog_enabled() -> None:
     """Raise a 404 when the task template catalog is disabled."""
 
@@ -87,7 +79,6 @@ def ensure_task_template_catalog_enabled() -> None:
             "message": "Task template catalog is disabled in this environment.",
         },
     )
-
 
 def resolve_template_scope_for_user(
     *,

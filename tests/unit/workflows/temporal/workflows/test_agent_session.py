@@ -26,7 +26,6 @@ from moonmind.workflows.temporal.workflows.agent_session import (
     MoonMindAgentSessionWorkflow,
 )
 
-
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     workflow_info = type(
         "WorkflowInfo",
@@ -46,7 +45,6 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent_session_module.workflow, "info", workflow_info)
     monkeypatch.setattr(agent_session_module.workflow, "logger", logger)
 
-
 def _workflow_input(**overrides: object) -> CodexManagedSessionWorkflowInput:
     payload: dict[str, object] = {
         "taskRunId": "wf-run-1",
@@ -55,14 +53,12 @@ def _workflow_input(**overrides: object) -> CodexManagedSessionWorkflowInput:
     payload.update(overrides)
     return CodexManagedSessionWorkflowInput.model_validate(payload)
 
-
 def _runtime_handles(
     payload: dict[str, object] | None = None,
     **overrides: object,
 ) -> CodexManagedSessionAttachRuntimeHandlesSignal:
     overrides = {**(payload or {}), **overrides}
     return CodexManagedSessionAttachRuntimeHandlesSignal.model_validate(overrides)
-
 
 def _send_follow_up(
     payload: dict[str, object] | None = None,
@@ -71,14 +67,12 @@ def _send_follow_up(
     overrides = {**(payload or {}), **overrides}
     return CodexManagedSessionSendFollowUpRequest.model_validate(overrides)
 
-
 def _interrupt_turn(
     payload: dict[str, object] | None = None,
     **overrides: object,
 ) -> CodexManagedSessionInterruptRequest:
     overrides = {**(payload or {}), **overrides}
     return CodexManagedSessionInterruptRequest.model_validate(overrides)
-
 
 def _clear_session(
     payload: dict[str, object] | None = None,
@@ -87,7 +81,6 @@ def _clear_session(
     overrides = {**(payload or {}), **overrides}
     return CodexManagedSessionClearUpdateRequest.model_validate(overrides)
 
-
 def _cancel_session(
     payload: dict[str, object] | None = None,
     **overrides: object,
@@ -95,14 +88,12 @@ def _cancel_session(
     overrides = {**(payload or {}), **overrides}
     return CodexManagedSessionCancelUpdateRequest.model_validate(overrides)
 
-
 def _terminate_session(
     payload: dict[str, object] | None = None,
     **overrides: object,
 ) -> CodexManagedSessionTerminateUpdateRequest:
     overrides = {**(payload or {}), **overrides}
     return CodexManagedSessionTerminateUpdateRequest.model_validate(overrides)
-
 
 def _assert_forbidden_metadata_absent(value: object) -> None:
     rendered = str(value)
@@ -115,7 +106,6 @@ def _assert_forbidden_metadata_absent(value: object) -> None:
         "traceback body",
     ):
         assert forbidden not in rendered
-
 
 def test_agent_session_initializes_task_scoped_codex_binding(
     monkeypatch: pytest.MonkeyPatch,
@@ -134,7 +124,6 @@ def test_agent_session_initializes_task_scoped_codex_binding(
     assert status["binding"]["sessionEpoch"] == 1
     assert status["binding"]["executionProfileRef"] == "codex-default"
     assert status["binding"]["sessionId"] == "sess:wf-run-1:codex_cli"
-
 
 @pytest.mark.asyncio
 async def test_agent_session_run_initializes_bounded_temporal_visibility(
@@ -188,7 +177,6 @@ async def test_agent_session_run_initializes_bounded_temporal_visibility(
         }
     ]
 
-
 def test_agent_session_visibility_and_activity_summaries_exclude_forbidden_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -231,7 +219,6 @@ def test_agent_session_visibility_and_activity_summaries_exclude_forbidden_value
     _assert_forbidden_metadata_absent(summary)
     _assert_forbidden_metadata_absent(current_details)
     _assert_forbidden_metadata_absent(search_attributes)
-
 
 def test_agent_session_logs_bounded_telemetry_context_without_payload_values(
     monkeypatch: pytest.MonkeyPatch,
@@ -294,7 +281,6 @@ def test_agent_session_logs_bounded_telemetry_context_without_payload_values(
     _assert_forbidden_metadata_absent(current_details)
     _assert_forbidden_metadata_absent(search_attributes)
 
-
 def test_agent_session_send_follow_up_validator_allows_pre_handle_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -304,7 +290,6 @@ def test_agent_session_send_follow_up_validator_allows_pre_handle_request(
     workflow.validate_send_follow_up(
         _send_follow_up({"message": "Continue the task-scoped session."})
     )
-
 
 def test_agent_session_workflow_input_carries_request_tracking_state(
     monkeypatch: pytest.MonkeyPatch,
@@ -337,7 +322,6 @@ def test_agent_session_workflow_input_carries_request_tracking_state(
     ]
     assert snapshot.request_tracking_state[0].request_id == "request-1"
 
-
 def test_agent_session_restore_caps_request_tracking_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -362,7 +346,6 @@ def test_agent_session_restore_caps_request_tracking_state(
     assert restored_entries[0]["requestId"] == "request-5"
     assert restored_entries[-1]["requestId"] == "request-104"
 
-
 def test_agent_session_continue_as_new_suggestion_calls_temporal_info_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -385,7 +368,6 @@ def test_agent_session_continue_as_new_suggestion_calls_temporal_info_method(
 
     assert workflow._should_continue_as_new() is False
 
-
 def test_agent_session_request_tracking_rejects_cross_action_reuse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -402,7 +384,6 @@ def test_agent_session_request_tracking_rejects_cross_action_reuse(
             request_id="request-1",
             action="clear_session",
         )
-
 
 @pytest.mark.asyncio
 async def test_agent_session_request_tracking_prefers_temporal_update_id(
@@ -488,7 +469,6 @@ async def test_agent_session_request_tracking_prefers_temporal_update_id(
         }
     ]
 
-
 def test_agent_session_interrupt_turn_validator_rejects_stale_epoch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -509,7 +489,6 @@ def test_agent_session_interrupt_turn_validator_rejects_stale_epoch(
             _interrupt_turn({"sessionEpoch": 2, "reason": "Stop this turn."})
         )
 
-
 def test_agent_session_interrupt_turn_validator_requires_active_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -529,7 +508,6 @@ def test_agent_session_interrupt_turn_validator_requires_active_turn(
             _interrupt_turn({"sessionEpoch": 1, "reason": "Stop this turn."})
         )
 
-
 def test_agent_session_clear_session_validator_rejects_when_already_clearing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -548,7 +526,6 @@ def test_agent_session_clear_session_validator_rejects_when_already_clearing(
     with pytest.raises(ValueError, match="already clearing"):
         workflow.validate_clear_session(_clear_session({}))
 
-
 @pytest.mark.asyncio
 async def test_agent_session_terminate_update_marks_termination_requested(
     monkeypatch: pytest.MonkeyPatch,
@@ -564,7 +541,6 @@ async def test_agent_session_terminate_update_marks_termination_requested(
     assert status["terminationRequested"] is True
     assert status["lastControlAction"] == "terminate_session"
     assert status["lastControlReason"] == "done"
-
 
 @pytest.mark.asyncio
 async def test_agent_session_terminate_update_executes_remote_terminate_when_handles_exist(
@@ -623,7 +599,6 @@ async def test_agent_session_terminate_update_executes_remote_terminate_when_han
     assert status["status"] == AGENT_SESSION_STATUS_TERMINATING
     assert status["terminationRequested"] is True
     assert status["activeTurnId"] is None
-
 
 @pytest.mark.asyncio
 async def test_agent_session_terminate_update_keeps_terminating_when_remote_terminate_fails(
@@ -698,7 +673,6 @@ async def test_agent_session_terminate_update_keeps_terminating_when_remote_term
     ]
     assert warnings == []
 
-
 @pytest.mark.asyncio
 async def test_agent_session_cancel_interrupts_active_turn_without_terminating(
     monkeypatch: pytest.MonkeyPatch,
@@ -758,7 +732,6 @@ async def test_agent_session_cancel_interrupts_active_turn_without_terminating(
     assert status["lastControlAction"] == "cancel_session"
     assert status["lastControlReason"] == "operator cancel"
 
-
 @pytest.mark.asyncio
 async def test_agent_session_completed_identified_request_rejects_duplicate_mutation(
     monkeypatch: pytest.MonkeyPatch,
@@ -803,7 +776,6 @@ async def test_agent_session_completed_identified_request_rejects_duplicate_muta
                 }
             )
         )
-
 
 @pytest.mark.asyncio
 async def test_agent_session_send_follow_up_update_executes_session_activity_surface(
@@ -932,7 +904,6 @@ async def test_agent_session_send_follow_up_update_executes_session_activity_sur
         "containerId=container-1, threadId=thread-1"
     )
 
-
 @pytest.mark.asyncio
 async def test_agent_session_updates_visibility_on_major_transitions(
     monkeypatch: pytest.MonkeyPatch,
@@ -1033,7 +1004,6 @@ async def test_agent_session_updates_visibility_on_major_transitions(
         "IsDegraded": [False],
     }
 
-
 @pytest.mark.asyncio
 async def test_agent_session_refresh_projection_uses_authoritative_binding_task_run_id(
     monkeypatch: pytest.MonkeyPatch,
@@ -1113,7 +1083,6 @@ async def test_agent_session_refresh_projection_uses_authoritative_binding_task_
         "action": "send_follow_up",
         "reason": None,
     }
-
 
 @pytest.mark.asyncio
 async def test_agent_session_interrupt_turn_update_executes_session_activity_surface(
@@ -1214,7 +1183,6 @@ async def test_agent_session_interrupt_turn_update_executes_session_activity_sur
     assert status["activeTurnId"] is None
     assert status["lastControlAction"] == "interrupt_turn"
     assert status["lastControlReason"] == "Stop this turn."
-
 
 @pytest.mark.asyncio
 async def test_agent_session_clear_session_update_executes_remote_clear_and_updates_epoch(
@@ -1319,7 +1287,6 @@ async def test_agent_session_clear_session_update_executes_remote_clear_and_upda
     assert status["lastControlAction"] == "clear_session"
     assert status["lastControlReason"] == "Reset stale context"
 
-
 def test_agent_session_legacy_control_action_signal_replays_clear_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1350,7 +1317,6 @@ def test_agent_session_legacy_control_action_signal_replays_clear_session(
     assert status["activeTurnId"] is None
     assert status["lastControlAction"] == "clear_session"
     assert status["lastControlReason"] == "Replay old clear event"
-
 
 @pytest.mark.asyncio
 async def test_agent_session_async_mutators_wait_for_workflow_lock(
@@ -1447,7 +1413,6 @@ async def test_agent_session_async_mutators_wait_for_workflow_lock(
         "agent_runtime.publish_session_artifacts",
     ]
 
-
 @pytest.mark.asyncio
 async def test_agent_session_send_follow_up_waits_for_runtime_handles(
     monkeypatch: pytest.MonkeyPatch,
@@ -1535,7 +1500,6 @@ async def test_agent_session_send_follow_up_waits_for_runtime_handles(
         "agent_runtime.publish_session_artifacts",
     ]
 
-
 @pytest.mark.asyncio
 async def test_agent_session_run_waits_for_handlers_before_completion(
     monkeypatch: pytest.MonkeyPatch,
@@ -1559,7 +1523,6 @@ async def test_agent_session_run_waits_for_handlers_before_completion(
 
     assert waited_for_handlers is True
     assert status["status"] == "terminated"
-
 
 @pytest.mark.asyncio
 async def test_agent_session_run_waits_for_state_change_without_timeout_polling(
@@ -1589,7 +1552,6 @@ async def test_agent_session_run_waits_for_state_change_without_timeout_polling(
 
     assert state_waits == 1
     assert status["status"] == "terminated"
-
 
 @pytest.mark.asyncio
 async def test_agent_session_continue_as_new_carries_bounded_session_state(

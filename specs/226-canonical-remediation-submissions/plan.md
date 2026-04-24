@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement MM-451 by validating the canonical remediation submission and pinned target linkage behavior described in `docs/tmp/jira-orchestration-inputs/MM-451-moonspec-orchestration-input.md`. Repo gap analysis found the required runtime behavior already delivered by the remediation create/link slice: task-shaped submissions preserve `task.remediation`, create-time service validation pins target run identity, durable remediation links support inbound/outbound lookups, invalid submissions fail before workflow start, and the convenience route expands into the same canonical create contract. Planned work is artifact traceability and focused verification, not duplicate implementation.
+Implement MM-451 by validating the canonical remediation submission and pinned target linkage behavior described in `spec.md` (Input). Repo gap analysis found the required runtime behavior already delivered by the remediation create/link slice: task-shaped submissions preserve `task.remediation`, create-time service validation pins target run identity, durable remediation links support inbound/outbound lookups, invalid submissions fail before workflow start, and the convenience route expands into the same canonical create contract. Planned work is artifact traceability and focused verification, not duplicate implementation.
 
 ## Requirement Status
 
@@ -33,15 +33,15 @@ Implement MM-451 by validating the canonical remediation submission and pinned t
 
 ## Technical Context
 
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK  
-**Storage**: Existing SQLAlchemy/Alembic database with `execution_remediation_links` already present  
-**Unit Testing**: pytest via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`  
-**Integration Testing**: Existing router/service boundary tests; no new compose-backed integration seam for this already implemented slice  
-**Target Platform**: Linux server / Docker Compose deployment  
-**Project Type**: FastAPI control plane plus Temporal execution service  
-**Performance Goals**: Create-time remediation validation remains bounded to one target source lookup and one link insert  
-**Constraints**: Runtime mode; preserve canonical `task.remediation`; do not change dependency semantics; preserve MM-451 traceability  
+**Language/Version**: Python 3.12 
+**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic v2, Temporal Python SDK 
+**Storage**: Existing SQLAlchemy/Alembic database with `execution_remediation_links` already present 
+**Unit Testing**: pytest via `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` 
+**Integration Testing**: Existing router/service boundary tests; no new compose-backed integration seam for this already implemented slice 
+**Target Platform**: Linux server / Docker Compose deployment 
+**Project Type**: FastAPI control plane plus Temporal execution service 
+**Performance Goals**: Create-time remediation validation remains bounded to one target source lookup and one link insert 
+**Constraints**: Runtime mode; preserve canonical `task.remediation`; do not change dependency semantics; preserve MM-451 traceability 
 **Scale/Scope**: One remediation relationship per remediation execution for this submission/linkage slice
 
 ## Constitution Check
@@ -57,7 +57,7 @@ Implement MM-451 by validating the canonical remediation submission and pinned t
 - IX. Resilient by Default: PASS. Validation happens before workflow start and link creation is transactional with execution creation.
 - X. Continuous Improvement: PASS. Verification records the existing implementation evidence for MM-451.
 - XI. Spec-Driven Development: PASS. This spec/plan/tasks set preserves the Jira preset brief and source mappings.
-- XII. Canonical Docs vs Tmp: PASS. No canonical docs are changed; orchestration input remains under `docs/tmp`.
+- XII. Canonical Docs vs Tmp: PASS. No canonical docs are changed; orchestration input remains under `local-only handoffs`.
 - XIII. Pre-Release Compatibility: PASS. No compatibility alias or internal fallback layer is added.
 
 ## Project Structure
@@ -72,7 +72,7 @@ specs/226-canonical-remediation-submissions/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── canonical-remediation-submissions.md
+│ └── canonical-remediation-submissions.md
 └── tasks.md
 ```
 
@@ -89,8 +89,8 @@ moonmind/
 
 tests/
 └── unit/
-    ├── api/routers/test_executions.py
-    └── workflows/temporal/test_temporal_service.py
+ ├── api/routers/test_executions.py
+ └── workflows/temporal/test_temporal_service.py
 ```
 
 ## Complexity Tracking

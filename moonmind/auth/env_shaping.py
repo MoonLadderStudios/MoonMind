@@ -30,14 +30,12 @@ _BASE_ENV_FILTER_FRAGMENTS: tuple[str, ...] = (
     "private_key",
 )
 
-
 def _should_filter_base_env_var(key: str) -> bool:
     normalized_key = str(key or "").strip()
     if not normalized_key:
         return False
     lowered = normalized_key.lower()
     return any(fragment in lowered for fragment in _BASE_ENV_FILTER_FRAGMENTS)
-
 
 def shape_environment_for_oauth(
     base_env: dict[str, str],
@@ -55,7 +53,6 @@ def shape_environment_for_oauth(
     if volume_mount_path:
         env["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
     return env
-
 
 def shape_environment_for_api_key(
     base_env: dict[str, str],

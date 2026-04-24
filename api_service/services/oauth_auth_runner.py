@@ -7,7 +7,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 async def stop_auth_runner_container(
     *,
     session_id: str,

@@ -67,7 +67,7 @@
 ## Phase 9: Polish & Validation
 
 - [ ] T019 Run `./tools/test_unit.sh` and verify all tests pass
-- [ ] T020 Update `docs/tmp/SingleSubstrateMigration.md` Phase 1 items as completed
+- [ ] T020 Update `docs/MoonMindRoadmap.md` Phase 1 items as completed
 - [ ] T021 Commit all changes on branch `095-queue-substrate-removal`
 
 ---

@@ -1,6 +1,6 @@
 # Tasks: OAuth Terminal Docker Verification
 
-**Input**: Design documents from `/specs/194-oauth-terminal-docker-verification/`  
+**Input**: Design documents from `/specs/194-oauth-terminal-docker-verification/` 
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/oauth-terminal-docker-verification.md, quickstart.md
 
 **Tests**: Unit tests and integration tests are REQUIRED. Write or adjust tests first only if a product or harness gap is found; the primary required evidence is Docker-backed integration verification.
@@ -26,7 +26,7 @@
 **Purpose**: Confirm active MM-363 artifacts and the verification environment before changing reports or code.
 
 - [X] T001 Confirm `.specify/feature.json` points to `specs/194-oauth-terminal-docker-verification` and MM-363 traceability is present in `specs/194-oauth-terminal-docker-verification/spec.md` (FR-009, SC-005)
-- [X] T002 [P] Confirm no existing feature directory already owns MM-363 using `rg -n "MM-363" specs docs/tmp` (FR-009)
+- [X] T002 [P] Confirm no existing feature directory already owns MM-363 using `rg -n "MM-363" specs local-only handoffs` (FR-009)
 - [X] T003 [P] Inspect `specs/175-launch-codex-auth-materialization/verification.md`, `specs/180-codex-volume-targeting/verification.md`, and `specs/183-oauth-terminal-flow/verification.md` for current Docker-backed evidence gaps (FR-007, SC-004)
 - [X] T004 Check Docker availability with `test -S /var/run/docker.sock` and `docker ps`, recording the result in `specs/194-oauth-terminal-docker-verification/quickstart.md` (FR-001, SC-001)
 

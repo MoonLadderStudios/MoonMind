@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional
 
 from moonmind.schemas import Manifest
 
-
 def download_loader(type_name: str):
     """Resolve a llama-index reader class without hard-importing legacy helpers."""
     try:
@@ -28,7 +27,6 @@ def download_loader(type_name: str):
     except Exception:
         module = import_module("llama_index.readers")
         return getattr(module, type_name)
-
 
 class ManifestRunner:
     """Run readers defined in a Manifest."""

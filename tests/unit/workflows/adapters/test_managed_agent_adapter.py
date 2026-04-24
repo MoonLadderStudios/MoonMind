@@ -48,11 +48,9 @@ from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeAct
 
 pytestmark = [pytest.mark.asyncio]
 
-
 # ---------------------------------------------------------------------------
 # DB fixture
 # ---------------------------------------------------------------------------
-
 
 @asynccontextmanager
 async def _in_memory_db(tmp_path: Path):
@@ -68,11 +66,9 @@ async def _in_memory_db(tmp_path: Path):
     finally:
         await engine.dispose()
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def _fake_profiles(profiles: list[dict[str, Any]]):
     """Return an async callable that always yields the given profiles list."""
@@ -82,19 +78,15 @@ def _fake_profiles(profiles: list[dict[str, Any]]):
 
     return _fetcher
 
-
 def _noop_slot_requester(**_kwargs):
     pass
-
 
 async def _async_noop(**_kwargs):
     pass
 
-
 # ---------------------------------------------------------------------------
 # Environment shaping tests
 # ---------------------------------------------------------------------------
-
 
 async def test_shape_environment_for_oauth_clears_sensitive_vars():
     base = {
@@ -111,13 +103,11 @@ async def test_shape_environment_for_oauth_clears_sensitive_vars():
     assert shaped["HOME"] == "/home/user"
     assert shaped["MANAGED_AUTH_VOLUME_PATH"] == "/mnt/auth"
 
-
 async def test_shape_environment_for_oauth_without_mount_path():
     base = {"HOME": "/home/user", "GEMINI_API_KEY": "secret"}
     shaped = shape_environment_for_oauth(base, volume_mount_path=None)
     assert "MANAGED_AUTH_VOLUME_PATH" not in shaped
     assert "GEMINI_API_KEY" not in shaped
-
 
 async def test_shape_environment_for_oauth_clears_github_cli_tokens():
     base = {
@@ -129,7 +119,6 @@ async def test_shape_environment_for_oauth_clears_github_cli_tokens():
     assert "GITHUB_TOKEN" not in shaped
     assert "OPENAI_API_KEY" not in shaped
 
-
 async def test_shape_environment_for_api_key_sets_ref():
     base = {"HOME": "/home/user"}
     shaped = shape_environment_for_api_key(
@@ -139,13 +128,11 @@ async def test_shape_environment_for_api_key_sets_ref():
     assert shaped["MANAGED_ACCOUNT_LABEL"] == "ci-bot"
     assert shaped["HOME"] == "/home/user"
 
-
 async def test_shape_environment_for_api_key_without_ref():
     base = {"HOME": "/home/user"}
     shaped = shape_environment_for_api_key(base, api_key_ref=None, account_label=None)
     assert "MANAGED_API_KEY_REF" not in shaped
     assert "MANAGED_ACCOUNT_LABEL" not in shaped
-
 
 async def test_launch_context_exports_execution_profile_ref() -> None:
     context = build_managed_profile_launch_context(
@@ -167,7 +154,6 @@ async def test_launch_context_exports_execution_profile_ref() -> None:
         context.delta_env_overrides["MOONMIND_EXECUTION_PROFILE_RUNTIME"]
         == "codex_cli"
     )
-
 
 async def test_launch_context_reserved_execution_profile_keys_cannot_be_overridden() -> None:
     context = build_managed_profile_launch_context(
@@ -195,11 +181,9 @@ async def test_launch_context_reserved_execution_profile_keys_cannot_be_overridd
     )
     assert context.delta_env_overrides["SAFE_RUNTIME_FLAG"] == "enabled"
 
-
 # ---------------------------------------------------------------------------
 # Profile resolution tests
 # ---------------------------------------------------------------------------
-
 
 async def test_resolve_profile_by_id():
     profiles = [
@@ -236,7 +220,6 @@ async def test_resolve_profile_by_id():
     # so the adapter should NOT send a redundant slot request.
     assert ("slot_request", "wf-123", "gemini_cli") not in calls
 
-
 async def test_resolve_profile_auto_picks_runtime_default():
     profiles = [
         {
@@ -270,7 +253,6 @@ async def test_resolve_profile_auto_picks_runtime_default():
     )
     handle = await adapter.start(request)
     assert handle.metadata["profile_id"] == "second"
-
 
 async def test_resolve_profile_selector_filters():
     profiles = [
@@ -382,8 +364,6 @@ async def test_resolve_profile_selector_filters():
     ):
         await adapter.start(req5)
 
-
-
 async def test_start_uses_passthrough_keys_for_github_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -451,7 +431,6 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
     assert "GITHUB_TOKEN" not in env_overrides
     assert "OPENAI_API_KEY" not in env_overrides
 
-
 async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
     profiles = [
         {
@@ -505,7 +484,6 @@ async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
     assert env_overrides.get("ANTHROPIC_BASE_URL") == "https://api.minimax.io/anthropic"
     assert env_overrides.get("ANTHROPIC_MODEL") == "MiniMax-M2.7"
 
-
 async def test_start_passes_profile_default_model_to_launcher() -> None:
     profiles = [
         {
@@ -547,7 +525,6 @@ async def test_start_passes_profile_default_model_to_launcher() -> None:
     profile_payload = captured_payload.get("profile") or {}
     assert profile_payload.get("defaultModel") == "MiniMax-M2.7"
     assert profile_payload.get("modelOverrides") == {"small_fast": "MiniMax-M2.7"}
-
 
 async def test_start_passes_rich_provider_profile_fields_to_launcher() -> None:
     profiles = [
@@ -633,7 +610,6 @@ async def test_start_passes_rich_provider_profile_fields_to_launcher() -> None:
         "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
     }
 
-
 async def test_start_falls_back_to_runtime_default_model_when_profile_blank() -> None:
     profiles = [
         {
@@ -673,7 +649,6 @@ async def test_start_falls_back_to_runtime_default_model_when_profile_blank() ->
     profile_payload = captured_payload.get("profile") or {}
     assert profile_payload.get("defaultModel") == "gpt-5.4"
     assert profile_payload.get("defaultEffort") == "high"
-
 
 async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
@@ -734,7 +709,6 @@ async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pyt
     assert "ANTHROPIC_BASE_URL" in env_overrides
     assert "proxy/anthropic" in env_overrides["ANTHROPIC_BASE_URL"]
 
-
 async def test_resolve_profile_raises_when_not_found():
     profiles = [{"profile_id": "exists", "credential_source": "secret_ref"}]
 
@@ -758,7 +732,6 @@ async def test_resolve_profile_raises_when_not_found():
     with pytest.raises(ProfileResolutionError, match="not found"):
         await adapter.start(request)
 
-
 async def test_resolve_profile_raises_when_no_profiles():
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles([]),
@@ -779,7 +752,6 @@ async def test_resolve_profile_raises_when_no_profiles():
     )
     with pytest.raises(ProfileResolutionError, match="No enabled provider profiles"):
         await adapter.start(request)
-
 
 async def test_start_rejects_non_managed_agent_kind():
     adapter = ManagedAgentAdapter(
@@ -802,11 +774,9 @@ async def test_start_rejects_non_managed_agent_kind():
     with pytest.raises(ValueError, match="managed"):
         await adapter.start(request)
 
-
 # ---------------------------------------------------------------------------
 # Slot release and 429 cooldown tests
 # ---------------------------------------------------------------------------
-
 
 async def test_release_slot_signals_manager():
     released: list[dict] = []
@@ -844,7 +814,6 @@ async def test_release_slot_signals_manager():
     assert released[0]["profile_id"] == "prof-release"
     assert released[0]["wf"] == "wf-release"
 
-
 async def test_report_429_cooldown_uses_active_profile():
     reported: list[dict] = []
 
@@ -876,7 +845,6 @@ async def test_report_429_cooldown_uses_active_profile():
     assert reported[0]["profile_id"] == "prof-429"
     assert reported[0]["secs"] == 600
 
-
 async def test_report_429_cooldown_raises_without_active_profile():
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles([]),
@@ -888,11 +856,9 @@ async def test_report_429_cooldown_raises_without_active_profile():
     with pytest.raises(ValueError, match="profile_id is required"):
         await adapter.report_429_cooldown(cooldown_seconds=300)
 
-
 # ---------------------------------------------------------------------------
 # provider_profile_list activity tests (integration against in-memory SQLite DB)
 # ---------------------------------------------------------------------------
-
 
 @asynccontextmanager
 async def _patched_session_context(session_factory):
@@ -904,7 +870,6 @@ async def _patched_session_context(session_factory):
     """
     async with session_factory() as session:
         yield session
-
 
 async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
@@ -961,7 +926,6 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
         assert profiles[0]["enabled"] is True
         assert profiles[0]["max_parallel_runs"] == 2
 
-
 async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         service = TemporalArtifactService(
@@ -980,7 +944,6 @@ async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path:
             _db_base_mod.get_async_session_context = orig
 
         assert result == {"profiles": []}
-
 
 async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
@@ -1018,7 +981,6 @@ async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
         profiles = result["profiles"]
         assert len(profiles) == 1
         assert profiles[0]["profile_id"] == "c1"
-
 
 async def test_provider_profile_list_preserves_secret_ref_materialization_fields(
     tmp_path: Path,
@@ -1076,7 +1038,6 @@ async def test_provider_profile_list_preserves_secret_ref_materialization_fields
             "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
             "ANTHROPIC_MODEL": "MiniMax-M2.7",
         }
-
 
 async def test_provider_profile_list_preserves_path_aware_codex_materialization_fields(
     tmp_path: Path,
@@ -1158,11 +1119,9 @@ async def test_provider_profile_list_preserves_path_aware_codex_materialization_
             "suppress_default_model_flag": True
         }
 
-
 # ---------------------------------------------------------------------------
 # Store-backed status / fetch_result tests
 # ---------------------------------------------------------------------------
-
 
 async def test_status_reads_from_store(tmp_path: Path):
     from datetime import UTC, datetime
@@ -1194,7 +1153,6 @@ async def test_status_reads_from_store(tmp_path: Path):
     assert status.status == "completed"
     assert status.agent_id == "gemini_cli"
 
-
 async def test_status_falls_back_to_stub_without_store():
     adapter = ManagedAgentAdapter(
         profile_fetcher=_fake_profiles([]),
@@ -1206,7 +1164,6 @@ async def test_status_falls_back_to_stub_without_store():
 
     status = await adapter.status("nonexistent")
     assert status.status == "running"  # stub default
-
 
 async def test_fetch_result_reads_from_store(tmp_path: Path):
     from datetime import UTC, datetime
@@ -1240,7 +1197,6 @@ async def test_fetch_result_reads_from_store(tmp_path: Path):
     assert result.failure_class is None
     assert "artifact://logs/stdout" in result.output_refs
     assert "artifact://diag/123" in result.output_refs
-
 
 async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(
     tmp_path: Path,
@@ -1293,7 +1249,6 @@ async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(
     assert "pr-resolver reported status 'failed'" in result.summary
     assert "manual_review" in result.summary
 
-
 async def test_fetch_result_maps_blocked_pr_resolver_result_to_user_error(
     tmp_path: Path,
 ):
@@ -1344,7 +1299,6 @@ async def test_fetch_result_maps_blocked_pr_resolver_result_to_user_error(
     assert result.summary is not None
     assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
     assert "run_fix_comments_skill" in result.summary
-
 
 async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
     tmp_path: Path,
@@ -1398,7 +1352,6 @@ async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
     assert result.summary is not None
     assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
     assert "run_fix_comments_skill" in result.summary
-
 
 async def test_fetch_result_prefers_newer_pr_resolver_attempt_over_stale_result(
     tmp_path: Path,
@@ -1465,7 +1418,6 @@ async def test_fetch_result_prefers_newer_pr_resolver_attempt_over_stale_result(
     assert "ci_running" in result.summary
     assert "merge_conflicts" not in result.summary
 
-
 async def test_fetch_result_ignores_stale_failure_when_newer_attempt_is_merged(
     tmp_path: Path,
 ):
@@ -1529,7 +1481,6 @@ async def test_fetch_result_ignores_stale_failure_when_newer_attempt_is_merged(
     assert result.summary is not None
     assert "pr-resolver" not in result.summary
 
-
 async def test_fetch_result_ignores_merged_pr_resolver_artifact(tmp_path: Path):
     from datetime import UTC, datetime
 
@@ -1570,7 +1521,6 @@ async def test_fetch_result_ignores_merged_pr_resolver_artifact(tmp_path: Path):
     )
     assert result.failure_class is None
     assert result.metadata["mergeAutomationDisposition"] == "merged"
-
 
 async def test_fetch_result_maps_already_merged_pr_resolver_artifact_metadata(tmp_path: Path):
     from datetime import UTC, datetime
@@ -1621,7 +1571,6 @@ async def test_fetch_result_maps_already_merged_pr_resolver_artifact_metadata(tm
     assert result.metadata["mergeAutomationDisposition"] == "already_merged"
     assert result.metadata["headSha"] == "abc123"
 
-
 async def test_fetch_result_returns_empty_for_non_terminal(tmp_path: Path):
     from datetime import UTC, datetime
 
@@ -1652,7 +1601,6 @@ async def test_fetch_result_returns_empty_for_non_terminal(tmp_path: Path):
     # Non-terminal: should return default empty result
     assert result.failure_class is None
     assert result.output_refs == []
-
 
 async def test_fetch_result_ignores_pr_resolver_artifact_when_not_expected(
     tmp_path: Path,
@@ -1708,11 +1656,9 @@ async def test_fetch_result_ignores_pr_resolver_artifact_when_not_expected(
     assert result.summary is not None
     assert "pr-resolver" not in result.summary
 
-
 # ---------------------------------------------------------------------------
 # Regression: env_overrides must be delta-only (not full shaped env)
 # ---------------------------------------------------------------------------
-
 
 async def test_start_with_sensitive_runtime_env_overrides_does_not_raise(
     monkeypatch: pytest.MonkeyPatch,

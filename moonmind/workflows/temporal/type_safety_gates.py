@@ -20,10 +20,8 @@ TemporalPatternKind = Literal[
     "canonical_workflow_result",
 ]
 
-
 class _GateModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
 
 class ReviewGateFinding(_GateModel):
     rule_id: str = Field(alias="ruleId")
@@ -46,7 +44,6 @@ class ReviewGateFinding(_GateModel):
             raise ValueError("failed findings require remediation")
         return self
 
-
 class CompatibilityEvidence(_GateModel):
     change_kind: ChangeKind = Field(alias="changeKind")
     safety_mode: SafetyMode | None = Field(default=None, alias="safetyMode")
@@ -62,7 +59,6 @@ class CompatibilityEvidence(_GateModel):
             raise ValueError("must not be empty")
         return value
 
-
 class EscapeHatchJustification(_GateModel):
     target: str
     reason: str
@@ -77,7 +73,6 @@ class EscapeHatchJustification(_GateModel):
             raise ValueError("must not be empty")
         return value
 
-
 class TemporalPatternCase(_GateModel):
     pattern: TemporalPatternKind
     target: str
@@ -89,7 +84,6 @@ class TemporalPatternCase(_GateModel):
         if not value.strip():
             raise ValueError("must not be empty")
         return value
-
 
 _ANTI_PATTERN_RULES: dict[str, tuple[str, str, str]] = {
     "raw_dict_activity_payload": (
@@ -133,7 +127,6 @@ _SAFE_PATTERNS = {
     "compact_artifact_ref",
     "canonical_workflow_result",
 }
-
 
 def evaluate_compatibility_evidence(evidence: CompatibilityEvidence) -> ReviewGateFinding:
     target = evidence.target or f"{evidence.change_kind}:compatibility"
@@ -215,7 +208,6 @@ def evaluate_compatibility_evidence(evidence: CompatibilityEvidence) -> ReviewGa
         evidenceRef=evidence.evidence_ref,
     )
 
-
 def evaluate_temporal_pattern_case(case: TemporalPatternCase) -> ReviewGateFinding:
     if case.pattern in _SAFE_PATTERNS:
         return ReviewGateFinding(
@@ -233,7 +225,6 @@ def evaluate_temporal_pattern_case(case: TemporalPatternCase) -> ReviewGateFindi
         message=message,
         remediation=remediation,
     )
-
 
 def evaluate_escape_hatch(justification: EscapeHatchJustification) -> ReviewGateFinding:
     failures: list[str] = []
@@ -265,7 +256,6 @@ def evaluate_escape_hatch(justification: EscapeHatchJustification) -> ReviewGate
         target=justification.target,
         message="Escape hatch is transitional, boundary-only, and compatibility-justified.",
     )
-
 
 def build_self_check_findings() -> list[ReviewGateFinding]:
     findings: list[ReviewGateFinding] = [

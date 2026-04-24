@@ -13,7 +13,6 @@ from moonmind.workflows.skills.resolver import (
     resolve_run_skill_selection,
 )
 
-
 @pytest.fixture
 def skills_mirror(tmp_path, monkeypatch):
     mirror = tmp_path / "skills"
@@ -41,7 +40,6 @@ def skills_mirror(tmp_path, monkeypatch):
     )
     return mirror, legacy
 
-
 def test_resolve_run_skill_selection_uses_global_defaults(skills_mirror, monkeypatch):
     mirror, _ = skills_mirror
     monkeypatch.setattr(
@@ -65,7 +63,6 @@ def test_resolve_run_skill_selection_uses_global_defaults(skills_mirror, monkeyp
     assert resolved.selection_source == "global_default"
     assert [skill.skill_name for skill in resolved.skills] == ["auto"]
     assert resolved.skills[0].source_uri == (mirror / "auto").resolve().as_uri()
-
 
 def test_resolve_run_skill_selection_permissive_mode_discovers_local_skills(
     skills_mirror, monkeypatch
@@ -99,7 +96,6 @@ def test_resolve_run_skill_selection_permissive_mode_discovers_local_skills(
     assert resolved.skills[1].source_uri == (mirror / "docs-lint").resolve().as_uri()
     assert resolved.skills[2].source_uri == (legacy / "legacy").resolve().as_uri()
 
-
 def test_resolve_run_skill_selection_prefers_job_override(skills_mirror):
     resolved = resolve_run_skill_selection(
         run_id="run-2",
@@ -115,14 +111,12 @@ def test_resolve_run_skill_selection_prefers_job_override(skills_mirror):
     assert resolved.skills[0].version == "1.2.0"
     assert resolved.skills[0].source_uri == "file:///tmp/custom/docs-lint"
 
-
 def test_resolve_run_skill_selection_rejects_duplicates(skills_mirror):
     with pytest.raises(SkillResolutionError, match="Duplicate skill name"):
         resolve_run_skill_selection(
             run_id="run-3",
             context={"skill_selection": ["docs-lint:1", "docs-lint:2"]},
         )
-
 
 @pytest.mark.parametrize("skill_name", ["../evil", "a/b", "a\\b", "..", "bad name"])
 def test_resolve_run_skill_selection_rejects_unsafe_names(skills_mirror, skill_name):
@@ -132,7 +126,6 @@ def test_resolve_run_skill_selection_rejects_unsafe_names(skills_mirror, skill_n
             context={"skill_selection": [f"{skill_name}:1.0.0"]},
         )
 
-
 def test_resolve_run_skill_selection_falls_back_to_legacy_root(skills_mirror):
     _, legacy = skills_mirror
     resolved = resolve_run_skill_selection(
@@ -141,7 +134,6 @@ def test_resolve_run_skill_selection_falls_back_to_legacy_root(skills_mirror):
     )
 
     assert resolved.skills[0].source_uri == (legacy / "legacy").resolve().as_uri()
-
 
 def test_resolve_run_skill_selection_resolves_jira_issue_updater_repo_skill(
     monkeypatch,
@@ -177,7 +169,6 @@ def test_resolve_run_skill_selection_resolves_jira_issue_updater_repo_skill(
     assert resolved.skills[0].skill_name == "jira-issue-updater"
     assert resolved.skills[0].source_uri == active_skill.resolve().as_uri()
 
-
 def test_resolve_run_skill_selection_requires_source(monkeypatch, tmp_path):
     empty_root = tmp_path / "empty"
     empty_root.mkdir(parents=True)
@@ -198,7 +189,6 @@ def test_resolve_run_skill_selection_requires_source(monkeypatch, tmp_path):
             run_id="run-5",
             context={"skill_selection": ["missing:1.0.0"]},
         )
-
 
 def test_list_available_skill_names_permissive_mode_discovers_local_roots(
     skills_mirror, monkeypatch
@@ -221,7 +211,6 @@ def test_list_available_skill_names_permissive_mode_discovers_local_roots(
 
     assert list_available_skill_names() == ("auto", "docs-lint", "legacy")
 
-
 def test_list_available_skill_names_allowlist_filters_unlisted_local_skills(
     skills_mirror, monkeypatch
 ):
@@ -242,7 +231,6 @@ def test_list_available_skill_names_allowlist_filters_unlisted_local_skills(
     )
 
     assert list_available_skill_names() == ("auto", "legacy")
-
 
 def test_list_available_skill_names_default_skill_without_local_mirror(
     monkeypatch, tmp_path
@@ -280,7 +268,6 @@ def test_list_available_skill_names_default_skill_without_local_mirror(
     # With no local mirror, the default_skill has no on-disk path, so
     # list_available_skill_names returns an empty tuple.
     assert list_available_skill_names() == ()
-
 
 def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
     monkeypatch, tmp_path
@@ -342,7 +329,6 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
         "speckit-orchestrate",
     )
 
-
 def test_list_available_skill_names_falls_back_to_cwd_when_repo_root_mirror_missing(
     monkeypatch, tmp_path
 ):
@@ -390,7 +376,6 @@ def test_list_available_skill_names_falls_back_to_cwd_when_repo_root_mirror_miss
     )
 
     assert list_available_skill_names() == ("local-gate-tool",)
-
 
 def test_project_root_fallback_handles_shallow_paths(monkeypatch):
     resolver_module = sys.modules[SkillResolutionError.__module__]

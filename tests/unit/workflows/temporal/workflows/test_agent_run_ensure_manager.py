@@ -13,7 +13,6 @@ import textwrap
 
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
-
 class TestEnsureManagerAutoStart:
     """Verify request_slot is routed through the auto-start fallback."""
 

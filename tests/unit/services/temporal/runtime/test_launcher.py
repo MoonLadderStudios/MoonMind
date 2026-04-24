@@ -13,7 +13,6 @@ from moonmind.workflows.temporal.runtime.launcher import (
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
-
 def _make_profile(**overrides) -> ManagedRuntimeProfile:
     defaults = dict(
         runtime_id="codex-cli",
@@ -27,7 +26,6 @@ def _make_profile(**overrides) -> ManagedRuntimeProfile:
     defaults.update(overrides)
     return ManagedRuntimeProfile(**defaults)
 
-
 def _make_request(**overrides) -> AgentExecutionRequest:
     defaults = dict(
         agent_kind="managed",
@@ -38,7 +36,6 @@ def _make_request(**overrides) -> AgentExecutionRequest:
     )
     defaults.update(overrides)
     return AgentExecutionRequest(**defaults)
-
 
 def test_build_command_default():
     store = ManagedRunStore("/tmp/test-store")
@@ -53,7 +50,6 @@ def test_build_command_default():
     assert "--effort" in cmd
     assert "medium" in cmd
 
-
 def test_build_command_with_request_overrides():
     store = ManagedRunStore("/tmp/test-store")
     launcher = ManagedRuntimeLauncher(store)
@@ -64,7 +60,6 @@ def test_build_command_with_request_overrides():
     assert "o3" in cmd
     assert "high" in cmd
 
-
 def test_build_command_with_instruction_ref():
     store = ManagedRunStore("/tmp/test-store")
     launcher = ManagedRuntimeLauncher(store)
@@ -74,7 +69,6 @@ def test_build_command_with_instruction_ref():
     cmd = launcher.build_command(profile, request)
     assert "--prompt" in cmd
     assert "instr-ref-1" in cmd
-
 
 def test_build_command_codex_cli():
     """Codex CLI uses `codex exec -m MODEL [PROMPT]` — no --effort or --prompt flags."""
@@ -102,7 +96,6 @@ def test_build_command_codex_cli():
     assert "--prompt" not in cmd
     assert "Fix the bug" in cmd
 
-
 def test_build_command_gemini_cli():
     """Gemini CLI uses `gemini --yolo --prompt PROMPT --model MODEL`."""
     store = ManagedRunStore("/tmp/test-store")
@@ -124,7 +117,6 @@ def test_build_command_gemini_cli():
     assert "--effort" not in cmd
     assert "Fix the bug" in cmd
 
-
 def test_build_command_per_runtime():
     store = ManagedRunStore("/tmp/test-store")
     launcher = ManagedRuntimeLauncher(store)
@@ -141,9 +133,6 @@ def test_build_command_per_runtime():
     # No model/effort flags since both are None and no request overrides
     assert "--model" not in cmd
     assert "--effort" not in cmd
-
-
-
 
 @pytest.mark.asyncio
 async def test_launch_spawns_process(tmp_path, monkeypatch):
@@ -165,7 +154,6 @@ async def test_launch_spawns_process(tmp_path, monkeypatch):
     assert loaded is not None
     assert loaded.pid == process.pid
 
-
 @pytest.mark.asyncio
 async def test_launch_keeps_workflow_id_none_as_null(tmp_path):
     store = ManagedRunStore(tmp_path)
@@ -185,7 +173,6 @@ async def test_launch_keeps_workflow_id_none_as_null(tmp_path):
     loaded = store.load("run-none-workflow")
     assert loaded is not None
     assert loaded.workflow_id is None
-
 
 @pytest.mark.asyncio
 async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch):
@@ -241,7 +228,6 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
 
     assert captured_env["MM_SAFE"] == "1"
     assert captured_env["GITHUB_TOKEN"] == "ghp-runtime"
-
 
 @pytest.mark.asyncio
 async def test_launch_registers_generated_support_dir_for_cleanup(tmp_path, monkeypatch):
@@ -316,7 +302,6 @@ async def test_launch_registers_generated_support_dir_for_cleanup(tmp_path, monk
     assert support_dir.exists()
     assert str(support_dir / "codex-home" / "config.toml") in cleanup_path_set
 
-
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService")
 async def test_launch_builds_codex_command_after_workspace_preparation(
@@ -388,7 +373,6 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
         for arg in captured_args
     )
 
-
 @pytest.mark.asyncio
 async def test_launch_resets_stale_live_log_spool(tmp_path, monkeypatch):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
@@ -440,7 +424,6 @@ async def test_launch_resets_stale_live_log_spool(tmp_path, monkeypatch):
 
     assert not spool_path.exists()
 
-
 def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_path):
     env = {"GITHUB_TOKEN": "ghp_testtoken123", "PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(
@@ -469,7 +452,6 @@ def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_pat
     assert "ghp_testtoken123" not in git_helper.read_text(encoding="utf-8")
     assert "ghp_testtoken123" not in gitconfig_text
 
-
 def test_persist_gh_config_writes_safe_directory_without_token(tmp_path):
     env = {"PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
@@ -483,13 +465,11 @@ def test_persist_gh_config_writes_safe_directory_without_token(tmp_path):
     assert env["GIT_CONFIG_GLOBAL"] == str(gitconfig)
     assert "[credential]" not in gitconfig.read_text(encoding="utf-8")
 
-
 def test_persist_gh_config_skips_without_workspace():
     env = {"PATH": "/usr/bin"}
     ManagedRuntimeLauncher._persist_gh_config(env, None)
     assert "GH_CONFIG_DIR" not in env
     assert "GIT_CONFIG_GLOBAL" not in env
-
 
 def test_build_github_socket_path_stays_short_for_long_workspace_paths(tmp_path):
     support_root = tmp_path / ("nested-" * 12) / ("workspace-" * 8)
@@ -501,7 +481,6 @@ def test_build_github_socket_path_stays_short_for_long_workspace_paths(tmp_path)
     assert len(socket_path.encode("utf-8")) < 80
     assert str(support_root) not in socket_path
     assert socket_path.endswith(".sock")
-
 
 def test_persist_gh_config_uses_support_root_for_repo_workspace(tmp_path):
     run_root = tmp_path / "run-1"
@@ -539,7 +518,6 @@ def test_persist_gh_config_uses_support_root_for_repo_workspace(tmp_path):
         encoding="utf-8"
     )
 
-
 def test_persist_gh_config_writes_git_credential_helper(tmp_path):
     """When a .git/config exists, _persist_gh_config injects a broker helper."""
     git_dir = tmp_path / ".git"
@@ -567,7 +545,6 @@ def test_persist_gh_config_writes_git_credential_helper(tmp_path):
     assert "[credential]" in updated_config
     assert str(git_helper) in updated_config
 
-
 def test_persist_gh_config_git_credential_idempotent(tmp_path):
     """Calling _persist_gh_config twice should not duplicate the credential section."""
     git_dir = tmp_path / ".git"
@@ -591,7 +568,6 @@ def test_persist_gh_config_git_credential_idempotent(tmp_path):
     assert updated_config.count("# moonmind-credential-helper") == 1
     assert updated_config.count("[credential]") == 1
 
-
 def test_persist_gh_config_skips_git_cred_without_git_dir(tmp_path):
     """When no .git/config exists, global git config still carries the helper."""
     env = {"PATH": "/usr/bin"}
@@ -604,7 +580,6 @@ def test_persist_gh_config_skips_git_cred_without_git_dir(tmp_path):
     assert (tmp_path / ".moonmind" / "bin" / "git-credential-moonmind").exists()
     gitconfig = tmp_path / ".moonmind" / "gitconfig"
     assert "[credential]" in gitconfig.read_text(encoding="utf-8")
-
 
 def test_persist_gh_config_quotes_helper_path_when_store_has_spaces(tmp_path):
     run_root = tmp_path / "run root"
@@ -625,7 +600,6 @@ def test_persist_gh_config_quotes_helper_path_when_store_has_spaces(tmp_path):
     assert "helper = !" in updated_config
     assert str(run_root / ".moonmind" / "bin" / "git-credential-moonmind") in updated_config
 
-
 def test_persist_gh_config_writes_git_identity_to_global_config(tmp_path):
     env = {
         "PATH": "/usr/bin",
@@ -640,7 +614,6 @@ def test_persist_gh_config_writes_git_identity_to_global_config(tmp_path):
     assert "[user]" in text
     assert "\tname = Test User" in text
     assert "\temail = test@example.com" in text
-
 
 @pytest.mark.asyncio
 async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypatch):
@@ -661,7 +634,6 @@ async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypat
     )
     assert existing.run_id == "run-1"
     assert exc_process is None
-
 
 @pytest.mark.asyncio
 async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatch):
@@ -700,7 +672,6 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
     assert record.live_stream_capable is True
     assert expected_workspace.exists()
     assert str(expected_workspace) in stdout.decode("utf-8", errors="replace")
-
 
 @pytest.mark.asyncio
 async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypatch):
@@ -803,7 +774,6 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
     launch_kwargs = next(kwargs for args, kwargs in calls if args[:2] == ("echo", "hello"))
     assert launch_kwargs.get("cwd") == expected_workspace
 
-
 @pytest.mark.asyncio
 async def test_launch_emits_workspace_preparation_applied_annotation(
     tmp_path, monkeypatch
@@ -865,7 +835,6 @@ async def test_launch_emits_workspace_preparation_applied_annotation(
         emission.get("annotation_type") == "workspace_preparation_applied"
         for emission in log_streamer.emissions
     )
-
 
 @pytest.mark.asyncio
 async def test_launch_emits_workspace_preparation_skipped_annotation_for_existing_file(
@@ -929,7 +898,6 @@ async def test_launch_emits_workspace_preparation_skipped_annotation_for_existin
         emission.get("annotation_type") == "workspace_preparation_skipped"
         for emission in log_streamer.emissions
     )
-
 
 @pytest.mark.asyncio
 async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypatch):
@@ -1003,7 +971,6 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
     assert checkout_call[-1] == "main"
     assert "-b" not in checkout_call
 
-
 @pytest.mark.asyncio
 async def test_launch_raises_when_workspace_clone_fails(tmp_path, monkeypatch):
     store = ManagedRunStore(tmp_path / "managed_runs")
@@ -1052,10 +1019,6 @@ async def test_launch_raises_when_workspace_clone_fails(tmp_path, monkeypatch):
             profile=profile,
         )
     assert store.load("workspace-run-fail") is None
-
-
-
-
 
 @pytest.mark.asyncio
 async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeypatch):
@@ -1128,7 +1091,6 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
     # Keys specified in clear_env_keys must be stripped
     assert "OPENAI_API_KEY" not in captured_env, "clear_env_keys was ignored; ambient credential leaked"
 
-
 @pytest.mark.asyncio
 async def test_launch_filters_ambient_jira_credentials_from_child_env(
     tmp_path, monkeypatch
@@ -1185,7 +1147,6 @@ async def test_launch_filters_ambient_jira_credentials_from_child_env(
     assert captured_env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
     assert captured_env["HOME"] == "/home/testuser"
     assert not any(key.startswith("ATLASSIAN_") for key in captured_env)
-
 
 @pytest.mark.asyncio
 async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypatch):
@@ -1251,7 +1212,6 @@ async def test_launch_materializes_managed_api_key_target_env(tmp_path, monkeypa
     assert captured_env["ANTHROPIC_AUTH_TOKEN"] == "resolved-minimax-token"
     assert "MANAGED_API_KEY_REF" not in captured_env
     assert "MANAGED_API_KEY_TARGET_ENV" not in captured_env
-
 
 @pytest.mark.asyncio
 async def test_launch_materializes_claude_anthropic_secret_ref_profile(
@@ -1338,7 +1298,6 @@ async def test_launch_materializes_claude_anthropic_secret_ref_profile(
     assert "MANAGED_API_KEY_REF" not in captured_env
     assert "MANAGED_API_KEY_TARGET_ENV" not in captured_env
 
-
 @pytest.mark.asyncio
 async def test_launch_claude_anthropic_missing_secret_ref_fails_before_process(
     tmp_path, monkeypatch
@@ -1405,7 +1364,6 @@ async def test_launch_claude_anthropic_missing_secret_ref_fails_before_process(
     assert "missing" in message
     assert "resolved-claude-anthropic-key" not in message
     assert "ambient-anthropic-key" not in message
-
 
 @pytest.mark.asyncio
 async def test_launch_resolves_github_token_from_secret_ref_setting(
@@ -1488,7 +1446,6 @@ async def test_launch_resolves_github_token_from_secret_ref_setting(
     assert "resolved-github-token" not in gitconfig.read_text(encoding="utf-8")
     assert (run_root / ".moonmind" / "bin" / "gh").exists()
 
-
 @pytest.mark.asyncio
 async def test_launch_resolves_github_token_from_managed_secrets_store_without_profile_ref(
     tmp_path, monkeypatch
@@ -1561,7 +1518,6 @@ async def test_launch_resolves_github_token_from_managed_secrets_store_without_p
     assert "GITHUB_TOKEN" not in captured_env
     assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
     assert (run_root / ".moonmind" / "bin" / "gh").exists()
-
 
 @pytest.mark.asyncio
 async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
@@ -1636,7 +1592,6 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
     assert captured_env["GITHUB_TOKEN"] == "resolved-from-managed-secrets-table"
     assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
     assert (run_root / ".moonmind" / "bin" / "gh").exists()
-
 
 @pytest.mark.asyncio
 @pytest.mark.asyncio
@@ -1780,7 +1735,6 @@ async def test_launch_privilege_drop_for_claude_code_as_root(tmp_path, monkeypat
     assert actual_cmd[0] == "claude"
     assert "-p" in actual_cmd or "--dangerously-skip-permissions" in actual_cmd
 
-
 @pytest.mark.asyncio
 async def test_launch_privilege_drop_chowns_repo_only_for_external_workspace(tmp_path, monkeypatch):
     captured_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
@@ -1867,7 +1821,6 @@ async def test_launch_privilege_drop_chowns_repo_only_for_external_workspace(tmp
     assert len(chown_calls) == 1
     assert chown_calls[0][-1] == str(workspace_root)
 
-
 @pytest.mark.asyncio
 async def test_launch_materializes_claude_anthropic_oauth_home_profile(
     tmp_path, monkeypatch
@@ -1947,7 +1900,6 @@ async def test_launch_materializes_claude_anthropic_oauth_home_profile(
     assert "OPENAI_API_KEY" not in captured_env
     assert captured_cwd["value"] == str(workspace.resolve())
     assert captured_cwd["value"] != captured_env["MANAGED_AUTH_VOLUME_PATH"]
-
 
 @pytest.mark.asyncio
 async def test_launch_materializes_claude_oauth_home_profile_without_auth_volume_cleanup_paths(

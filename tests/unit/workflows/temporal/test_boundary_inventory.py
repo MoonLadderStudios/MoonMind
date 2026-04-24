@@ -7,14 +7,12 @@ from moonmind.workflows.temporal.boundary_inventory import (
     iter_temporal_boundary_contracts,
 )
 
-
 def test_inventory_preserves_mm327_tool_source() -> None:
     inventory = get_temporal_boundary_inventory()
 
     assert inventory.source_issue_key == "MM-327"
     assert inventory.board_scope == "TOOL"
     assert inventory.contracts == iter_temporal_boundary_contracts()
-
 
 def test_inventory_accessors_return_defensive_copies() -> None:
     inventory = get_temporal_boundary_inventory()
@@ -25,7 +23,6 @@ def test_inventory_accessors_return_defensive_copies() -> None:
 
     assert get_temporal_boundary_inventory().source_issue_key == "MM-327"
     assert iter_temporal_boundary_contracts()[0].name == "artifact.read"
-
 
 def test_inventory_covers_required_boundary_kinds() -> None:
     kinds = {contract.kind for contract in iter_temporal_boundary_contracts()}
@@ -39,7 +36,6 @@ def test_inventory_covers_required_boundary_kinds() -> None:
         "continue_as_new",
     }.issubset(kinds)
 
-
 def test_inventory_entries_have_request_models_and_source_coverage() -> None:
     for contract in iter_temporal_boundary_contracts():
         assert contract.request_model.name
@@ -47,7 +43,6 @@ def test_inventory_entries_have_request_models_and_source_coverage() -> None:
         assert contract.coverage_ids
         if contract.status != "modeled" or contract.response_model is None:
             assert contract.rationale
-
 
 def test_inventory_includes_representative_temporal_contracts() -> None:
     by_name = {

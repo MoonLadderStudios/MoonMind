@@ -1,6 +1,6 @@
 # Workflow Scheduling Guide
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkflowSchedulingGuide.md`](../tmp/remaining-work/Temporal-WorkflowSchedulingGuide.md)
+**Implementation tracking:** Rollout and backlog notes live in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files—not as migration checklists in canonical `docs/`.
 
 **Status:** Active
 **Owner:** MoonMind Platform
@@ -64,14 +64,14 @@ When a deferred one-time execution is created:
 
 ```json
 {
-  "workflowId": "mm:01HX...",
-  "runId": "temporal-run-uuid",
-  "workflowType": "MoonMind.Run",
-  "state": "scheduled",
-  "scheduledFor": "2026-03-19T02:00:00Z",
-  "title": "Fix auth bug in login page",
-  "startedAt": null,
-  "redirectPath": "/tasks/mm:01HX...?source=temporal"
+ "workflowId": "mm:01HX...",
+ "runId": "temporal-run-uuid",
+ "workflowType": "MoonMind.Run",
+ "state": "scheduled",
+ "scheduledFor": "2026-03-19T02:00:00Z",
+ "title": "Fix auth bug in login page",
+ "startedAt": null,
+ "redirectPath": "/tasks/mm:01HX...?source=temporal"
 }
 ```
 
@@ -126,25 +126,25 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
 
 ```json
 {
-  "name": "Nightly code scan",
-  "description": "Run a security scan every night at 2 AM",
-  "enabled": true,
-  "cron": "0 2 * * *",
-  "timezone": "America/Los_Angeles",
-  "scopeType": "personal",
-  "target": {
-    "workflowType": "MoonMind.Run",
-    "initialParameters": {
-      "runtime": "gemini_cli",
-      "model": "gemini-2.5-pro",
-      "repository": "MoonLadderStudios/MoonMind"
-    }
-  },
-  "policy": {
-    "overlap": "skip",
-    "catchup": "last",
-    "jitterSeconds": 30
-  }
+ "name": "Nightly code scan",
+ "description": "Run a security scan every night at 2 AM",
+ "enabled": true,
+ "cron": "0 2 * * *",
+ "timezone": "America/Los_Angeles",
+ "scopeType": "personal",
+ "target": {
+ "workflowType": "MoonMind.Run",
+ "initialParameters": {
+ "runtime": "gemini_cli",
+ "model": "gemini-2.5-pro",
+ "repository": "MoonLadderStudios/MoonMind"
+ }
+ },
+ "policy": {
+ "overlap": "skip",
+ "catchup": "last",
+ "jitterSeconds": 30
+ }
 }
 ```
 
@@ -167,13 +167,13 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
 
 ```json
 {
-  "scheduled": true,
-  "definitionId": "def-uuid-123",
-  "name": "Nightly code scan",
-  "cron": "0 2 * * *",
-  "timezone": "America/Los_Angeles",
-  "nextRunAt": "2026-03-19T09:00:00Z",
-  "redirectPath": "/tasks/schedules/def-uuid-123"
+ "scheduled": true,
+ "definitionId": "def-uuid-123",
+ "name": "Nightly code scan",
+ "cron": "0 2 * * *",
+ "timezone": "America/Los_Angeles",
+ "nextRunAt": "2026-03-19T09:00:00Z",
+ "redirectPath": "/tasks/schedules/def-uuid-123"
 }
 ```
 
@@ -204,20 +204,20 @@ POST /api/executions
 
 ```json
 {
-  "workflowType": "MoonMind.Run",
-  "title": "Fix auth bug in login page",
-  "inputArtifactRef": "art_abc123",
-  "planArtifactRef": null,
-  "manifestArtifactRef": null,
-  "failurePolicy": null,
-  "initialParameters": {
-    "runtime": "gemini_cli",
-    "model": "gemini-2.5-pro",
-    "effort": "high",
-    "repository": "MoonLadderStudios/MoonMind",
-    "publishMode": "pr"
-  },
-  "idempotencyKey": null
+ "workflowType": "MoonMind.Run",
+ "title": "Fix auth bug in login page",
+ "inputArtifactRef": "art_abc123",
+ "planArtifactRef": null,
+ "manifestArtifactRef": null,
+ "failurePolicy": null,
+ "initialParameters": {
+ "runtime": "gemini_cli",
+ "model": "gemini-2.5-pro",
+ "effort": "high",
+ "repository": "MoonLadderStudios/MoonMind",
+ "publishMode": "pr"
+ },
+ "idempotencyKey": null
 }
 ```
 
@@ -239,21 +239,21 @@ POST /api/executions
 
 1. **API service** receives the request, authenticates the caller, and validates the payload.
 2. **If `schedule` is absent or null**, the execution starts immediately:
-   - **`TemporalExecutionService.create_execution()`** generates a workflow ID (`mm:<uuid>`), persists a `TemporalExecutionRecord` in Postgres, and calls `TemporalClientAdapter.start_workflow()`.
-   - **`TemporalClientAdapter.start_workflow()`** calls the Temporal SDK's `client.start_workflow()` with the workflow type, ID, task queue (`mm.workflow`), memo (title, summary), and search attributes (`mm_owner_id`, `mm_owner_type`, `mm_state`, `mm_entry`, `mm_updated_at`).
-   - The **workflow worker** picks up the execution and drives it through the lifecycle: `initializing → planning → executing → proposals → finalizing → completed/failed`.
+ - **`TemporalExecutionService.create_execution()`** generates a workflow ID (`mm:<uuid>`), persists a `TemporalExecutionRecord` in Postgres, and calls `TemporalClientAdapter.start_workflow()`.
+ - **`TemporalClientAdapter.start_workflow()`** calls the Temporal SDK's `client.start_workflow()` with the workflow type, ID, task queue (`mm.workflow`), memo (title, summary), and search attributes (`mm_owner_id`, `mm_owner_type`, `mm_state`, `mm_entry`, `mm_updated_at`).
+ - The **workflow worker** picks up the execution and drives it through the lifecycle: `initializing → planning → executing → proposals → finalizing → completed/failed`.
 3. **If `schedule` is present**, the API routes to the scheduling path instead (see Section 4).
 
 #### Response (Immediate Execution)
 
 ```json
 {
-  "workflowId": "mm:01HX...",
-  "runId": "temporal-run-uuid",
-  "workflowType": "MoonMind.Run",
-  "state": "initializing",
-  "title": "Fix auth bug in login page",
-  "startedAt": "2026-03-18T21:48:00Z"
+ "workflowId": "mm:01HX...",
+ "runId": "temporal-run-uuid",
+ "workflowType": "MoonMind.Run",
+ "state": "initializing",
+ "title": "Fix auth bug in login page",
+ "startedAt": "2026-03-18T21:48:00Z"
 }
 ```
 
@@ -269,20 +269,20 @@ POST /api/executions
 
 1. User navigates to **New Task** from the dashboard sidebar or header.
 2. The submit form offers:
-   - **Instructions** text area
-   - **Runtime** selector (Codex, Gemini CLI, Claude, Jules when enabled)
-   - **Model** and **Effort** selection (runtime-specific defaults auto-populated)
-   - **Repository** field
-   - **Publish mode** (PR, direct commit, etc.)
-   - **Attachments** (images, context files)
-   - Optional **skill** or **step template** selection
-   - **Schedule** panel (see Section 5.4 for details)
+ - **Instructions** text area
+ - **Runtime** selector (Codex, Gemini CLI, Claude, Jules when enabled)
+ - **Model** and **Effort** selection (runtime-specific defaults auto-populated)
+ - **Repository** field
+ - **Publish mode** (PR, direct commit, etc.)
+ - **Attachments** (images, context files)
+ - Optional **skill** or **step template** selection
+ - **Schedule** panel (see Section 5.4 for details)
 3. User clicks **Submit** (or **Schedule** when scheduling is configured).
 4. The dashboard sends the request to the backend create endpoint. The backend determines the workflow type and handles scheduling if specified.
 5. On success:
-   - **Immediate execution:** redirect to `/tasks/{taskId}?source=temporal`
-   - **Deferred one-time execution:** redirect to `/tasks/{taskId}?source=temporal` (shows scheduled banner)
-   - **Recurring schedule:** redirect to `/tasks/schedules/{definitionId}`
+ - **Immediate execution:** redirect to `/tasks/{taskId}?source=temporal`
+ - **Deferred one-time execution:** redirect to `/tasks/{taskId}?source=temporal` (shows scheduled banner)
+ - **Recurring schedule:** redirect to `/tasks/schedules/{definitionId}`
 
 #### Key UI Rules
 
@@ -301,23 +301,23 @@ The schedule panel appears below the main task fields and above the submit butto
 
 ```
 ┌─────────────────────────────────────────┐
-│  When to run                            │
-│                                         │
-│  ( • ) Run immediately                  │
-│  (   ) Schedule for later               │
-│  (   ) Set up recurring schedule        │
-│                                         │
-│  ─── Shown when "Schedule for later" ── │
-│  Date: [____-__-__]                     │
-│  Time: [__:__]  Timezone: [_________▾]  │
-│                                         │
-│  ── Shown when "Recurring schedule" ──  │
-│  Schedule name: [____________________]  │
-│  Cron: [_______]  Timezone: [________▾] │
-│  Preview: "Every weekday at 9:00 AM"    │
-│                                         │
+│ When to run │
+│ │
+│ ( • ) Run immediately │
+│ ( ) Schedule for later │
+│ ( ) Set up recurring schedule │
+│ │
+│ ─── Shown when "Schedule for later" ── │
+│ Date: [____-__-__] │
+│ Time: [__:__] Timezone: [_________▾] │
+│ │
+│ ── Shown when "Recurring schedule" ── │
+│ Schedule name: [____________________] │
+│ Cron: [_______] Timezone: [________▾] │
+│ Preview: "Every weekday at 9:00 AM" │
+│ │
 └─────────────────────────────────────────┘
-│ [ Submit ]  or  [ Schedule ]            │
+│ [ Submit ] or [ Schedule ] │
 ```
 
 #### Behavior per Selection
@@ -410,12 +410,12 @@ The cron field uses standard 5-field POSIX cron syntax:
 
 ```
 ┌───────── minute (0–59)
-│  ┌────── hour (0–23)
-│  │  ┌─── day of month (1–31)
-│  │  │  ┌ month (1–12)
-│  │  │  │  ┌ day of week (0–7, where 0 and 7 = Sunday)
-│  │  │  │  │
-*  *  *  *  *
+│ ┌────── hour (0–23)
+│ │ ┌─── day of month (1–31)
+│ │ │ ┌ month (1–12)
+│ │ │ │ ┌ day of week (0–7, where 0 and 7 = Sunday)
+│ │ │ │ │
+* * * * *
 ```
 
 **Common examples:**
@@ -439,72 +439,72 @@ The cron field uses standard 5-field POSIX cron syntax:
 
 ```bash
 curl -X POST http://localhost:8000/api/executions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{
-    "workflowType": "MoonMind.Run",
-    "title": "Fix login bug",
-    "initialParameters": {
-      "runtime": "gemini_cli",
-      "model": "gemini-2.5-pro",
-      "repository": "MoonLadderStudios/MoonMind"
-    }
-  }'
+ -H "Content-Type: application/json" \
+ -H "Authorization: Bearer $TOKEN" \
+ -d '{
+ "workflowType": "MoonMind.Run",
+ "title": "Fix login bug",
+ "initialParameters": {
+ "runtime": "gemini_cli",
+ "model": "gemini-2.5-pro",
+ "repository": "MoonLadderStudios/MoonMind"
+ }
+ }'
 ```
 
 ### Start a deferred one-time workflow
 
 ```bash
 curl -X POST http://localhost:8000/api/executions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{
-    "workflowType": "MoonMind.Run",
-    "title": "Deploy staging environment",
-    "initialParameters": {
-      "runtime": "gemini_cli",
-      "model": "gemini-2.5-pro",
-      "repository": "MoonLadderStudios/MoonMind"
-    },
-    "schedule": {
-      "mode": "once",
-      "scheduledFor": "2026-03-19T02:00:00Z"
-    }
-  }'
+ -H "Content-Type: application/json" \
+ -H "Authorization: Bearer $TOKEN" \
+ -d '{
+ "workflowType": "MoonMind.Run",
+ "title": "Deploy staging environment",
+ "initialParameters": {
+ "runtime": "gemini_cli",
+ "model": "gemini-2.5-pro",
+ "repository": "MoonLadderStudios/MoonMind"
+ },
+ "schedule": {
+ "mode": "once",
+ "scheduledFor": "2026-03-19T02:00:00Z"
+ }
+ }'
 ```
 
 ### Create a recurring schedule
 
 ```bash
 curl -X POST http://localhost:8000/api/recurring-tasks \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{
-    "name": "Daily code review",
-    "cron": "0 2 * * *",
-    "timezone": "America/Los_Angeles",
-    "scopeType": "personal",
-    "workflowType": "MoonMind.Run",
-    "initialParameters": {
-      "runtime": "gemini_cli",
-      "model": "gemini-2.5-pro",
-      "repository": "MoonLadderStudios/MoonMind"
-    }
-  }'
+ -H "Content-Type: application/json" \
+ -H "Authorization: Bearer $TOKEN" \
+ -d '{
+ "name": "Daily code review",
+ "cron": "0 2 * * *",
+ "timezone": "America/Los_Angeles",
+ "scopeType": "personal",
+ "workflowType": "MoonMind.Run",
+ "initialParameters": {
+ "runtime": "gemini_cli",
+ "model": "gemini-2.5-pro",
+ "repository": "MoonLadderStudios/MoonMind"
+ }
+ }'
 ```
 
 ### Trigger manual run
 
 ```bash
 curl -X POST http://localhost:8000/api/recurring-tasks/$SCHEDULE_ID/run \
-  -H "Authorization: Bearer $TOKEN"
+ -H "Authorization: Bearer $TOKEN"
 ```
 
 ### List run history
 
 ```bash
 curl http://localhost:8000/api/recurring-tasks/$SCHEDULE_ID/runs?limit=50 \
-  -H "Authorization: Bearer $TOKEN"
+ -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
@@ -515,16 +515,16 @@ The dashboard's schedule UI is powered by the `sources.schedules` block in the r
 
 ```json
 {
-  "sources": {
-    "schedules": {
-      "list": "/api/recurring-tasks?scope=personal",
-      "create": "/api/recurring-tasks",
-      "detail": "/api/recurring-tasks/{id}",
-      "update": "/api/recurring-tasks/{id}",
-      "runNow": "/api/recurring-tasks/{id}/run",
-      "runs": "/api/recurring-tasks/{id}/runs?limit=200"
-    }
-  }
+ "sources": {
+ "schedules": {
+ "list": "/api/recurring-tasks?scope=personal",
+ "create": "/api/recurring-tasks",
+ "detail": "/api/recurring-tasks/{id}",
+ "update": "/api/recurring-tasks/{id}",
+ "runNow": "/api/recurring-tasks/{id}/run",
+ "runs": "/api/recurring-tasks/{id}/runs?limit=200"
+ }
+ }
 }
 ```
 

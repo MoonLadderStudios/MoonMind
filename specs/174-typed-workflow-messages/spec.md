@@ -24,10 +24,9 @@ Coverage IDs
 Story Metadata
 - Story ID: STORY-003
 - Short name: typed-workflow-messages
-- Breakdown JSON: docs/tmp/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json
+- Breakdown JSON: artifacts/story-breakdowns/mm-316-breakdown-docs-temporal-temporaltypesafet-c8c0a38c/stories.json
 
 Additional constraints:
-
 
 Selected mode: runtime.
 Default to runtime mode and only use docs mode when explicitly requested.

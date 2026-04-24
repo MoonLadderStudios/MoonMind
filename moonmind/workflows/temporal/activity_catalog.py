@@ -29,10 +29,8 @@ SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
 
-
 class TemporalActivityCatalogError(ValueError):
     """Raised when Temporal activity routing metadata is invalid."""
-
 
 @dataclass(frozen=True, slots=True)
 class TemporalActivityTimeouts:
@@ -59,7 +57,6 @@ class TemporalActivityTimeouts:
                 "heartbeat_timeout_seconds must be greater than zero"
             )
 
-
 @dataclass(frozen=True, slots=True)
 class TemporalActivityRetries:
     """Default retry policy for one activity type.
@@ -79,7 +76,6 @@ class TemporalActivityRetries:
                 "max_interval_seconds must be greater than zero"
             )
 
-
 @dataclass(frozen=True, slots=True)
 class TemporalActivityDefinition:
     """Stable routing contract for one activity type."""
@@ -93,7 +89,6 @@ class TemporalActivityDefinition:
     retries: TemporalActivityRetries
     heartbeat_required: bool = False
 
-
 @dataclass(frozen=True, slots=True)
 class TemporalWorkerFleet:
     """Worker fleet metadata used for routing and operational validation."""
@@ -104,7 +99,6 @@ class TemporalWorkerFleet:
     privileges: tuple[str, ...]
     scaling_notes: str
     activity_types: tuple[str, ...] = ()
-
 
 @dataclass(frozen=True, slots=True)
 class TemporalActivityRoute:
@@ -118,7 +112,6 @@ class TemporalActivityRoute:
     retries: TemporalActivityRetries
     heartbeat_required: bool = False
 
-
 def _activity_retries(
     *, max_attempts: int, max_interval_seconds: int, non_retryable: tuple[str, ...] = ()
 ) -> TemporalActivityRetries:
@@ -127,7 +120,6 @@ def _activity_retries(
         max_interval_seconds=max_interval_seconds,
         non_retryable_error_codes=non_retryable,
     )
-
 
 def _skill_route_family(required_capabilities: tuple[str, ...]) -> tuple[str, str]:
     categories: set[str] = set()
@@ -167,7 +159,6 @@ def _skill_route_family(required_capabilities: tuple[str, ...]) -> tuple[str, st
     if category == "docker_workload":
         return AGENT_RUNTIME_FLEET, "docker_workload"
     return INTEGRATIONS_FLEET, integration_caps[0]
-
 
 class TemporalActivityCatalog:
     """Default activity catalog + worker fleet topology for Temporal workers."""
@@ -288,7 +279,6 @@ class TemporalActivityCatalog:
                     f"Activity '{activity.activity_type}' routes to queue '{activity.task_queue}' "
                     f"outside fleet '{activity.fleet}'"
                 )
-
 
 def build_default_activity_catalog(
     temporal_settings: TemporalSettings | None = None,
@@ -1163,7 +1153,6 @@ def build_default_activity_catalog(
 
     return TemporalActivityCatalog(activities=activities, fleets=fleets)
 
-
 def manifest_ingest_activity_routes(
     catalog: TemporalActivityCatalog | None = None,
 ) -> tuple[TemporalActivityRoute, ...]:
@@ -1177,7 +1166,6 @@ def manifest_ingest_activity_routes(
             "manifest.write_summary",
         )
     )
-
 
 def skill_policy_as_route(
     *,
@@ -1209,7 +1197,6 @@ def skill_policy_as_route(
         ),
         heartbeat_required=heartbeat_required,
     )
-
 
 __all__ = [
     "AGENT_RUNTIME_FLEET",

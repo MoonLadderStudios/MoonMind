@@ -102,5 +102,4 @@ Traceability verification:
 ```bash
 rg -n "MM-403|postMergeJira|Post-Merge Jira Completion" \
   specs/205-post-merge-jira-completion \
-  docs/tmp/jira-orchestration-inputs/MM-403-moonspec-orchestration-input.md
 ```

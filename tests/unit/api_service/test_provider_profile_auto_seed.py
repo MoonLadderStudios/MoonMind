@@ -15,7 +15,6 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
 )
 
-
 @pytest.fixture()
 def _module_db(tmp_path):
     """Create a single in-memory SQLite engine and schema for the test."""
@@ -41,7 +40,6 @@ def _module_db(tmp_path):
     yield
     db_base.DATABASE_URL, db_base.engine, db_base.async_session_maker = _orig
     asyncio.run(_teardown(engine))
-
 
 @pytest.mark.asyncio
 async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
@@ -93,8 +91,6 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
         "OPENAI_API_KEY",
     ]
 
-
-
 @pytest.mark.asyncio
 async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
     """Calling auto-seed twice should not duplicate profiles."""
@@ -115,7 +111,6 @@ async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
         profiles = result.scalars().all()
     assert len(profiles) == 3
 
-
 @pytest.mark.asyncio
 async def test_auto_seed_skipped_when_env_set(_module_db, monkeypatch):
     """Seeding should be skipped when MOONMIND_SKIP_PROVIDER_PROFILE_SEED is set."""
@@ -129,7 +124,6 @@ async def test_auto_seed_skipped_when_env_set(_module_db, monkeypatch):
         result = await session.execute(select(ManagedAgentProviderProfile))
         profiles = result.scalars().all()
     assert len(profiles) == 0
-
 
 @pytest.mark.asyncio
 async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
@@ -151,7 +145,6 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     assert "claude_anthropic" in profile_ids
     assert "claude_minimax" in profile_ids
 
-
     # Verify MiniMax profile details.
     mm_profile = next(p for p in profiles if p.profile_id == "claude_minimax")
     assert mm_profile.runtime_id == "claude_code"
@@ -168,7 +161,6 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
 
     anthropic_profile = next(p for p in profiles if p.profile_id == "claude_anthropic")
     assert anthropic_profile.is_default is True
-
 
 @pytest.mark.asyncio
 async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch):
@@ -194,8 +186,6 @@ async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch
     profile_ids = {p.profile_id for p in profiles}
     assert "claude_anthropic" in profile_ids
     assert "claude_minimax" in profile_ids
-
-
 
 @pytest.mark.asyncio
 async def test_auto_seed_reconcile_does_not_overwrite_user_default_model(_module_db, monkeypatch):
@@ -224,7 +214,6 @@ async def test_auto_seed_reconcile_does_not_overwrite_user_default_model(_module
         # because desired_default_model is None for the standard profiles.
         assert profile.default_model == "gpt-user-custom"
 
-
 @pytest.mark.asyncio
 async def test_auto_seed_reconciles_legacy_codex_default_provider(
     _module_db, monkeypatch
@@ -251,7 +240,6 @@ async def test_auto_seed_reconciles_legacy_codex_default_provider(
         assert profile is not None
         assert profile.provider_id == "openai"
         assert profile.provider_label == "OpenAI"
-
 
 @pytest.mark.asyncio
 async def test_auto_seed_backfills_claude_api_key_clear_env_for_existing_profile(
@@ -283,7 +271,6 @@ async def test_auto_seed_backfills_claude_api_key_clear_env_for_existing_profile
             "CLAUDE_API_KEY",
         ]
 
-
 @pytest.mark.asyncio
 async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch):
     """When MINIMAX_API_KEY is absent, only the 3 default profiles are seeded."""
@@ -303,7 +290,6 @@ async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch
     assert "claude_minimax" not in profile_ids
     assert "claude_anthropic" in profile_ids
     assert len(profiles) == 3
-
 
 @pytest.mark.asyncio
 async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
@@ -406,7 +392,6 @@ async def test_auto_seed_reconciles_openrouter_codex_config_template_for_existin
     assert content_template["model_reasoning_effort"] == "high"
     assert content_template["model"] == "qwen/qwen3.6-plus"
 
-
 @pytest.mark.asyncio
 async def test_auto_seed_reconciles_deprecated_openrouter_codex_seed_model(
     _module_db, monkeypatch
@@ -446,7 +431,6 @@ async def test_auto_seed_reconciles_deprecated_openrouter_codex_seed_model(
         content_template["profiles"]["openrouter_qwen36_plus"]["model"]
         == "qwen/qwen3.6-plus"
     )
-
 
 @pytest.mark.asyncio
 async def test_auto_seed_does_not_overwrite_custom_openrouter_codex_config_template(

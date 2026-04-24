@@ -34,7 +34,6 @@ from .workspace_links import (
     ensure_shared_skill_links,
 )
 
-
 class SkillMaterializationError(RuntimeError):
     """Raised when skill materialization fails."""
 
@@ -42,11 +41,9 @@ class SkillMaterializationError(RuntimeError):
         super().__init__(message)
         self.code = code
 
-
 def _make_writable(func, path, _exc_info) -> None:
     os.chmod(path, stat.S_IWRITE)
     func(path)
-
 
 _SKILL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 _DOWNLOAD_TIMEOUT_SECONDS = 30
@@ -60,7 +57,6 @@ _PUBLIC_ADDRESS_REJECTION_PROPERTIES = (
 )
 _GIT_SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443, "ssh": 22, "git": 9418}
 
-
 @dataclass(frozen=True, slots=True)
 class MaterializedSkill:
     """Materialized skill metadata for one run."""
@@ -70,7 +66,6 @@ class MaterializedSkill:
     source_uri: str
     content_hash: str
     cache_path: Path
-
 
 @dataclass(frozen=True, slots=True)
 class MaterializedSkillWorkspace:
@@ -100,7 +95,6 @@ class MaterializedSkillWorkspace:
             **self.links.to_payload(),
         }
 
-
 def _parse_frontmatter_name(skill_md: Path) -> str | None:
     try:
         raw = skill_md.read_text(encoding="utf-8")
@@ -127,7 +121,6 @@ def _parse_frontmatter_name(skill_md: Path) -> str | None:
         return parsed or None
     return None
 
-
 def _hash_skill_directory(skill_dir: Path) -> str:
     digest = hashlib.sha256()
 
@@ -150,7 +143,6 @@ def _hash_skill_directory(skill_dir: Path) -> str:
 
     return digest.hexdigest()
 
-
 def _validate_skill_name(skill_name: str) -> None:
     if not skill_name:
         raise SkillMaterializationError(
@@ -172,7 +164,6 @@ def _validate_skill_name(skill_name: str) -> None:
             f"Skill name '{skill_name}' contains unsupported characters",
         )
 
-
 def _mark_read_only(path: Path) -> None:
     if path.is_symlink():
         return
@@ -182,7 +173,6 @@ def _mark_read_only(path: Path) -> None:
             _mark_read_only(child)
         return
     path.chmod(0o444)
-
 
 def _extract_archive(archive: Path, destination: Path) -> Path:
     destination_root = destination.resolve()
@@ -238,7 +228,6 @@ def _extract_archive(archive: Path, destination: Path) -> Path:
             f"Skill bundle is not a valid zip/tar archive: {archive}",
         ) from exc
 
-
 def _safe_create_connection(
     address: Tuple[str, int],
     timeout: float = socket._GLOBAL_DEFAULT_TIMEOUT,  # type: ignore
@@ -291,13 +280,11 @@ def _safe_create_connection(
         raise err
     raise OSError("getaddrinfo returns an empty list")
 
-
 class _SafeHTTPConnection(http.client.HTTPConnection):
     def connect(self) -> None:
         self.sock = _safe_create_connection(
             (self.host, self.port), self.timeout, self.source_address
         )
-
 
 class _SafeHTTPSConnection(http.client.HTTPSConnection):
     def connect(self) -> None:
@@ -314,16 +301,13 @@ class _SafeHTTPSConnection(http.client.HTTPSConnection):
             self.sock, server_hostname=server_hostname
         )
 
-
 class _SafeHTTPHandler(HTTPHandler):
     def http_open(self, req: Request) -> Any:
         return self.do_open(_SafeHTTPConnection, req)
 
-
 class _SafeHTTPSHandler(HTTPSHandler):
     def https_open(self, req: Request) -> Any:
         return self.do_open(_SafeHTTPSConnection, req, context=self._context)
-
 
 def _validate_public_host(
     hostname: str,
@@ -358,7 +342,6 @@ def _validate_public_host(
                 f"{source_label} host resolves to a non-public address: {hostname}",
             )
 
-
 def _validate_public_remote_host(source_uri: str) -> None:
     parsed = urlparse(source_uri)
     hostname = parsed.hostname
@@ -375,7 +358,6 @@ def _validate_public_remote_host(source_uri: str) -> None:
         error_code="bundle_fetch_failed",
         source_label="Skill bundle source",
     )
-
 
 def _validate_git_source_uri(repo_uri: str) -> None:
     parsed = urlparse(repo_uri)
@@ -420,7 +402,6 @@ def _validate_git_source_uri(repo_uri: str) -> None:
         source_label="Git skill source",
     )
 
-
 def _download_remote_bundle(source_uri: str, destination: Path) -> Path:
     _validate_public_remote_host(source_uri)
     request = Request(source_uri, method="GET")
@@ -438,7 +419,6 @@ def _download_remote_bundle(source_uri: str, destination: Path) -> Path:
             f"Unable to download skill bundle from {source_uri}: {exc}",
         ) from exc
     return destination
-
 
 def _resolve_source_root(entry: ResolvedSkill, scratch_dir: Path) -> Path:
     source_uri = entry.source_uri.strip()
@@ -513,7 +493,6 @@ def _resolve_source_root(entry: ResolvedSkill, scratch_dir: Path) -> Path:
         f"Skill source path does not exist for {skill_name}: {candidate}",
     )
 
-
 def _find_skill_dir(root: Path, *, skill_name: str) -> Path:
     if root.name == skill_name:
         return root
@@ -537,7 +516,6 @@ def _find_skill_dir(root: Path, *, skill_name: str) -> Path:
         f"Unable to locate skill directory for '{skill_name}' in source root {root}",
     )
 
-
 def _validate_skill_metadata(entry: ResolvedSkill, skill_dir: Path) -> None:
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
@@ -558,7 +536,6 @@ def _validate_skill_metadata(entry: ResolvedSkill, skill_dir: Path) -> None:
             f"Resolved skill name '{entry.skill_name}' does not match directory '{skill_dir.name}'",
         )
 
-
 def _clear_directory(path: Path) -> None:
     if not path.exists():
         return
@@ -568,14 +545,12 @@ def _clear_directory(path: Path) -> None:
         elif child.is_dir():
             shutil.rmtree(child, onerror=_make_writable)
 
-
 def _ensure_signature(entry: ResolvedSkill, *, verify_signatures: bool) -> None:
     if verify_signatures and not entry.signature:
         raise SkillMaterializationError(
             "signature_missing",
             f"Skill '{entry.skill_name}:{entry.version}' is missing a required signature",
         )
-
 
 def _materialize_cache_entry(
     *, entry: ResolvedSkill, cache_root: Path
@@ -620,7 +595,6 @@ def _materialize_cache_entry(
         content_hash=computed_hash,
         cache_path=skill_cache_dir,
     )
-
 
 def materialize_run_skill_workspace(
     *,

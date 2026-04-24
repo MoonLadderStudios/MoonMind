@@ -10,7 +10,6 @@ from moonmind.workflows.temporal.workflows.task_5_14_workflow import Task514Work
 # NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping consistently exceed CI timeout thresholds. Kept for local dev verification.
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
-
 @pytest.mark.asyncio
 async def test_task_5_14_workflow():
     """Test validation for Task514Workflow and Task514Activity."""

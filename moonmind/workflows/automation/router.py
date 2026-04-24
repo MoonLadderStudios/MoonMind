@@ -12,7 +12,6 @@ CODEX_QUEUE_PREFIX = "codex-"
 CODEX_QUEUE_HEADER = "codex-queue"
 CODEX_AFFINITY_HEADER = "codex-affinity"
 
-
 @dataclass(frozen=True, slots=True)
 class QueueDefinition:
     """Lightweight replacement for ``kombu.Queue``."""
@@ -22,12 +21,10 @@ class QueueDefinition:
     routing_key: str = ""
     durable: bool = True
 
-
 def _ensure_positive(value: int, *, field: str) -> int:
     if value <= 0:
         raise ValueError(f"{field} must be a positive integer; received {value!r}")
     return value
-
 
 def _normalize_queue_name(queue_name: str) -> str:
     """Normalize queue names configured via environment or config files."""
@@ -37,11 +34,9 @@ def _normalize_queue_name(queue_name: str) -> str:
         raise ValueError("codex_queue must be a non-empty string")
     return candidate
 
-
 def _hash_affinity_key(key: str) -> int:
     digest = hashlib.sha256(key.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big", signed=False)
-
 
 @dataclass(frozen=True, slots=True)
 class CodexShardRouter:
@@ -128,7 +123,6 @@ class CodexShardRouter:
             configured_names.add(name)
         return tuple(queues)
 
-
 def get_codex_shard_router(
     shard_count: int | None = None,
     *,
@@ -143,11 +137,9 @@ def get_codex_shard_router(
     count = shard_count or settings.workflow.codex_shards
     return CodexShardRouter(shard_count=count)
 
-
 def iter_codex_queue_names(shard_count: int | None = None) -> Iterable[str]:
     router = get_codex_shard_router(shard_count)
     return router.queue_names()
-
 
 def build_task_router(
     router: CodexShardRouter,
@@ -188,12 +180,10 @@ def build_task_router(
 
     return (_route_task,)
 
-
 def _is_codex_task(task_name: str) -> bool:
     return task_name.endswith(".submit_codex_job") or task_name.endswith(
         ".apply_and_publish"
     )
-
 
 __all__ = [
     "CODEX_QUEUE_PREFIX",

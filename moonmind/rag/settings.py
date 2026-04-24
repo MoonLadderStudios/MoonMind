@@ -13,7 +13,6 @@ from moonmind.utils.env_bool import env_to_bool
 
 _SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai", "ollama"})
 
-
 def _get_env(
     source: Mapping[str, str] | None, key: str, default: str | None = None
 ) -> str | None:
@@ -22,7 +21,6 @@ def _get_env(
             return str(source[key])
         return default
     return os.getenv(key, default)
-
 
 @dataclass(slots=True)
 class RagRuntimeSettings:

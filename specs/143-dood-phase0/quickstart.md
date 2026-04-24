@@ -18,5 +18,5 @@ pytest -q tests/unit/docs/test_dood_phase0_contract.py
 
 - The focused test passes.
 - The full unit suite passes.
-- The canonical DooD doc links to `docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`.
+- The canonical DooD doc links to `docs/ManagedAgents/DockerOutOfDocker.md`.
 - The session-plane and execution-model docs state that workload containers remain outside session identity unless they are true managed runtimes.

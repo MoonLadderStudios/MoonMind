@@ -20,13 +20,11 @@ from moonmind.workflows.temporal.client import WorkflowStartResult
 
 CURRENT_USER_DEP = get_current_user()
 
-
 # ---------------------------------------------------------------------------
 # Module-scoped shared database fixture
 # Creates the engine + schema ONCE per module instead of once per test.
 # Each test uses a unique idempotency key to avoid cross-test data conflicts.
 # ---------------------------------------------------------------------------
-
 
 @pytest.fixture(scope="module")
 def _module_db(tmp_path_factory):
@@ -60,13 +58,11 @@ def _module_db(tmp_path_factory):
     db_base.DATABASE_URL, db_base.engine, db_base.async_session_maker = _orig
     asyncio.run(_teardown(engine))
 
-
 @pytest.fixture(autouse=True)
 def _reset_dependency_overrides(_module_db):  # noqa: PT004 — depends on _module_db
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
-
 
 @pytest.fixture(autouse=True)
 def _reset_callback_rate_limiter():
@@ -77,7 +73,6 @@ def _reset_callback_rate_limiter():
     execution_integrations_router._callback_rate_limiter = (
         execution_integrations_router._CallbackRateLimiter()
     )
-
 
 @pytest.fixture(autouse=True)
 def _stub_temporal_adapter(monkeypatch: pytest.MonkeyPatch):
@@ -104,11 +99,9 @@ def _stub_temporal_adapter(monkeypatch: pytest.MonkeyPatch):
         _signal_workflow,
     )
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
 
 async def _create_monitored_execution(
     client: AsyncClient,
@@ -140,7 +133,6 @@ async def _create_monitored_execution(
     callback_key = configure_response.json()["integration"]["callbackCorrelationKey"]
     return workflow_id, callback_key
 
-
 def _shared_client(shared_user_id):
     """Return an async ASGI context manager with auth override applied."""
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
@@ -148,11 +140,9 @@ def _shared_client(shared_user_id):
     )
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
 
 @pytest.mark.asyncio
 async def test_callback_rejects_missing_configured_token(monkeypatch):
@@ -173,7 +163,6 @@ async def test_callback_rejects_missing_configured_token(monkeypatch):
 
     assert response.status_code == 401
     assert response.json()["detail"]["code"] == "integration_callback_unauthorized"
-
 
 @pytest.mark.asyncio
 async def test_callback_accepts_matching_bearer_token(monkeypatch):
@@ -196,7 +185,6 @@ async def test_callback_accepts_matching_bearer_token(monkeypatch):
 
     assert response.status_code == 202
     assert response.json()["integration"]["normalizedStatus"] == "completed"
-
 
 @pytest.mark.asyncio
 async def test_callback_rejects_payload_over_limit(monkeypatch):
@@ -221,7 +209,6 @@ async def test_callback_rejects_payload_over_limit(monkeypatch):
         response.json()["detail"]["code"]
         == "integration_callback_payload_too_large"
     )
-
 
 @pytest.mark.asyncio
 async def test_callback_rejects_rate_limited_bursts(monkeypatch):
@@ -254,7 +241,6 @@ async def test_callback_rejects_rate_limited_bursts(monkeypatch):
     assert first.status_code == 202
     assert second.status_code == 429
     assert second.json()["detail"]["code"] == "integration_callback_rate_limited"
-
 
 @pytest.mark.asyncio
 async def test_callback_rate_limit_applies_across_callback_keys(monkeypatch):
@@ -294,7 +280,6 @@ async def test_callback_rate_limit_applies_across_callback_keys(monkeypatch):
     assert second.status_code == 429
     assert second.json()["detail"]["code"] == "integration_callback_rate_limited"
 
-
 def test_callback_rate_limiter_evicts_idle_buckets(monkeypatch):
     limiter = execution_integrations_router._CallbackRateLimiter()
     ticks = iter((10.0, 11.0, 80.0))
@@ -310,7 +295,6 @@ def test_callback_rate_limiter_evicts_idle_buckets(monkeypatch):
 
     assert limiter.allow(key="jules:callbacks", limit=1, window_seconds=30) is True
     assert set(limiter._buckets) == {"jules:callbacks"}
-
 
 @pytest.mark.asyncio
 async def test_callback_can_capture_raw_payload_artifact(tmp_path, monkeypatch):

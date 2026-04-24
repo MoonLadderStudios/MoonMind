@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_GRACE_SECONDS: float = 2.0
 
-
 async def cancel_managed_process(
     process: asyncio.subprocess.Process,
     grace_seconds: float = DEFAULT_GRACE_SECONDS,

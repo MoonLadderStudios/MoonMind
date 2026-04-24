@@ -54,7 +54,6 @@ _JIRA_CREATE_PAGE_SOURCES = {
     "issue": "/api/jira/issues/{issueKey}",
 }
 
-
 def _validate_jira_source_templates(sources: Mapping[str, str]) -> None:
     invalid = [
         name
@@ -74,9 +73,7 @@ def _validate_jira_source_templates(sources: Mapping[str, str]) -> None:
             f"{invalid_names}"
         )
 
-
 _validate_jira_source_templates(_JIRA_CREATE_PAGE_SOURCES)
-
 
 @dataclass(frozen=True, slots=True)
 class RepositoryOption:
@@ -93,7 +90,6 @@ class RepositoryOption:
             "source": self.source,
         }
 
-
 @dataclass(frozen=True, slots=True)
 class BranchOption:
     """Browser-safe branch suggestion for the Create page."""
@@ -109,12 +105,10 @@ class BranchOption:
             "source": self.source,
         }
 
-
 def _build_jira_sources() -> dict[str, str]:
     """Return MoonMind-owned Jira browser endpoint templates."""
 
     return dict(_JIRA_CREATE_PAGE_SOURCES)
-
 
 def _normalize_repository_value(value: object) -> str | None:
     """Return a browser-safe owner/repo value, or ``None`` when invalid."""
@@ -146,7 +140,6 @@ def _normalize_repository_value(value: object) -> str | None:
     normalized = f"{owner}/{repo}"
     return normalized if _OWNER_REPO_RE.fullmatch(normalized) else None
 
-
 def _append_repository_option(
     options: list[RepositoryOption],
     seen: set[str],
@@ -164,7 +157,6 @@ def _append_repository_option(
     options.append(
         RepositoryOption(value=normalized, label=normalized, source=source)
     )
-
 
 def _fetch_github_repository_options(
     token: str,
@@ -208,7 +200,6 @@ def _fetch_github_repository_options(
                     source="github",
                 )
     return options, None
-
 
 def _fetch_github_branch_options(
     token: str,
@@ -264,16 +255,13 @@ def _fetch_github_branch_options(
 
     return options, None
 
-
 def _github_repository_options_cache_key(token: str) -> str:
     return sha256(token.encode("utf-8")).hexdigest()
-
 
 def _github_branch_options_cache_key(token: str, repository: str) -> str:
     normalized_repository = _normalize_repository_value(repository) or ""
     raw_key = f"{token}:{normalized_repository.lower()}"
     return sha256(raw_key.encode("utf-8")).hexdigest()
-
 
 def _get_cached_github_repository_options(
     token: str,
@@ -289,7 +277,6 @@ def _get_cached_github_repository_options(
     options, error = _fetch_github_repository_options(token)
     _GITHUB_REPOSITORY_OPTIONS_CACHE[cache_key] = (now, tuple(options), error)
     return options, error
-
 
 def _get_cached_github_branch_options(
     token: str,
@@ -307,11 +294,9 @@ def _get_cached_github_branch_options(
     _GITHUB_BRANCH_OPTIONS_CACHE[cache_key] = (now, tuple(options), error)
     return options, error
 
-
 def _is_create_page_path(initial_path: str) -> bool:
     normalized_path = urlparse(initial_path or "").path.rstrip("/")
     return normalized_path in {"/tasks/new", "/tasks/create"}
-
 
 def _build_repository_options(
     *,
@@ -354,7 +339,6 @@ def _build_repository_options(
         "error": discovery_error,
     }
 
-
 def build_repository_branch_options(repository: str) -> dict[str, Any]:
     """Build Create-page branch suggestions through MoonMind-owned GitHub lookup."""
 
@@ -383,7 +367,6 @@ def build_repository_branch_options(repository: str) -> dict[str, Any]:
         "items": [option.to_payload() for option in options],
         "error": error,
     }
-
 
 def _jira_create_page_enabled() -> bool:
     """Return whether the Create-page Jira browser rollout is enabled."""
@@ -421,7 +404,6 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
 
 }
 
-
 def normalize_status(source: str, raw_status: str | None) -> str:
     """Normalize source-specific status values into dashboard display states."""
 
@@ -445,19 +427,16 @@ def normalize_status(source: str, raw_status: str | None) -> str:
 
     return "queued"
 
-
 def status_maps() -> dict[str, dict[str, str]]:
     """Return a copy of status maps so callers can safely mutate local copies."""
 
     return deepcopy(_STATUS_MAPS)
-
 
 def _build_supported_task_runtimes() -> list[str]:
     supported: list[str] = ["codex_cli", "gemini_cli", "claude_code", "codex_cloud"]
     if settings.jules_runtime_gate.enabled:
         supported.append("jules")
     return supported
-
 
 def _build_default_attachment_policy(config: "dict[str, Any]") -> dict[str, Any]:
     """Normalize attachment policy values for dashboard consumption."""
@@ -483,7 +462,6 @@ def _build_default_attachment_policy(config: "dict[str, Any]") -> dict[str, Any]
         ),
     }
 
-
 def build_live_logs_feature_config() -> dict[str, object]:
     """Build the grouped Live Logs feature flags for dashboard consumers."""
 
@@ -500,7 +478,6 @@ def build_live_logs_feature_config() -> dict[str, object]:
         ),
     }
 
-
 def _build_dashboard_system_metadata() -> dict[str, str | None]:
     """Return operator-facing build metadata for the dashboard shell and runtime config."""
 
@@ -508,7 +485,6 @@ def _build_dashboard_system_metadata() -> dict[str, str | None]:
     return {
         "buildId": build_id,
     }
-
 
 def _build_jira_runtime_config() -> dict[str, Any] | None:
     """Build Create-page Jira browser config when the UI rollout is enabled."""
@@ -525,7 +501,6 @@ def _build_jira_runtime_config() -> dict[str, Any] | None:
             "rememberLastBoardInSession": settings.feature_flags.jira_create_page_remember_last_board_in_session,
         },
     }
-
 
 def build_runtime_config(initial_path: str) -> dict[str, Any]:
     """Build runtime config consumed by dashboard JavaScript."""
@@ -696,7 +671,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             **jira_system,
         },
     }
-
 
 __all__ = [
     "build_live_logs_feature_config",

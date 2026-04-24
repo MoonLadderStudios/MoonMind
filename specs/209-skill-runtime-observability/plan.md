@@ -30,15 +30,15 @@ MM-408 requires operator-visible evidence for skill-enabled executions: selected
 
 ## Technical Context
 
-**Language/Version**: Python 3.12; TypeScript/React for task-detail UI  
-**Primary Dependencies**: Pydantic v2, FastAPI, SQLAlchemy async ORM, existing Temporal execution router/service, React, Vitest, pytest  
-**Storage**: Existing Temporal execution records, input parameters, artifact refs, and materialization metadata only; no new persistent tables planned  
-**Unit Testing**: `./tools/test_unit.sh`; focused Python tests with `python -m pytest`; focused UI tests with `npm run ui:test -- <path>` or `./tools/test_unit.sh --ui-args <path>`  
-**Integration Testing**: Existing hermetic suite through `./tools/test_integration.sh`; no new compose service dependency expected  
-**Target Platform**: MoonMind API service, Mission Control task detail, and managed runtime execution metadata surfaces  
-**Project Type**: Web service plus frontend dashboard behavior  
-**Performance Goals**: Skill runtime metadata remains compact and does not require reading full skill bodies or dereferencing artifacts during task-detail render  
-**Constraints**: Preserve artifact-backed payload discipline; do not dump full skill bodies; preserve MM-408 traceability; add workflow/activity or adapter-boundary tests where runtime materialization semantics are affected  
+**Language/Version**: Python 3.12; TypeScript/React for task-detail UI 
+**Primary Dependencies**: Pydantic v2, FastAPI, SQLAlchemy async ORM, existing Temporal execution router/service, React, Vitest, pytest 
+**Storage**: Existing Temporal execution records, input parameters, artifact refs, and materialization metadata only; no new persistent tables planned 
+**Unit Testing**: `./tools/test_unit.sh`; focused Python tests with `python -m pytest`; focused UI tests with `npm run ui:test -- <path>` or `./tools/test_unit.sh --ui-args <path>` 
+**Integration Testing**: Existing hermetic suite through `./tools/test_integration.sh`; no new compose service dependency expected 
+**Target Platform**: MoonMind API service, Mission Control task detail, and managed runtime execution metadata surfaces 
+**Project Type**: Web service plus frontend dashboard behavior 
+**Performance Goals**: Skill runtime metadata remains compact and does not require reading full skill bodies or dereferencing artifacts during task-detail render 
+**Constraints**: Preserve artifact-backed payload discipline; do not dump full skill bodies; preserve MM-408 traceability; add workflow/activity or adapter-boundary tests where runtime materialization semantics are affected 
 **Scale/Scope**: One execution detail payload extension, one task-detail UI component extension, lifecycle metadata tests, and focused boundary verification
 
 ## Constitution Check
@@ -51,7 +51,7 @@ MM-408 requires operator-visible evidence for skill-enabled executions: selected
 - Principle VII, Powerful Runtime Configurability: PASS. Skill selector and lifecycle intent remains payload/config driven.
 - Principle VIII, Modular and Extensible Architecture: PASS. Changes are scoped to existing execution schemas, router serialization, task-detail UI, and boundary tests.
 - Principle IX, Resilient by Default: PASS. Projection diagnostics remain actionable and replay/rerun semantics are explicit.
-- Principle XII, Canonical Documentation Separates Desired State From Backlog: PASS. This feature uses `docs/tmp` planning artifacts for implementation details and does not rewrite canonical docs as migration trackers.
+- Principle XII, Canonical Documentation Separates Desired State From Backlog: PASS. This feature uses `local-only handoffs` planning artifacts for implementation details and does not rewrite canonical docs as migration trackers.
 - Principle XIII, Pre-Release Compatibility Policy: PASS. No compatibility aliases are planned; the internal execution-detail contract is extended directly.
 
 ## Project Structure
@@ -66,7 +66,7 @@ specs/209-skill-runtime-observability/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── skill-runtime-observability.md
+│ └── skill-runtime-observability.md
 └── tasks.md
 ```
 
@@ -75,32 +75,32 @@ specs/209-skill-runtime-observability/
 ```text
 moonmind/
 └── schemas/
-    └── temporal_models.py
+ └── temporal_models.py
 
 api_service/
 └── api/
-    └── routers/
-        └── executions.py
+ └── routers/
+ └── executions.py
 
 frontend/
 └── src/
-    ├── components/
-    │   └── skills/
-    │       └── SkillProvenanceBadge.tsx
-    └── entrypoints/
-        ├── task-detail.tsx
-        └── task-detail.test.tsx
+ ├── components/
+ │ └── skills/
+ │ └── SkillProvenanceBadge.tsx
+ └── entrypoints/
+ ├── task-detail.tsx
+ └── task-detail.test.tsx
 
 tests/
 └── unit/
-    ├── api/
-    │   └── routers/
-    │       └── test_executions.py
-    ├── services/
-    │   └── test_skill_materialization.py
-    └── workflows/
-        └── temporal/
-            └── test_run_artifacts.py
+ ├── api/
+ │ └── routers/
+ │ └── test_executions.py
+ ├── services/
+ │ └── test_skill_materialization.py
+ └── workflows/
+ └── temporal/
+ └── test_run_artifacts.py
 ```
 
 **Structure Decision**: Extend existing execution detail and task-detail skill UI surfaces rather than creating a separate skill observability endpoint. Keep runtime materialization behavior in the existing service and tests unless lifecycle verification exposes a gap.

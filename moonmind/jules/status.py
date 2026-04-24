@@ -38,7 +38,6 @@ _JULES_AWAITING_FEEDBACK_PROVIDER_STATUSES = frozenset(
     {"awaiting_user_feedback"}
 )
 
-
 @dataclass(frozen=True, slots=True)
 class JulesStatusSnapshot:
     """Normalized Jules provider status plus portable MoonMind mapping."""
@@ -50,7 +49,6 @@ class JulesStatusSnapshot:
     succeeded: bool
     failed: bool
     canceled: bool
-
 
 def normalize_jules_status(raw_status: str | None) -> JulesStatusSnapshot:
     """Normalize one Jules status into provider and MoonMind status fields."""
@@ -82,7 +80,6 @@ def normalize_jules_status(raw_status: str | None) -> JulesStatusSnapshot:
         failed=normalized_status == "failed",
         canceled=normalized_status == "canceled",
     )
-
 
 __all__ = [
     "JULES_CANCELED_PROVIDER_STATUSES",

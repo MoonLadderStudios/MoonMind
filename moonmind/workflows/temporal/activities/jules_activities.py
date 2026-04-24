@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 _JULES_FALLBACK_ANSWER = "Proceed with your recommendation."
 
-
 def _build_client() -> JulesClient:
     """Build a ``JulesClient`` from environment config.
 
@@ -42,7 +41,6 @@ def _build_client() -> JulesClient:
     jules_url = os.environ.get("JULES_API_URL", "").strip() or "https://jules.googleapis.com/v1alpha"
     jules_key = os.environ.get("JULES_API_KEY", "").strip()
     return JulesClient(base_url=jules_url, api_key=jules_key)
-
 
 def _build_adapter() -> JulesAgentAdapter:
     """Build a gated JulesAgentAdapter using env-based configuration.
@@ -62,7 +60,6 @@ def _build_adapter() -> JulesAgentAdapter:
     jules_key = os.environ.get("JULES_API_KEY", "").strip()
     client = JulesClient(base_url=jules_url, api_key=jules_key)
     return JulesAgentAdapter(client_factory=lambda: client)
-
 
 async def _generate_llm_answer(prompt: str) -> str:
     """Dispatch a prompt to an LLM and return the generated answer.
@@ -106,14 +103,12 @@ async def _generate_llm_answer(prompt: str) -> str:
 
     return "Proceed with your recommendation."
 
-
 @activity.defn(name="integration.jules.start")
 async def jules_start_activity(request: AgentExecutionRequest) -> AgentRunHandle:
     """Start a Jules-backed run via the canonical adapter contract."""
 
     adapter = _build_adapter()
     return await adapter.start(request)
-
 
 @activity.defn(name="integration.jules.status")
 async def jules_status_activity(run_id: str) -> AgentRunStatus:
@@ -122,7 +117,6 @@ async def jules_status_activity(run_id: str) -> AgentRunStatus:
     adapter = _build_adapter()
     return await adapter.status(run_id)
 
-
 @activity.defn(name="integration.jules.fetch_result")
 async def jules_fetch_result_activity(run_id: str) -> AgentRunResult:
     """Fetch terminal result for one completed Jules task."""
@@ -130,14 +124,12 @@ async def jules_fetch_result_activity(run_id: str) -> AgentRunResult:
     adapter = _build_adapter()
     return await adapter.fetch_result(run_id)
 
-
 @activity.defn(name="integration.jules.cancel")
 async def jules_cancel_activity(run_id: str) -> AgentRunStatus:
     """Attempt best-effort cancellation for one Jules task."""
 
     adapter = _build_adapter()
     return await adapter.cancel(run_id)
-
 
 @activity.defn(name="integration.jules.send_message")
 async def jules_send_message_activity(payload: dict) -> AgentRunStatus:
@@ -169,7 +161,6 @@ async def jules_send_message_activity(payload: dict) -> AgentRunStatus:
         prompt=validated.prompt,
     )
 
-
 @activity.defn(name="integration.jules.list_activities")
 async def jules_list_activities_activity(session_id: str) -> dict:
     """Fetch session activities and extract the latest agent question.
@@ -185,7 +176,6 @@ async def jules_list_activities_activity(session_id: str) -> dict:
         return result.model_dump(by_alias=True)
     finally:
         await client.aclose()
-
 
 @activity.defn(name="integration.jules.answer_question")
 async def jules_answer_question_activity(payload: dict) -> dict:
@@ -247,7 +237,6 @@ async def jules_answer_question_activity(payload: dict) -> dict:
     finally:
         await client.aclose()
 
-
 @activity.defn(name="repo.merge_pr")
 async def repo_merge_pr_activity(payload: dict) -> dict:
     """Merge a PR via GitHub REST API (provider-agnostic).
@@ -282,7 +271,6 @@ async def repo_merge_pr_activity(payload: dict) -> dict:
 
     result = await svc.merge_pull_request(pr_url=pr_url, merge_method=merge_method)
     return result.model_dump(by_alias=True)
-
 
 @activity.defn(name="integration.jules.get_auto_answer_config")
 async def jules_get_auto_answer_config_activity(_args: list | None = None) -> dict:
@@ -324,7 +312,6 @@ async def jules_get_auto_answer_config_activity(_args: list | None = None) -> di
         "runtime": runtime,
         "timeout_seconds": timeout,
     }
-
 
 @activity.defn(name="repo.create_pr")
 async def repo_create_pr_activity(payload: dict) -> dict:
@@ -372,7 +359,6 @@ async def repo_create_pr_activity(payload: dict) -> dict:
     )
     return result.model_dump(by_alias=True)
 
-
 __all__ = [
     "jules_answer_question_activity",
     "jules_cancel_activity",
@@ -385,5 +371,4 @@ __all__ = [
     "jules_start_activity",
     "jules_status_activity",
 ]
-
 

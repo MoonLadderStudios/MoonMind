@@ -36,7 +36,7 @@ Preserve the completed Phase 0 DooD documentation boundary and implement the Pha
 | IX. Resilient by Default | PASS | Validation rejects unsafe or unsupported inputs before launch. |
 | X. Continuous Improvement | PASS | Results carry bounded diagnostics refs for later observability phases. |
 | XI. Spec-Driven Development | PASS | Spec, plan, tasks, tests, and code are included in this feature. |
-| XII. Canonical Docs vs tmp | PASS | Phase tracking updates remain in `docs/tmp/remaining-work/`. |
+| XII. Canonical Docs vs tmp | PASS | Phase tracking updates remain in `docs/ManagedAgents/DockerOutOfDocker.md`. |
 | XIII. Delete, Don't Deprecate | PASS | No compatibility aliases or fallback image behavior are introduced. |
 
 ## Project Structure

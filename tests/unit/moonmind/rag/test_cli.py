@@ -3,7 +3,6 @@ from pathlib import Path
 from moonmind.rag import cli as rag_cli
 from moonmind.rag.context_pack import ContextItem, build_context_pack
 
-
 def test_run_search_returns_context_pack_and_writes_json(
     monkeypatch,
     tmp_path: Path,

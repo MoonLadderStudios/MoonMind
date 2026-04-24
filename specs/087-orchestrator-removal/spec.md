@@ -1,9 +1,9 @@
 # Feature Specification: Remove mm-orchestrator
 
-**Feature Branch**: `087-orchestrator-removal`  
-**Created**: 2025-03-19  
-**Status**: Draft  
-**Input**: Remove the `mm-orchestrator` runtime and related code, configuration, and docs from the repository (original scratch plan lived under `docs/tmp/` and has been deleted; this spec is the retained normative source).
+**Feature Branch**: `087-orchestrator-removal` 
+**Created**: 2025-03-19 
+**Status**: Draft 
+**Input**: Remove the `mm-orchestrator` runtime and related code, configuration, and docs from the repository (original scratch plan lived under `local-only handoffs` and has been deleted; this spec is the retained normative source).
 
 ## Source Document Requirements
 

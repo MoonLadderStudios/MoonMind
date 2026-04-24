@@ -18,7 +18,6 @@ sys.path.insert(0, str(project_root))
 
 from moonmind.summarization.readme_generator import ReadmeAiGenerator
 
-
 async def main():
     """
     Example function to demonstrate and test ReadmeAiGenerator.
@@ -80,7 +79,6 @@ async def main():
             logger.error(f"Failed to save the full README to file: {e}")
     else:
         logger.error("Failed to generate README.md using ReadmeAiGenerator.")
-
 
 if __name__ == "__main__":
     # To run this async function:

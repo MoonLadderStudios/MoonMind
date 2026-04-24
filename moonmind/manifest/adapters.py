@@ -19,11 +19,9 @@ from moonmind.schemas.manifest_v0_models import DataSourceConfig
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
 # Base helper
 # ---------------------------------------------------------------------------
-
 
 class _BaseAdapter:
     """Common init for all manifest-driven adapters."""
@@ -38,11 +36,9 @@ class _BaseAdapter:
             return os.environ.get(env_name, val)
         return val
 
-
 # ---------------------------------------------------------------------------
 # GitHub
 # ---------------------------------------------------------------------------
-
 
 class GitHubReaderAdapter(_BaseAdapter):
     """Wraps ``moonmind.indexers.github_indexer.GitHubIndexer``."""
@@ -123,11 +119,9 @@ class GitHubReaderAdapter(_BaseAdapter):
             "branch": params.get("branch", "main"),
         }
 
-
 # ---------------------------------------------------------------------------
 # Google Drive
 # ---------------------------------------------------------------------------
-
 
 class GoogleDriveReaderAdapter(_BaseAdapter):
     """Wraps ``moonmind.indexers.google_drive_indexer.GoogleDriveIndexer``."""
@@ -184,11 +178,9 @@ class GoogleDriveReaderAdapter(_BaseAdapter):
     def state(self) -> Dict[str, Any]:
         return {"folder_id": self.ds.params.get("folderId")}
 
-
 # ---------------------------------------------------------------------------
 # Simple Directory (Local)
 # ---------------------------------------------------------------------------
-
 
 class SimpleDirectoryReaderAdapter(_BaseAdapter):
     """Wraps ``moonmind.indexers.local_data_indexer.LocalDataIndexer``."""
@@ -250,11 +242,9 @@ class SimpleDirectoryReaderAdapter(_BaseAdapter):
     def state(self) -> Dict[str, Any]:
         return {"inputDir": self.ds.params.get("inputDir", ".")}
 
-
 # ---------------------------------------------------------------------------
 # Confluence
 # ---------------------------------------------------------------------------
-
 
 class ConfluenceReaderAdapter(_BaseAdapter):
     """Wraps ``moonmind.indexers.confluence_indexer.ConfluenceIndexer``."""
@@ -318,11 +308,9 @@ class ConfluenceReaderAdapter(_BaseAdapter):
     def state(self) -> Dict[str, Any]:
         return {"spaceKey": self.ds.params.get("spaceKey")}
 
-
 # ---------------------------------------------------------------------------
 # Auto-registration
 # ---------------------------------------------------------------------------
-
 
 def register_builtin_adapters() -> None:
     """Register all built-in reader adapters."""
@@ -330,7 +318,6 @@ def register_builtin_adapters() -> None:
     register_adapter("GoogleDriveReader", GoogleDriveReaderAdapter)
     register_adapter("SimpleDirectoryReader", SimpleDirectoryReaderAdapter)
     register_adapter("ConfluenceReader", ConfluenceReaderAdapter)
-
 
 # Auto-register on import
 register_builtin_adapters()

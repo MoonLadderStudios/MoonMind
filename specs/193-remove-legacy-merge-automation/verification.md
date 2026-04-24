@@ -2,7 +2,7 @@
 
 **Verdict**: FULLY_IMPLEMENTED  
 **Verified**: 2026-04-16  
-**Original Request Source**: MM-364 Jira preset brief preserved in `spec.md` and `docs/tmp/jira-orchestration-inputs/MM-364-moonspec-orchestration-input.md`
+**Original Request Source**: MM-364 Jira preset brief preserved in `spec.md` and `spec.md` (Input)
 
 ## Evidence Summary
 

@@ -9,7 +9,6 @@ from moonmind.workflows.temporal.runtime.process_control import (
     cancel_managed_process,
 )
 
-
 def _make_mock_process(*, pid: int = 42, returncode: int | None = None):
     """Create a mock asyncio subprocess Process."""
     proc = MagicMock()
@@ -21,7 +20,6 @@ def _make_mock_process(*, pid: int = 42, returncode: int | None = None):
     proc.wait = AsyncMock()
     return proc
 
-
 @pytest.mark.asyncio
 async def test_cancel_already_terminated():
     """Process already exited — no signals sent."""
@@ -30,7 +28,6 @@ async def test_cancel_already_terminated():
     assert result == 0
     proc.send_signal.assert_not_called()
     proc.kill.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_cancel_graceful_exit():
@@ -46,7 +43,6 @@ async def test_cancel_graceful_exit():
     assert result == 0
     proc.send_signal.assert_called_once()
     proc.kill.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_cancel_requires_sigkill():
@@ -71,7 +67,6 @@ async def test_cancel_requires_sigkill():
     assert result == -9
     proc.send_signal.assert_called_once()
     proc.kill.assert_called_once()
-
 
 @pytest.mark.asyncio
 async def test_cancel_process_already_gone():

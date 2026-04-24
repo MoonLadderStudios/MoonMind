@@ -2,7 +2,7 @@
 
 **Feature Branch**: `122-agent-skill-phase6`  
 **Status**: Active  
-**Input**: Implement Phase 6 of docs/tmp/004-AgentSkillSystemPlan.md using test-driven development
+**Input**: Implement Phase 6 of spec.md (Input) using test-driven development
 
 ## User Scenarios & Testing
 

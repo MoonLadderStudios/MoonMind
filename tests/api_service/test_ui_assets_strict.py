@@ -20,7 +20,6 @@ from api_service.ui_assets import (
     ui_assets,
 )
 
-
 def test_ui_assets_strict_raises_when_manifest_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -30,7 +29,6 @@ def test_ui_assets_strict_raises_when_manifest_missing(
     with pytest.raises(ManifestNotFoundError):
         ui_assets("mission-control")
 
-
 def test_ui_assets_lenient_returns_comment_when_manifest_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -39,7 +37,6 @@ def test_ui_assets_lenient_returns_comment_when_manifest_missing(
     monkeypatch.setenv("MOONMIND_LENIENT_UI_ASSETS", "1")
     html = ui_assets("mission-control")
     assert "Vite manifest not found" in html
-
 
 def test_ui_assets_strict_raises_when_entrypoint_key_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -51,7 +48,6 @@ def test_ui_assets_strict_raises_when_entrypoint_key_missing(
     with pytest.raises(EntrypointMissingError):
         ui_assets("mission-control")
 
-
 def test_ui_assets_lenient_returns_comment_when_entrypoint_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -61,7 +57,6 @@ def test_ui_assets_lenient_returns_comment_when_entrypoint_missing(
     monkeypatch.setenv("MOONMIND_LENIENT_UI_ASSETS", "1")
     html = ui_assets("mission-control")
     assert "manifest entry not found" in html
-
 
 def test_ui_assets_includes_css_from_imported_chunks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -103,7 +98,6 @@ def test_ui_assets_includes_css_from_imported_chunks(
     assert 'src="/static/task_dashboard/dist/assets/mission-control.js"' in html
     assert 'href="/static/task_dashboard/dist/assets/mountPage.css"' in html
 
-
 def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -141,7 +135,6 @@ def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_missing(
 
     assert 'src="/static/task_dashboard/dist/assets/mission-control.js"' in html
     assert resolve_mission_control_dist_root() == dist_root
-
 
 def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_is_stale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -193,7 +186,6 @@ def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_is_stale(
 
     assert 'src="/static/task_dashboard/dist/assets/mission-control.js"' in html
     assert resolve_mission_control_dist_root() == bundled_dist_root
-
 
 def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -262,7 +254,6 @@ def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
     assert 'href="/static/task_dashboard/dist/assets/mission-control.css"' in html
     assert resolve_mission_control_dist_root() == bundled_dist_root
 
-
 def test_resolve_mission_control_dist_root_returns_after_newest_usable_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -299,7 +290,6 @@ def test_resolve_mission_control_dist_root_returns_after_newest_usable_candidate
 
     assert resolve_mission_control_dist_root() == bundled_dist_root
     assert checked_candidates == [bundled_dist_root]
-
 
 def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -346,7 +336,6 @@ def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(
 
     assert response.status_code == 200
     assert "bundled" in response.text
-
 
 def test_ui_assets_strict_raises_when_imported_chunk_file_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 
-
 from moonmind.manifest.validator import (
     ValidationResult,
     validate_manifest_file,
@@ -16,16 +15,13 @@ from moonmind.manifest.validator import (
 
 logger = logging.getLogger(__name__)
 
-
 class ManifestCliError(RuntimeError):
     """Raised for manifest CLI usage errors."""
-
 
 def run_validate(*, manifest_path: str) -> ValidationResult:
     """Validate a manifest YAML file and return the result."""
     result = validate_manifest_file(manifest_path)
     return result
-
 
 def run_plan(*, manifest_path: str) -> dict:
     """Dry-run: parse manifest and estimate scope without writes.
@@ -47,7 +43,6 @@ def run_plan(*, manifest_path: str) -> dict:
     plan_result = pipeline.plan()
     return plan_result.to_dict()
 
-
 def run_manifest(*, manifest_path: str) -> dict:
     """Full pipeline: validate, fetch, transform, embed, upsert.
 
@@ -67,7 +62,6 @@ def run_manifest(*, manifest_path: str) -> dict:
     pipeline = ManifestPipeline(manifest)
     run_result = pipeline.run()
     return run_result.to_dict()
-
 
 def run_evaluate(
     *,

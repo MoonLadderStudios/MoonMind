@@ -5,19 +5,19 @@
 
 ## Summary
 
-Implement MM-389 by updating the repository-current plans overview so readers can discover that preset composition is a control-plane authoring concern resolved before `PlanDefinition` creation, while runtime plans remain flattened execution graphs of concrete nodes and edges. The technical approach is to add one concise boundary paragraph near the existing tasks, skills, presets, and plans content in `docs/tmp/101-PlansOverview.md`, linking authoring-time semantics to `docs/Tasks/TaskPresetsSystem.md` and runtime plan semantics to `docs/Tasks/SkillAndPlanContracts.md`. Verification focuses on focused documentation checks, source traceability, and final MoonSpec verification against the preserved MM-389 Jira preset brief.
+Implement MM-389 by updating the repository-current plans overview so readers can discover that preset composition is a control-plane authoring concern resolved before `PlanDefinition` creation, while runtime plans remain flattened execution graphs of concrete nodes and edges. The technical approach is to add one concise boundary paragraph near the existing tasks, skills, presets, and plans content in `docs/MoonMindRoadmap.md`, linking authoring-time semantics to `docs/Tasks/TaskPresetsSystem.md` and runtime plan semantics to `docs/Tasks/SkillAndPlanContracts.md`. Verification focuses on focused documentation checks, source traceability, and final MoonSpec verification against the preserved MM-389 Jira preset brief.
 
 ## Technical Context
 
 **Language/Version**: Markdown documentation for MoonMind runtime plan and preset architecture
-**Primary Dependencies**: Existing `docs/tmp/101-PlansOverview.md`, `docs/Tasks/TaskPresetsSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`, preserved MM-389 Jira preset brief
+**Primary Dependencies**: Existing `docs/MoonMindRoadmap.md`, `docs/Tasks/TaskPresetsSystem.md`, `docs/Tasks/SkillAndPlanContracts.md`, preserved MM-389 Jira preset brief
 **Storage**: No new persistent storage; documents describe existing plan and preset semantics
-**Unit Testing**: Documentation contract checks with `rg` against `docs/tmp/101-PlansOverview.md` and generated MoonSpec artifacts
+**Unit Testing**: Documentation contract checks with `rg` against `docs/MoonMindRoadmap.md` and generated MoonSpec artifacts
 **Integration Testing**: End-to-end documentation validation by reviewing the plans overview against MM-389 acceptance scenarios and running final `/moonspec-verify`
 **Target Platform**: MoonMind control plane, preset authoring surfaces, and runtime plan executor contract
 **Project Type**: Runtime architecture documentation contract
 **Performance Goals**: No runtime performance impact; documentation must clarify boundaries without adding runtime preset expansion work
-**Constraints**: Preserve desired-state documentation boundaries, keep volatile planning under `docs/tmp/` and `specs/`, do not add migration checklists to canonical docs, and preserve Jira issue key MM-389 in artifacts
+**Constraints**: Preserve desired-state documentation boundaries, keep volatile planning under `local-only handoffs` and `specs/`, do not add migration checklists to canonical docs, and preserve Jira issue key MM-389 in artifacts
 **Scale/Scope**: One plans overview file plus MoonSpec artifacts for one independently testable story
 
 ## Constitution Check
@@ -47,26 +47,26 @@ specs/203-document-plans-preset-boundary/
 ├── research.md
 ├── quickstart.md
 ├── contracts/
-│   └── plans-preset-boundary.md
+│ └── plans-preset-boundary.md
 ├── tasks.md
 └── checklists/
-    └── requirements.md
+ └── requirements.md
 ```
 
 ### Source Documentation
 
 ```text
-docs/tmp/
+
 ├── 101-PlansOverview.md
 └── jira-orchestration-inputs/
-    └── MM-389-moonspec-orchestration-input.md
+ └── MM-389-moonspec-orchestration-input.md
 
 docs/Tasks/
 ├── TaskPresetsSystem.md
 └── SkillAndPlanContracts.md
 ```
 
-**Structure Decision**: Update `docs/tmp/101-PlansOverview.md` because it is the repository-current plans overview equivalent named by MM-389. Use existing links to the two canonical task documents and add one clarifying paragraph instead of creating a new index or canonical migration checklist.
+**Structure Decision**: Update `docs/MoonMindRoadmap.md` because it is the repository-current plans overview equivalent named by MM-389. Use existing links to the two canonical task documents and add one clarifying paragraph instead of creating a new index or canonical migration checklist.
 
 ## Complexity Tracking
 

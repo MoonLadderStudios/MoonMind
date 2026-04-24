@@ -9,7 +9,6 @@ from moonmind.factories.openai_factory import get_openai_model, list_openai_mode
 # Configure basic logging for tests to see warnings if needed
 logging.basicConfig(level=logging.INFO)
 
-
 class TestOpenAIFactory(unittest.TestCase):
     def setUp(self):
         # Store original settings to restore them after tests
@@ -107,7 +106,6 @@ class TestOpenAIFactory(unittest.TestCase):
         self.assertEqual(model_name_specific, "gpt-specific")
         # The function no longer logs this warning.
         mock_logger_warning.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()

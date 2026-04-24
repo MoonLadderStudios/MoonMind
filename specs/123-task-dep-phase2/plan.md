@@ -1,6 +1,6 @@
 # Implementation Plan: Task Dependencies Phase 2 - MoonMind.Run Dependency Gate
 
-**Branch**: `123-task-dep-phase2` | **Date**: 2026-04-01 | **Spec**: [spec.md](spec.md)  
+**Branch**: `123-task-dep-phase2` | **Date**: 2026-04-01 | **Spec**: [spec.md](spec.md) 
 **Input**: Feature specification from `/specs/123-task-dep-phase2/spec.md`
 
 ## Summary
@@ -9,14 +9,14 @@ Phase 2 implements the missing runtime dependency gate inside `MoonMindRunWorkfl
 
 ## Technical Context
 
-**Language/Version**: Python 3.11  
-**Primary Dependencies**: Temporal Python SDK, pytest  
-**Storage**: Temporal workflow state, Search Attributes, Memo, existing artifact outputs  
-**Testing**: pytest via `./tools/test_unit.sh`  
-**Target Platform**: Linux worker container running Temporal workflows  
-**Project Type**: Single Python monorepo  
-**Performance Goals**: Dependency gating should add no polling loop and should block only on prerequisite workflow completion or cancellation.  
-**Constraints**: Preserve replay safety for in-flight executions, add workflow-boundary tests, do not introduce new internal compatibility aliases, and keep metadata within the existing Visibility schema.  
+**Language/Version**: Python 3.11 
+**Primary Dependencies**: Temporal Python SDK, pytest 
+**Storage**: Temporal workflow state, Search Attributes, Memo, existing artifact outputs 
+**Testing**: pytest via `./tools/test_unit.sh` 
+**Target Platform**: Linux worker container running Temporal workflows 
+**Project Type**: Single Python monorepo 
+**Performance Goals**: Dependency gating should add no polling loop and should block only on prerequisite workflow completion or cancellation. 
+**Constraints**: Preserve replay safety for in-flight executions, add workflow-boundary tests, do not introduce new internal compatibility aliases, and keep metadata within the existing Visibility schema. 
 **Scale/Scope**: One workflow file, one or two unit-test files, and feature-spec artifacts for this phase.
 
 ## Constitution Check
@@ -34,7 +34,7 @@ Phase 2 implements the missing runtime dependency gate inside `MoonMindRunWorkfl
 | IX. Resilient by Default | PASS | Adds durable dependency waiting, failure propagation, and replay-safe patching with boundary tests. |
 | X. Continuous Improvement | PASS | Improves runtime observability through waiting metadata without changing operator flow shape. |
 | XI. Spec-Driven Development | PASS | This feature spec/plan/tasks drive the Phase 2 runtime implementation. |
-| XII. Canonical Documentation | PASS | Sequencing stays in `docs/tmp`; canonical docs already describe the target behavior. |
+| XII. Canonical Documentation | PASS | Sequencing stays in `local-only handoffs`; canonical docs already describe the target behavior. |
 | XIII. Pre-Release Velocity | PASS | No compatibility aliases; only a replay-safe patch guard for in-flight workflow histories. |
 
 ## Phase 0: Research Findings
@@ -61,7 +61,7 @@ specs/123-task-dep-phase2/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   └── requirements-traceability.md
+│ └── requirements-traceability.md
 └── tasks.md
 ```
 
@@ -78,17 +78,17 @@ specs/123-task-dep-phase2/
 
 - Introduce a small helper to normalize dependency IDs from `parameters.get("task", {}).get("dependsOn")`.
 - Introduce a helper that:
-  - stores dependency IDs on workflow state,
-  - sets `_waiting_reason = "dependency_wait"`,
-  - transitions to `STATE_WAITING_ON_DEPENDENCIES`,
-  - awaits dependency handles inside `workflow.CancellationScope()`,
-  - converts dependency exceptions into a dependency-specific `ValueError`.
+ - stores dependency IDs on workflow state,
+ - sets `_waiting_reason = "dependency_wait"`,
+ - transitions to `STATE_WAITING_ON_DEPENDENCIES`,
+ - awaits dependency handles inside `workflow.CancellationScope()`,
+ - converts dependency exceptions into a dependency-specific `ValueError`.
 
 #### Metadata behavior
 
 - Keep queryable state in the existing registered schema:
-  - `mm_state = waiting_on_dependencies`
-  - `waiting_reason = dependency_wait`
+ - `mm_state = waiting_on_dependencies`
+ - `waiting_reason = dependency_wait`
 - Store compact dependency IDs in memo only, because the current visibility contract explicitly avoids new ad hoc search attributes in v1.
 
 #### Replay and cancellation safety

@@ -24,7 +24,6 @@ from moonmind.schemas.managed_session_models import (
     SendCodexManagedSessionTurnRequest,
 )
 
-
 def test_codex_managed_session_plane_contract_freezes_phase1_mvp_scope() -> None:
     contract = CodexManagedSessionPlaneContract()
 
@@ -42,7 +41,6 @@ def test_codex_managed_session_plane_contract_freezes_phase1_mvp_scope() -> None
     )
     assert contract.clear_behavior == "new_thread_same_container_new_epoch"
 
-
 def test_codex_managed_session_plane_contract_exposes_canonical_control_actions() -> None:
     contract = CodexManagedSessionPlaneContract()
 
@@ -58,7 +56,6 @@ def test_codex_managed_session_plane_contract_exposes_canonical_control_actions(
         "terminate_session",
     )
 
-
 def test_codex_managed_session_plane_contract_rejects_non_canonical_overrides() -> None:
     with pytest.raises(ValidationError, match="Input should be False"):
         CodexManagedSessionPlaneContract(cross_task_reuse=True)
@@ -69,7 +66,6 @@ def test_codex_managed_session_plane_contract_rejects_non_canonical_overrides() 
         CodexManagedSessionPlaneContract(
             control_actions=("start_session", "send_turn")
         )
-
 
 def test_codex_managed_session_state_clear_session_bumps_epoch_and_rotates_thread() -> None:
     state = CodexManagedSessionState(
@@ -88,7 +84,6 @@ def test_codex_managed_session_state_clear_session_bumps_epoch_and_rotates_threa
     assert cleared.session_epoch == 2
     assert cleared.active_turn_id is None
 
-
 def test_codex_managed_session_state_normalizes_identifier_whitespace() -> None:
     state = CodexManagedSessionState(
         sessionId="  sess-123  ",
@@ -103,7 +98,6 @@ def test_codex_managed_session_state_normalizes_identifier_whitespace() -> None:
     assert state.thread_id == "thread-1"
     assert state.active_turn_id == "turn-1"
 
-
 def test_codex_managed_session_state_clear_session_requires_a_new_non_blank_thread() -> None:
     state = CodexManagedSessionState(
         sessionId="sess-123",
@@ -117,7 +111,6 @@ def test_codex_managed_session_state_clear_session_requires_a_new_non_blank_thre
 
     with pytest.raises(ValueError, match="threadId must not be blank"):
         state.clear_session(new_thread_id="   ")
-
 
 @pytest.mark.parametrize(
     ("field_name", "field_value"),
@@ -142,7 +135,6 @@ def test_codex_managed_session_state_rejects_blank_identifiers(
     with pytest.raises(ValidationError):
         CodexManagedSessionState(**kwargs)
 
-
 def test_codex_managed_session_state_requires_epoch_at_least_one() -> None:
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         CodexManagedSessionState(
@@ -151,7 +143,6 @@ def test_codex_managed_session_state_requires_epoch_at_least_one() -> None:
             containerId="ctr-123",
             threadId="thread-1",
         )
-
 
 def test_launch_codex_managed_session_request_freezes_remote_container_defaults() -> None:
     request = LaunchCodexManagedSessionRequest(
@@ -171,7 +162,6 @@ def test_launch_codex_managed_session_request_freezes_remote_container_defaults(
     assert request.protocol == "codex_app_server"
     assert request.session_epoch == 1
 
-
 def test_launch_codex_managed_session_request_rejects_local_control_mode() -> None:
     with pytest.raises(ValidationError, match="Input should be 'remote_container'"):
         LaunchCodexManagedSessionRequest(
@@ -186,7 +176,6 @@ def test_launch_codex_managed_session_request_rejects_local_control_mode() -> No
             controlMode="local_process",
         )
 
-
 def test_launch_codex_managed_session_request_requires_absolute_paths() -> None:
     with pytest.raises(ValidationError, match="workspacePath must be an absolute path"):
         LaunchCodexManagedSessionRequest(
@@ -199,7 +188,6 @@ def test_launch_codex_managed_session_request_requires_absolute_paths() -> None:
             codexHomePath="/work/task/codex-home",
             imageRef="moonmind:latest",
         )
-
 
 def test_launch_codex_managed_session_request_rejects_invalid_auth_target() -> None:
     with pytest.raises(
@@ -234,7 +222,6 @@ def test_launch_codex_managed_session_request_rejects_invalid_auth_target() -> N
             environment={"MANAGED_AUTH_VOLUME_PATH": "/work/task/codex-home"},
         )
 
-
 def test_launch_codex_managed_session_request_rejects_reserved_session_environment() -> None:
     with pytest.raises(
         ValidationError,
@@ -252,7 +239,6 @@ def test_launch_codex_managed_session_request_rejects_reserved_session_environme
             imageRef="moonmind:latest",
             environment={"MOONMIND_SESSION_WORKSPACE_PATH": "/tmp/override"},
         )
-
 
 def test_managed_github_credential_descriptor_serializes_without_secret_value() -> None:
     descriptor = ManagedGitHubCredentialDescriptor(
@@ -283,16 +269,13 @@ def test_managed_github_credential_descriptor_serializes_without_secret_value() 
     assert "ghp_secret_token_value" not in str(payload)
     assert "GITHUB_TOKEN" not in payload["environment"]
 
-
 def test_managed_github_credential_descriptor_requires_secret_ref() -> None:
     with pytest.raises(ValidationError, match="secretRef is required"):
         ManagedGitHubCredentialDescriptor(source="secret_ref")
 
-
 def test_managed_github_credential_descriptor_rejects_unknown_source() -> None:
     with pytest.raises(ValidationError):
         ManagedGitHubCredentialDescriptor(source="plain_text", required=True)
-
 
 def test_codex_managed_session_clear_request_requires_new_thread() -> None:
     with pytest.raises(ValidationError, match="must differ from threadId"):
@@ -303,7 +286,6 @@ def test_codex_managed_session_clear_request_requires_new_thread() -> None:
             threadId="thread-1",
             newThreadId="thread-1",
         )
-
 
 def test_codex_managed_session_locator_requires_bounded_identity() -> None:
     locator = CodexManagedSessionLocator(
@@ -317,7 +299,6 @@ def test_codex_managed_session_locator_requires_bounded_identity() -> None:
     assert locator.session_epoch == 1
     assert locator.container_id == "ctr-123"
     assert locator.thread_id == "thread-1"
-
 
 @pytest.mark.parametrize("missing_field", ["sessionEpoch", "containerId", "threadId"])
 def test_send_turn_request_requires_full_session_locator(
@@ -335,7 +316,6 @@ def test_send_turn_request_requires_full_session_locator(
     with pytest.raises(ValidationError, match=missing_field):
         SendCodexManagedSessionTurnRequest(**payload)
 
-
 def test_codex_managed_session_handle_exposes_remote_container_contract() -> None:
     handle = CodexManagedSessionHandle(
         sessionState={
@@ -352,7 +332,6 @@ def test_codex_managed_session_handle_exposes_remote_container_contract() -> Non
     assert handle.container_backend == "docker"
     assert handle.session_state.container_id == "ctr-123"
 
-
 def test_codex_managed_session_turn_response_requires_remote_session_state() -> None:
     response = CodexManagedSessionTurnResponse(
         sessionState={
@@ -368,7 +347,6 @@ def test_codex_managed_session_turn_response_requires_remote_session_state() -> 
 
     assert response.turn_id == "turn-1"
     assert response.session_state.active_turn_id == "turn-1"
-
 
 def test_codex_managed_session_turn_response_clamps_large_assistant_text() -> None:
     response = CodexManagedSessionTurnResponse(
@@ -387,7 +365,6 @@ def test_codex_managed_session_turn_response_clamps_large_assistant_text() -> No
     assert response.metadata["assistantTextTruncated"] is True
     assert response.metadata["assistantTextOriginalChars"] == 12000
 
-
 def test_codex_managed_session_summary_clamps_large_last_assistant_text_bytes() -> None:
     response = CodexManagedSessionSummary(
         sessionState={
@@ -402,7 +379,6 @@ def test_codex_managed_session_summary_clamps_large_last_assistant_text_bytes() 
     assert len(response.metadata["lastAssistantText"].encode("utf-8")) <= 8192
     assert response.metadata["lastAssistantTextTruncated"] is True
     assert response.metadata["lastAssistantTextOriginalChars"] == 5000
-
 
 def test_codex_managed_session_summary_and_publication_allow_artifact_refs() -> None:
     summary = CodexManagedSessionSummary(
@@ -425,7 +401,6 @@ def test_codex_managed_session_summary_and_publication_allow_artifact_refs() -> 
     assert summary.latest_summary_ref == "art-summary"
     assert publication.published_artifact_refs == ("art-summary", "art-checkpoint")
 
-
 def test_send_codex_managed_session_turn_request_trims_instruction_and_reason() -> None:
     request = SendCodexManagedSessionTurnRequest(
         sessionId="sess-123",
@@ -438,7 +413,6 @@ def test_send_codex_managed_session_turn_request_trims_instruction_and_reason() 
 
     assert request.instructions == "Investigate the failing test"
     assert request.reason == "Operator follow-up"
-
 
 def test_attach_runtime_handles_signal_is_explicit_typed_contract() -> None:
     signal = CodexManagedSessionAttachRuntimeHandlesSignal.model_validate(
@@ -459,7 +433,6 @@ def test_attach_runtime_handles_signal_is_explicit_typed_contract() -> None:
     assert signal.last_control_action == "send_turn"
     assert signal.last_control_reason == "operator follow-up"
 
-
 @pytest.mark.parametrize(
     "model_type",
     [
@@ -477,7 +450,6 @@ def test_each_session_control_update_has_its_own_request_model(
 
     assert request.reason == "operator control"
     assert request.request_id == "request-1"
-
 
 def test_session_control_update_models_forbid_unknown_fields() -> None:
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):

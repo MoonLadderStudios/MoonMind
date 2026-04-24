@@ -5,7 +5,6 @@ import time
 from moonmind.utils.find_files import find_files
 from moonmind.utils.read_text_file import read_text_file
 
-
 def summarize_text_gemini(base_prompt: str, input_text: str, model: any):
     logger = logging.getLogger(__name__)
     try:
@@ -46,7 +45,6 @@ def summarize_text_gemini(base_prompt: str, input_text: str, model: any):
             f"Error during text summarization (Gemini call or response processing): {e}. Input (start): '{input_text[:100]}...'"
         )
         return None
-
 
 def update_summaries(
     input_dir: str,

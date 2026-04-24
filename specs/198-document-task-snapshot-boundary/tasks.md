@@ -8,7 +8,7 @@
 **Test Commands**:
 
 - Focused documentation contract check: `rg -n "Preset compilation|authoredPresets|source\\?|include-tree|detachment state|live preset catalog" docs/Tasks/TaskArchitecture.md`
-- Source traceability check: `rg -n "MM-385|DESIGN-REQ-015|DESIGN-REQ-017|DESIGN-REQ-018|DESIGN-REQ-019|DESIGN-REQ-025|DESIGN-REQ-026" specs/198-document-task-snapshot-boundary docs/tmp/jira-orchestration-inputs/MM-385-moonspec-orchestration-input.md`
+- Source traceability check: `rg -n "MM-385|DESIGN-REQ-015|DESIGN-REQ-017|DESIGN-REQ-018|DESIGN-REQ-019|DESIGN-REQ-025|DESIGN-REQ-026" specs/198-document-task-snapshot-boundary`
 - Full unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - Final verification: `/moonspec-verify`
 
@@ -21,12 +21,12 @@
 - FR-005, SC-003, DESIGN-REQ-025: snapshot durability preserves pinned bindings, include-tree summary, per-step provenance, detachment state, and final submitted order.
 - FR-006, SC-004, DESIGN-REQ-015, DESIGN-REQ-026: execution-plane workers do not expand presets or depend on live preset catalog correctness.
 - FR-007: submitted tasks remain executable, reconstructible, and auditable after catalog changes.
-- FR-008: canonical docs remain desired-state; volatile planning stays under `docs/tmp/` and `specs/`.
+- FR-008: canonical docs remain desired-state; volatile planning stays under `local-only handoffs` and `specs/`.
 - FR-009, SC-005: MM-385 and original Jira preset brief remain visible in artifacts and verification evidence.
 
 ## Phase 1: Setup
 
-- [X] T001 Confirm active MM-385 feature directory and source input in `.specify/feature.json`, `docs/tmp/jira-orchestration-inputs/MM-385-moonspec-orchestration-input.md`, and `specs/198-document-task-snapshot-boundary/spec.md` (FR-009, SC-005).
+- [X] T001 Confirm active MM-385 feature directory and source input in `.specify/feature.json`, `spec.md` (Input), and `specs/198-document-task-snapshot-boundary/spec.md` (FR-009, SC-005).
 - [X] T002 Confirm `docs/Tasks/TaskArchitecture.md` is the canonical documentation target and `docs/Tasks/PresetComposability.md` is absent in the current checkout in `specs/198-document-task-snapshot-boundary/research.md` (FR-008).
 
 ## Phase 2: Foundational
