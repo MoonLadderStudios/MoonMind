@@ -1,12 +1,12 @@
 [
   {
-    "id": 4167635630,
-    "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; no independent action required beyond the linked inline comment disposition."
+    "id": 3135364204,
+    "disposition": "addressed",
+    "rationale": "Updated the integration test fake launcher to build sessionContext like moonmind/workloads/docker_launcher.py, omitting sessionEpoch/sourceTurnId when those values are null."
   },
   {
-    "id": 3135262955,
+    "id": 3135364206,
     "disposition": "addressed",
-    "rationale": "Replaced the absolute workspace path in specs/250-unrestricted-container-and-docker-cli-contracts/checklists/requirements.md with the relative link ../spec.md."
+    "rationale": "Updated the Temporal activity unit test fake launcher to mirror the production _session_context behavior instead of materializing None-valued keys."
   }
 ]

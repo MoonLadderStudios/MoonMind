@@ -91,6 +91,17 @@ class _FakeLauncher:
         self.validated: Any | None = None
         self.reason: str | None = None
 
+    @staticmethod
+    def _session_context(validated: Any) -> dict[str, object] | None:
+        if validated.request.session_id is None:
+            return None
+        context: dict[str, object] = {"sessionId": validated.request.session_id}
+        if validated.request.session_epoch is not None:
+            context["sessionEpoch"] = validated.request.session_epoch
+        if validated.request.source_turn_id is not None:
+            context["sourceTurnId"] = validated.request.source_turn_id
+        return context
+
     async def run(self, validated: Any) -> WorkloadResult:
         self.validated = validated
         return WorkloadResult(
@@ -107,15 +118,7 @@ class _FakeLauncher:
                     "attempt": validated.request.attempt,
                     "toolName": validated.request.tool_name,
                     "profileId": validated.profile.id,
-                    "sessionContext": (
-                        {
-                            "sessionId": validated.request.session_id,
-                            "sessionEpoch": validated.request.session_epoch,
-                            "sourceTurnId": validated.request.source_turn_id,
-                        }
-                        if validated.request.session_id is not None
-                        else None
-                    ),
+                    "sessionContext": self._session_context(validated),
                 },
                 "artifactPublication": {"status": "complete"},
             },
