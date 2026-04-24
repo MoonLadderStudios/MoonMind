@@ -207,6 +207,8 @@ Key diagnostics:
 - Existing temporal artifact metadata tables and configured artifact store; no new persistent storage (245-publish-report-bundles)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, existing Docker workload launcher/registry stack, pytest (251-workspace-mount-session-boundary-isolation)
 - No new persistent storage; existing workload metadata, artifact-backed workload outputs, and runtime labels only (251-workspace-mount-session-boundary-isolation)
+- Python 3.12 + Pydantic v2, FastAPI, existing MoonMind RAG services, existing managed-runtime adapter and provider-profile stack, pytest (256-retrieval-transport-separation)
+- No new persistent storage; reuse existing retrieval settings, runtime metadata, provider-profile rows, and artifact-backed retrieval outputs (256-retrieval-transport-separation)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
