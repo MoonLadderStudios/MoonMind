@@ -99,7 +99,26 @@ class _FakeLauncher:
             status="succeeded",
             labels=validated.ownership.labels,
             exitCode=0,
-            metadata={"containerName": validated.container_name},
+            metadata={
+                "containerName": validated.container_name,
+                "workload": {
+                    "taskRunId": validated.request.task_run_id,
+                    "stepId": validated.request.step_id,
+                    "attempt": validated.request.attempt,
+                    "toolName": validated.request.tool_name,
+                    "profileId": validated.profile.id,
+                    "sessionContext": (
+                        {
+                            "sessionId": validated.request.session_id,
+                            "sessionEpoch": validated.request.session_epoch,
+                            "sourceTurnId": validated.request.source_turn_id,
+                        }
+                        if validated.request.session_id is not None
+                        else None
+                    ),
+                },
+                "artifactPublication": {"status": "complete"},
+            },
         )
 
     async def start_helper(self, validated: Any) -> WorkloadResult:
@@ -177,6 +196,36 @@ async def test_workload_run_activity_validates_request_and_calls_launcher() -> N
     assert result["profileId"] == "local-python"
     assert result["status"] == "succeeded"
     assert result["labels"]["moonmind.kind"] == "workload"
+
+
+@pytest.mark.asyncio
+async def test_workload_run_activity_preserves_session_context_as_workload_metadata() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    activities = TemporalAgentRuntimeActivities(
+        workload_registry=registry,
+        workload_launcher=launcher,
+    )
+
+    result = await activities.workload_run(
+        {
+            "request": _request_payload(
+                sessionId="session-1",
+                sessionEpoch=3,
+                sourceTurnId="turn-7",
+            )
+        }
+    )
+
+    assert result["metadata"]["workload"]["sessionContext"] == {
+        "sessionId": "session-1",
+        "sessionEpoch": 3,
+        "sourceTurnId": "turn-7",
+    }
+    assert "session.summary" not in (result.get("outputRefs") or {})
 
 
 @pytest.mark.asyncio

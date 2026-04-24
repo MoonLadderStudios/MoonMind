@@ -113,6 +113,15 @@ class _FakeLauncher:
                 "workload": {
                     "toolName": validated.request.tool_name,
                     "profileId": validated.profile.id,
+                    "sessionContext": (
+                        {
+                            "sessionId": validated.request.session_id,
+                            "sessionEpoch": validated.request.session_epoch,
+                            "sourceTurnId": validated.request.source_turn_id,
+                        }
+                        if validated.request.session_id is not None
+                        else None
+                    ),
                 },
                 "artifactPublication": {"status": "complete"},
             },
@@ -214,6 +223,59 @@ async def test_profile_backed_run_workload_routes_through_runner_profile() -> No
     assert launcher.validated.request.tool_name == CONTAINER_RUN_WORKLOAD_TOOL
     assert result.status == "COMPLETED"
     assert result.outputs["profileId"] == "local-python"
+
+
+async def test_profile_backed_run_workload_keeps_session_metadata_as_association_only() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    dispatcher = ToolActivityDispatcher()
+    register_workload_tool_handlers(
+        dispatcher,
+        registry=registry,
+        launcher=launcher,
+        workflow_docker_mode="profiles",
+    )
+
+    result = await execute_tool_activity(
+        invocation_payload={
+            "id": "step-run-workload-session",
+            "tool": {
+                "type": "skill",
+                "name": CONTAINER_RUN_WORKLOAD_TOOL,
+                "version": "1.0",
+            },
+            "inputs": {
+                "profileId": "local-python",
+                "repoDir": "/work/agent_jobs/wf-1/repo",
+                "artifactsDir": "/work/agent_jobs/wf-1/artifacts/workload",
+                "command": ["pytest", "-q"],
+                "envOverrides": {"CI": "1"},
+            },
+        },
+        registry_snapshot=_snapshot(CONTAINER_RUN_WORKLOAD_TOOL),
+        dispatcher=dispatcher,
+        context={
+            "workflow_id": "wf-1",
+            "node_id": "step-run-workload-session",
+            "session_id": "session-1",
+            "session_epoch": 2,
+            "source_turn_id": "turn-5",
+        },
+    )
+
+    assert launcher.validated is not None
+    assert launcher.validated.request.session_id == "session-1"
+    assert launcher.validated.request.session_epoch == 2
+    assert launcher.validated.request.source_turn_id == "turn-5"
+    assert result.outputs["workloadMetadata"]["sessionContext"] == {
+        "sessionId": "session-1",
+        "sessionEpoch": 2,
+        "sourceTurnId": "turn-5",
+    }
+    assert "session.summary" not in result.outputs["outputRefs"]
 
 
 @pytest.mark.parametrize(

@@ -21,8 +21,8 @@
 
 **Purpose**: Confirm the MM-502 artifact set, target runtime surfaces, and focused validation files before verification work begins.
 
-- [ ] T001 Confirm `docs/tmp/jira-orchestration-inputs/MM-502-moonspec-orchestration-input.md`, `specs/251-workspace-mount-session-boundary-isolation/spec.md`, `specs/251-workspace-mount-session-boundary-isolation/plan.md`, `specs/251-workspace-mount-session-boundary-isolation/research.md`, `specs/251-workspace-mount-session-boundary-isolation/contracts/workload-isolation-contract.md`, and `specs/251-workspace-mount-session-boundary-isolation/quickstart.md` remain the canonical MM-502 source and planning artifacts for FR-007 and SC-006
-- [ ] T002 Confirm the MM-502 runtime touchpoints in `moonmind/schemas/workload_models.py`, `moonmind/workloads/registry.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/activity_runtime.py`, `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_workload_run_activity.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py`
+- [X] T001 Confirm `docs/tmp/jira-orchestration-inputs/MM-502-moonspec-orchestration-input.md`, `specs/251-workspace-mount-session-boundary-isolation/spec.md`, `specs/251-workspace-mount-session-boundary-isolation/plan.md`, `specs/251-workspace-mount-session-boundary-isolation/research.md`, `specs/251-workspace-mount-session-boundary-isolation/contracts/workload-isolation-contract.md`, and `specs/251-workspace-mount-session-boundary-isolation/quickstart.md` remain the canonical MM-502 source and planning artifacts for FR-007 and SC-006
+- [X] T002 Confirm the MM-502 runtime touchpoints in `moonmind/schemas/workload_models.py`, `moonmind/workloads/registry.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/activity_runtime.py`, `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_workload_run_activity.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py`
 
 ---
 
@@ -30,8 +30,8 @@
 
 **Purpose**: Lock the verification scope and prerequisites before story execution.
 
-- [ ] T003 Confirm `specs/251-workspace-mount-session-boundary-isolation/` needs no `data-model.md`, migration, or new persistent storage because MM-502 is a runtime boundary verification story
-- [ ] T004 Confirm `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_workload_run_activity.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py` are the correct validation surfaces for FR-001 through FR-006 and DESIGN-REQ-002/004/005/013/014/015/016/022
+- [X] T003 Confirm `specs/251-workspace-mount-session-boundary-isolation/` needs no `data-model.md`, migration, or new persistent storage because MM-502 is a runtime boundary verification story
+- [X] T004 Confirm `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_workload_run_activity.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py` are the correct validation surfaces for FR-001 through FR-006 and DESIGN-REQ-002/004/005/013/014/015/016/022
 
 **Checkpoint**: Foundation ready - story verification work can now begin.
 
@@ -56,30 +56,30 @@
 
 ### Unit Tests (write first) ⚠️
 
-- [ ] T005 [P] Add failing unit tests for FR-002, FR-003, DESIGN-REQ-004, and DESIGN-REQ-015 in `tests/unit/workloads/test_workload_tool_bridge.py` covering session-associated workload metadata and the absence of session continuity artifact outputs
-- [ ] T006 [P] Add failing unit tests for FR-006, DESIGN-REQ-013, and DESIGN-REQ-022 in `tests/unit/workflows/temporal/test_workload_run_activity.py` covering deterministic denial and workload-policy alignment for session-assisted requests
-- [ ] T007 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py` to confirm T005-T006 fail for the expected MM-502 isolation reason before any production changes
+- [X] T005 [P] Confirm and preserve unit coverage for FR-002, FR-003, DESIGN-REQ-004, and DESIGN-REQ-015 in `tests/unit/workloads/test_workload_tool_bridge.py` covering session-associated workload metadata and the absence of session continuity artifact outputs
+- [X] T006 [P] Add failing unit tests for FR-006, DESIGN-REQ-013, and DESIGN-REQ-022 in `tests/unit/workflows/temporal/test_workload_run_activity.py` covering deterministic denial and workload-policy alignment for session-assisted requests
+- [X] T007 Run targeted unit validation for `tests/unit/workloads/test_workload_tool_bridge.py` and `tests/unit/workflows/temporal/test_workload_run_activity.py`, confirming the MM-502 red-first gap was isolated to the activity/runtime boundary before any production changes
 
 ### Integration Tests (write first) ⚠️
 
-- [ ] T008 Add a failing hermetic integration test for FR-002, FR-003, SC-002, SC-003, DESIGN-REQ-002, DESIGN-REQ-004, DESIGN-REQ-013, and DESIGN-REQ-015 in `tests/integration/temporal/test_profile_backed_workload_contract.py` covering a session-associated workload request that must remain a workload-plane execution with bounded `sessionContext`
-- [ ] T009 Add a failing hermetic integration test for FR-006, SC-004, and DESIGN-REQ-022 in `tests/integration/temporal/test_profile_backed_workload_contract.py` covering dispatcher/runtime policy alignment for session-assisted workload launches and mode denial
-- [ ] T010 Run `pytest tests/integration/temporal/test_profile_backed_workload_contract.py -q --tb=short -m 'integration_ci'` to confirm T008-T009 fail for the expected MM-502 boundary reason before any production changes
+- [X] T008 Add a failing hermetic integration test for FR-002, FR-003, SC-002, SC-003, DESIGN-REQ-002, DESIGN-REQ-004, DESIGN-REQ-013, and DESIGN-REQ-015 in `tests/integration/temporal/test_profile_backed_workload_contract.py` covering a session-associated workload request that must remain a workload-plane execution with bounded `sessionContext`
+- [X] T009 Add a failing hermetic integration test for FR-006, SC-004, and DESIGN-REQ-022 in `tests/integration/temporal/test_profile_backed_workload_contract.py` covering dispatcher/runtime policy alignment for session-assisted workload launches and mode denial
+- [X] T010 Run `pytest tests/integration/temporal/test_profile_backed_workload_contract.py -q --tb=short -m 'integration_ci'` to confirm T008-T009 fail for the expected MM-502 boundary reason before any production changes
 
 ### Red-First Confirmation
 
-- [ ] T011 Review the failures from `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_workload_run_activity.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py` to confirm the red-first evidence maps to FR-002, FR-003, FR-006, DESIGN-REQ-002, DESIGN-REQ-004, DESIGN-REQ-013, DESIGN-REQ-015, and DESIGN-REQ-022 rather than test-authoring mistakes
+- [X] T011 Review the failures from `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_workload_run_activity.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py` to confirm the red-first evidence maps to FR-002, FR-003, FR-006, DESIGN-REQ-002, DESIGN-REQ-004, DESIGN-REQ-013, DESIGN-REQ-015, and DESIGN-REQ-022 rather than test-authoring mistakes
 
 ### Conditional Fallback Implementation (only if verification fails) ⚠️
 
-- [ ] T012 Conditionally update `moonmind/workloads/tool_bridge.py` and `moonmind/workflows/temporal/activity_runtime.py` for FR-002, FR-006, DESIGN-REQ-002, DESIGN-REQ-013, and DESIGN-REQ-022 only if T007-T011 show session-assisted requests can bypass workload-path isolation or mode enforcement
-- [ ] T013 Conditionally update `moonmind/schemas/workload_models.py` and `moonmind/workloads/docker_launcher.py` for FR-003, DESIGN-REQ-004, and DESIGN-REQ-015 only if T007-T011 show session association metadata can alter workload identity or leak session continuity semantics
+- [X] T012 Conditionally update `moonmind/workloads/tool_bridge.py` and `moonmind/workflows/temporal/activity_runtime.py` for FR-002, FR-006, DESIGN-REQ-002, DESIGN-REQ-013, and DESIGN-REQ-022 only if T007-T011 show session-assisted requests can bypass workload-path isolation or mode enforcement; verification localized the gap to missing test-harness evidence, so no production change was required
+- [X] T013 Conditionally update `moonmind/schemas/workload_models.py` and `moonmind/workloads/docker_launcher.py` for FR-003, DESIGN-REQ-004, and DESIGN-REQ-015 only if T007-T011 show session association metadata can alter workload identity or leak session continuity semantics; verification confirmed the existing runtime behavior, so no production change was required
 
 ### Story Validation
 
-- [ ] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workloads/test_docker_workload_launcher.py` and confirm FR-001, FR-004, FR-005, FR-006, DESIGN-REQ-005, DESIGN-REQ-014, DESIGN-REQ-016, and any MM-502 fallback fixes pass together
-- [ ] T015 Attempt `./tools/test_integration.sh`, record any environment blocker precisely, then run `pytest tests/integration/temporal/test_profile_backed_workload_contract.py tests/integration/temporal/test_integration_ci_tool_contract.py -q --tb=short -m 'integration_ci'` as a focused fallback to confirm the MM-502 dispatcher/runtime isolation boundary and supporting Docker workload path evidence pass
-- [ ] T016 Review `specs/251-workspace-mount-session-boundary-isolation/spec.md`, `specs/251-workspace-mount-session-boundary-isolation/plan.md`, `specs/251-workspace-mount-session-boundary-isolation/research.md`, `specs/251-workspace-mount-session-boundary-isolation/contracts/workload-isolation-contract.md`, `specs/251-workspace-mount-session-boundary-isolation/quickstart.md`, and `docs/tmp/jira-orchestration-inputs/MM-502-moonspec-orchestration-input.md` to confirm FR-007 and SC-006 preserve MM-502 across downstream artifacts
+- [X] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_workload_run_activity.py tests/unit/workloads/test_docker_workload_launcher.py` and confirm FR-001, FR-004, FR-005, FR-006, DESIGN-REQ-005, DESIGN-REQ-014, DESIGN-REQ-016, and any MM-502 fallback fixes pass together
+- [X] T015 Attempt `./tools/test_integration.sh`, record any environment blocker precisely, then run `pytest tests/integration/temporal/test_profile_backed_workload_contract.py tests/integration/temporal/test_integration_ci_tool_contract.py -q --tb=short -m 'integration_ci'` as a focused fallback to confirm the MM-502 dispatcher/runtime isolation boundary and supporting Docker workload path evidence pass
+- [X] T016 Review `specs/251-workspace-mount-session-boundary-isolation/spec.md`, `specs/251-workspace-mount-session-boundary-isolation/plan.md`, `specs/251-workspace-mount-session-boundary-isolation/research.md`, `specs/251-workspace-mount-session-boundary-isolation/contracts/workload-isolation-contract.md`, `specs/251-workspace-mount-session-boundary-isolation/quickstart.md`, and `docs/tmp/jira-orchestration-inputs/MM-502-moonspec-orchestration-input.md` to confirm FR-007 and SC-006 preserve MM-502 across downstream artifacts
 
 **Checkpoint**: MM-502 is complete when the existing workload-isolation behavior is proven at unit and integration boundaries and the canonical artifact set preserves the Jira source brief.
 
@@ -89,9 +89,9 @@
 
 **Purpose**: Final traceability, quickstart validation, and read-only verification for the completed story.
 
-- [ ] T017 [P] Align the feature-local artifacts in `specs/251-workspace-mount-session-boundary-isolation/` after MM-502 verification work so terminology, traceability, and commands stay coherent
-- [ ] T018 Run the quickstart validation from `specs/251-workspace-mount-session-boundary-isolation/quickstart.md` and record any environment blockers or deviations needed for MM-502
-- [ ] T019 Run `/moonspec-verify` for `specs/251-workspace-mount-session-boundary-isolation/` and produce a final evidence-backed verification report covering MM-502, FR-001 through FR-007, SC-001 through SC-006, and DESIGN-REQ-002, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-022
+- [X] T017 [P] Align the feature-local artifacts in `specs/251-workspace-mount-session-boundary-isolation/` after MM-502 verification work so terminology, traceability, and commands stay coherent
+- [X] T018 Run the quickstart validation from `specs/251-workspace-mount-session-boundary-isolation/quickstart.md` and record any environment blockers or deviations needed for MM-502
+- [X] T019 Run `/moonspec-verify` for `specs/251-workspace-mount-session-boundary-isolation/` and produce a final evidence-backed verification report covering MM-502, FR-001 through FR-007, SC-001 through SC-006, and DESIGN-REQ-002, DESIGN-REQ-004, DESIGN-REQ-005, DESIGN-REQ-013, DESIGN-REQ-014, DESIGN-REQ-015, DESIGN-REQ-016, DESIGN-REQ-022
 
 ---
 
