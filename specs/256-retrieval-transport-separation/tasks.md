@@ -7,7 +7,7 @@
 
 **Organization**: Tasks are grouped by phase around the single MM-508 story so the work stays focused, traceable, and independently testable.
 
-**Source Traceability**: The original MM-508 Jira preset brief is preserved in `spec.md`. Tasks cover exactly one story and map FR-001 through FR-007, acceptance scenarios 1 through 6, SC-001 through SC-007, and DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-014, DESIGN-REQ-016, DESIGN-REQ-019, DESIGN-REQ-024, and DESIGN-REQ-025. Requirement-status summary from `plan.md`: 0 missing rows, 11 partial rows require test-first completion work, 2 implemented-unverified rows require verification-first coverage with conditional fallback implementation tasks, and 1 implemented-verified row requires traceability-preserving final validation only.
+**Source Traceability**: The original MM-508 Jira preset brief is preserved in `spec.md`. Tasks cover exactly one story and map FR-001 through FR-007, acceptance scenarios 1 through 6, SC-001 through SC-007, and DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-014, DESIGN-REQ-016, DESIGN-REQ-019, DESIGN-REQ-024, and DESIGN-REQ-025. Requirement-status summary from `plan.md`: 0 missing rows, 12 partial rows require test-first completion work, 3 implemented-unverified rows require verification-first coverage, and 1 implemented-verified row requires traceability-preserving final validation only.
 
 **Test Commands**:
 
@@ -84,10 +84,10 @@
 ### Conditional Fallback Implementation (implemented_unverified rows)
 
 - [ ] T019 If T010 or T016 proves the direct path no longer satisfies MM-508, update `moonmind/rag/settings.py` and `moonmind/rag/service.py` for FR-003, acceptance scenario 3, SC-003, and DESIGN-REQ-010 to preserve direct retrieval without weakening gateway preference.
-- [ ] T020 If T011 or T016 proves degraded fallback is still ambiguous, update `moonmind/rag/context_injection.py` for FR-004, acceptance scenario 4, SC-004, and DESIGN-REQ-014 to keep local fallback explicitly gated and transport-visible.
 
 ### Implementation
 
+- [ ] T020 Implement explicit degraded fallback observability for FR-004, acceptance scenario 4, SC-004, and DESIGN-REQ-014 in `moonmind/rag/context_injection.py` and any affected retrieval metadata helpers so local fallback stays policy gated and transport-visible.
 - [ ] T021 Implement retrieval-setting separation for FR-001, acceptance scenario 1, SC-001, and DESIGN-REQ-004 / DESIGN-REQ-019 in `api_service/api/routers/executions.py`, `moonmind/workflows/temporal/runtime/launcher.py`, and any affected retrieval-setting helpers.
 - [ ] T022 Implement gateway-preference behavior for FR-002, acceptance scenario 2, SC-002, and DESIGN-REQ-009 / DESIGN-REQ-024 in `moonmind/rag/settings.py`, `moonmind/rag/service.py`, and `api_service/api/routers/retrieval_gateway.py`.
 - [ ] T023 Implement coherent transport metadata and knob propagation for FR-005, FR-006, acceptance scenario 5, SC-005, SC-006, and DESIGN-REQ-016 / DESIGN-REQ-025 in `moonmind/rag/context_injection.py`, `moonmind/rag/service.py`, `api_service/api/routers/retrieval_gateway.py`, and any affected runtime metadata helpers.
@@ -125,7 +125,8 @@
 - T008-T013 must be written before T014.
 - T015-T016 must be written before T017.
 - T014 and T017 must confirm red-first failures before any implementation work begins.
-- T019 and T020 are conditional and run only if verification proves the existing direct path or degraded fallback behavior is insufficient.
+- T019 is conditional and runs only if verification proves the existing direct path is insufficient.
+- T020 is required implementation work because FR-004 / DESIGN-REQ-014 remain partial in `plan.md`.
 - T021 should land before T022 and T023 because boundary separation clarifies what transport behavior is allowed to consume.
 - T024 depends on completion of all required implementation tasks.
 - T025 depends on T024.
@@ -164,5 +165,5 @@ Task: "Add failing degraded-fallback tests in tests/unit/rag/test_context_inject
 
 - This task list covers one story only.
 - `moonspec-breakdown` is not applicable because MM-508 is already a single-story Jira preset brief.
-- T019 and T020 are the only conditional fallback implementation tasks because FR-003 and FR-004 are the implemented-unverified rows in `plan.md`.
+- T019 is the only conditional fallback implementation task because FR-003 / DESIGN-REQ-010 are the direct-path implemented-unverified rows in `plan.md`; FR-004 / DESIGN-REQ-014 remain partial and therefore stay in the required implementation path.
 - Preserve `MM-508` in all downstream evidence and verification artifacts.
