@@ -1,22 +1,22 @@
 [
   {
-    "id": 3134534895,
+    "id": 3134586258,
     "disposition": "addressed",
-    "rationale": "Replaced the managed-agent absolute feature path in .specify/feature.json with the repo-relative specs/245-claude-oauth-guardrails path."
+    "rationale": "Removed the superseded --mm-executing-sweep-duration and --mm-executing-sweep-delay variables so the stylesheet keeps only the active cycle-duration contract."
   },
   {
-    "id": 4166796428,
-    "disposition": "not-applicable",
-    "rationale": "Top-level Codex review wrapper comment; the actionable feedback was the linked review comment and has been addressed."
-  },
-  {
-    "id": 3134537750,
+    "id": 3134586265,
     "disposition": "addressed",
-    "rationale": "Updated .specify/feature.json to use the suggested repo-relative feature_directory value for portability across environments."
+    "rationale": "Dropped the obsolete CSS test expectations for the removed duration and delay tokens so the suite reflects the active shimmer contract only."
   },
   {
-    "id": 4166799430,
+    "id": 3134586268,
+    "disposition": "addressed",
+    "rationale": "Simplified the single-quoted selector string literal to remove unnecessary escaped double quotes."
+  },
+  {
+    "id": 4166856735,
     "disposition": "not-applicable",
-    "rationale": "Top-level Gemini summary review; the only actionable item duplicated the .specify/feature.json path issue and is now fixed."
+    "rationale": "Top-level review summary only; its actionable items were handled through the inline review comments above."
   }
 ]

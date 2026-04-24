@@ -40,7 +40,8 @@ describe('executionStatusPillProps', () => {
     ]);
   });
 
-  it('adds MM-489 traceability for the layered shimmer refinement story', () => {
+  it('adds MM-489 and MM-490 traceability for adjacent shimmer refinement stories', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
   });
 });
