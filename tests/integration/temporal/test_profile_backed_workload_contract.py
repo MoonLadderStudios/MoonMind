@@ -7,13 +7,18 @@ import pytest
 
 from moonmind.schemas.workload_models import RunnerProfile, WorkloadResult
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
-from moonmind.workflows.skills.tool_dispatcher import (
-    ToolActivityDispatcher,
-    execute_tool_activity,
+from moonmind.workflows.skills.skill_dispatcher import (
+    SkillActivityDispatcher as ToolActivityDispatcher,
+    execute_skill_activity as execute_tool_activity,
 )
-from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
-from moonmind.workflows.skills.tool_registry import create_registry_snapshot
-from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
+from moonmind.workflows.skills.skill_plan_contracts import (
+    SkillFailure as ToolFailure,
+    parse_skill_definition as parse_tool_definition,
+)
+from moonmind.workflows.skills.skill_registry import (
+    SkillRegistrySnapshot,
+    create_registry_snapshot,
+)
 from moonmind.workloads.registry import RunnerProfileRegistry
 from moonmind.workloads.tool_bridge import (
     CONTAINER_RUN_WORKLOAD_TOOL,
@@ -155,7 +160,7 @@ class _FakeLauncher:
         )
 
 
-def _snapshot(*tool_names: str):
+def _snapshot(*tool_names: str) -> SkillRegistrySnapshot:
     return create_registry_snapshot(
         skills=tuple(
             parse_tool_definition(
@@ -287,6 +292,7 @@ async def test_profile_backed_helper_lifecycle_stays_bounded() -> None:
             },
             "inputs": {
                 "profileId": "redis-helper",
+                "stepId": "helper-lifecycle",
                 "repoDir": "/work/agent_jobs/wf-1/repo",
                 "artifactsDir": "/work/agent_jobs/wf-1/artifacts/helper",
                 "command": ["--appendonly", "no"],
@@ -300,7 +306,7 @@ async def test_profile_backed_helper_lifecycle_stays_bounded() -> None:
 
     assert launcher.validated is not None
     assert launcher.validated.profile.kind == "bounded_service"
-    assert launcher.validated.container_name == "mm-helper-wf-1-step-start-helper-1"
+    assert launcher.validated.container_name == "mm-helper-wf-1-helper-lifecycle-1"
     assert start_result.status == "COMPLETED"
     assert start_result.outputs["workloadMetadata"]["helper"]["readiness"]["status"] == "ready"
 
@@ -314,6 +320,7 @@ async def test_profile_backed_helper_lifecycle_stays_bounded() -> None:
             },
             "inputs": {
                 "profileId": "redis-helper",
+                "stepId": "helper-lifecycle",
                 "repoDir": "/work/agent_jobs/wf-1/repo",
                 "artifactsDir": "/work/agent_jobs/wf-1/artifacts/helper",
                 "ttlSeconds": 300,
@@ -345,6 +352,8 @@ async def test_disabled_mode_denies_profile_backed_workload_tools() -> None:
         workflow_docker_mode="disabled",
     )
 
+    assert dispatcher._skill_handlers == {}
+
     with pytest.raises(ToolFailure) as exc_info:
         await execute_tool_activity(
             invocation_payload={
@@ -367,3 +376,4 @@ async def test_disabled_mode_denies_profile_backed_workload_tools() -> None:
         )
 
     assert exc_info.value.error_code == "INVALID_INPUT"
+    assert "No mm.tool.execute handler registered" in exc_info.value.message
