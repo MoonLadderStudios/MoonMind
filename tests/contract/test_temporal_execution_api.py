@@ -246,18 +246,10 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
             latest_report_ref = report_projection['latestReportRef']
             assert latest_report_ref['artifact_ref_v'] == 1
             assert latest_report_ref['artifact_id'] == primary_artifact.artifact_id
-            assert latest_report_ref['size_bytes'] == len(b'# report')
-            assert latest_report_ref['content_type'] == 'text/markdown'
-            assert latest_report_ref['encryption'] == 'none'
-            assert 'diagnostics' in latest_report_ref
 
             latest_summary_ref = report_projection['latestReportSummaryRef']
             assert latest_summary_ref['artifact_ref_v'] == 1
             assert latest_summary_ref['artifact_id'] == summary_artifact.artifact_id
-            assert latest_summary_ref['size_bytes'] == len(b'{"summary":true}')
-            assert latest_summary_ref['content_type'] == 'application/json'
-            assert latest_summary_ref['encryption'] == 'none'
-            assert 'diagnostics' in latest_summary_ref
             query_state[workflow_id] = {
                 "get_progress": {
                     "runId": "run-query-latest",

@@ -6,7 +6,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Iterator
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import uuid4
 
 import pytest
@@ -241,7 +241,7 @@ def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
-    _override_user_dependencies(app, is_superuser=True)
+    user = _override_user_dependencies(app, is_superuser=True)
 
     with TestClient(app) as test_client:
         yield test_client, mock_service
@@ -260,7 +260,7 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
     )
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
-    _override_user_dependencies(app, is_superuser=True)
+    user = _override_user_dependencies(app, is_superuser=True)
 
     owner_id = uuid4()
     with TestClient(app) as test_client:
@@ -2491,7 +2491,7 @@ def test_signal_execution_routes_send_message_and_serializes_audit(
     mock_service.signal_execution.return_value = record
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
-    _override_user_dependencies(app, is_superuser=True)
+    user = _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
 
     with TestClient(app) as test_client:
@@ -2531,7 +2531,7 @@ def test_signal_execution_routes_skip_dependency_wait(monkeypatch: pytest.Monkey
     mock_service.signal_execution.return_value = record
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
-    _override_user_dependencies(app, is_superuser=True)
+    user = _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
 
     with TestClient(app) as test_client:
@@ -3813,7 +3813,7 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
         rollback=AsyncMock(),
     )
     _override_temporal_client(app)
-    _override_user_dependencies(app, is_superuser=True)
+    user = _override_user_dependencies(app, is_superuser=True)
 
     primary_artifact = SimpleNamespace(
         artifact_id='art-primary',
@@ -3852,25 +3852,33 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
 
     assert response.status_code == 200
     payload = response.json()
+    assert artifact_service.list_for_execution.await_args_list == [
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.primary',
+            latest_only=True,
+        ),
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.summary',
+            latest_only=True,
+        ),
+    ]
     assert payload['reportProjection'] == {
         'hasReport': True,
         'latestReportRef': {
             'artifact_ref_v': 1,
             'artifact_id': 'art-primary',
-            'sha256': 'sha-primary',
-            'size_bytes': 128,
-            'content_type': 'text/markdown',
-            'encryption': 'none',
-            'diagnostics': None,
         },
         'latestReportSummaryRef': {
             'artifact_ref_v': 1,
             'artifact_id': 'art-summary',
-            'sha256': 'sha-summary',
-            'size_bytes': 64,
-            'content_type': 'application/json',
-            'encryption': 'none',
-            'diagnostics': None,
         },
         'reportType': 'security_pentest_report',
         'reportStatus': 'final',
@@ -3891,7 +3899,7 @@ def test_describe_execution_report_projection_degrades_safely_when_no_report_exi
         rollback=AsyncMock(),
     )
     _override_temporal_client(app)
-    _override_user_dependencies(app, is_superuser=True)
+    user = _override_user_dependencies(app, is_superuser=True)
 
     artifact_service = SimpleNamespace(list_for_execution=AsyncMock(return_value=[]))
 
@@ -3904,6 +3912,24 @@ def test_describe_execution_report_projection_degrades_safely_when_no_report_exi
 
     assert response.status_code == 200
     payload = response.json()
+    assert artifact_service.list_for_execution.await_args_list == [
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.primary',
+            latest_only=True,
+        ),
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.summary',
+            latest_only=True,
+        ),
+    ]
     assert payload['reportProjection'] == {'hasReport': False}
 
 

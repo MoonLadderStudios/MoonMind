@@ -14,7 +14,10 @@ from pydantic import (
     model_validator,
 )
 
-from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
+from moonmind.schemas.temporal_artifact_models import (
+    ArtifactRefModel,
+    CompactArtifactRefModel,
+)
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
 
 SUPPORTED_WORKFLOW_TYPES = (
@@ -1024,8 +1027,10 @@ class ExecutionReportProjectionModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     has_report: bool = Field(..., alias="hasReport")
-    latest_report_ref: ArtifactRefModel | None = Field(None, alias="latestReportRef")
-    latest_report_summary_ref: ArtifactRefModel | None = Field(
+    latest_report_ref: CompactArtifactRefModel | None = Field(
+        None, alias="latestReportRef"
+    )
+    latest_report_summary_ref: CompactArtifactRefModel | None = Field(
         None, alias="latestReportSummaryRef"
     )
     report_type: str | None = Field(None, alias="reportType")

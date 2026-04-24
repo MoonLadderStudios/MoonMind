@@ -1480,13 +1480,23 @@ async def _hydrate_execution_report_projection(
     principal = str(getattr(user, "id", "") or "system")
     try:
         artifact_service = get_temporal_artifact_service(session)
-        primary_artifacts = await artifact_service.list_for_execution(
-            namespace=execution.namespace,
-            workflow_id=execution.workflow_id,
-            run_id=execution.run_id,
-            principal=principal,
-            link_type="report.primary",
-            latest_only=True,
+        primary_artifacts, summary_artifacts = await asyncio.gather(
+            artifact_service.list_for_execution(
+                namespace=execution.namespace,
+                workflow_id=execution.workflow_id,
+                run_id=execution.run_id,
+                principal=principal,
+                link_type="report.primary",
+                latest_only=True,
+            ),
+            artifact_service.list_for_execution(
+                namespace=execution.namespace,
+                workflow_id=execution.workflow_id,
+                run_id=execution.run_id,
+                principal=principal,
+                link_type="report.summary",
+                latest_only=True,
+            ),
         )
         primary_artifact = primary_artifacts[0] if primary_artifacts else None
         if primary_artifact is None:
@@ -1498,14 +1508,6 @@ async def _hydrate_execution_report_projection(
                 }
             )
 
-        summary_artifacts = await artifact_service.list_for_execution(
-            namespace=execution.namespace,
-            workflow_id=execution.workflow_id,
-            run_id=execution.run_id,
-            principal=principal,
-            link_type="report.summary",
-            latest_only=True,
-        )
         summary_artifact = summary_artifacts[0] if summary_artifacts else None
 
         primary_ref_model = _build_execution_artifact_ref_model(primary_artifact)
@@ -1547,13 +1549,6 @@ async def _hydrate_execution_report_projection(
             projection_bundle,
             metadata=projection_metadata or None,
         )
-        projection_payload["latest_report_ref"] = primary_ref_model.model_dump(
-            by_alias=True, exclude_none=False
-        )
-        if summary_ref_model is not None:
-            projection_payload[
-                "latest_report_summary_ref"
-            ] = summary_ref_model.model_dump(by_alias=True, exclude_none=False)
         projection = ExecutionReportProjectionModel.model_validate(projection_payload)
         return execution.model_copy(update={"report_projection": projection})
     except Exception as exc:

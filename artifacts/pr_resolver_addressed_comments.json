@@ -1,27 +1,17 @@
 [
   {
-    "id": 4167224734,
+    "id": 3135051899,
+    "disposition": "addressed",
+    "rationale": "Hydration now fetches primary and summary report artifacts concurrently with asyncio.gather."
+  },
+  {
+    "id": 3135051901,
+    "disposition": "addressed",
+    "rationale": "Execution report projections now preserve compact artifact refs end to end instead of re-injecting full artifact metadata."
+  },
+  {
+    "id": 4167397793,
     "disposition": "not-applicable",
-    "rationale": "Top-level bot review summary only; the actionable retention-mapping items were addressed in the referenced files."
-  },
-  {
-    "id": 3134907874,
-    "disposition": "addressed",
-    "rationale": "Updated FR-005 and related spec language to include report.appendix, report.findings_index, and report.export as long-retention link types."
-  },
-  {
-    "id": 3134907881,
-    "disposition": "addressed",
-    "rationale": "Expanded the plan evidence summary for FR-005 to list every report link type that defaults to long retention."
-  },
-  {
-    "id": 3134907887,
-    "disposition": "addressed",
-    "rationale": "Revised the research decision and evidence text so the retention-default analysis matches the implementation mapping."
-  },
-  {
-    "id": 3134907889,
-    "disposition": "addressed",
-    "rationale": "Updated verification coverage to record all report link types that derive long retention by default."
+    "rationale": "Top-level bot review summary only restated the two inline comments and required no separate change."
   }
 ]
