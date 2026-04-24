@@ -9,7 +9,7 @@
 
 **Source Traceability**: MM-497; FR-001 through FR-007; acceptance scenarios 1-6; SC-001 through SC-007; DESIGN-REQ-021, DESIGN-REQ-023, DESIGN-REQ-024.
 
-**Requirement Status Summary**: code-and-test = 2 (`FR-006`, `FR-007` traceability artifacts only); verification-only = 6 (`FR-001`, `FR-002`, `FR-003`, `FR-004`, `FR-005`, `DESIGN-REQ-021`); conditional fallback = 3 (`FR-003`, `DESIGN-REQ-023`, `DESIGN-REQ-024`); already-verified = 4 (`FR-001`, `FR-002`, `FR-004`, `FR-005`).
+**Requirement Status Summary**: verification-first = 5 (`FR-001`, `FR-002`, `FR-004`, `FR-005`, `DESIGN-REQ-021`); conditional fallback = 3 (`FR-003`, `DESIGN-REQ-023`, `DESIGN-REQ-024`); traceability-only = 2 (`FR-006`, `FR-007`); existing-evidence rows = 5 (`FR-001`, `FR-002`, `FR-004`, `FR-005`, `DESIGN-REQ-021`).
 
 **Test Commands**:
 
@@ -82,8 +82,8 @@
 
 ### Red-First Confirmation
 
-- [ ] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/workflows/temporal/test_artifacts.py tests/unit/api/routers/test_executions.py --ui-args frontend/src/entrypoints/task-detail.test.tsx` and confirm any new MM-497-focused verification coverage fails before fallback implementation begins
-- [ ] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_execution_api.py` and confirm any new MM-497 execution-boundary verification coverage fails before fallback implementation begins
+- [ ] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/workflows/temporal/test_artifacts.py tests/unit/api/routers/test_executions.py --ui-args frontend/src/entrypoints/task-detail.test.tsx` and, when T007-T009 introduce new MM-497-focused verification coverage, confirm it fails before fallback implementation begins; otherwise record that existing verification remains green
+- [ ] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_execution_api.py` and, when T010 introduces new MM-497 execution-boundary coverage, confirm it fails before fallback implementation begins; otherwise record that the existing contract boundary remains green
 
 ### Fallback Implementation Tasks (only if T013 or T014 exposes drift)
 
