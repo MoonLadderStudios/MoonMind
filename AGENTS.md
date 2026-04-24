@@ -206,6 +206,8 @@ Key diagnostics:
 - Existing OAuth session rows, provider-profile rows, managed-session diagnostics, artifact metadata, and workflow history; no new persistent tables planned (245-claude-oauth-guardrails)
 - Python 3.12 and TypeScript/React for existing Mission Control verification surfaces + Pydantic v2, Temporal Python SDK, SQLAlchemy async ORM, existing temporal artifact service/helpers, React, Vitest (245-publish-report-bundles)
 - Existing temporal artifact metadata tables and configured artifact store; no new persistent storage (245-publish-report-bundles)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, existing Docker workload launcher/registry stack, pytest (251-workspace-mount-session-boundary-isolation)
+- No new persistent storage; existing workload metadata, artifact-backed workload outputs, and runtime labels only (251-workspace-mount-session-boundary-isolation)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
