@@ -306,6 +306,11 @@ describe('Tasks List Entrypoint', () => {
 
     expect(controlDeck).toBeTruthy();
     expect(controlDeck?.querySelector('form.task-list-control-grid')).toBeTruthy();
+
+    const controlDeckStyles = getComputedStyle(controlDeck as HTMLElement);
+    expect(controlDeckStyles.borderTopWidth).toBe('0px');
+    expect(controlDeckStyles.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(controlDeckStyles.boxShadow).toBe('none');
     expect(
       controlDeck?.querySelector('.task-list-utility-cluster')?.contains(screen.getByLabelText('Live updates')),
     ).toBe(true);

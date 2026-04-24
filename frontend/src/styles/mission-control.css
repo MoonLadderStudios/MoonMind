@@ -659,8 +659,13 @@ h1 {
 .task-list-control-deck {
   display: grid;
   gap: 0.85rem;
-  border-color: rgb(var(--mm-border) / 0.55);
-  box-shadow: 0 14px 34px -24px rgb(0 0 0 / 0.35);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding: 0;
 }
 
 .task-list-control-grid {
