@@ -13,7 +13,7 @@
 
 **Test Commands**:
 
-- Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/config/test_settings.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py`
+- Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/config/test_settings.py tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py`
 - Hermetic integration tests: `./tools/test_integration.sh`
 - Final full unit suite: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`
 - Final verification: `/moonspec-verify`
@@ -29,7 +29,7 @@
 **Purpose**: Confirm the single-story MM-499 artifact set and the exact repo surfaces that must move from a boolean Docker gate to a tri-mode policy contract.
 
 - [ ] T001 Confirm `specs/248-enforce-docker-workflow-modes-and-registry-gating/` contains `spec.md`, `plan.md`, `research.md`, `contracts/workflow-docker-mode-contract.md`, and `quickstart.md` for MM-499
-- [ ] T002 Confirm the current MM-499 touchpoints and traceability targets in `moonmind/config/settings.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/worker_runtime.py`, `moonmind/workflows/temporal/activity_runtime.py`, and `docs/tmp/jira-orchestration-inputs/MM-499-moonspec-orchestration-input.md`
+- [ ] T002 Confirm the current MM-499 touchpoints and traceability targets in `moonmind/config/settings.py`, `moonmind/schemas/workload_models.py`, `moonmind/workloads/registry.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/worker_runtime.py`, `moonmind/workflows/temporal/activity_runtime.py`, and `docs/tmp/jira-orchestration-inputs/MM-499-moonspec-orchestration-input.md`
 
 ---
 
@@ -57,6 +57,7 @@
 **Unit Test Plan**:
 
 - Verify settings normalization and fail-fast invalid values in `tests/unit/config/test_settings.py`.
+- Verify unrestricted request schemas and registry validation behavior in `tests/unit/workloads/test_workload_contract.py`.
 - Verify mode-aware tool definition exposure, handler denial, and unrestricted-tool gating in `tests/unit/workloads/test_workload_tool_bridge.py`.
 - Verify Temporal activity/runtime denial and worker registration alignment in `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workflows/temporal/test_workload_run_activity.py`, and `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`.
 
@@ -68,31 +69,32 @@
 ### Unit Tests (write first)
 
 - [ ] T005 [P] Add failing unit tests for FR-002, FR-003, SC-001, SC-002, DESIGN-REQ-003, DESIGN-REQ-007, and DESIGN-REQ-008 in `tests/unit/config/test_settings.py` covering default `profiles`, accepted `disabled` / `profiles` / `unrestricted` values, and invalid `MOONMIND_WORKFLOW_DOCKER_MODE` rejection
-- [ ] T006 [P] Add failing unit tests for FR-001, FR-004, FR-005, FR-006, FR-007, SC-003, SC-004, SC-005, DESIGN-REQ-001, DESIGN-REQ-009, DESIGN-REQ-010, and DESIGN-REQ-011 in `tests/unit/workloads/test_workload_tool_bridge.py` covering mode-aware registration matrices, disabled-mode omission, profiles-mode curated exposure, unrestricted-mode unrestricted tool exposure, and deterministic denial of forbidden direct invocation
-- [ ] T007 [P] Add failing unit tests for FR-004, FR-006, FR-007, SC-003, SC-005, and SC-006 in `tests/unit/workflows/temporal/test_activity_runtime.py` and `tests/unit/workflows/temporal/test_workload_run_activity.py` covering mode-aware activity denial and allowed execution paths for Docker-backed tools
-- [ ] T008 [P] Add failing unit tests for FR-001, FR-005, FR-006, FR-007, SC-004, SC-005, and SC-006 in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py` covering worker/runtime wiring of the normalized workflow Docker mode into registration and execution surfaces
+- [ ] T006 [P] Add failing unit tests for FR-006, SC-005, and DESIGN-REQ-011 in `tests/unit/workloads/test_workload_contract.py` covering unrestricted request schemas, validation rules, and policy boundaries for `container.run_container` and `container.run_docker`
+- [ ] T007 [P] Add failing unit tests for FR-001, FR-004, FR-005, FR-006, FR-007, SC-003, SC-004, SC-005, DESIGN-REQ-001, DESIGN-REQ-009, DESIGN-REQ-010, and DESIGN-REQ-011 in `tests/unit/workloads/test_workload_tool_bridge.py` covering mode-aware registration matrices, disabled-mode omission, profiles-mode curated exposure, unrestricted-mode unrestricted tool exposure, and deterministic denial of forbidden direct invocation
+- [ ] T008 [P] Add failing unit tests for FR-004, FR-006, FR-007, SC-003, SC-005, and SC-006 in `tests/unit/workflows/temporal/test_activity_runtime.py` and `tests/unit/workflows/temporal/test_workload_run_activity.py` covering mode-aware activity denial and allowed execution paths for Docker-backed tools
+- [ ] T009 [P] Add failing unit tests for FR-001, FR-005, FR-006, FR-007, SC-004, SC-005, and SC-006 in `tests/unit/workflows/temporal/test_temporal_worker_runtime.py` covering worker/runtime wiring of the normalized workflow Docker mode into registration and execution surfaces
 
 ### Integration Tests (write first)
 
-- [ ] T009 [P] Add a failing `integration_ci` boundary test for acceptance scenarios 3-6, SC-003 through SC-006, and DESIGN-REQ-009 through DESIGN-REQ-011 in `tests/integration/temporal/test_integration_ci_tool_contract.py` proving registry exposure and dispatcher execution stay aligned for `disabled`, `profiles`, and `unrestricted` modes
+- [ ] T010 [P] Add a failing `integration_ci` boundary test for acceptance scenarios 3-6, SC-003 through SC-006, and DESIGN-REQ-009 through DESIGN-REQ-011 in `tests/integration/temporal/test_integration_ci_tool_contract.py` proving registry exposure and dispatcher execution stay aligned for `disabled`, `profiles`, and `unrestricted` modes
 
 ### Red-First Confirmation
 
-- [ ] T010 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/config/test_settings.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py` and confirm the new MM-499-focused unit coverage fails against the current boolean workflow Docker gate
-- [ ] T011 Run `./tools/test_integration.sh` and confirm the new MM-499 hermetic integration boundary fails until mode-aware registration and execution are aligned
+- [ ] T011 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/config/test_settings.py tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py` and confirm the new MM-499-focused unit coverage fails against the current boolean workflow Docker gate
+- [ ] T012 Run `./tools/test_integration.sh` and confirm the new MM-499 hermetic integration boundary fails until mode-aware registration and execution are aligned
 
 ### Implementation
 
-- [ ] T012 Implement the canonical `MOONMIND_WORKFLOW_DOCKER_MODE` configuration surface and remove the superseded boolean workflow Docker setting in `moonmind/config/settings.py` for FR-001, FR-002, FR-003, DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-007, and DESIGN-REQ-008
-- [ ] T013 Implement normalized workflow Docker mode policy helpers and mode-aware tool registration in `moonmind/workloads/tool_bridge.py` for FR-001, FR-004, FR-005, FR-006, FR-007, DESIGN-REQ-009, DESIGN-REQ-010, and DESIGN-REQ-011
-- [ ] T014 Implement unrestricted request and validation support for `container.run_container` and `container.run_docker` in `moonmind/schemas/workload_models.py`, `moonmind/workloads/registry.py`, and `moonmind/workloads/docker_launcher.py` for FR-006, SC-005, and DESIGN-REQ-011
-- [ ] T015 Implement mode-aware worker/runtime wiring in `moonmind/workflows/temporal/worker_runtime.py` and `moonmind/workflows/temporal/activity_runtime.py` so discovery and execution share the same policy decision for FR-004, FR-005, FR-006, FR-007, SC-003, SC-004, SC-005, and SC-006
+- [ ] T013 Implement the canonical `MOONMIND_WORKFLOW_DOCKER_MODE` configuration surface and remove the superseded boolean workflow Docker setting in `moonmind/config/settings.py` for FR-001, FR-002, FR-003, DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-007, and DESIGN-REQ-008
+- [ ] T014 Implement unrestricted request models and validation support for `container.run_container` and `container.run_docker` in `moonmind/schemas/workload_models.py`, `moonmind/workloads/registry.py`, and `moonmind/workloads/docker_launcher.py` for FR-006, SC-005, and DESIGN-REQ-011
+- [ ] T015 Implement normalized workflow Docker mode policy helpers and mode-aware tool registration in `moonmind/workloads/tool_bridge.py` for FR-001, FR-004, FR-005, FR-006, FR-007, DESIGN-REQ-009, DESIGN-REQ-010, and DESIGN-REQ-011
+- [ ] T016 Implement mode-aware worker/runtime wiring in `moonmind/workflows/temporal/worker_runtime.py` and `moonmind/workflows/temporal/activity_runtime.py` so discovery and execution share the same policy decision for FR-004, FR-005, FR-006, FR-007, SC-003, SC-004, SC-005, and SC-006
 
 ### Story Validation
 
-- [ ] T016 Rerun the focused unit command from T010 until FR-001 through FR-007, SC-001 through SC-006, and DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-011 pass in `tests/unit/config/test_settings.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, and `tests/unit/workflows/temporal/test_workload_run_activity.py`
-- [ ] T017 Rerun `./tools/test_integration.sh` until the updated `tests/integration/temporal/test_integration_ci_tool_contract.py` boundary confirms disabled/profiles/unrestricted registry and execution alignment for acceptance scenarios 3-6 and SC-003 through SC-006
-- [ ] T018 Review `spec.md`, `plan.md`, `research.md`, `contracts/workflow-docker-mode-contract.md`, `quickstart.md`, changed code, and tests to confirm FR-008 and SC-007 preserve MM-499 and the original Jira preset brief across downstream artifacts and implementation evidence
+- [ ] T017 Rerun the focused unit command from T011 until FR-001 through FR-007, SC-001 through SC-006, and DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-011 pass in `tests/unit/config/test_settings.py`, `tests/unit/workloads/test_workload_contract.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, and `tests/unit/workflows/temporal/test_workload_run_activity.py`
+- [ ] T018 Rerun `./tools/test_integration.sh` until the updated `tests/integration/temporal/test_integration_ci_tool_contract.py` boundary confirms disabled/profiles/unrestricted registry and execution alignment for acceptance scenarios 3-6 and SC-003 through SC-006
+- [ ] T019 Review `spec.md`, `plan.md`, `research.md`, `contracts/workflow-docker-mode-contract.md`, `quickstart.md`, changed code, and tests to confirm FR-008 and SC-007 preserve MM-499 and the original Jira preset brief across downstream artifacts and implementation evidence
 
 **Checkpoint**: The MM-499 story is complete when the canonical mode setting replaces the boolean gate, discovery and execution align across all three modes, and the focused unit plus hermetic integration coverage passes.
 
@@ -102,9 +104,9 @@
 
 **Purpose**: Complete final validation and preserve story-level evidence without adding hidden scope.
 
-- [ ] T019 [P] Update `specs/248-enforce-docker-workflow-modes-and-registry-gating/plan.md`, `research.md`, and `quickstart.md` if implementation details or test commands changed while preserving MM-499 traceability
-- [ ] T020 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` to confirm the full required unit suite still passes after the MM-499 runtime and test changes
-- [ ] T021 Run `/moonspec-verify` for `specs/248-enforce-docker-workflow-modes-and-registry-gating/` and produce `verification.md` covering MM-499, FR-001 through FR-008, SC-001 through SC-007, and DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-011
+- [ ] T020 [P] Update `specs/248-enforce-docker-workflow-modes-and-registry-gating/plan.md`, `research.md`, and `quickstart.md` if implementation details or test commands changed while preserving MM-499 traceability
+- [ ] T021 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` to confirm the full required unit suite still passes after the MM-499 runtime and test changes
+- [ ] T022 Run `/moonspec-verify` for `specs/248-enforce-docker-workflow-modes-and-registry-gating/` and produce `verification.md` covering MM-499, FR-001 through FR-008, SC-001 through SC-007, and DESIGN-REQ-001, DESIGN-REQ-003, DESIGN-REQ-007, DESIGN-REQ-008, DESIGN-REQ-009, DESIGN-REQ-010, DESIGN-REQ-011
 
 ---
 
@@ -119,23 +121,24 @@
 
 ### Within The Story
 
-- T005-T009 must be written before any production implementation task.
-- T010-T011 must confirm the red state before T012-T015 begin.
-- T012 establishes the canonical configuration surface before mode-aware tool/runtime wiring is finalized.
-- T013 and T014 define the mode-aware tool contract and unrestricted runtime surface before T015 integrates the policy into worker/activity execution.
-- T016-T018 validate story completion before Polish begins.
+- T005-T010 must be written before any production implementation task.
+- T011-T012 must confirm the red state before T013-T016 begin.
+- T013 establishes the canonical configuration surface before mode-aware tool/runtime wiring is finalized.
+- T014 defines unrestricted request validation and launcher support before T015 and T016 integrate the policy into registration and execution.
+- T015 and T016 finalize the shared mode-aware policy across tool registration and Temporal runtime behavior.
+- T017-T019 validate story completion before Polish begins.
 
 ### Parallel Opportunities
 
-- T005-T008 can run in parallel because they modify different unit test files.
-- T009 can run in parallel with T005-T008 because it modifies a different integration file.
-- T019 can run in parallel with verification preparation once T018 confirms traceability.
+- T005-T009 can run in parallel because they modify different unit test files.
+- T010 can run in parallel with T005-T009 because it modifies a different integration file.
+- T020 can run in parallel with verification preparation once T019 confirms traceability.
 
 ## Implementation Strategy
 
 1. Confirm the MM-499 planning artifacts and repo touchpoints.
-2. Add failing unit and hermetic integration coverage for the tri-mode workflow Docker contract.
+2. Add failing unit and hermetic integration coverage for the tri-mode workflow Docker contract, including unrestricted request schema/policy tests.
 3. Replace the legacy boolean workflow Docker setting with the canonical mode surface.
-4. Implement mode-aware tool registration, unrestricted tool support, and unified worker/runtime policy wiring.
+4. Implement unrestricted request support, mode-aware tool registration, and unified worker/runtime policy wiring.
 5. Rerun focused unit and hermetic integration verification until the story passes.
 6. Preserve MM-499 traceability in all downstream artifacts and finish with `/moonspec-verify`.

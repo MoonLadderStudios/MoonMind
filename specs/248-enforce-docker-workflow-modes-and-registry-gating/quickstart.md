@@ -9,12 +9,13 @@ Implement and verify the MM-499 workflow Docker mode contract before generating 
 Run the focused settings and workload policy suites first:
 
 ```bash
-MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/config/test_settings.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py
+MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/config/test_settings.py tests/unit/workloads/test_workload_contract.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_temporal_worker_runtime.py tests/unit/workflows/temporal/test_workload_run_activity.py
 ```
 
 What this proves:
 - the canonical workflow Docker mode setting normalizes correctly
 - invalid mode values fail fast
+- unrestricted request schemas and registry policy validation align with the selected mode
 - worker/runtime registration uses the selected mode
 - disabled-, profiles-, and unrestricted-mode execution behavior is covered at the tool handler and activity boundaries
 

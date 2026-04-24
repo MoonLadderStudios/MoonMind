@@ -79,7 +79,11 @@ specs/248-enforce-docker-workflow-modes-and-registry-gating/
 moonmind/config/
 └── settings.py
 
+moonmind/schemas/
+└── workload_models.py
+
 moonmind/workloads/
+├── docker_launcher.py
 ├── tool_bridge.py
 └── registry.py
 
@@ -91,6 +95,7 @@ tests/unit/config/
 └── test_settings.py
 
 tests/unit/workloads/
+├── test_workload_contract.py
 └── test_workload_tool_bridge.py
 
 tests/unit/workflows/temporal/
@@ -102,7 +107,7 @@ tests/integration/temporal/
 └── test_integration_ci_tool_contract.py
 ```
 
-**Structure Decision**: Keep MM-499 scoped to workflow configuration normalization, mode-aware workload tool registration, and runtime denial wiring across the existing Docker workload path. No new storage or separate subsystem is needed; the main gap is replacing the boolean gate with one shared tri-mode policy model and proving discovery and execution stay aligned.
+**Structure Decision**: Keep MM-499 scoped to workflow configuration normalization, mode-aware workload tool registration, unrestricted request schema/policy support, and runtime denial wiring across the existing Docker workload path. No new storage or separate subsystem is needed; the main gap is replacing the boolean gate with one shared tri-mode policy model and proving discovery and execution stay aligned.
 
 ## Complexity Tracking
 
