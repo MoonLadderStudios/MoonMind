@@ -12,6 +12,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedAgentProviderProfile,
     ManagedRuntimeProfile,
     LiveLogChunk,
+    extract_durable_retrieval_metadata,
     is_terminal_agent_run_state,
 )
 
@@ -483,4 +484,23 @@ def test_managed_runtime_profile_roundtrips_file_templates() -> None:
     assert ft.content_template == {
         "model_provider": "openrouter",
         "model": "qwen/qwen3.6-plus",
+    }
+
+
+def test_extract_durable_retrieval_metadata_only_allows_boolean_contract_fields() -> None:
+    metadata = extract_durable_retrieval_metadata(
+        {
+            "metadata": {
+                "moonmind": {
+                    "retrievedContextItemCount": True,
+                    "retrievalContextTruncated": True,
+                    "retrievalMode": "semantic",
+                }
+            }
+        }
+    )
+
+    assert metadata == {
+        "retrievalContextTruncated": True,
+        "retrievalMode": "semantic",
     }

@@ -113,6 +113,7 @@ class ContextInjectionService:
                 pack = retrieval_result
                 retrieval_skip_reason = None
         except Exception as exc:
+            retrieval_skip_reason = self._normalize_retrieval_failure_reason(exc)
             logger.info("[rag] retrieval skipped: %s", exc)
             fallback_pack = self._build_local_fallback_pack(
                 instruction=instruction_ref,
@@ -121,7 +122,7 @@ class ContextInjectionService:
             if fallback_pack is None:
                 self._record_disabled_context_metadata(
                     request=request,
-                    reason=retrieval_skip_reason or "local_fallback_unavailable",
+                    reason=retrieval_skip_reason,
                     initiation_mode="automatic",
                 )
                 return PromptContextResolution(instruction=instruction_ref)
@@ -277,6 +278,17 @@ class ContextInjectionService:
             moonmind_meta = {}
             metadata["moonmind"] = moonmind_meta
         return moonmind_meta
+
+    @staticmethod
+    def _normalize_retrieval_failure_reason(exc: Exception) -> str:
+        message = str(exc).strip().lower()
+        if "gateway" in message or "moonmind_retrieval_url" in message:
+            return "retrieval_gateway_unavailable"
+        if "qdrant" in message:
+            return "qdrant_unavailable"
+        if "collection" in message:
+            return "collection_unavailable"
+        return "retrieval_unavailable"
 
     @staticmethod
     def _record_context_metadata(

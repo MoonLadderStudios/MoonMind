@@ -203,7 +203,7 @@ class ContextRetrievalService:
             context_text=data.get("context_text", ""),
             retrieved_at=data.get("retrieved_at", ""),
             telemetry_id=data.get("telemetry_id", ""),
-            initiation_mode=str(data.get("initiation_mode", initiation_mode) or initiation_mode),
+            initiation_mode=str(data.get("initiation_mode") or initiation_mode),
             truncated=bool(data.get("truncated", False)),
         )
 

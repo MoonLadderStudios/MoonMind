@@ -92,6 +92,9 @@ _DURABLE_RETRIEVAL_METADATA_KEYS: tuple[str, ...] = (
     "retrievalContextTruncated",
     "sessionContinuityCacheStatus",
 )
+_BOOLEAN_DURABLE_RETRIEVAL_METADATA_KEYS: frozenset[str] = frozenset({
+    "retrievalContextTruncated",
+})
 
 
 def extract_durable_retrieval_metadata(
@@ -117,7 +120,8 @@ def extract_durable_retrieval_metadata(
                 compact[key] = normalized
             continue
         if isinstance(value, bool):
-            compact[key] = value
+            if key in _BOOLEAN_DURABLE_RETRIEVAL_METADATA_KEYS:
+                compact[key] = value
             continue
         if isinstance(value, int):
             compact[key] = value

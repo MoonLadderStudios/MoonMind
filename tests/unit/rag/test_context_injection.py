@@ -308,3 +308,31 @@ def test_record_context_metadata_marks_disabled_retrieval_state(
     assert moonmind_meta["retrievalMode"] == "disabled"
     assert moonmind_meta["retrievalDisabledReason"] == "qdrant_disabled"
     assert moonmind_meta["retrievalInitiationMode"] == "automatic"
+
+
+@pytest.mark.asyncio
+@patch("moonmind.rag.context_injection.ContextInjectionService._build_local_fallback_pack")
+@patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
+async def test_inject_context_records_retrieval_failure_reason_when_fallback_unavailable(
+    mock_retrieve,
+    mock_build_fallback,
+    mock_request: AgentExecutionRequest,
+    tmp_path,
+) -> None:
+    service = ContextInjectionService(env={"MOONMIND_RAG_AUTO_CONTEXT": "true"})
+    mock_retrieve.side_effect = RuntimeError(
+        "RetrievalGateway request failed due to a network error. Verify connectivity to MOONMIND_RETRIEVAL_URL."
+    )
+    mock_build_fallback.return_value = None
+
+    result = await service.inject_context(
+        request=mock_request,
+        workspace_path=tmp_path,
+    )
+
+    assert result.instruction == "Original instruction"
+    assert result.items_count == 0
+    assert result.artifact_path is None
+    moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
+    assert moonmind_meta["retrievalMode"] == "disabled"
+    assert moonmind_meta["retrievalDisabledReason"] == "retrieval_gateway_unavailable"
