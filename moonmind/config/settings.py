@@ -16,6 +16,7 @@ from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
+from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
 _ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
@@ -893,12 +894,12 @@ class WorkflowSettings(BaseSettings):
         description="Hard timeout for non-container worker stage commands.",
         ge=1,
     )
-    workflow_docker_enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices("MOONMIND_WORKFLOW_DOCKER_ENABLED"),
+    workflow_docker_mode: Literal["disabled", "profiles", "unrestricted"] = Field(
+        "profiles",
+        validation_alias=AliasChoices("MOONMIND_WORKFLOW_DOCKER_MODE"),
         description=(
-            "Allow workflow-requested Docker-backed workload tools to route "
-            "through the DooD worker/tool boundary."
+            "Deployment-owned workflow Docker access mode for Docker-backed "
+            "workload tools (disabled|profiles|unrestricted)."
         ),
     )
 
@@ -971,6 +972,11 @@ class WorkflowSettings(BaseSettings):
                 f"workflow.proposal_moonmind_severity_floor must be one of: {allowed}"
             )
         return text
+
+    @field_validator("workflow_docker_mode", mode="before")
+    @classmethod
+    def _normalize_workflow_docker_mode(cls, value: object) -> str:
+        return normalize_workflow_docker_mode(value)
 
     @field_validator("moonmind_ci_repository", mode="before")
     @classmethod

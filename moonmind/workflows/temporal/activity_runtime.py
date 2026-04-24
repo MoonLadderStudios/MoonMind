@@ -68,12 +68,14 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
 )
-from moonmind.schemas.workload_models import WorkloadRequest, WorkloadResult
+from moonmind.schemas.workload_models import WorkloadResult, parse_workload_request
 from moonmind.workloads.tool_bridge import (
     CONTAINER_START_HELPER_TOOL,
     CONTAINER_STOP_HELPER_TOOL,
     build_dood_tool_definition_payload,
     is_dood_tool,
+    normalize_workflow_docker_mode,
+    tool_allowed_for_workflow_docker_mode,
 )
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
@@ -319,6 +321,14 @@ def _docker_workflows_disabled_failure() -> temporal_exceptions.ApplicationError
     return temporal_exceptions.ApplicationError(
         "policy_denied: docker_workflows_disabled",
         type="docker_workflows_disabled",
+        non_retryable=True,
+    )
+
+
+def _docker_workflow_mode_forbidden_failure(*, workflow_docker_mode: str, tool_name: str) -> temporal_exceptions.ApplicationError:
+    return temporal_exceptions.ApplicationError(
+        f"policy_denied: docker_workflow_mode_forbidden ({tool_name} requires unrestricted; current mode={workflow_docker_mode})",
+        type="docker_workflow_mode_forbidden",
         non_retryable=True,
     )
 
@@ -2849,7 +2859,7 @@ class TemporalAgentRuntimeActivities:
         session_controller: ManagedSessionController | None = None,
         workload_launcher: Any | None = None,
         workload_registry: Any | None = None,
-        workflow_docker_enabled: bool = True,
+        workflow_docker_mode: str = "profiles",
         client_adapter: Any = None,
     ) -> None:
         self._artifact_service = artifact_service
@@ -2859,7 +2869,7 @@ class TemporalAgentRuntimeActivities:
         self._session_controller = session_controller
         self._workload_launcher = workload_launcher
         self._workload_registry = workload_registry
-        self._workflow_docker_enabled = workflow_docker_enabled
+        self._workflow_docker_mode = normalize_workflow_docker_mode(workflow_docker_mode)
         if client_adapter is None:
             from moonmind.workflows.temporal import client as temporal_client_module
 
@@ -3187,7 +3197,8 @@ class TemporalAgentRuntimeActivities:
     ) -> dict[str, Any]:
         """Run one validated Docker workload on the agent_runtime fleet."""
 
-        if not self._workflow_docker_enabled:
+        workflow_mode = self._workflow_docker_mode
+        if workflow_mode == "disabled":
             raise _docker_workflows_disabled_failure()
         if self._workload_registry is None or self._workload_launcher is None:
             raise TemporalActivityRuntimeError(
@@ -3197,7 +3208,15 @@ class TemporalAgentRuntimeActivities:
         reason = str(request_payload.pop("reason", "") or "bounded_window_complete")
         if request_payload.get("toolName") == CONTAINER_STOP_HELPER_TOOL:
             request_payload.setdefault("command", ["stop"])
-        request = WorkloadRequest.model_validate(request_payload)
+        request = parse_workload_request(request_payload)
+        if not tool_allowed_for_workflow_docker_mode(
+            tool_name=request.tool_name,
+            workflow_docker_mode=workflow_mode,
+        ):
+            raise _docker_workflow_mode_forbidden_failure(
+                workflow_docker_mode=workflow_mode,
+                tool_name=request.tool_name,
+            )
         validated = self._workload_registry.validate_request(request)
         if request.tool_name == CONTAINER_START_HELPER_TOOL:
             result = await self._workload_launcher.start_helper(validated)
@@ -3225,7 +3244,7 @@ class TemporalAgentRuntimeActivities:
         silently falling back to the generic tool executor.
         """
 
-        if not self._workflow_docker_enabled:
+        if self._workflow_docker_mode == "disabled":
             raise _docker_workflows_disabled_failure()
         raw_payload = dict(payload)
         nested_request = raw_payload.get("request")

@@ -1556,7 +1556,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         session_controller=session_controller,
         workload_registry=workload_registry,
         workload_launcher=workload_launcher,
-        workflow_docker_enabled=True,
+        workflow_docker_mode="profiles",
     )
     mock_build_bindings.assert_called_once_with(
         fleet=AGENT_RUNTIME_FLEET,
@@ -1571,4 +1571,77 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         review_activities=ANY,
         agent_skills_activities=ANY,
     )
+    await resources.aclose()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.settings")
+@patch("moonmind.workflows.temporal.worker_runtime.register_workload_tool_handlers")
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalReviewActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalProposalActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.AgentSkillsActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalManifestActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalIntegrationActivities")
+async def test_build_runtime_activities_registers_unrestricted_mode(
+    mock_integration_activities_cls,
+    mock_sandbox_activities_cls,
+    mock_skill_activities_cls,
+    mock_manifest_activities_cls,
+    mock_plan_activities_cls,
+    mock_artifact_activities_cls,
+    mock_agent_skills_activities_cls,
+    mock_proposal_activities_cls,
+    mock_review_activities_cls,
+    mock_agent_runtime_activities_cls,
+    mock_build_deps,
+    mock_build_bindings,
+    mock_register_workload_tool_handlers,
+    mock_settings,
+):
+    run_store = MagicMock()
+    run_supervisor = MagicMock()
+    run_supervisor.reconcile = AsyncMock(return_value=[])
+    run_launcher = MagicMock()
+    session_controller = MagicMock()
+    session_controller.reconcile = AsyncMock(return_value=[])
+    workload_registry = MagicMock()
+    workload_launcher = MagicMock()
+    mock_build_deps.return_value = (
+        run_store,
+        run_supervisor,
+        run_launcher,
+        session_controller,
+        workload_registry,
+        workload_launcher,
+    )
+    mock_settings.workflow.workflow_docker_mode = "unrestricted"
+
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = AGENT_RUNTIME_FLEET
+
+    mock_binding = MagicMock()
+    mock_binding.handler = "agent_runtime_handler"
+    mock_build_bindings.return_value = [mock_binding]
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        resources, _handlers = await _build_runtime_activities(topology)
+
+    mock_agent_runtime_activities_cls.assert_called_once()
+    assert mock_agent_runtime_activities_cls.call_args.kwargs["workflow_docker_mode"] == "unrestricted"
+    mock_register_workload_tool_handlers.assert_called_once()
+    assert mock_register_workload_tool_handlers.call_args.kwargs["workflow_docker_mode"] == "unrestricted"
     await resources.aclose()

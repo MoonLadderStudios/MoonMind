@@ -809,7 +809,7 @@ async def test_security_pentest_execute_fails_closed_before_runner_without_scope
 
 
 async def test_security_pentest_execute_denies_without_retry_when_workflow_docker_disabled():
-    activities = TemporalAgentRuntimeActivities(workflow_docker_enabled=False)
+    activities = TemporalAgentRuntimeActivities(workflow_docker_mode="disabled")
 
     with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
         await activities.security_pentest_execute(_pentest_activity_payload())
