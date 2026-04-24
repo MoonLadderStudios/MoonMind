@@ -208,6 +208,8 @@ Key diagnostics:
 - No new persistent storage; existing workload metadata, artifact-backed workload outputs, and runtime labels only (251-workspace-mount-session-boundary-isolation)
 - Python 3.12 + Pydantic v2, FastAPI, existing MoonMind RAG services, existing managed-runtime adapter and provider-profile stack, pytest (256-retrieval-transport-separation)
 - No new persistent storage; reuse existing retrieval settings, runtime metadata, provider-profile rows, and artifact-backed retrieval outputs (256-retrieval-transport-separation)
+- Python 3.12 + Pydantic v2, FastAPI, existing MoonMind RAG services, Temporal runtime launcher and managed-session helpers, pytest (257-retrieval-evidence-guardrails)
+- Existing artifact-backed retrieval outputs and runtime metadata only; no new persistent storage planned (257-retrieval-evidence-guardrails)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
