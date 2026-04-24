@@ -217,6 +217,31 @@ class TestClaudeCodePrepareWorkspace:
         await s.prepare_workspace(tmp_path, request)
         assert not (tmp_path / "CLAUDE.md").exists()
 
+    @pytest.mark.asyncio
+    @patch("moonmind.rag.context_injection.ContextInjectionService")
+    async def test_injects_context_before_creating_claude_md(
+        self,
+        mock_service_class,
+        tmp_path,
+    ) -> None:
+        mock_service = mock_service_class.return_value
+
+        async def _inject_context(*, request, workspace_path):
+            assert workspace_path == tmp_path
+            request.instruction_ref = "Injected retrieval context"
+
+        mock_service.inject_context = AsyncMock(side_effect=_inject_context)
+
+        request = _make_request(instruction_ref="Original instruction")
+        await ClaudeCodeStrategy().prepare_workspace(tmp_path, request)
+
+        mock_service.inject_context.assert_called_once_with(
+            request=request,
+            workspace_path=tmp_path,
+        )
+        assert request.instruction_ref == "Injected retrieval context"
+        assert (tmp_path / "CLAUDE.md").read_text() == "Injected retrieval context"
+
 # ---------------------------------------------------------------------------
 # CodexCliStrategy
 # ---------------------------------------------------------------------------
