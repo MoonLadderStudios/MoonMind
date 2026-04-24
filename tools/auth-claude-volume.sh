@@ -58,7 +58,7 @@ cmd_sync() {
   echo "Syncing Claude credentials from ${HOST_CLAUDE_DIR} into volume '${VOLUME_NAME}'..."
 
   # Copy the entire host credential directory into the volume.
-  # Claude's file layout can vary (credentials.json, settings.json, cache/, etc.)
+  # Claude's file layout can vary (.credentials.json, credentials.json, settings.json, cache/, etc.)
   # so we sync everything present rather than a fixed list.
   docker run --rm \
     -v "${VOLUME_NAME}:${CLAUDE_HOME}" \
@@ -133,18 +133,24 @@ cmd_check() {
   docker run --rm \
     -v "${VOLUME_NAME}:${CLAUDE_HOME}:ro" \
     alpine:3.20 sh -c "
+      dot_creds='${CLAUDE_HOME}/.credentials.json'
       creds='${CLAUDE_HOME}/credentials.json'
       settings='${CLAUDE_HOME}/settings.json'
 
-      if [ ! -f \"\$creds\" ]; then
-        echo 'MISSING: credentials.json — no credentials in volume'
+      if [ ! -s \"\$dot_creds\" ] && [ ! -s \"\$creds\" ]; then
+        echo 'MISSING: .credentials.json or credentials.json — no credentials in volume'
         echo ''
         echo 'Provision credentials with one of:'
         echo '  $0 --sync    (copy from host ~/.claude)'
         echo '  $0 --login   (interactive login in container)'
         exit 1
       fi
-      echo 'FOUND: credentials.json'
+      if [ -s \"\$dot_creds\" ]; then
+        echo 'FOUND: .credentials.json'
+      fi
+      if [ -s \"\$creds\" ]; then
+        echo 'FOUND: credentials.json'
+      fi
 
       if [ -f \"\$settings\" ]; then
         echo \"SETTINGS: \$(cat \"\$settings\")\"
