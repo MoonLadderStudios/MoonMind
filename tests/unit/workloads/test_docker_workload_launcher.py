@@ -940,6 +940,44 @@ async def test_launcher_captures_bounded_process_output(
 
 
 @pytest.mark.asyncio
+async def test_launcher_runs_unrestricted_requests_without_profile_concurrency_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "ps":
+            return _Process(returncode=0, stdout=b"CONTAINER ID\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    registry = _registry(tmp_path)
+    validated = registry.validate_request(
+        UnrestrictedDockerRequest.model_validate(
+            {
+                "toolName": "container.run_docker",
+                "taskRunId": "task-unrestricted",
+                "stepId": "docker-cli",
+                "attempt": 1,
+                "repoDir": "/work/agent_jobs/task-unrestricted/repo",
+                "artifactsDir": "/work/agent_jobs/task-unrestricted/artifacts/docker-cli",
+                "command": ["docker", "ps"],
+            }
+        )
+    )
+
+    result = await DockerWorkloadLauncher(
+        concurrency_limiter=DockerWorkloadConcurrencyLimiter(fleet_limit=2)
+    ).run(validated)
+
+    assert result.status == "succeeded"
+    assert result.exit_code == 0
+
+
+
+@pytest.mark.asyncio
 async def test_launcher_enforces_profile_concurrency_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

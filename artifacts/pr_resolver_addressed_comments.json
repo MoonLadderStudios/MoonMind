@@ -38,5 +38,10 @@
     "id": 3134997019,
     "disposition": "addressed",
     "rationale": "Removed the unused CONTAINER_RUN_CONTAINER_TOOL import from the Temporal worker runtime unit test."
+  },
+  {
+    "id": 3135008658,
+    "disposition": "addressed",
+    "rationale": "Unrestricted workload requests no longer dereference profile-only concurrency metadata; the launcher now skips per-profile concurrency caps when profile=None and covers the path with a regression test."
   }
 ]

@@ -92,9 +92,12 @@ class DockerWorkloadConcurrencyLimiter:
         request: ValidatedWorkloadRequest,
     ) -> _ConcurrencyLease:
         profile_id = request.profile.id if request.profile is not None else request.request.tool_name
+        max_concurrency = (
+            request.profile.max_concurrency if request.profile is not None else None
+        )
         async with self._lock:
             active_for_profile = self._active_by_profile.get(profile_id, 0)
-            if active_for_profile >= request.profile.max_concurrency:
+            if max_concurrency is not None and active_for_profile >= max_concurrency:
                 raise DockerWorkloadLauncherError(
                     "workload concurrency limit exceeded for profile "
                     f"{profile_id}"
