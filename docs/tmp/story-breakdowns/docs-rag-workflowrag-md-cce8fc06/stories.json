@@ -1,0 +1,715 @@
+{
+  "source": {
+    "title": "Workflow RAG \u2013 Managed Session Retrieval",
+    "path": "docs/Rag/WorkflowRag.md",
+    "referencePath": "docs/Rag/WorkflowRag.md",
+    "originalDesign": "# Workflow RAG \u2013 Managed Session Retrieval\n\n**Status:** Draft\n**Owners:** MoonMind Engineering\n**Last Updated:** 2026-04-22\n\n> **See also:**\n> - [ManagedAgentArchitecture.md](../ManagedAgents/ManagedAgentArchitecture.md)\n> - [SharedManagedAgentAbstractions.md](../ManagedAgents/SharedManagedAgentAbstractions.md)\n> - [ProviderProfiles.md](../Security/ProviderProfiles.md)\n> - [ManifestIngestDesign.md](./ManifestIngestDesign.md)\n> - [LlamaIndexManifestSystem.md](./LlamaIndexManifestSystem.md)\n\n## 1. Summary\n\nThis document defines how **document retrieval** works for **managed sessions** in MoonMind.\n\nMoonMind\u2019s managed-agent architecture is **managed-session first**. A managed session is the runtime-owned work session, but MoonMind remains the owner of durable context assembly, artifact publication, and orchestration. Workflow RAG is therefore **not** primarily a chat-style \u201cagent remembers to search\u201d feature. Its primary job is to let MoonMind assemble relevant document and code context, publish that context as durable artifacts and refs, and deliver it into managed sessions at the right step boundaries.\n\nThe retrieval path is intentionally lean:\n\n**(embed query) \u2192 (vector search) \u2192 (build `ContextPack`) \u2192 (inject or publish retrieved context)**\n\nThe retrieval path does **not** require an additional general-purpose chat/completions LLM hop upstream. It may use an embedding model plus Qdrant, then hand the resulting `ContextPack` to the managed runtime.\n\nA managed session may also perform additional retrieval later in the run when RAG is enabled. That follow-up retrieval should use the same MoonMind retrieval contract, budgets, filters, and artifact discipline rather than inventing a separate runtime-specific RAG model.\n\nThis document focuses on **managed-session usage**. Ad hoc or conversational retrieval remains possible, but it is secondary to the managed-session design center.\n\n---\n\n## 2. Scope and non-goals\n\n### 2.1 In scope\n\nThis document covers:\n\n- document and code retrieval for managed sessions,\n- initial context resolution before or at the start of a managed step,\n- session-initiated follow-up retrieval during a managed run,\n- embedding-model-assisted semantic search against Qdrant,\n- `ContextPack` publication and prompt/context delivery,\n- direct and gateway retrieval transport,\n- workspace overlay retrieval,\n- retrieval budgeting, filtering, and observability,\n- the relationship between RAG configuration and Provider Profiles.\n\n### 2.2 Out of scope\n\nThis document does **not** define:\n\n- the full ingest pipeline in detail,\n- the full managed-session contract,\n- the full Provider Profile schema,\n- raw secret backend behavior,\n- general long-term memory architecture outside the document/code retrieval lane,\n- unrestricted direct database administration from inside managed sessions.\n\nManaged sessions may initiate retrieval queries, but they should not receive unrestricted control-plane authority over vector infrastructure by default.\n\n---\n\n## 3. Architectural position in MoonMind\n\nMoonMind owns context assembly. Managed sessions consume context that MoonMind resolves, publishes, and delivers through artifacts, refs, workspace materialization, and runtime-specific input injection.\n\nFor shared managed-agent contracts, `contextRefs` is the normative place to reference retrieval results, context packs, instruction bundles, and related artifacts. Large context bodies belong behind refs rather than being inlined into durable workflow payloads.\n\nAccordingly, Workflow RAG is one **context plane** inside the broader managed-session context system:\n\n- planning and prior run history may contribute context,\n- skills may contribute context,\n- task attachments may contribute context,\n- **document/code retrieval contributes context via Workflow RAG**.\n\nThis document is specifically about that last plane.\n\n---\n\n## 4. Core model\n\n### 4.1 Primary model: MoonMind-owned initial context resolution\n\nThe primary managed-session RAG flow is:\n\n1. MoonMind receives the task or step instruction.\n2. MoonMind resolves retrieval settings and retrieval scope.\n3. MoonMind embeds the instruction or derived retrieval query.\n4. MoonMind searches the vector index.\n5. MoonMind builds a `ContextPack`.\n6. MoonMind persists the pack as an artifact and/or publishes a ref.\n7. MoonMind injects the retrieved context into the managed runtime\u2019s next input surface.\n8. The managed session consumes that context while performing the actual task.\n\nThis is the default model because it keeps durable truth, observability, and retrieval policy inside MoonMind rather than forcing the runtime session to be the primary owner of retrieval state.\n\n### 4.2 Secondary model: session-initiated follow-up retrieval\n\nAfter initial context injection, a managed session may determine that it needs more information.\n\nWhen RAG is enabled, the managed session may issue additional retrieval requests using MoonMind-owned retrieval surfaces. Those requests may be used to:\n\n- refine a search query,\n- search for another symbol, file, design note, or API,\n- compare multiple code paths,\n- retrieve fresh overlay content after edits,\n- narrow or broaden filters,\n- request more or less context for the next turn.\n\nThis is the \u201cagent can ask for more context\u201d path. It is useful, but it is **secondary** to MoonMind-owned initial context assembly.\n\n### 4.3 No additional general chat-model hop required for retrieval\n\nWorkflow RAG should continue to use embeddings and vector search only for retrieval. A general-purpose chat/completions model is not required merely to fetch context.\n\nThe managed runtime\u2019s normal model still consumes the retrieved context afterward to do the actual task. But retrieval itself remains:\n\n- embedding request,\n- vector search,\n- deterministic context packaging.\n\n---\n\n## 5. Current implementation\n\n### 5.1 Retrieval path\n\nThe current lean retrieval layer lives under `moonmind/rag/`.\n\nThe retrieval path is:\n\n1. `ContextRetrievalService` embeds the query using the configured embedding provider.\n2. Qdrant is queried through the lean RAG client.\n3. Results are formatted into a `ContextPack`.\n4. `ContextPack.context_text` is published for injection into runtime input.\n\nThis retrieval path does not route through a separate generative LLM summarization hop.\n\n### 5.2 Managed runtime integration today\n\nCodex is the current reference managed-session implementation.\n\nIn the current Codex runtime strategy, `prepare_workspace()` invokes `ContextInjectionService` before the command is built. `ContextInjectionService` resolves retrieval, persists a context artifact under `artifacts/context/`, prepends the retrieved context to `instruction_ref`, and adds safety framing that treats retrieved text as untrusted reference data.\n\nIf retrieval is unavailable or skipped for allowed reasons, local workspace fallback search may be used instead.\n\n### 5.3 Retrieval transports\n\nTwo retrieval transports exist today:\n\n- **`direct`** \u2014 the worker or managed runtime environment performs embedding and talks to Qdrant directly.\n- **`gateway`** \u2014 the worker or managed runtime calls a MoonMind retrieval gateway, and the gateway performs retrieval on its behalf.\n\n`gateway` should be the preferred default when MoonMind owns the outbound retrieval path or when embedding credentials are not otherwise available inside the worker/session environment.\n\n### 5.4 Overlay support\n\nWorkflow RAG supports workspace overlay retrieval so a managed run can retrieve content that has changed during the run and has not yet been folded into the canonical index.\n\nOverlay data remains part of the retrieval plane, not a separate ad hoc runtime memory system.\n\n---\n\n## 6. Managed-session contract for RAG\n\n### 6.1 Context belongs behind refs and artifacts\n\nManaged-session contracts should reference retrieval results through `contextRefs` or artifact refs.\n\nLarge retrieved bodies should not be copied into durable workflow payloads. The authoritative durable surfaces remain:\n\n- artifacts,\n- bounded workflow metadata,\n- execution/read models,\n- session continuity artifacts.\n\n### 6.2 Session state is a continuity cache, not durable truth\n\nA managed session may remember prior retrieval results locally, but that local memory is a convenience cache.\n\nAuthoritative retrieval truth remains:\n\n- the vector index,\n- the persisted `ContextPack` artifact,\n- bounded retrieval metadata,\n- published refs and observability records.\n\nIf a session is reset or a new session epoch begins, MoonMind should be able to rebuild enough retrieval context from durable state.\n\n### 6.3 Reset semantics\n\nA session clear/reset is a continuity boundary, not a deletion of durable retrieval state.\n\nAfter reset, MoonMind may:\n\n- re-run retrieval for the new step,\n- reattach the latest context pack ref,\n- re-materialize the compact objective and instructions,\n- let the session request additional retrieval again if needed.\n\n---\n\n## 7. Provider Profiles, embedding configuration, and retrieval ownership\n\n### 7.1 Provider Profiles do not automatically solve retrieval credentials\n\nManaged-session Provider Profiles exist to launch and shape the managed runtime against its provider. They are not, by themselves, the complete retrieval-credential model.\n\nA profile such as `codex_default` may be OAuth-backed or runtime-specific and may not expose embedding credentials suitable for direct RAG execution.\n\n### 7.2 Retrieval configuration is separate from managed-runtime launch configuration\n\nWorkflow RAG requires an embedding model configuration.\n\nThat embedding configuration may be satisfied in one of two ways:\n\n1. **Direct mode**\n   - the worker or session environment has embedding configuration available,\n   - the environment can perform embedding and Qdrant search directly.\n\n2. **Gateway mode**\n   - the worker or session calls a MoonMind retrieval gateway,\n   - MoonMind owns the embedding configuration and outbound retrieval calls.\n\nGateway mode is the recommended default when users only configure a managed runtime Provider Profile and do not separately provide embedding credentials to the runtime environment.\n\n### 7.3 Preferred architecture\n\nWhen MoonMind owns the outbound retrieval path, Workflow RAG should be **proxy-first/gateway-first**.\n\nThat keeps:\n\n- embedding credentials out of most session containers,\n- retrieval policy centralized,\n- observability consistent,\n- initial context assembly deterministic,\n- runtime/provider launch concerns separate from retrieval concerns.\n\n### 7.4 Practical rule\n\nA managed runtime Provider Profile should not be treated as a generic source of embedding credentials by default.\n\nInstead:\n\n- runtime Provider Profiles launch the managed runtime,\n- retrieval settings configure Workflow RAG,\n- gateway transport bridges the two when needed.\n\n---\n\n## 8. Retrieval execution modes\n\n### 8.1 Automatic pre-turn retrieval\n\nThis is the default managed-session path.\n\nMoonMind resolves initial context before the managed session starts its substantive work on the step. The retrieved context is persisted, then injected into the next runtime input surface.\n\n### 8.2 Explicit session retrieval requests\n\nWhen RAG is enabled, a managed session may explicitly ask for more context during the run.\n\nThese retrieval requests should support at least:\n\n- `query`\n- `filters`\n- `top_k`\n- `overlay_policy`\n- optional budget overrides within policy\n- machine-readable output (`ContextPack` / JSON)\n- text output (`context_text`) for immediate use in the next turn\n\nThis is the recommended meaning of \u201cmanaged sessions can make arbitrary calls to the vector database.\u201d\n\nIn practice, that means the session can issue arbitrary **authorized semantic retrieval queries** over the configured corpus, with embeddings produced on demand, rather than requiring a fixed one-shot prefetch only.\n\n### 8.3 Preferred session-facing surface\n\nThe preferred session-facing surface is a MoonMind-owned retrieval tool or gateway call, not unrestricted raw database admin access.\n\nThat tool may be implemented as:\n\n- `moonmind rag search`,\n- a runtime adapter tool that calls the same retrieval layer,\n- a gateway endpoint for managed-session retrieval requests,\n- or an equivalent runtime-neutral retrieval capability.\n\n### 8.4 Direct raw database access is optional, not the default contract\n\nA deployment may choose to allow direct Qdrant access from a worker/session environment.\n\nThat is an implementation choice, not the primary managed-session contract. The default contract should be:\n\n- the session may ask for retrieval,\n- MoonMind performs or mediates retrieval,\n- results come back as a `ContextPack` plus artifacts/refs.\n\n---\n\n## 9. Retrieval flow details\n\n### 9.1 Initial retrieval flow\n\n```text\nTask/step instruction\n  -> resolve retrieval settings and scope\n  -> embed query\n  -> vector search\n  -> build ContextPack\n  -> persist artifact / publish ref\n  -> prepend or otherwise deliver retrieved context\n  -> managed session executes with that context\n```\n\n### 9.2 Session-initiated retrieval flow\n\n```text\nManaged session decides more context is needed\n  -> call MoonMind retrieval tool/gateway\n  -> embed query\n  -> vector search\n  -> build ContextPack\n  -> return context_text and JSON metadata\n  -> optionally persist artifact / publish ref\n  -> session continues work with the new context\n```\n\n### 9.3 Local fallback flow\n\nIf semantic retrieval is unavailable and policy allows degraded mode, MoonMind may use local workspace search fallback for initial context injection or explicit follow-up retrieval.\n\nFallback mode should be explicit in metadata and observability.\n\n---\n\n## 10. `ContextPack` contract\n\n`ContextPack` is the shared retrieval result shape used by CLI and gateway flows.\n\nAt minimum, a pack contains:\n\n- `context_text`\n- `items`\n- `filters`\n- `budgets`\n- `usage`\n- `transport`\n- `retrieved_at`\n- `telemetry_id`\n\nEach item should include enough provenance to explain what was retrieved, including at least:\n\n- `source`\n- `score`\n- `text`\n- `trust_class`\n- offsets and chunk identity when available\n- any bounded filter/payload metadata needed for operator understanding\n\n### 10.1 Target contract expectations\n\nThe longer-term contract should continue to strengthen:\n\n- provenance,\n- trust class,\n- overlay/canonical distinction,\n- retrieval transport,\n- truncation indicators,\n- usage/budget reporting,\n- compact artifact refs for durable publication.\n\n### 10.2 Prompt safety\n\nRetrieved context is reference data, not instructions.\n\nRuntime injection must continue to preserve a safety boundary that tells the model to treat retrieved content as untrusted reference material and to prefer current repository state when retrieved content conflicts with the checked-out workspace.\n\n---\n\n## 11. Filters, scope, and \u201chow much context\u201d knobs\n\nWorkflow RAG should expose simple, high-value levers for retrieval amount and scope.\n\n### 11.1 Primary knobs\n\n- **`top_k` / `RAG_SIMILARITY_TOP_K`**\n  - how many hits to retrieve before formatting.\n\n- **`max_context_chars` / `RAG_MAX_CONTEXT_LENGTH_CHARS`**\n  - how much retrieved text may be packed into `context_text`.\n\n- **filters**\n  - repo/workspace/run/job/tenant metadata used to constrain the search space.\n\n### 11.2 Budget knobs\n\n- **token budget**\n  - constrains retrieval size before or during execution.\n\n- **latency budget**\n  - constrains slow or overly expensive retrieval requests.\n\n### 11.3 Overlay knob\n\n- **overlay policy**\n  - whether workspace overlay content is included or skipped.\n\nThese knobs should be available both for automatic initial retrieval and for session-initiated follow-up retrieval, subject to policy.\n\n---\n\n## 12. Managed-session enablement rules\n\n### 12.1 RAG enabled vs disabled\n\nWhen RAG is disabled:\n\n- MoonMind does not perform semantic retrieval,\n- the managed session should not assume retrieval tools are available,\n- any retrieval request should fail fast with a clear reason.\n\nWhen RAG is enabled:\n\n- MoonMind may perform automatic initial retrieval,\n- the managed session may request additional retrieval,\n- retrieved context should be published with artifacts/refs and observability metadata.\n\n### 12.2 Session-facing capability signal\n\nManaged runtimes should receive an explicit capability signal when RAG is enabled.\n\nThat signal should explain:\n\n- that retrieval is available,\n- how to request more context,\n- that retrieved content is reference data,\n- any relevant budgets or scope constraints.\n\nThis capability signal should be runtime-neutral in concept even if the exact prompt/tooling surface differs by runtime.\n\n---\n\n## 13. Observability and evidence\n\nEvery retrieval operation should leave durable evidence sufficient for debugging and operator trust.\n\nAt minimum, observability should record:\n\n- whether retrieval ran,\n- whether it was automatic or session-initiated,\n- transport used (`direct`, `gateway`, `local_fallback`),\n- filters applied,\n- number of items returned,\n- token/latency usage and budgets,\n- whether context was truncated,\n- artifact path or context ref,\n- degraded mode / fallback reason when applicable.\n\nUI badges and timeline rendering are consumers of this evidence, not the evidence itself.\n\n---\n\n## 14. Security and trust rules\n\n### 14.1 No raw secrets in workflow payloads\n\nWorkflow RAG must not place raw provider keys, OAuth tokens, or generated secret-bearing config bodies into durable workflow payloads or artifacts.\n\n### 14.2 Retrieval should be bounded by policy\n\nEven when managed sessions may issue arbitrary retrieval queries, those queries remain bounded by:\n\n- authorized corpus scope,\n- filters,\n- budgets,\n- transport policy,\n- provider/secret policy,\n- audit/observability requirements.\n\n### 14.3 Gateway-first preference\n\nWhen MoonMind owns the outbound retrieval path, prefer gateway/proxy execution so that most session containers do not need direct embedding secrets or direct vector-store credentials.\n\n### 14.4 Trust boundary for retrieved text\n\nRetrieved text may contain stale, conflicting, or malicious content.\n\nPrompt injection and runtime instructions must continue to:\n\n- treat retrieved text as untrusted,\n- avoid executing instructions embedded in retrieved content,\n- prefer the current workspace state over retrieved stale copies when they conflict.\n\n---\n\n## 15. Runtime rollout\n\n### 15.1 Codex is the reference implementation today\n\nCodex is the current live managed-session reference implementation for Workflow RAG.\n\n### 15.2 Future runtimes should implement the same shared model\n\nClaude Code, Gemini CLI, and future runtimes should support the same retrieval contract:\n\n- MoonMind-owned initial context resolution,\n- artifact/ref-backed retrieval publication,\n- session-initiated follow-up retrieval when RAG is enabled,\n- the same `ContextPack` and observability model,\n- runtime-specific delivery details only at the adapter layer.\n\nNo runtime should invent a separate top-level RAG architecture.\n\n---\n\n## 16. Environment and settings\n\nThe exact configuration surface may evolve, but the current retrieval settings include the following concepts:\n\n| Setting | Purpose |\n|---|---|\n| `DEFAULT_EMBEDDING_PROVIDER` | Select embedding provider |\n| provider-specific embedding model setting | Select embedding model |\n| `QDRANT_HOST` / `QDRANT_PORT` / `QDRANT_URL` | Vector store location |\n| `QDRANT_API_KEY` | Vector store auth when required |\n| `VECTOR_STORE_COLLECTION_NAME` | Retrieval collection |\n| `RAG_SIMILARITY_TOP_K` | Default retrieval count |\n| `RAG_MAX_CONTEXT_LENGTH_CHARS` | Injected context size cap |\n| `RAG_OVERLAY_MODE` | Overlay storage mode |\n| `MOONMIND_RETRIEVAL_URL` | Gateway transport endpoint |\n| `RAG_QUERY_TOKEN_BUDGET` | Retrieval token budget |\n| `RAG_LATENCY_BUDGET_MS` | Retrieval latency budget |\n| `MOONMIND_RAG_AUTO_CONTEXT` | Automatic initial retrieval enablement |\n\nMission Control UI exposure for these settings is a separate concern from the retrieval contract itself.\n\n---\n\n## 17. Recommended desired-state statement\n\nMoonMind\u2019s desired Workflow RAG model is:\n\n- **embedding-first and retrieval-only** for context resolution,\n- **managed-session centered** rather than chat-loop centered,\n- **MoonMind-owned** for initial context assembly,\n- **artifact/ref-backed** for durable truth,\n- **gateway-first** when MoonMind owns the outbound retrieval path,\n- **session-initiated follow-up capable** when RAG is enabled,\n- **bounded by policy, filters, and budgets**,\n- **consistent across runtimes** through the shared managed-session contract.\n\nIn that desired state:\n\n- initial context is resolved before or at step start,\n- managed sessions can request additional semantic retrieval as needed,\n- retrieval still uses embeddings plus vector search rather than an extra general LLM hop,\n- Provider Profiles remain focused on runtime launch and provider shaping,\n- and Workflow RAG becomes the document/code retrieval plane inside the broader managed-session context system.\n"
+  },
+  "extractedAt": "2026-04-24T06:34:33Z",
+  "storyOutputMode": "jira",
+  "designSummary": "Workflow RAG defines MoonMind-managed document and code retrieval for managed sessions. MoonMind remains the owner of initial context assembly, durable publication, and policy enforcement, while managed sessions may request additional retrieval through bounded MoonMind-owned surfaces. The design is embedding-first, artifact/ref-backed, gateway-first when MoonMind owns outbound retrieval, and explicit about reset semantics, degraded local fallback, observability evidence, and trust boundaries.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Managed-session-first retrieval purpose",
+      "type": "requirement",
+      "source_section": "1. Summary",
+      "explanation": "Workflow RAG exists to let MoonMind assemble relevant document and code context, publish it durably, and deliver it at managed-step boundaries rather than relying on ad hoc chat retrieval."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Lean retrieval path without upstream chat hop",
+      "type": "constraint",
+      "source_section": "1. Summary; 4.3 No additional general chat-model hop required for retrieval",
+      "explanation": "Retrieval remains embedding-first and vector-search-driven, producing a ContextPack without a separate generative summarization hop."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Scope includes initial and follow-up retrieval for managed sessions",
+      "type": "requirement",
+      "source_section": "2.1 In scope",
+      "explanation": "The design covers initial context resolution, session-initiated follow-up retrieval, direct and gateway transport, overlays, filtering, budgeting, and provider-profile interaction."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Out-of-scope boundaries remain explicit",
+      "type": "non-goal",
+      "source_section": "2.2 Out of scope",
+      "explanation": "The design intentionally excludes full ingest details, full managed-session contracts, full provider-profile schema, raw secret backend behavior, long-term memory beyond document/code retrieval, and unrestricted DB administration."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "MoonMind owns context assembly and durable refs",
+      "type": "state-model",
+      "source_section": "3. Architectural position in MoonMind",
+      "explanation": "Retrieval is one context plane within the managed-session system, and large bodies must live behind refs such as contextRefs and artifacts rather than durable payload inline blobs."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Primary initial retrieval pipeline",
+      "type": "workflow",
+      "source_section": "4.1 Primary model: MoonMind-owned initial context resolution",
+      "explanation": "MoonMind resolves settings and scope, embeds the query, searches the vector index, builds a ContextPack, persists artifacts/refs, and injects retrieved context into the managed runtime before execution."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Session-initiated follow-up retrieval path",
+      "type": "workflow",
+      "source_section": "4.2 Secondary model: session-initiated follow-up retrieval",
+      "explanation": "Managed sessions may request more context during execution to refine searches, compare code paths, retrieve overlay content, or adjust scope and budgets."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Current reference implementation through Codex workspace preparation",
+      "type": "integration",
+      "source_section": "5.2 Managed runtime integration today",
+      "explanation": "Codex currently prepares workspace retrieval via ContextInjectionService, publishes artifacts under artifacts/context, prepends instruction refs, and applies safety framing."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Retrieval transports direct and gateway",
+      "type": "integration",
+      "source_section": "5.3 Retrieval transports",
+      "explanation": "Both direct and gateway modes exist, but gateway is the preferred default when MoonMind owns outbound retrieval or embedding credentials are unavailable in session environments."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Workspace overlay retrieval support",
+      "type": "artifact",
+      "source_section": "5.4 Overlay support",
+      "explanation": "Retrieval must be able to include workspace changes made during a run before those changes are indexed canonically."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Context belongs behind refs and durable artifacts",
+      "type": "artifact",
+      "source_section": "6.1 Context belongs behind refs and artifacts",
+      "explanation": "Large retrieved bodies must be referenced through artifacts or contextRefs, while durable truth remains bounded metadata plus published refs."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Session state is convenience cache only",
+      "type": "state-model",
+      "source_section": "6.2 Session state is a continuity cache, not durable truth",
+      "explanation": "Local session memory is non-authoritative; MoonMind must be able to rebuild retrieval context from the vector index, persisted ContextPack artifacts, and bounded metadata after resets."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Reset semantics preserve durable retrieval truth",
+      "type": "state-model",
+      "source_section": "6.3 Reset semantics",
+      "explanation": "Session resets clear continuity but must not delete durable retrieval state, and MoonMind should be able to rerun or reattach context after reset."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Provider profiles are separate from retrieval credentials",
+      "type": "constraint",
+      "source_section": "7. Provider Profiles, embedding configuration, and retrieval ownership",
+      "explanation": "Managed runtime launch settings must remain distinct from embedding/retrieval configuration, with gateway transport bridging them when needed."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Session-facing retrieval surface is MoonMind-owned and bounded",
+      "type": "integration",
+      "source_section": "8. Retrieval execution modes",
+      "explanation": "Sessions can request arbitrary authorized semantic retrieval queries through a MoonMind tool or gateway, not unrestricted raw vector-database admin access."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Initial, follow-up, and local fallback flows remain explicit",
+      "type": "workflow",
+      "source_section": "9. Retrieval flow details",
+      "explanation": "The design specifies explicit automatic retrieval, session-initiated retrieval, and degraded local fallback flows with metadata describing fallback behavior."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "ContextPack minimum and strengthening contract",
+      "type": "artifact",
+      "source_section": "10. ContextPack contract",
+      "explanation": "ContextPack must include context_text, items, filters, budgets, usage, transport, retrieved_at, telemetry_id, and provenance-bearing item metadata, with future strengthening around trust, overlay distinction, truncation, and artifact refs."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Prompt safety boundary for retrieved text",
+      "type": "security",
+      "source_section": "10.2 Prompt safety",
+      "explanation": "Runtime injection must frame retrieved content as untrusted reference data and prefer current repository state when retrieved content conflicts with the checked-out workspace."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Filters, top-k, context-size, budgets, and overlay knobs",
+      "type": "requirement",
+      "source_section": "11. Filters, scope, and \u201chow much context\u201d knobs",
+      "explanation": "Workflow RAG needs top_k, max_context_chars, filters, token and latency budgets, and overlay policy controls for both automatic and session-initiated retrieval subject to policy."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "RAG enablement and capability signalling",
+      "type": "requirement",
+      "source_section": "12. Managed-session enablement rules",
+      "explanation": "When disabled, retrieval fails fast and is not assumed available; when enabled, automatic retrieval, follow-up retrieval, publication, and runtime-neutral capability signals must be present."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Durable observability evidence for every retrieval operation",
+      "type": "observability",
+      "source_section": "13. Observability and evidence",
+      "explanation": "Each retrieval operation must leave durable evidence covering initiation mode, transport, filters, item count, budgets, truncation, artifact refs, and degraded reasons."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Security and trust guardrails for retrieval",
+      "type": "security",
+      "source_section": "14. Security and trust rules",
+      "explanation": "No raw secrets may land in durable payloads or artifacts; retrieval remains policy-bounded, gateway-first when MoonMind owns outbound calls, and retrieved text must be treated as stale or malicious until proven otherwise."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Shared runtime rollout model",
+      "type": "migration",
+      "source_section": "15. Runtime rollout",
+      "explanation": "Codex is the current reference implementation, but Claude Code, Gemini CLI, and future runtimes must adopt the same MoonMind-owned retrieval model and shared ContextPack/observability contract at the adapter boundary."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Environment settings support the retrieval contract",
+      "type": "integration",
+      "source_section": "16. Environment and settings",
+      "explanation": "The contract depends on configuration for embedding provider/model, Qdrant location and auth, collection, budgets, overlay mode, retrieval gateway URL, and auto-context enablement, while Mission Control exposure stays separate."
+    },
+    {
+      "id": "DESIGN-REQ-025",
+      "title": "Desired-state statement anchors the implementation shape",
+      "type": "requirement",
+      "source_section": "17. Recommended desired-state statement",
+      "explanation": "The target model is embedding-first, managed-session-centered, MoonMind-owned, artifact/ref-backed, gateway-first when appropriate, follow-up capable, policy bounded, and consistent across runtimes."
+    }
+  ],
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Resolve and publish initial managed-session retrieval context",
+      "shortName": "initial-rag-pack",
+      "description": "As MoonMind orchestration, I can resolve retrieval settings before a managed step, run embedding-driven search, build a ContextPack, and publish the result as durable artifacts/refs so the managed session starts with the right context.",
+      "why": "This is the primary value path in the design and establishes MoonMind, not the runtime, as the owner of initial context assembly and durable retrieval truth.",
+      "sourceReference": {
+        "path": "docs/Rag/WorkflowRag.md",
+        "title": "Workflow RAG \u2013 Managed Session Retrieval",
+        "sections": [
+          "1. Summary",
+          "3. Architectural position in MoonMind",
+          "4.1 Primary model: MoonMind-owned initial context resolution",
+          "5.1 Retrieval path",
+          "5.2 Managed runtime integration today",
+          "6.1 Context belongs behind refs and artifacts",
+          "9.1 Initial retrieval flow",
+          "10. ContextPack contract",
+          "17. Recommended desired-state statement"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "scope": [
+        "Resolve retrieval settings and scope for a managed step before substantive runtime work begins.",
+        "Embed the retrieval query, search the vector index, build a ContextPack, and publish the result as artifacts or refs.",
+        "Inject or otherwise deliver the retrieved context into the managed runtime while preserving artifact-backed durable truth."
+      ],
+      "outOfScope": [
+        "Full ingest-pipeline design and long-term memory features outside document/code retrieval.",
+        "Session-initiated follow-up retrieval tooling beyond whatever is necessary to avoid blocking the initial path."
+      ],
+      "independentTest": "Start a managed step with Workflow RAG enabled and verify MoonMind resolves retrieval before the runtime begins work, persists a ContextPack artifact/ref with required fields, and injects the retrieved context into the runtime input without an upstream chat-model summarization hop.",
+      "acceptanceCriteria": [
+        "Initial managed-step execution resolves retrieval settings and scope before runtime task execution begins.",
+        "The retrieval path performs embedding plus vector search and packages results into a ContextPack without requiring a separate general chat/completions retrieval hop.",
+        "Retrieved context is persisted or published behind artifacts/refs, and large bodies are not copied into durable workflow payloads.",
+        "The managed runtime receives the retrieved context through the adapter input surface together with the existing safety framing for untrusted retrieved text.",
+        "Current Codex-style workspace preparation remains representable by this contract rather than as a bespoke one-off implementation."
+      ],
+      "requirements": [
+        "MoonMind owns initial context assembly for managed sessions.",
+        "Context publication uses durable refs and artifacts as the source of truth.",
+        "ContextPack includes the minimum shared retrieval shape needed by runtime adapters."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Implements the managed-session-first purpose by making pre-step context assembly the primary delivery path."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Enforces embedding-first retrieval without an upstream chat summarization hop."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "Materializes the MoonMind-owned context plane using durable refs instead of inline workflow payload bodies."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "Implements the full initial retrieval pipeline end to end."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "Keeps the current Codex reference integration aligned to the shared retrieval contract."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Publishes retrieval results behind artifacts/contextRefs rather than durable payload blobs."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Requires the shared ContextPack output and provenance-bearing retrieval items."
+        },
+        {
+          "id": "DESIGN-REQ-025",
+          "ownership": "Delivers the desired-state initial context behavior for the shared model."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing retrieval services and artifact publication surfaces can be extended without redefining the ingest system."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Enable managed sessions to request additional retrieval through MoonMind-owned surfaces",
+      "shortName": "followup-rag-tool",
+      "description": "As a managed session runtime, I can request additional authorized retrieval during execution through a MoonMind-owned tool or gateway and receive a ContextPack plus text output for the next turn.",
+      "why": "The design explicitly allows sessions to ask for more context, but only through MoonMind-controlled contracts that preserve policy, observability, and portability across runtimes.",
+      "sourceReference": {
+        "path": "docs/Rag/WorkflowRag.md",
+        "title": "Workflow RAG \u2013 Managed Session Retrieval",
+        "sections": [
+          "2.1 In scope",
+          "4.2 Secondary model: session-initiated follow-up retrieval",
+          "8. Retrieval execution modes",
+          "9.2 Session-initiated retrieval flow",
+          "11. Filters, scope, and \u201chow much context\u201d knobs",
+          "12. Managed-session enablement rules",
+          "15. Runtime rollout",
+          "17. Recommended desired-state statement"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "scope": [
+        "Expose a runtime-neutral retrieval request surface for managed sessions when RAG is enabled.",
+        "Support query, filters, top_k, overlay policy, and bounded budget overrides.",
+        "Return both machine-readable ContextPack/JSON output and text output for immediate use in the next turn."
+      ],
+      "outOfScope": [
+        "Unrestricted raw vector-database administration from sessions.",
+        "New runtime-specific RAG architectures that diverge from the shared managed-session contract."
+      ],
+      "independentTest": "Within an active managed session with RAG enabled, request additional retrieval through the supported MoonMind surface and verify the runtime receives a bounded ContextPack plus text output, with the request failing fast and clearly when RAG is disabled.",
+      "acceptanceCriteria": [
+        "Managed sessions can issue follow-up retrieval requests only through a MoonMind-owned tool, adapter surface, or gateway.",
+        "The request contract supports query, filters, top_k, overlay policy, and bounded budget overrides, and returns both ContextPack metadata and text output.",
+        "The runtime receives an explicit capability signal when retrieval is enabled, including how to request more context and what budgets or scope constraints apply.",
+        "When retrieval is disabled, follow-up retrieval requests fail fast with a clear reason instead of silently degrading to an undefined behavior.",
+        "The same follow-up retrieval model remains valid for Codex now and future managed runtimes later."
+      ],
+      "requirements": [
+        "Session-initiated retrieval is secondary to but consistent with initial MoonMind-owned context assembly.",
+        "The retrieval surface remains runtime neutral and policy bounded.",
+        "Enablement and capability signalling are explicit runtime inputs."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Covers the in-scope follow-up retrieval outcome for managed sessions."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Implements the session-initiated retrieval path for more context during execution."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Provides the bounded MoonMind-owned retrieval tool/gateway instead of raw database admin access."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "ownership": "Owns request knobs such as filters, top_k, overlay policy, and budget overrides for follow-up retrieval."
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "ownership": "Implements explicit enabled/disabled behavior and runtime capability signalling."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "ownership": "Defines a shared adapter-facing follow-up retrieval contract for future runtimes."
+        },
+        {
+          "id": "DESIGN-REQ-025",
+          "ownership": "Advances the desired-state follow-up retrieval capability while preserving the shared contract."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Keep retrieval durability, reset semantics, and session continuity cache boundaries explicit",
+      "shortName": "rag-durable-state",
+      "description": "As MoonMind durability logic, I can treat session retrieval memory as a convenience cache while preserving authoritative retrieval truth in artifacts, refs, and bounded metadata that survive resets and new session epochs.",
+      "why": "The retrieval design depends on clear durable truth boundaries so resets, retries, and managed-session continuity do not erase or silently fork context state.",
+      "sourceReference": {
+        "path": "docs/Rag/WorkflowRag.md",
+        "title": "Workflow RAG \u2013 Managed Session Retrieval",
+        "sections": [
+          "3. Architectural position in MoonMind",
+          "6. Managed-session contract for RAG",
+          "9.1 Initial retrieval flow",
+          "10. ContextPack contract",
+          "15. Runtime rollout"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "scope": [
+        "Define and enforce authoritative retrieval truth in artifacts, refs, vector index state, and bounded metadata.",
+        "Ensure session-local retrieval memory is treated as a rebuildable continuity cache only.",
+        "Support reset behavior that can reattach or recompute retrieval state without deleting durable evidence."
+      ],
+      "outOfScope": [
+        "Redefining the full managed-session contract outside retrieval continuity and reset semantics.",
+        "Long-term memory product work outside document/code retrieval."
+      ],
+      "independentTest": "Persist retrieval context for a managed session, reset or replace the session epoch, and verify MoonMind can reattach or recompute retrieval context from durable state while session-local cache contents are treated as non-authoritative.",
+      "acceptanceCriteria": [
+        "Retrieval truth is recoverable from artifacts, refs, vector index state, and bounded metadata without depending on in-session cache state.",
+        "Large retrieved bodies continue to live behind artifacts or refs rather than inside durable workflow payloads.",
+        "Session reset is treated as a continuity boundary only; it does not delete authoritative retrieval state.",
+        "After reset, MoonMind can rerun retrieval or reattach the latest context pack ref for the next step.",
+        "Runtime adapters consume the same durable retrieval truth model rather than inventing runtime-specific persistence semantics."
+      ],
+      "requirements": [
+        "Session continuity must never become the sole source of retrieval truth.",
+        "Reset behavior preserves durable retrieval evidence and rebuildability.",
+        "The shared ContextPack contract remains the authoritative retrieval result shape."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "Reinforces MoonMind-owned context planes and refs as durable truth."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Keeps retrieval bodies behind artifacts/contextRefs during continuity transitions."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Implements the cache-vs-truth boundary for session-local retrieval memory."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "Owns reset semantics, including re-run and reattach behavior after resets."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Requires the shared retrieval result shape to remain durable and rebuildable."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "ownership": "Preserves one continuity model across current and future runtimes."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Separate retrieval configuration from provider profiles and support direct, gateway, and fallback retrieval modes",
+      "shortName": "rag-transport-policy",
+      "description": "As MoonMind retrieval configuration, I can keep embedding and vector-store settings separate from managed runtime provider profiles while selecting direct, gateway, or explicit local fallback transport under policy.",
+      "why": "This preserves the architectural boundary between runtime launch and retrieval ownership, while allowing retrieval to work in environments that lack embedding credentials inside the session container.",
+      "sourceReference": {
+        "path": "docs/Rag/WorkflowRag.md",
+        "title": "Workflow RAG \u2013 Managed Session Retrieval",
+        "sections": [
+          "2.2 Out of scope",
+          "5.3 Retrieval transports",
+          "5.4 Overlay support",
+          "7. Provider Profiles, embedding configuration, and retrieval ownership",
+          "8.4 Direct raw database access is optional, not the default contract",
+          "9.3 Local fallback flow",
+          "11. Filters, scope, and \u201chow much context\u201d knobs",
+          "16. Environment and settings",
+          "17. Recommended desired-state statement"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-024",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "scope": [
+        "Represent retrieval transport selection between direct, gateway, and explicit local fallback modes.",
+        "Keep embedding and vector-store configuration distinct from managed-runtime provider-profile launch configuration.",
+        "Support overlay retrieval and policy-bounded filter and budget knobs across retrieval modes."
+      ],
+      "outOfScope": [
+        "Changing Mission Control settings UX beyond whatever fields are needed to honor the runtime contract.",
+        "Treating provider profiles as an implicit or automatic source of embedding credentials."
+      ],
+      "independentTest": "Configure a managed runtime with RAG enabled under gateway and direct-capable environments, verify retrieval mode selection honors policy and settings, and confirm that degraded local fallback is only used when allowed and is recorded explicitly.",
+      "acceptanceCriteria": [
+        "Retrieval configuration for embedding provider/model, Qdrant connection, collection, budgets, overlay mode, and retrieval URL remains separate from managed-runtime provider-profile launch settings.",
+        "Gateway transport is supported and preferred when MoonMind owns outbound retrieval or embedding credentials are not present in the session environment.",
+        "Direct transport remains available when policy and environment permit it, without becoming the required default contract.",
+        "Local fallback retrieval is explicit, policy gated, and recorded as degraded behavior rather than silently masquerading as semantic retrieval.",
+        "Overlay retrieval and the documented top_k, max_context_chars, filter, token-budget, latency-budget, and auto-context settings apply coherently across supported retrieval modes."
+      ],
+      "requirements": [
+        "Provider profiles stay focused on runtime launch and provider shaping.",
+        "Retrieval transport selection remains policy driven and environment aware.",
+        "Overlay and budget knobs are part of the shared Workflow RAG contract."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Preserves explicit non-goals by refusing to fold ingest, full provider schemas, or unrestricted DB admin into this transport story."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "Implements direct and gateway transport selection with gateway-first preference where appropriate."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Owns workspace overlay retrieval behavior as part of the retrieval plane."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "Separates managed-runtime provider profiles from retrieval credentials and settings."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "Implements explicit degraded local fallback behavior under policy."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "ownership": "Owns filter, budget, context-size, and overlay knobs across retrieval modes."
+        },
+        {
+          "id": "DESIGN-REQ-024",
+          "ownership": "Covers the environment and settings surface required to drive the retrieval contract."
+        },
+        {
+          "id": "DESIGN-REQ-025",
+          "ownership": "Delivers the desired-state gateway-first, policy-bounded transport model."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Record retrieval evidence and enforce trust and secret-handling guardrails",
+      "shortName": "rag-observability-safety",
+      "description": "As MoonMind operations, I can audit every retrieval action with durable evidence while keeping retrieved text untrusted and preventing raw secrets or unsafe retrieval authority from leaking into durable surfaces.",
+      "why": "The design treats operator trust, debugging evidence, and security boundaries as first-class requirements rather than adapter-specific polish.",
+      "sourceReference": {
+        "path": "docs/Rag/WorkflowRag.md",
+        "title": "Workflow RAG \u2013 Managed Session Retrieval",
+        "sections": [
+          "9.3 Local fallback flow",
+          "10.2 Prompt safety",
+          "12. Managed-session enablement rules",
+          "13. Observability and evidence",
+          "14. Security and trust rules",
+          "15. Runtime rollout",
+          "17. Recommended desired-state statement"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-025"
+        ]
+      },
+      "scope": [
+        "Capture durable evidence for automatic, session-initiated, and fallback retrieval actions.",
+        "Enforce prompt-safety framing and current-workspace precedence when retrieved text conflicts with checkout state.",
+        "Prevent raw secrets, unrestricted authority, or policy violations from entering durable workflow payloads or artifacts."
+      ],
+      "outOfScope": [
+        "Replacing UI rendering work as the primary evidence source.",
+        "Building a separate runtime-specific security model for each managed runtime."
+      ],
+      "independentTest": "Run retrieval in normal, disabled, and degraded/fallback cases and verify durable evidence records the initiation mode, transport, budgets, truncation, filters, artifacts/refs, and degraded reasons, while prompt injection framing and secret-handling rules remain enforced.",
+      "acceptanceCriteria": [
+        "Every retrieval operation records durable evidence covering initiation mode, transport, filters, result count, budgets, truncation, artifact/ref location, and degraded reason when applicable.",
+        "Retrieved text is always delivered with safety framing that marks it as untrusted reference material and prefers current workspace state on conflict.",
+        "Raw provider keys, OAuth tokens, and secret-bearing config bodies are excluded from durable workflow payloads and retrieval artifacts.",
+        "Session-issued retrieval remains bounded by authorized corpus scope, filters, budgets, transport policy, provider/secret policy, and audit requirements.",
+        "The same observability and trust rules apply across the Codex reference implementation and future managed runtimes."
+      ],
+      "requirements": [
+        "Observability evidence is durable and sufficient for debugging and operator trust.",
+        "Security and trust rules apply to both automatic and explicit retrieval.",
+        "Disabled and degraded modes remain explicit in telemetry and runtime behavior."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "Captures explicit fallback metadata and degraded-mode evidence instead of silent fallback."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Owns prompt-safety framing and workspace-precedence behavior for retrieved text."
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "ownership": "Covers explicit capability and fail-fast behavior as an observable runtime contract."
+        },
+        {
+          "id": "DESIGN-REQ-021",
+          "ownership": "Implements the full durable evidence set for every retrieval operation."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "ownership": "Enforces secret, policy, and trust-boundary rules for retrieval."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "ownership": "Keeps observability and trust requirements shared across runtime adapters."
+        },
+        {
+          "id": "DESIGN-REQ-025",
+          "ownership": "Supports the desired-state policy-bounded, artifact-backed retrieval model."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-004"
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-001",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-001",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-025": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-004",
+      "STORY-005"
+    ]
+  }
+}
