@@ -172,7 +172,7 @@ class RunnerProfileRegistry:
                     sessionId=parsed_request.session_id,
                     sessionEpoch=parsed_request.session_epoch,
                     workloadAccess="profile",
-                    workflowDockerMode=workflow_docker_mode or ownership.workflow_docker_mode,
+                    workflowDockerMode=ownership.workflow_docker_mode,
                 )
 
             return ValidatedWorkloadRequest(

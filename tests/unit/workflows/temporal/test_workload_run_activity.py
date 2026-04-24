@@ -347,3 +347,40 @@ async def test_workload_run_activity_denies_unrestricted_tool_when_mode_is_profi
 
     assert exc_info.value.type == "docker_workflow_mode_forbidden"
     assert "profiles" in str(exc_info.value)
+
+
+class _CapturingRegistry:
+    def __init__(self, validated: object) -> None:
+        self.validated = validated
+        self.calls: list[tuple[object, str | None]] = []
+
+    def validate_request(
+        self,
+        request: object,
+        *,
+        workflow_docker_mode: str | None = None,
+    ) -> object:
+        self.calls.append((request, workflow_docker_mode))
+        return self.validated
+
+
+@pytest.mark.asyncio
+async def test_workload_run_activity_passes_active_workflow_mode_to_registry() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    validated = registry.validate_request(_request_payload(), workflow_docker_mode="unrestricted")
+    capturing_registry = _CapturingRegistry(validated)
+    launcher = _FakeLauncher()
+    activities = TemporalAgentRuntimeActivities(
+        workload_registry=capturing_registry,
+        workload_launcher=launcher,
+        workflow_docker_mode="unrestricted",
+    )
+
+    result = await activities.workload_run({"request": _request_payload()})
+
+    assert capturing_registry.calls == [(validated.request, "unrestricted")]
+    assert launcher.validated is validated
+    assert result["labels"]["moonmind.workflow_docker_mode"] == "unrestricted"
