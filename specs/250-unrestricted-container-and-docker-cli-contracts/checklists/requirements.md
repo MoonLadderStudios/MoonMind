@@ -2,7 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-04-24
-**Feature**: [spec.md](/work/agent_jobs/mm:b1ef7bdc-2515-49c4-a314-225562cce660/repo/specs/250-unrestricted-container-and-docker-cli-contracts/spec.md)
+**Feature**: [spec.md](../spec.md)
 
 ## Content Quality
 
