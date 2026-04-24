@@ -1,47 +1,22 @@
 [
   {
-    "id": 4167329002,
-    "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; the actionable line comments below were evaluated and resolved individually."
+    "id": 3135151857,
+    "disposition": "addressed",
+    "rationale": "Switched the new test to the canonical skill wrapper imports and removed the duplicated tool-module imports."
   },
   {
-    "id": 3134994540,
+    "id": 3135151861,
     "disposition": "addressed",
-    "rationale": "Unrestricted Docker CLI execution now replaces the leading docker token with the configured runtime binary so commands no longer become 'docker docker ...'."
+    "rationale": "Added the explicit SkillRegistrySnapshot return type to _snapshot for clearer typing."
   },
   {
-    "id": 3134994545,
+    "id": 3135151866,
     "disposition": "addressed",
-    "rationale": "The helper-side unrestricted Docker path now reuses the same normalized command builder and handles unrestricted requests before profile-only validation."
+    "rationale": "Pinned both helper calls to the same explicit stepId so the stop path targets the same deterministic helper container name."
   },
   {
-    "id": 3134994548,
+    "id": 3135151868,
     "disposition": "addressed",
-    "rationale": "The unrestricted fallback runner profile is now a module-level constant instead of being revalidated from a hardcoded dict on every invocation."
-  },
-  {
-    "id": 3134994551,
-    "disposition": "addressed",
-    "rationale": "The helper path now shares the module-level unrestricted runner profile and unrestricted arg builder instead of repeating inline model validation."
-  },
-  {
-    "id": 3134994554,
-    "disposition": "addressed",
-    "rationale": "Default timeout and kill-grace values are now centralized as module-level constants and reused across labels, diagnostics, and timeout handling."
-  },
-  {
-    "id": 3134994556,
-    "disposition": "addressed",
-    "rationale": "Workflow Docker mode normalization is now centralized in a shared module used by both settings and the tool bridge, removing the duplicated implementation."
-  },
-  {
-    "id": 3134997019,
-    "disposition": "addressed",
-    "rationale": "Removed the unused CONTAINER_RUN_CONTAINER_TOOL import from the Temporal worker runtime unit test."
-  },
-  {
-    "id": 3135008658,
-    "disposition": "addressed",
-    "rationale": "Unrestricted workload requests no longer dereference profile-only concurrency metadata; the launcher now skips per-profile concurrency caps when profile=None and covers the path with a regression test."
+    "rationale": "Updated the disabled-mode test to assert the dispatcher omits handlers and fails with the missing-handler message that matches current disabled-mode behavior."
   }
 ]
