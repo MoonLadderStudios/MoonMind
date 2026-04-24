@@ -1613,6 +1613,68 @@ async def test_fetch_result_preserves_failure_when_reverify_returns_none(
     assert result.metadata.get("prResolverReverified") is None
 
 
+async def test_fetch_result_reverifies_blocked_resolver_by_pr_number_when_merged(
+    tmp_path: Path,
+) -> None:
+    """Regression: resolver runs can omit head_branch in fetch_result input.
+
+    When the stable run id carries the PR number and GitHub confirms that PR is
+    merged, stale resolver states such as ci_running must not fail merge
+    automation.
+    """
+    from unittest.mock import patch
+
+    run_id = "resolver:pr:1727:head:623c3697e576:h:54dc00462b516f8d:1"
+    store = _make_store(tmp_path)
+    _save_record(store, run_id=run_id, status="completed")
+
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    with patch(
+        "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
+        autospec=True,
+    ) as mock_adapter_cls:
+        adapter = mock_adapter_cls.return_value
+        adapter.fetch_result = AsyncMock(
+            return_value=AgentRunResult(
+                summary=(
+                    "pr-resolver reported status 'blocked'; ci_running; "
+                    "next_step=retry_finalize_after_backoff"
+                ),
+                failure_class="user_error",
+            )
+        )
+
+        with patch.object(
+            activities,
+            "_reverify_pr_merged_state",
+            return_value={
+                "number": 1727,
+                "state": "MERGED",
+                "url": "https://github.com/org/repo/pull/1727",
+                "mergedAt": "2026-04-24T00:55:48Z",
+            },
+        ) as mock_reverify:
+            result = await activities.agent_runtime_fetch_result(
+                {
+                    "run_id": run_id,
+                    "pr_resolver_expected": True,
+                }
+            )
+
+    mock_reverify.assert_called_once_with(
+        run_id=run_id,
+        head_branch=None,
+        base_branch=None,
+    )
+    assert result.failure_class is None
+    assert "#1727" in (result.summary or "")
+    assert result.metadata.get("prResolverReverified") is True
+    assert result.metadata.get("mergeAutomationDisposition") == "already_merged"
+    assert "ci_running" in (
+        result.metadata.get("prResolverStaleSummary") or ""
+    )
+
+
 async def test_fetch_result_skips_reverify_without_head_branch(
     tmp_path: Path,
 ) -> None:
@@ -1649,6 +1711,57 @@ async def test_fetch_result_skips_reverify_without_head_branch(
 
     mock_reverify.assert_not_called()
     assert result.failure_class == "execution_error"
+
+
+async def test_reverify_pr_merged_state_queries_pr_number_from_run_id(
+    tmp_path: Path,
+) -> None:
+    """The activity can recover when fetch_result omitted the head branch."""
+    import subprocess
+    from unittest.mock import patch
+
+    run_id = "resolver:pr:1727:head:623c3697e576:h:54dc00462b516f8d:1"
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    store = _make_store(tmp_path)
+    _save_record(
+        store,
+        run_id=run_id,
+        status="completed",
+        workspace_path=str(workspace),
+    )
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    calls: list[list[str]] = []
+
+    def _mock_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess:
+        calls.append(args)
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=(
+                '{"number":1727,"state":"MERGED",'
+                '"url":"https://github.com/org/repo/pull/1727",'
+                '"mergedAt":"2026-04-24T00:55:48Z",'
+                '"baseRefName":"main","headRefName":"mm-491-d125a4e3"}'
+            ),
+            stderr="",
+        )
+
+    with (
+        patch.object(
+            activities, "_detect_repo_from_workspace", return_value="org/repo",
+        ),
+        patch("subprocess.run", side_effect=_mock_run),
+    ):
+        merged_pr = activities._reverify_pr_merged_state(
+            run_id=run_id,
+            head_branch=None,
+            base_branch=None,
+        )
+
+    assert merged_pr is not None
+    assert merged_pr["number"] == 1727
+    assert calls[0][:4] == ["gh", "pr", "view", "1727"]
 
 
 async def test_reverify_pr_merged_state_queries_head_and_base_branch(
