@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from moonmind.workflows.temporal.runtime.strategies.base import (
     ManagedRuntimeStrategy,
@@ -63,6 +63,7 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         self,
         workspace_path: Path,
         request: Any,
+        environment: Mapping[str, str] | None = None,
     ) -> None:
         """Inject shared retrieval context and write CLAUDE.md in the workspace.
 

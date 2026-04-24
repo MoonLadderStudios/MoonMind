@@ -684,6 +684,9 @@ class ManagedRuntimeLauncher:
         # Update profile with the materialized command template so build_command uses it
         profile.command_template = mat_cmd
 
+        if strategy is not None:
+            env_overrides = strategy.shape_environment(env_overrides, profile)
+
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex).
         if resolved_workspace_path is not None and strategy is not None:
@@ -697,7 +700,9 @@ class ManagedRuntimeLauncher:
 
             try:
                 await strategy.prepare_workspace(
-                    Path(resolved_workspace_path), request
+                    Path(resolved_workspace_path),
+                    request,
+                    environment=env_overrides,
                 )
 
                 if claude_md_path is not None:
@@ -771,9 +776,6 @@ class ManagedRuntimeLauncher:
                         active_link.symlink_to(active_skills_dir, target_is_directory=True)
                 except OSError as ex:
                     logger.warning("Failed to link active skills directory: %s", ex)
-
-        if strategy is not None:
-            env_overrides = strategy.shape_environment(env_overrides, profile)
 
         for key in profile.passthrough_env_keys:
             value = os.environ.get(key)

@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from moonmind.schemas.agent_runtime_models import (
     AgentRunState,
@@ -130,6 +130,7 @@ class ManagedRuntimeStrategy(ABC):
         self,
         workspace_path: Path,
         request: Any,
+        environment: Mapping[str, str] | None = None,
     ) -> None:
         """Pre-launch workspace setup (no-op by default).
 

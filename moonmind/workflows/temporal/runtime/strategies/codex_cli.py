@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -54,9 +54,23 @@ _CODEX_MANAGED_RUNTIME_NOTE = (
 )
 _CODEX_MANAGED_RUNTIME_NOTE_HEADER = "Managed Codex CLI note:\n"
 
-def build_managed_retrieval_capability_note() -> str:
-    settings = RagRuntimeSettings.from_env(os.environ)
-    enabled, reason = settings.retrieval_execution_reason(os.environ)
+def _managed_retrieval_capability_state(
+    env_source: Mapping[str, str] | None = None,
+) -> tuple[bool, str]:
+    env = env_source or os.environ
+    settings = RagRuntimeSettings.from_env(env)
+    enabled, reason = settings.retrieval_execution_reason(env)
+    if not enabled:
+        return False, reason
+    if settings.resolved_transport(None) == "gateway":
+        return False, "retrieval_gateway_auth_unavailable"
+    return True, reason
+
+
+def build_managed_retrieval_capability_note(
+    env_source: Mapping[str, str] | None = None,
+) -> str:
+    enabled, reason = _managed_retrieval_capability_state(env_source)
     if enabled:
         return (
             "\n\nMoonMind retrieval capability:\n"
@@ -71,12 +85,16 @@ def build_managed_retrieval_capability_note() -> str:
     )
 
 
-def append_managed_codex_runtime_note(instruction: str) -> str:
-    normalized = str(instruction or "")
+def append_managed_codex_runtime_note(
+    instruction: str | None,
+    *,
+    env_source: Mapping[str, str] | None = None,
+) -> str:
+    normalized = instruction or ""
     if not normalized:
         return normalized
     if _CODEX_MANAGED_RETRIEVAL_NOTE_HEADER not in normalized:
-        normalized += build_managed_retrieval_capability_note()
+        normalized += build_managed_retrieval_capability_note(env_source)
     if _CODEX_MANAGED_RUNTIME_NOTE_HEADER not in normalized:
         normalized += _CODEX_MANAGED_RUNTIME_NOTE
     return normalized
@@ -203,6 +221,7 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
         self,
         workspace_path: Path,
         request: AgentExecutionRequest,
+        environment: Mapping[str, str] | None = None,
     ) -> None:
         """Inject RAG context into the instruction before building the command."""
         from moonmind.rag.context_injection import ContextInjectionService
@@ -213,7 +232,10 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
         )
         instruction = request.instruction_ref or ""
         if instruction:
-            request.instruction_ref = append_managed_codex_runtime_note(instruction)
+            request.instruction_ref = append_managed_codex_runtime_note(
+                instruction,
+                env_source=environment,
+            )
 
     def classify_result(
         self,

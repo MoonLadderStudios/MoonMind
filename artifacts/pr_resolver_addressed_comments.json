@@ -1,52 +1,32 @@
 [
   {
-    "id": 3135645849,
+    "id": 3136402860,
     "disposition": "addressed",
-    "rationale": "Updated the task-list test to assert the control deck no longer carries the panel--controls class instead of relying on JSDOM computed-style defaults."
+    "rationale": "Removed the redundant os.environ argument when computing the retrieval capability note state."
   },
   {
-    "id": 3135645854,
+    "id": 3136402866,
     "disposition": "addressed",
-    "rationale": "Removed panel--controls from the task-list control-deck markup and deleted the CSS reset block that had only been undoing that shared card treatment."
+    "rationale": "Dropped the redundant str() coercion and now normalize the instruction with `instruction or \"\"`."
   },
   {
-    "id": 4168083355,
-    "disposition": "addressed",
-    "rationale": "Applied the review’s requested direction by moving the fix into markup and test semantics rather than maintaining CSS overrides."
-  },
-  {
-    "id": 3135664728,
-    "disposition": "addressed",
-    "rationale": "Replaced the hardcoded 38% midpoint with calc(50% + var(--mm-executing-sweep-layer-offset)) in frontend/src/styles/mission-control.css and verified the frontend/unit suites pass."
-  },
-  {
-    "id": 4168107533,
+    "id": 4169026231,
     "disposition": "not-applicable",
-    "rationale": "This top-level review is only a summary of the inline feedback thread; the actionable CSS comment was addressed directly."
+    "rationale": "This is the automated review summary, not an actionable code comment."
   },
   {
-    "id": 3135895313,
+    "id": 3136412472,
     "disposition": "addressed",
-    "rationale": "Added watchfiles to pyproject.toml and regenerated poetry.lock so the Docker build consumes it from locked requirements instead of a manual pip install."
+    "rationale": "Managed Codex retrieval guidance now treats gateway transport as unavailable until there is a usable authenticated managed-session path, so the prompt no longer advertises a 401-only capability."
   },
   {
-    "id": 3135895320,
+    "id": 3136412479,
     "disposition": "addressed",
-    "rationale": "Removed pytest-related installs from runtime-base so production api-runtime and worker-runtime images no longer inherit test runners; test-runtime still installs requirements-tests.txt."
+    "rationale": "The launcher now passes the run-scoped materialized environment into workspace preparation so the capability note reflects the actual launch environment rather than process-global defaults."
   },
   {
-    "id": 3135895323,
-    "disposition": "addressed",
-    "rationale": "Replaced the editable Docker image install with a standard pip install --no-deps . after copying the source tree into /app."
-  },
-  {
-    "id": 4168395193,
+    "id": 4169038612,
     "disposition": "not-applicable",
-    "rationale": "This review body only summarized the three inline Gemini comments above, which were addressed individually."
-  },
-  {
-    "id": 4168422983,
-    "disposition": "addressed",
-    "rationale": "Restored the frontend:ci and contracts:check gates on the amd64 publish path before docker/build-push-action runs."
+    "rationale": "This is the Codex review wrapper comment; the actionable suggestions were tracked in the individual review comments above."
   }
 ]
