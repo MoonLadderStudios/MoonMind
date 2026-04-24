@@ -85,6 +85,8 @@ _DURABLE_RETRIEVAL_METADATA_KEYS: tuple[str, ...] = (
     "retrievedContextTransport",
     "retrievedContextItemCount",
     "retrievalDurabilityAuthority",
+    "retrievalMode",
+    "retrievalDegradedReason",
     "sessionContinuityCacheStatus",
 )
 
