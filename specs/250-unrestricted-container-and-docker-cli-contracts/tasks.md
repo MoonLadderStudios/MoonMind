@@ -53,7 +53,7 @@
 
 **Integration Test Plan**:
 
-- Re-run `tests/integration/temporal/test_integration_ci_tool_contract.py` through `./tools/test_integration.sh` to prove dispatcher/runtime omission outside `unrestricted` mode and execution of `container.run_container` in `unrestricted` mode.
+- Re-run `tests/integration/temporal/test_integration_ci_tool_contract.py` through `./tools/test_integration.sh` to prove dispatcher/runtime omission outside `unrestricted` mode, execution of `container.run_container` in `unrestricted` mode, and whether the current boundary sufficiently exercises the structured unrestricted contract.
 - Add targeted integration assertions in `tests/integration/temporal/test_integration_ci_tool_contract.py` only if the current boundary does not fully prove FR-002 or FR-006 after verification.
 
 ### Verification Tests
@@ -61,7 +61,7 @@
 - [ ] T005 [P] Re-run and review unrestricted request validation coverage for FR-002, FR-003, SC-001, SC-002, DESIGN-REQ-017, and DESIGN-REQ-022 in `tests/unit/workloads/test_workload_contract.py` and `tests/unit/workloads/test_docker_workload_launcher.py`
 - [ ] T006 [P] Re-run and review unrestricted tool registration and mode-aware denial coverage for FR-001, FR-004, FR-005, SC-003, SC-004, DESIGN-REQ-003, DESIGN-REQ-010, and DESIGN-REQ-025 in `tests/unit/workloads/test_workload_tool_bridge.py`
 - [ ] T007 [P] Re-run and review runtime wiring and mode propagation coverage for FR-004, SC-003, DESIGN-REQ-003, and DESIGN-REQ-010 in `tests/unit/workflows/temporal/test_workload_run_activity.py`, `tests/unit/workflows/temporal/test_temporal_worker_runtime.py`, and `tests/unit/config/test_settings.py`
-- [ ] T008 Re-run and review the hermetic dispatcher boundary for FR-001, FR-004, FR-005, SC-003, SC-004, SC-005, DESIGN-REQ-010, and DESIGN-REQ-025 in `tests/integration/temporal/test_integration_ci_tool_contract.py`
+- [ ] T008 Re-run and review the hermetic dispatcher boundary for FR-001, FR-002, FR-004, FR-005, SC-003, SC-004, SC-005, DESIGN-REQ-010, and DESIGN-REQ-025 in `tests/integration/temporal/test_integration_ci_tool_contract.py`
 
 ### Red-First Confirmation
 
@@ -71,7 +71,7 @@
 ### Conditional Fallback Implementation
 
 - [ ] T011 If T005 or T009 exposes a structured unrestricted-boundary gap for FR-002, implement the minimum schema or launcher fix in `moonmind/schemas/workload_models.py` and `moonmind/workloads/docker_launcher.py`
-- [ ] T012 If T008 or T010 exposes a dispatcher/runtime alignment gap for FR-006 or DESIGN-REQ-022, implement the minimum tool registration, runtime enforcement, or integration assertion fix in `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/activity_runtime.py`, and `tests/integration/temporal/test_integration_ci_tool_contract.py`
+- [ ] T012 If T008 or T010 exposes a dispatcher/runtime alignment gap for FR-002, FR-006, or DESIGN-REQ-022, implement the minimum tool registration, runtime enforcement, or integration assertion fix in `moonmind/workloads/tool_bridge.py`, `moonmind/workflows/temporal/activity_runtime.py`, and `tests/integration/temporal/test_integration_ci_tool_contract.py`
 
 ### Story Validation
 
