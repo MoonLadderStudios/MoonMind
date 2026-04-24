@@ -17,6 +17,8 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import BaseModel
 
+from moonmind.rag.context_pack import ContextItem, ContextPack
+
 from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunStatus,
@@ -2375,6 +2377,56 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_verify_tool_hin
     assert "PASS, PARTIAL, FAIL, or BLOCKED" in result
     assert "Verify KANDY-3607 against this branch." in result
     assert "Managed Codex CLI note:" in result
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_includes_context_artifact_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    def _fake_retrieve(self, request):
+        return (
+            ContextPack(
+                items=[ContextItem(score=0.9, source="docs/spec.md", text="retrieved text")],
+                filters={"repo": "moonmind"},
+                budgets={},
+                usage={"tokens": 8, "latency_ms": 4},
+                transport="direct",
+                context_text="Retrieved context snippet",
+                retrieved_at="2026-04-24T00:00:00Z",
+                telemetry_id="tid-1",
+            ),
+            None,
+        )
+
+    monkeypatch.setattr("moonmind.rag.context_injection.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        "moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack",
+        _fake_retrieve,
+    )
+
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-1",
+                "idempotencyKey": "idem-1",
+                "instructionRef": "artifact:instructions",
+                "parameters": {"publishMode": "none"},
+            },
+            "workspacePath": str(tmp_path),
+        }
+    )
+
+    assert "BEGIN_RETRIEVED_CONTEXT" in result
+    assert "Retrieved context artifact: artifacts/context/" in result
+    assert str(tmp_path) not in result
+
 
 @pytest.mark.asyncio
 async def test_agent_runtime_prepare_turn_instructions_requires_workspace_for_instruction_ref() -> None:

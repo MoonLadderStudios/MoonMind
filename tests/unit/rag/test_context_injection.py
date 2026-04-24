@@ -117,8 +117,13 @@ async def test_inject_context_no_items(
     )
 
     assert result.items_count == 0
+    assert result.artifact_path is not None
     assert result.instruction == "Original instruction"
     assert mock_request.instruction_ref == "Original instruction"
+    moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
+    assert moonmind_meta["retrievedContextArtifactPath"].startswith("artifacts/context/")
+    assert moonmind_meta["retrievedContextTransport"] == "test-transport"
+    assert moonmind_meta["retrievedContextItemCount"] == 0
 
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.subprocess.Popen")

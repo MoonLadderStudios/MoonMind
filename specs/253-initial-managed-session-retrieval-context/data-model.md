@@ -46,7 +46,7 @@ Fields:
 
 Validation rules:
 - If retrieval yields no items, the original instruction may remain unchanged while artifact metadata can still be recorded.
-- If retrieval yields items, the returned instruction must include the untrusted-retrieved-text framing and the original instruction body.
+- If retrieval yields items, the returned instruction must include the untrusted-retrieved-text framing, a compact retrieved-context artifact reference, and the original instruction body.
 
 ### Retrieved Context Artifact
 
@@ -60,6 +60,7 @@ Fields:
 Validation rules:
 - Artifact publication must occur under the task workspace artifacts directory.
 - The artifact is the durable startup evidence for retrieval output and must stay reusable without requiring a replay of the original runtime session.
+- Compact `metadata.moonmind` fields may carry the relative artifact path, transport, and item count, but not the full retrieved body.
 
 ## Relationships
 

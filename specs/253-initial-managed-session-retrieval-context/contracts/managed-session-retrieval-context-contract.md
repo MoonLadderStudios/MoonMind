@@ -53,6 +53,7 @@ Contract:
 - The contract stays compatible with current Codex-style workspace preparation and any future managed runtime that consumes MoonMind-owned retrieval context.
 - Codex and Claude startup paths both consume the same shared `ContextInjectionService` contract during workspace preparation.
 - Retrieval transport choice does not change the visible contract at the runtime boundary.
+- Compact runtime-visible metadata may expose only the relative artifact path, transport, and item count; large retrieved bodies remain in the published context artifact and injected instruction text, not in durable workflow metadata.
 
 ## Verification Expectations
 
