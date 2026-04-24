@@ -97,6 +97,22 @@ function copyTextToClipboard(text: string): void {
   }
 }
 
+async function readTextFromClipboard(): Promise<string> {
+  if (
+    typeof navigator === 'undefined' ||
+    !navigator.clipboard ||
+    typeof navigator.clipboard.readText !== 'function'
+  ) {
+    return '';
+  }
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    // Browser clipboard permissions vary; native paste events remain the fallback path.
+    return '';
+  }
+}
+
 function readSessionId(payload: BootPayload): string {
   const initialData = payload.initialData as OAuthTerminalInitialData | undefined;
   if (initialData?.sessionId) {
@@ -160,11 +176,26 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
+  const sendTerminalInput = (data: string) => {
+    if (!data) {
+      return;
+    }
+    const socket = socketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'input', data }));
+    }
+  };
+
   const copyTerminalSelection = () => {
     const selectedText = terminalRef.current?.getSelection() ?? '';
     if (selectedText) {
       copyTextToClipboard(selectedText);
     }
+  };
+
+  const pasteClipboardToTerminal = async () => {
+    const text = await readTextFromClipboard();
+    sendTerminalInput(text);
   };
 
   useEffect(() => {
@@ -225,6 +256,32 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       event.clipboardData.setData('text/plain', selectedText);
     };
     terminalElement.addEventListener('copy', copySelectionListener);
+    const pasteListener = (event: ClipboardEvent) => {
+      const pastedText = event.clipboardData?.getData('text/plain') ?? '';
+      if (!pastedText) {
+        return;
+      }
+      event.preventDefault();
+      sendTerminalInput(pastedText);
+    };
+    terminalElement.addEventListener('paste', pasteListener);
+    const keydownListener = (event: KeyboardEvent) => {
+      const usesShortcutModifier = event.metaKey || event.ctrlKey;
+      if (!usesShortcutModifier) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === 'c') {
+        const selectedText = terminal.getSelection();
+        if (!selectedText) {
+          return;
+        }
+        event.preventDefault();
+        copyTextToClipboard(selectedText);
+        return;
+      }
+    };
+    terminalElement.addEventListener('keydown', keydownListener);
     const contextMenuListener = (event: MouseEvent) => {
       const selectedText = terminal.getSelection();
       if (!selectedText) {
@@ -261,6 +318,8 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       return () => {
         window.removeEventListener('resize', resizeListener);
         terminalElement.removeEventListener('copy', copySelectionListener);
+        terminalElement.removeEventListener('paste', pasteListener);
+        terminalElement.removeEventListener('keydown', keydownListener);
         terminalElement.removeEventListener('contextmenu', contextMenuListener);
         terminal.dispose();
         terminalRef.current = null;
@@ -270,10 +329,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
 
     let closed = false;
     const inputDisposable = terminal.onData((data) => {
-      const socket = socketRef.current;
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'input', data }));
-      }
+      sendTerminalInput(data);
     });
 
     const writeSocketMessage = (message: MessageEvent) => {
@@ -368,6 +424,8 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       closed = true;
       window.removeEventListener('resize', resizeListener);
       terminalElement.removeEventListener('copy', copySelectionListener);
+      terminalElement.removeEventListener('paste', pasteListener);
+      terminalElement.removeEventListener('keydown', keydownListener);
       terminalElement.removeEventListener('contextmenu', contextMenuListener);
       inputDisposable.dispose();
       socketRef.current?.close();
@@ -388,6 +446,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         <div className="oauth-terminal-actions">
           <button type="button" className="secondary" onClick={copyTerminalSelection}>
             Copy selection
+          </button>
+          <button type="button" className="secondary" onClick={pasteClipboardToTerminal}>
+            Paste from clipboard
           </button>
           <span className="oauth-terminal-status">{status}</span>
         </div>
