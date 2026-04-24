@@ -58,3 +58,4 @@ For the current plan state, integration is explicit but contingent because the r
 5. Run the full unit suite.
 6. Escalate to `./tools/test_integration.sh` only if a fix crosses persistence, activity publication, or API serialization boundaries.
 7. Preserve MM-497 and DESIGN-REQ-021/023/024 in downstream tasks and verification artifacts.
+8. Verify the deferred rollout questions from `docs/Artifacts/ReportArtifacts.md` section 20 remain explicit in feature-local artifacts rather than being silently decided during MM-497.

@@ -28,9 +28,9 @@
 
 **Purpose**: Confirm the planning artifacts and current verification targets for the single MM-497 story.
 
-- [ ] T001 Confirm `specs/249-report-semantics-rollout/` contains `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/report-rollout-semantics-contract.md`, and `quickstart.md`
-- [ ] T002 Inspect rollout source requirements in `docs/Artifacts/ReportArtifacts.md` sections 2, 5, 17, 19, 20, and 21 before verification work begins (FR-001 through FR-006, DESIGN-REQ-021, DESIGN-REQ-023, DESIGN-REQ-024)
-- [ ] T003 Inspect current rollout verification targets in `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/unit/workflows/temporal/test_artifacts.py`, `tests/unit/api/routers/test_executions.py`, `tests/contract/test_temporal_execution_api.py`, and `frontend/src/entrypoints/task-detail.test.tsx` before adding or tightening coverage (FR-001 through FR-005, SC-001 through SC-005)
+- [X] T001 Confirmed `specs/249-report-semantics-rollout/` contains `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/report-rollout-semantics-contract.md`, and `quickstart.md`
+- [X] T002 Inspected rollout source requirements in `docs/Artifacts/ReportArtifacts.md` sections 2, 5, 17, 19, 20, and 21 before verification work began, confirming generic-output compatibility, representative mappings, migration guidance, and deferred rollout questions remained explicit (FR-001 through FR-006, DESIGN-REQ-021, DESIGN-REQ-023, DESIGN-REQ-024)
+- [X] T003 Inspected current rollout verification targets in `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/unit/workflows/temporal/test_artifacts.py`, `tests/unit/api/routers/test_executions.py`, `tests/contract/test_temporal_execution_api.py`, and `frontend/src/entrypoints/task-detail.test.tsx` before tightening traceability, confirming the repo already carried focused MM-497 evidence (FR-001 through FR-005, SC-001 through SC-005)
 
 ---
 
@@ -40,9 +40,9 @@
 
 **CRITICAL**: No story implementation work can begin until this phase is complete.
 
-- [ ] T004 Confirm no database migration or new persistent storage is required because MM-497 preserves the existing artifact-backed rollout behavior and introduces no new report storage model (FR-003, FR-004, DESIGN-REQ-023)
-- [ ] T005 Confirm no new API route or report storage endpoint is required because MM-497 verifies the staged rollout contract rather than adding a new report subsystem (FR-003, DESIGN-REQ-021, DESIGN-REQ-024)
-- [ ] T006 Confirm the canonical rollout/runtime surfaces remain `moonmind/workflows/temporal/report_artifacts.py`, `moonmind/workflows/temporal/artifacts.py`, `api_service/api/routers/executions.py`, and `frontend/src/entrypoints/task-detail.tsx` for this story (FR-001 through FR-005)
+- [X] T004 Confirmed no database migration or new persistent storage is required because MM-497 preserves the existing artifact-backed rollout behavior and introduces no new report storage model (FR-003, FR-004, DESIGN-REQ-023)
+- [X] T005 Confirmed no new API route or report storage endpoint is required because MM-497 verifies the staged rollout contract rather than adding a new report subsystem (FR-003, DESIGN-REQ-021, DESIGN-REQ-024)
+- [X] T006 Confirmed the canonical rollout/runtime surfaces remain `moonmind/workflows/temporal/report_artifacts.py`, `moonmind/workflows/temporal/artifacts.py`, `api_service/api/routers/executions.py`, and `frontend/src/entrypoints/task-detail.tsx` for this story (FR-001 through FR-005)
 
 **Checkpoint**: Foundation ready - story verification and any fallback implementation work can now begin.
 
@@ -70,33 +70,33 @@
 
 ### Unit Verification Tests (write first)
 
-- [ ] T007 [P] Review and tighten `tests/unit/workflows/temporal/test_report_workflow_rollout.py` coverage for FR-001, FR-002, FR-005, SC-001, SC-002, SC-005, DESIGN-REQ-021, and DESIGN-REQ-024 so generic outputs remain valid and representative report mappings stay explicit
-- [ ] T008 [P] Review and tighten `tests/unit/workflows/temporal/test_artifacts.py` guardrail coverage for FR-003, FR-004, SC-003, SC-004, and DESIGN-REQ-023 so no hidden report-storage or out-of-scope capability requirement leaks into the rollout
-- [ ] T009 [P] Review and tighten `tests/unit/api/routers/test_executions.py` coverage for FR-003 and SC-003 so execution-detail report behavior continues to coexist with the staged rollout path rather than implying a flag-day migration
+- [X] T007 [P] Reviewed `tests/unit/workflows/temporal/test_report_workflow_rollout.py` coverage for FR-001, FR-002, FR-005, SC-001, SC-002, SC-005, DESIGN-REQ-021, and DESIGN-REQ-024; existing rollout assertions already kept generic outputs valid and representative report mappings explicit
+- [X] T008 [P] Reviewed `tests/unit/workflows/temporal/test_artifacts.py` guardrail coverage for FR-003, FR-004, SC-003, SC-004, and DESIGN-REQ-023; existing artifact assertions already preserved the staged rollout boundary and out-of-scope guardrails
+- [X] T009 [P] Reviewed `tests/unit/api/routers/test_executions.py` coverage for FR-003 and SC-003; existing execution-detail assertions already showed report behavior coexisting with the staged rollout path rather than implying a flag-day migration
 
 ### Integration-Style Boundary Tests (write first)
 
-- [ ] T010 [P] Review and tighten `tests/contract/test_temporal_execution_api.py` coverage for FR-003, SC-003, and DESIGN-REQ-021 so canonical report projections remain server-defined and artifact-backed
-- [ ] T011 [P] Review and tighten `frontend/src/entrypoints/task-detail.test.tsx` coverage for FR-003, FR-005, SC-002, and SC-005 so Mission Control continues to consume explicit report semantics without browser-side guessing
-- [ ] T012 [P] Add or update traceability assertions in `specs/249-report-semantics-rollout/quickstart.md` and later verification notes for FR-006, SC-006, FR-007, and SC-007 so deferred decisions and MM-497 remain explicit
+- [X] T010 [P] Reviewed `tests/contract/test_temporal_execution_api.py` coverage for FR-003, SC-003, and DESIGN-REQ-021; existing contract assertions already kept canonical report projections server-defined and artifact-backed
+- [X] T011 [P] Reviewed `frontend/src/entrypoints/task-detail.test.tsx` coverage for FR-003, FR-005, SC-002, and SC-005; existing Mission Control assertions already consumed explicit report semantics without browser-side guessing
+- [X] T012 [P] Updated `specs/249-report-semantics-rollout/quickstart.md` and later verification notes for FR-006, SC-006, FR-007, and SC-007 so deferred decisions and MM-497 remain explicit
 
 ### Red-First Confirmation
 
-- [ ] T013 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/workflows/temporal/test_artifacts.py tests/unit/api/routers/test_executions.py --ui-args frontend/src/entrypoints/task-detail.test.tsx` and, when T007-T009 introduce new MM-497-focused verification coverage, confirm it fails before fallback implementation begins; otherwise record that existing verification remains green
-- [ ] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_execution_api.py` and, when T010 introduces new MM-497 execution-boundary coverage, confirm it fails before fallback implementation begins; otherwise record that the existing contract boundary remains green
+- [X] T013 Ran `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/workflows/temporal/test_artifacts.py tests/unit/api/routers/test_executions.py --ui-args frontend/src/entrypoints/task-detail.test.tsx`; no new MM-497-specific unit assertions were required, and the existing verification remained green with 171 Python tests and 85 focused UI tests passing
+- [X] T014 Ran `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/contract/test_temporal_execution_api.py`; no new MM-497 contract assertions were required, and the existing contract boundary remained green with 8 Python contract tests and 14 wrapped frontend Vitest files passing
 
 ### Fallback Implementation Tasks (only if T013 or T014 exposes drift)
 
-- [ ] T015 Update `moonmind/workflows/temporal/report_artifacts.py` only if T013 exposes drift in generic-output compatibility, explicit `report.*` semantics, or representative workflow mappings (FR-001, FR-002, FR-005, DESIGN-REQ-021, DESIGN-REQ-024)
-- [ ] T016 Update `moonmind/workflows/temporal/artifacts.py`, `api_service/api/routers/executions.py`, and/or `frontend/src/entrypoints/task-detail.tsx` only if T013 or T014 exposes staged-rollout or canonical-report-consumption drift (FR-003, DESIGN-REQ-021, DESIGN-REQ-023)
-- [ ] T017 Update `specs/249-report-semantics-rollout/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/report-rollout-semantics-contract.md`, and `quickstart.md` only if verification reveals story-level traceability or deferred-decision drift (FR-006, FR-007, SC-006, SC-007)
+- [X] T015 No update was required in `moonmind/workflows/temporal/report_artifacts.py` because T013 exposed no drift in generic-output compatibility, explicit `report.*` semantics, or representative workflow mappings (FR-001, FR-002, FR-005, DESIGN-REQ-021, DESIGN-REQ-024)
+- [X] T016 No update was required in `moonmind/workflows/temporal/artifacts.py`, `api_service/api/routers/executions.py`, or `frontend/src/entrypoints/task-detail.tsx` because T013 and T014 exposed no staged-rollout or canonical-report-consumption drift (FR-003, DESIGN-REQ-021, DESIGN-REQ-023)
+- [X] T017 No story-level spec, plan, research, data-model, or contract correction was required after verification; traceability remained aligned, and the only feature-local artifact update was the planned `quickstart.md` clarification captured in T012 (FR-006, FR-007, SC-006, SC-007)
 
 ### Story Validation
 
-- [ ] T018 Rerun the focused unit command from T013 until MM-497 verification passes for FR-001 through FR-005, SC-001 through SC-005, and DESIGN-REQ-021/023/024
-- [ ] T019 Rerun the execution API contract command from T014 until MM-497 boundary verification passes for FR-003, SC-003, and DESIGN-REQ-021
-- [ ] T020 Run `rg -n "MM-497|DESIGN-REQ-021|DESIGN-REQ-023|DESIGN-REQ-024|report\\.primary|output\\.primary|report_type|auto-pinning|projection timing|export semantics|evidence grouping|multi-step" specs/249-report-semantics-rollout docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md docs/Artifacts/ReportArtifacts.md` to verify traceability and deferred-decision preservation (FR-006, FR-007, SC-006, SC-007)
-- [ ] T021 Escalate to `./tools/test_integration.sh` only if MM-497 fallback implementation crosses the hermetic integration boundary for artifact persistence, activity publication, or compose-backed API serialization
+- [X] T018 Reran the focused unit command from T013 until MM-497 verification passed for FR-001 through FR-005, SC-001 through SC-005, and DESIGN-REQ-021/023/024
+- [X] T019 Reran the execution API contract command from T014 until MM-497 boundary verification passed for FR-003, SC-003, and DESIGN-REQ-021
+- [X] T020 Ran `rg -n "MM-497|DESIGN-REQ-021|DESIGN-REQ-023|DESIGN-REQ-024|report\.primary|output\.primary|report_type|auto-pinning|projection timing|export semantics|evidence grouping|multi-step" specs/249-report-semantics-rollout docs/tmp/jira-orchestration-inputs/MM-497-moonspec-orchestration-input.md docs/Artifacts/ReportArtifacts.md` to verify traceability and deferred-decision preservation (FR-006, FR-007, SC-006, SC-007)
+- [X] T021 Hermetic integration escalation was not required because MM-497 remained a verification-first story and no fallback implementation crossed the artifact persistence, activity publication, or compose-backed API serialization boundary
 
 **Checkpoint**: MM-497 rollout behavior is verified against the current repo, and any code changes made were limited to the smallest contract-preserving fix required by failed verification.
 
@@ -106,9 +106,9 @@
 
 **Purpose**: Complete final validation and preserve story-level evidence without adding hidden scope.
 
-- [ ] T022 [P] Update `specs/249-report-semantics-rollout/quickstart.md` only if the executed MM-497 verification commands or escalation criteria differ from the current plan
-- [ ] T023 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` unless blocked by environment constraints so MM-497 closes with the canonical unit suite
-- [ ] T024 Run `/moonspec-verify` for `specs/249-report-semantics-rollout/` and produce the final verification artifact covering MM-497, FR-001 through FR-007, SC-001 through SC-007, and DESIGN-REQ-021, DESIGN-REQ-023, DESIGN-REQ-024
+- [X] T022 [P] No additional `quickstart.md` update was required because the executed MM-497 verification commands and escalation criteria matched the current plan after the T012 clarification
+- [X] T023 Ran `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh`; the canonical unit suite passed with 3956 Python tests passed, 1 xpassed, 104 warnings, 16 subtests passed, and the wrapped frontend Vitest suite passed 14 files / 415 tests
+- [X] T024 Ran `/moonspec-verify` equivalent for `specs/249-report-semantics-rollout/` and produced `specs/249-report-semantics-rollout/verification.md` covering MM-497, FR-001 through FR-007, SC-001 through SC-007, and DESIGN-REQ-021, DESIGN-REQ-023, DESIGN-REQ-024
 
 ---
 
