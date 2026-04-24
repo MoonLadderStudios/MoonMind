@@ -1,22 +1,22 @@
 [
   {
-    "id": 3134586258,
+    "id": 3134781723,
     "disposition": "addressed",
-    "rationale": "Removed the superseded --mm-executing-sweep-duration and --mm-executing-sweep-delay variables so the stylesheet keeps only the active cycle-duration contract."
+    "rationale": "Split the long pseudo-selector assertion into a named predicate and standalone expectation in mission-control.test.tsx."
   },
   {
-    "id": 3134586265,
+    "id": 3134781727,
     "disposition": "addressed",
-    "rationale": "Dropped the obsolete CSS test expectations for the removed duration and delay tokens so the suite reflects the active shimmer contract only."
+    "rationale": "Reworked the awaiting_external check to assert directly against rendered status-pill hosts instead of a conditional closest() lookup that could skip coverage."
   },
   {
-    "id": 3134586268,
+    "id": 3134781729,
     "disposition": "addressed",
-    "rationale": "Simplified the single-quoted selector string literal to remove unnecessary escaped double quotes."
+    "rationale": "Applied the same direct rendered-host assertion strategy to finalizing pills so the regression guard cannot silently pass."
   },
   {
-    "id": 4166856735,
+    "id": 4167072074,
     "disposition": "not-applicable",
-    "rationale": "Top-level review summary only; its actionable items were handled through the inline review comments above."
+    "rationale": "Top-level review summary only; the actionable items are tracked and addressed by the three inline review comments above."
   }
 ]

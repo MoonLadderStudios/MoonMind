@@ -139,22 +139,20 @@ describe('Tasks List Entrypoint', () => {
       expect(pill.closest('span')?.dataset.effect).toBeUndefined();
     }
 
-    const awaitingPills = screen.getAllByText('awaiting_external');
+    const nonExecutingStatusPills = Array.from(
+      document.querySelectorAll<HTMLElement>('.queue-table-cell-status span.status, .queue-card-status span.status'),
+    );
+
+    const awaitingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'awaiting_external');
     expect(awaitingPills.length).toBeGreaterThan(0);
     for (const pill of awaitingPills) {
-      const statusHost = pill.closest('span');
-      if (statusHost?.className.includes('status')) {
-        expect(statusHost.dataset.effect).toBeUndefined();
-      }
+      expect(pill.dataset.effect).toBeUndefined();
     }
 
-    const finalizingPills = screen.getAllByText('finalizing');
+    const finalizingPills = nonExecutingStatusPills.filter((pill) => pill.textContent === 'finalizing');
     expect(finalizingPills.length).toBeGreaterThan(0);
     for (const pill of finalizingPills) {
-      const statusHost = pill.closest('span');
-      if (statusHost?.className.includes('status')) {
-        expect(statusHost.dataset.effect).toBeUndefined();
-      }
+      expect(pill.dataset.effect).toBeUndefined();
     }
   });
 

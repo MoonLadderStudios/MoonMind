@@ -432,7 +432,14 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?background-position:\s*50% 0,\s*54% 0;[\s\S]*?background-size:\s*160% 100%,\s*140% 100%;/,
     );
-    expect(cssRuleBlockMatching(missionControlCss, (rule) => rule.selector.includes('status-running') && rule.selector.includes('shimmer-sweep') && (rule.selector.includes('::before') || rule.selector.includes('::after')))).toBe('');
+    const shimmerPseudoSelector = cssRuleBlockMatching(
+      missionControlCss,
+      (rule) =>
+        rule.selector.includes('status-running') &&
+        rule.selector.includes('shimmer-sweep') &&
+        (rule.selector.includes('::before') || rule.selector.includes('::after')),
+    );
+    expect(shimmerPseudoSelector).toBe('');
   });
 
   it('enforces MM-430 additive shared styling modifiers', async () => {
