@@ -169,8 +169,10 @@ async function readErrorDetail(response: Response, fallback: string): Promise<st
 export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
   const sessionId = useMemo(() => readSessionId(payload), [payload]);
   const [status, setStatus] = useState('Preparing terminal');
+  const [pastedInput, setPastedInput] = useState('');
   const [contextMenu, setContextMenu] = useState<TerminalContextMenuState | null>(null);
   const terminalElementRef = useRef<HTMLDivElement | null>(null);
+  const pastedInputRef = useRef<HTMLTextAreaElement | null>(null);
   const contextMenuItemRef = useRef<HTMLButtonElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -193,9 +195,22 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
     }
   };
 
+  const sendPastedInput = () => {
+    if (!pastedInput) {
+      pastedInputRef.current?.focus();
+      return;
+    }
+    const input = pastedInput.endsWith('\n') ? pastedInput : `${pastedInput}\n`;
+    sendTerminalInput(input);
+    setPastedInput('');
+  };
+
   const pasteClipboardToTerminal = async () => {
     const text = await readTextFromClipboard();
-    sendTerminalInput(text);
+    if (text) {
+      setPastedInput(text);
+    }
+    pastedInputRef.current?.focus();
   };
 
   useEffect(() => {
@@ -246,6 +261,19 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
     fitAddon.fit();
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
+    const terminalInputElement = terminalElement.querySelector(
+      '.xterm-helper-textarea, textarea',
+    ) as HTMLElement | null;
+    const focusTerminalInput = () => {
+      if (
+        terminalInputElement &&
+        typeof (terminalInputElement as HTMLTextAreaElement).focus === 'function'
+      ) {
+        (terminalInputElement as HTMLTextAreaElement).focus();
+        return;
+      }
+      terminal.focus();
+    };
 
     const copySelectionListener = (event: ClipboardEvent) => {
       const selectedText = terminal.getSelection();
@@ -264,7 +292,8 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       event.preventDefault();
       sendTerminalInput(pastedText);
     };
-    terminalElement.addEventListener('paste', pasteListener);
+    terminalElement.addEventListener('paste', pasteListener, true);
+    terminalInputElement?.addEventListener('paste', pasteListener, true);
     const keydownListener = (event: KeyboardEvent) => {
       const usesShortcutModifier = event.metaKey || event.ctrlKey;
       if (!usesShortcutModifier) {
@@ -282,6 +311,11 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       }
     };
     terminalElement.addEventListener('keydown', keydownListener);
+    terminalInputElement?.addEventListener('keydown', keydownListener);
+    const clickListener = () => {
+      focusTerminalInput();
+    };
+    terminalElement.addEventListener('click', clickListener);
     const contextMenuListener = (event: MouseEvent) => {
       const selectedText = terminal.getSelection();
       if (!selectedText) {
@@ -318,8 +352,11 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       return () => {
         window.removeEventListener('resize', resizeListener);
         terminalElement.removeEventListener('copy', copySelectionListener);
-        terminalElement.removeEventListener('paste', pasteListener);
+        terminalElement.removeEventListener('paste', pasteListener, true);
+        terminalInputElement?.removeEventListener('paste', pasteListener, true);
         terminalElement.removeEventListener('keydown', keydownListener);
+        terminalInputElement?.removeEventListener('keydown', keydownListener);
+        terminalElement.removeEventListener('click', clickListener);
         terminalElement.removeEventListener('contextmenu', contextMenuListener);
         terminal.dispose();
         terminalRef.current = null;
@@ -424,8 +461,11 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
       closed = true;
       window.removeEventListener('resize', resizeListener);
       terminalElement.removeEventListener('copy', copySelectionListener);
-      terminalElement.removeEventListener('paste', pasteListener);
+      terminalElement.removeEventListener('paste', pasteListener, true);
+      terminalInputElement?.removeEventListener('paste', pasteListener, true);
       terminalElement.removeEventListener('keydown', keydownListener);
+      terminalInputElement?.removeEventListener('keydown', keydownListener);
+      terminalElement.removeEventListener('click', clickListener);
       terminalElement.removeEventListener('contextmenu', contextMenuListener);
       inputDisposable.dispose();
       socketRef.current?.close();
@@ -453,6 +493,31 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           <span className="oauth-terminal-status">{status}</span>
         </div>
       </header>
+      <section className="oauth-terminal-paste-box">
+        <label className="oauth-terminal-paste-label" htmlFor="oauth-terminal-paste-input">
+          Paste authentication code
+        </label>
+        <div className="oauth-terminal-paste-controls">
+          <textarea
+            id="oauth-terminal-paste-input"
+            ref={pastedInputRef}
+            className="oauth-terminal-paste-input"
+            rows={3}
+            placeholder="Paste the returned authentication code here, then send it to the terminal."
+            value={pastedInput}
+            onChange={(event) => setPastedInput(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                sendPastedInput();
+              }
+            }}
+          />
+          <button type="button" className="primary" onClick={sendPastedInput}>
+            Send to terminal
+          </button>
+        </div>
+      </section>
       <section className="oauth-terminal-surface" aria-label="OAuth terminal output">
         <div ref={terminalElementRef} className="oauth-terminal-xterm" />
       </section>

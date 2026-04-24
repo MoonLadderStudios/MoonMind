@@ -2696,6 +2696,33 @@ button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-
   padding: 6px 10px;
 }
 
+.oauth-terminal-paste-box {
+  background: rgb(var(--mm-panel, 255 255 255));
+  border: 1px solid rgb(var(--mm-border, 203 213 225));
+  border-radius: 12px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.oauth-terminal-paste-label {
+  color: rgb(var(--mm-text, 15 23 42));
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.oauth-terminal-paste-controls {
+  display: grid;
+  gap: 12px;
+}
+
+.oauth-terminal-paste-input {
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  min-height: 5.5rem;
+  resize: vertical;
+}
+
 .oauth-terminal-surface {
   background: #111827;
   border-radius: 8px;
