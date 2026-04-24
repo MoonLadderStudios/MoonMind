@@ -1,27 +1,27 @@
 [
   {
-    "id": 3133634364,
+    "id": 3134339420,
     "disposition": "addressed",
-    "rationale": "Added an explicit TemporalExecutionRecord | TemporalExecutionCanonicalRecord type hint to the snapshot helper record parameter."
+    "rationale": "Removed the Ctrl/Cmd+V keydown interception so unsupported clipboard reads no longer block native paste delivery."
   },
   {
-    "id": 3133634368,
-    "disposition": "addressed",
-    "rationale": "Moved session.refresh(record) inside the snapshot_ref block so it only runs after a persisted snapshot commit."
-  },
-  {
-    "id": 4165735428,
+    "id": 4166572410,
     "disposition": "not-applicable",
-    "rationale": "Review summary only; its actionable child comments were handled individually."
+    "rationale": "Top-level automated review wrapper only; the actionable inline feedback is tracked and handled separately."
   },
   {
-    "id": 3133637367,
+    "id": 3134340059,
     "disposition": "addressed",
-    "rationale": "Changed direct-run snapshot creation to use parameters from the returned persisted record instead of the incoming request payload, preserving idempotency replay semantics."
+    "rationale": "Keyboard paste now relies on the browser paste event, keeping clipboard-read permissions only for the explicit toolbar action."
   },
   {
-    "id": 4165738806,
+    "id": 3134340064,
+    "disposition": "addressed",
+    "rationale": "Replaced the obsolete Ctrl+V test with a regression asserting the shortcut is left unhandled for the native paste event path."
+  },
+  {
+    "id": 4166573078,
     "disposition": "not-applicable",
-    "rationale": "Informational Codex review wrapper with no distinct actionable feedback beyond the child comment."
+    "rationale": "Summary review comment with no separate actionable request beyond the inline feedback already addressed."
   }
 ]

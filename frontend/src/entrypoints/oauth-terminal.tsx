@@ -280,10 +280,6 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         copyTextToClipboard(selectedText);
         return;
       }
-      if (key === 'v') {
-        event.preventDefault();
-        void pasteClipboardToTerminal();
-      }
     };
     terminalElement.addEventListener('keydown', keydownListener);
     const contextMenuListener = (event: MouseEvent) => {

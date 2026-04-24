@@ -169,23 +169,20 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     );
   });
 
-  it('pastes clipboard text with Ctrl+V', async () => {
+  it('leaves Ctrl+V available for the browser paste event', async () => {
     renderPage();
-    const socket = await waitForSocket();
-    vi.stubGlobal('navigator', {
-      clipboard: {
-        readText: vi.fn(async () => 'clipboard-token'),
-      },
+    await waitForSocket();
+    const event = new KeyboardEvent('keydown', {
+      key: 'v',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
     });
     const terminalSurface = document.querySelector('.oauth-terminal-xterm') as HTMLElement;
 
-    fireEvent.keyDown(terminalSurface, { key: 'v', ctrlKey: true });
+    terminalSurface.dispatchEvent(event);
 
-    await waitFor(() =>
-      expect(socket.send).toHaveBeenCalledWith(
-        JSON.stringify({ type: 'input', data: 'clipboard-token' }),
-      ),
-    );
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it('copies selected terminal text with Ctrl+C instead of sending interrupt', async () => {
