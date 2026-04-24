@@ -89,10 +89,11 @@ Requirements:
 ## Classification
 
 - Input type: Single-story feature request.
-- Breakdown decision: `moonspec-breakdown` was not run because the Jira preset brief already defines one independently testable runtime story.
+- Breakdown decision: `moonspec-breakdown` was not run because the Jira preset brief already defines one independently testable runtime story; breakdown is reserved for broad technical or declarative designs that contain multiple independently testable stories.
 - Selected mode: Runtime.
 - Source design: `docs/ManagedAgents/DockerOutOfDocker.md` is treated as runtime source requirements because the brief describes system behavior, not documentation-only work.
 - Resume decision: No existing Moon Spec artifacts for MM-502 were found under `specs/`; specification is the first incomplete stage.
+- Multi-spec ordering: Not applicable for MM-502 because this spec remains isolated to one story; if future Jira input requires multiple generated specs, they must remain isolated and be processed in dependency order.
 
 ## User Story - Enforce Workload Isolation Boundaries
 
