@@ -22,7 +22,8 @@ MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh \
   tests/unit/rag/test_service.py \
   tests/unit/rag/test_guardrails.py \
   tests/unit/rag/test_telemetry.py \
-  tests/unit/api/routers/test_retrieval_gateway.py
+  tests/unit/api/routers/test_retrieval_gateway.py \
+  tests/unit/services/temporal/runtime/test_launcher.py
 ```
 
 Expected use:

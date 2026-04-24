@@ -31,7 +31,7 @@ MM-509 is a runtime Workflow RAG contract story focused on durable retrieval evi
 **Language/Version**: Python 3.12  
 **Primary Dependencies**: Pydantic v2, FastAPI, existing MoonMind RAG services, Temporal runtime launcher and managed-session helpers, pytest  
 **Storage**: Existing artifact-backed retrieval outputs and runtime metadata only; no new persistent storage planned  
-**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh` with focused retrieval, gateway, runtime-launcher, and workflow activity tests  
+**Unit Testing**: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/rag/test_context_pack.py tests/unit/rag/test_context_injection.py tests/unit/rag/test_service.py tests/unit/rag/test_guardrails.py tests/unit/rag/test_telemetry.py tests/unit/api/routers/test_retrieval_gateway.py tests/unit/services/temporal/runtime/test_launcher.py` with focused retrieval, gateway, and runtime-launcher coverage  
 **Integration Testing**: `./tools/test_integration.sh` when compatible with the final change set, plus targeted Temporal retrieval boundary tests under `tests/integration/workflows/temporal/`  
 **Target Platform**: MoonMind retrieval runtime boundaries spanning direct retrieval, retrieval gateway, managed runtime context injection, and managed-session durability  
 **Project Type**: Backend runtime and API contract hardening for Workflow RAG evidence, safety framing, and policy enforcement  

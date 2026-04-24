@@ -11,7 +11,7 @@
 
 **Test Commands**:
 
-- Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/rag/test_context_pack.py tests/unit/rag/test_context_injection.py tests/unit/rag/test_service.py tests/unit/rag/test_guardrails.py tests/unit/rag/test_telemetry.py tests/unit/api/routers/test_retrieval_gateway.py`
+- Unit tests: `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/rag/test_context_pack.py tests/unit/rag/test_context_injection.py tests/unit/rag/test_service.py tests/unit/rag/test_guardrails.py tests/unit/rag/test_telemetry.py tests/unit/api/routers/test_retrieval_gateway.py tests/unit/services/temporal/runtime/test_launcher.py`
 - Integration tests: `./tools/test_integration.sh`; targeted workflow-boundary commands `pytest tests/integration/workflows/temporal/test_managed_session_retrieval_context.py -q --tb=short` and `pytest tests/integration/workflows/temporal/test_managed_session_retrieval_durability.py -q --tb=short`
 - Final verification: `/moonspec-verify` / `/speckit.verify`
 
@@ -68,8 +68,8 @@
 - [ ] T010 [P] Add failing unit test coverage for FR-003, acceptance scenario 3, SC-003, and DESIGN-REQ-020 in `tests/unit/rag/test_context_injection.py` and `tests/unit/rag/test_service.py` to prove provider keys, OAuth tokens, bearer tokens, and secret-bearing config bodies never reach durable retrieval artifacts or metadata.
 - [ ] T011 [P] Add failing unit test coverage for FR-004, acceptance scenario 4, SC-004, and DESIGN-REQ-021 / DESIGN-REQ-025 in `tests/unit/api/routers/test_retrieval_gateway.py` and `tests/unit/rag/test_service.py` to prove session-issued retrieval remains bounded by authorized scope, supported filters, budgets, transport policy, provider/secret policy, and audit requirements.
 - [ ] T012 [P] Add failing unit test coverage for FR-005, acceptance scenario 5, SC-005, and DESIGN-REQ-022 in `tests/unit/rag/test_context_injection.py` and `tests/unit/rag/test_guardrails.py` to prove enabled, disabled, and degraded retrieval states remain explicit and never masquerade as normal semantic retrieval.
-- [ ] T013 [P] Add verification-first unit test coverage for FR-006, acceptance scenario 6, SC-006, and DESIGN-REQ-023 in `tests/unit/rag/test_context_injection.py` and `tests/unit/rag/test_telemetry.py` to prove the shared evidence and trust contract remains runtime-neutral.
-- [ ] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/rag/test_context_pack.py tests/unit/rag/test_context_injection.py tests/unit/rag/test_service.py tests/unit/rag/test_guardrails.py tests/unit/rag/test_telemetry.py tests/unit/api/routers/test_retrieval_gateway.py` to confirm T008-T013 fail for the expected reason before any production changes.
+- [ ] T013 [P] Add verification-first unit test coverage for FR-006, acceptance scenario 6, SC-006, and DESIGN-REQ-023 in `tests/unit/rag/test_context_injection.py` and `tests/unit/services/temporal/runtime/test_launcher.py` to prove the shared evidence and trust contract remains runtime-neutral at the runtime boundary.
+- [ ] T014 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/rag/test_context_pack.py tests/unit/rag/test_context_injection.py tests/unit/rag/test_service.py tests/unit/rag/test_guardrails.py tests/unit/rag/test_telemetry.py tests/unit/api/routers/test_retrieval_gateway.py tests/unit/services/temporal/runtime/test_launcher.py` to confirm T008-T013 fail for the expected reason before any production changes.
 
 ### Integration Tests (write first) ⚠️
 
@@ -144,7 +144,7 @@
 # Launch red-first unit coverage together:
 Task: "Add failing durable-evidence tests in tests/unit/rag/test_context_pack.py and tests/unit/rag/test_context_injection.py"
 Task: "Add failing secret-exclusion and policy-envelope tests in tests/unit/rag/test_service.py and tests/unit/api/routers/test_retrieval_gateway.py"
-Task: "Add verification-first trust-framing and cross-runtime contract tests in tests/unit/rag/test_context_injection.py and tests/unit/rag/test_telemetry.py"
+Task: "Add verification-first trust-framing and cross-runtime contract tests in tests/unit/rag/test_context_injection.py and tests/unit/services/temporal/runtime/test_launcher.py"
 ```
 
 ## Implementation Strategy

@@ -63,7 +63,7 @@ Evidence: the repo already contains focused unit tests for `ContextPack`, `Conte
 Rationale: Much of MM-509 appears partly implemented already. The safest delivery path is to add failing verification tests for the missing contract details before changing production code.
 Alternatives considered: implementation-first planning. Rejected because it risks destabilizing already-correct retrieval behavior and obscuring the real gap, which is mostly contract proof.
 Test implications:
-- Unit: extend `tests/unit/rag/test_context_pack.py`, `tests/unit/rag/test_context_injection.py`, `tests/unit/rag/test_service.py`, `tests/unit/rag/test_guardrails.py`, `tests/unit/rag/test_telemetry.py`, and `tests/unit/api/routers/test_retrieval_gateway.py`.
+- Unit: extend `tests/unit/rag/test_context_pack.py`, `tests/unit/rag/test_context_injection.py`, `tests/unit/rag/test_service.py`, `tests/unit/rag/test_guardrails.py`, `tests/unit/rag/test_telemetry.py`, `tests/unit/api/routers/test_retrieval_gateway.py`, and `tests/unit/services/temporal/runtime/test_launcher.py`.
 - Integration: extend `tests/integration/workflows/temporal/test_managed_session_retrieval_context.py` and `tests/integration/workflows/temporal/test_managed_session_retrieval_durability.py` with MM-509-specific retrieval evidence, trust-framing, and cross-runtime contract assertions.
 
 ## Planning Tooling Constraint
