@@ -16,6 +16,8 @@ Source design path (optional): .
 Classify the input as a single-story feature request, broad technical or declarative design, or existing feature directory.
 Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts."
 
+Preserved source Jira preset brief: `MM-502` from `docs/tmp/jira-orchestration-inputs/MM-502-moonspec-orchestration-input.md`, reproduced verbatim in `## Original Preset Brief` below for downstream verification.
+
 Original brief reference: `docs/tmp/jira-orchestration-inputs/MM-502-moonspec-orchestration-input.md`.
 Classification: single-story runtime feature request.
 Resume decision: no existing Moon Spec feature directory or later-stage artifacts matched MM-502 under `specs/`, so `Specify` is the first incomplete stage.
