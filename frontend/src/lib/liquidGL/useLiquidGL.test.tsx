@@ -215,4 +215,74 @@ describe("useLiquidGL", () => {
     expect(element?.getAttribute("data-liquid-gl-initialized")).toBe("true");
     expect(element?.style.opacity).toBe("1");
   });
+
+  it("adapts HTMLElement targets into a selector before calling liquidGL", async () => {
+    const target = document.createElement("div");
+    target.className = "liquid-glass-panel";
+    document.body.appendChild(target);
+    const destroy = vi.fn();
+    const liquidGL = Object.assign(
+      vi.fn((options: { target: string; on?: { init?: (lens: { destroy?: () => void }) => void } }) => {
+        const lens = { el: document.createElement("div"), destroy };
+        options.on?.init?.(lens);
+        return lens;
+      }),
+      {
+        registerDynamic: vi.fn(),
+        syncWith: vi.fn(),
+      },
+    );
+    vi.mocked(getLiquidGL).mockReturnValue(liquidGL);
+
+    function ElementTargetHarness() {
+      useLiquidGL({
+        options: {
+          target,
+        },
+      });
+
+      return null;
+    }
+
+    const { unmount } = render(<ElementTargetHarness />);
+
+    await waitFor(() => {
+      expect(liquidGL).toHaveBeenCalledTimes(1);
+    });
+
+    expect(liquidGL).toHaveBeenCalledWith({
+      target: expect.stringContaining('[data-liquid-gl-target-id="'),
+      on: expect.objectContaining({ init: expect.any(Function) }),
+    });
+    expect(target.getAttribute("data-liquid-gl-initialized")).toBe("true");
+
+    unmount();
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(target.hasAttribute("data-liquid-gl-target-id")).toBe(false);
+    target.remove();
+  });
+
+  it("treats DOM fallback returns as successful initialization without retrying", async () => {
+    vi.useFakeTimers();
+    const liquidGL = Object.assign(
+      vi.fn(() => document.querySelector(".liquid-glass-panel") as HTMLElement),
+      {
+        registerDynamic: vi.fn(),
+        syncWith: vi.fn(),
+      },
+    );
+    vi.mocked(getLiquidGL).mockReturnValue(liquidGL);
+
+    render(<LiquidGLHarness />);
+
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+    });
+
+    expect(liquidGL).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".liquid-glass-panel")?.getAttribute("data-liquid-gl-initialized")).toBe(
+      "true",
+    );
+  });
 });

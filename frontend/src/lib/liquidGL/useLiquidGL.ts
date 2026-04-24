@@ -3,11 +3,12 @@ import { useEffect } from "react";
 import { getLiquidGL, type LiquidGLOptions } from "./index";
 
 const INITIALIZED_ATTR = "data-liquid-gl-initialized";
+const TARGET_ATTR = "data-liquid-gl-target-id";
 const INIT_RETRY_DELAY_MS = 120;
 const INIT_STALL_TIMEOUT_MS = 1800;
 const MAX_INIT_ATTEMPTS = 20;
 
-type LiquidGLInstance = { destroy?: () => void };
+type LiquidGLInstance = { destroy?: () => void } | HTMLElement;
 
 type UseLiquidGLArgs = {
   enabled?: boolean;
@@ -29,6 +30,7 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
     let disposed = false;
     let attempts = 0;
     let initializedElement: HTMLElement | null = null;
+    let attributedTargetElement: HTMLElement | null = null;
     let liquidGLInstances: LiquidGLInstance[] = [];
 
     const clearScheduledWork = () => {
@@ -48,11 +50,16 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
 
     const destroyInstances = () => {
       liquidGLInstances.forEach((instance) => {
+        if (instance instanceof HTMLElement) {
+          return;
+        }
         instance.destroy?.();
       });
       liquidGLInstances = [];
       initializedElement?.removeAttribute(INITIALIZED_ATTR);
       initializedElement = null;
+      attributedTargetElement?.removeAttribute(TARGET_ATTR);
+      attributedTargetElement = null;
     };
 
     const resolveTargetElement = (): HTMLElement | null => {
@@ -60,6 +67,20 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
         return document.querySelector<HTMLElement>(options.target);
       }
       return options.target instanceof HTMLElement ? options.target : null;
+    };
+
+    const resolveVendorTarget = (element: HTMLElement): string => {
+      if (typeof options.target === "string") {
+        return options.target;
+      }
+
+      let targetId = element.getAttribute(TARGET_ATTR);
+      if (!targetId) {
+        targetId = `liquid-gl-target-${Math.random().toString(36).slice(2, 10)}`;
+        element.setAttribute(TARGET_ATTR, targetId);
+      }
+      attributedTargetElement = element;
+      return `[${TARGET_ATTR}="${targetId}"]`;
     };
 
     const scheduleAttempt = (delayMs = 0) => {
@@ -98,10 +119,12 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       }
 
       let didInitialize = false;
+      const vendorTarget = resolveVendorTarget(element);
 
       try {
         const result = liquidGL({
           ...options,
+          target: vendorTarget,
           on: {
             ...options.on,
             init: (lens) => {
@@ -136,6 +159,16 @@ export function useLiquidGL({ enabled = true, options }: UseLiquidGLArgs): void 
       if (liquidGLInstances.length === 0) {
         attempts += 1;
         scheduleAttempt(INIT_RETRY_DELAY_MS);
+        return;
+      }
+
+      const isFallbackResult = liquidGLInstances.every(
+        (instance) => instance instanceof HTMLElement,
+      );
+      if (isFallbackResult) {
+        initializedElement = element;
+        element.style.pointerEvents = "auto";
+        element.setAttribute(INITIALIZED_ATTR, "true");
         return;
       }
 

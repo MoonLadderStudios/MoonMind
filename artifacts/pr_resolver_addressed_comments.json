@@ -1,22 +1,32 @@
 [
   {
-    "id": 3134534895,
+    "id": 3134718993,
     "disposition": "addressed",
-    "rationale": "Replaced the managed-agent absolute feature path in .specify/feature.json with the repo-relative specs/245-claude-oauth-guardrails path."
+    "rationale": "Handled the no-WebGL DOM fallback path as a successful initialization so the hook no longer retries after liquidGL returns fallback elements without calling on.init."
   },
   {
-    "id": 4166796428,
-    "disposition": "not-applicable",
-    "rationale": "Top-level Codex review wrapper comment; the actionable feedback was the linked review comment and has been addressed."
-  },
-  {
-    "id": 3134537750,
+    "id": 3134719011,
     "disposition": "addressed",
-    "rationale": "Updated .specify/feature.json to use the suggested repo-relative feature_directory value for portability across environments."
+    "rationale": "HTMLElement targets are now translated into a temporary selector before calling the vendor library, preserving hook support without passing an invalid target type into liquidGL."
   },
   {
-    "id": 4166799430,
+    "id": 4167005196,
     "disposition": "not-applicable",
-    "rationale": "Top-level Gemini summary review; the only actionable item duplicated the .specify/feature.json path issue and is now fixed."
+    "rationale": "Top-level bot review summary only; the actionable inline comments from this review were addressed separately."
+  },
+  {
+    "id": 3134722327,
+    "disposition": "addressed",
+    "rationale": "The hook now marks DOM fallback returns as initialized immediately, which stops false stall teardown and retry loops for fallback clients."
+  },
+  {
+    "id": 3134722330,
+    "disposition": "addressed",
+    "rationale": "The hook no longer forwards HTMLElement targets directly to the vendor API and now verifies that adapter path with a focused test."
+  },
+  {
+    "id": 4167008311,
+    "disposition": "not-applicable",
+    "rationale": "Top-level bot review summary only; the actionable inline comments from this review were addressed separately."
   }
 ]
