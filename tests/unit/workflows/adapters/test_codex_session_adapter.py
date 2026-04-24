@@ -2113,6 +2113,101 @@ async def test_start_delegates_turn_instruction_preparation_before_sending_turn(
     assert send_turn_calls[0].instructions.startswith("Injected context instruction")
     assert "Managed Codex CLI note:" in send_turn_calls[0].instructions
 
+async def test_start_populates_launch_metadata_from_prepared_turn_request(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    launch_calls: list[Any] = []
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _prepare(payload: dict[str, Any]) -> dict[str, Any]:
+        assert payload["includePreparedRequestMetadata"] is True
+        return {
+            "instructions": "Injected context instruction\n\nManaged Codex CLI note:",
+            "durableRetrievalMetadata": {
+                "latestContextPackRef": "artifacts/context/rag-context-prepared.json",
+                "retrievedContextArtifactPath": "artifacts/context/rag-context-prepared.json",
+                "retrievedContextTransport": "direct",
+                "retrievedContextItemCount": 2,
+                "retrievalDurabilityAuthority": "artifact_ref",
+                "sessionContinuityCacheStatus": "advisory_only",
+            },
+        }
+
+    async def _launch_session(request: Any) -> CodexManagedSessionHandle:
+        launch_calls.append(request)
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed-runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare,
+        send_turn=AsyncMock(
+            return_value=_turn_response(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(
+            return_value=_summary(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        publish_remote_artifacts=AsyncMock(
+            return_value=_publication(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    request = _request(binding)
+
+    await adapter.start(request)
+
+    assert len(launch_calls) == 1
+    launch_request = launch_calls[0]["request"]
+    assert (
+        launch_request["metadata"]["latestContextPackRef"]
+        == "artifacts/context/rag-context-prepared.json"
+    )
+    assert launch_request["metadata"]["retrievalDurabilityAuthority"] == "artifact_ref"
+    assert (
+        request.parameters["metadata"]["moonmind"]["latestContextPackRef"]
+        == "artifacts/context/rag-context-prepared.json"
+    )
+
 async def test_start_rejects_non_text_input_refs_for_session_turns(
     tmp_path: Path,
 ) -> None:

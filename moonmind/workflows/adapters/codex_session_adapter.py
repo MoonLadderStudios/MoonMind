@@ -120,6 +120,31 @@ def _result_ref_metadata(
     )
     return metadata
 
+
+def _merge_durable_retrieval_metadata(
+    request: AgentExecutionRequest,
+    metadata: Mapping[str, Any] | None,
+) -> None:
+    if not isinstance(metadata, Mapping) or not metadata:
+        return
+    parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    request.parameters = parameters
+    existing_metadata = parameters.setdefault("metadata", {})
+    if not isinstance(existing_metadata, dict):
+        existing_metadata = {}
+        parameters["metadata"] = existing_metadata
+    moonmind_metadata = existing_metadata.setdefault("moonmind", {})
+    if not isinstance(moonmind_metadata, dict):
+        moonmind_metadata = {}
+        existing_metadata["moonmind"] = moonmind_metadata
+    for key, value in metadata.items():
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                moonmind_metadata[key] = normalized
+        elif isinstance(value, int) and not isinstance(value, bool):
+            moonmind_metadata[key] = value
+
 def _clamp_agent_run_result_summary(summary: Any, *, default: str) -> str:
     normalized = str(summary or "").strip() or default
     if len(normalized) <= _MAX_AGENT_RUN_RESULT_SUMMARY_CHARS:
@@ -308,6 +333,16 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             raise ValueError(
                 "CodexSessionAdapter does not support inputRefs for managed session turns"
             )
+        instructions: str | None = None
+        preparation_error: Exception | None = None
+        try:
+            instructions = await self._instructions_for_request(
+                binding=binding,
+                request=request,
+                workspace_path=workspace_path,
+            )
+        except Exception as exc:
+            preparation_error = exc
         session_handle = await self._ensure_remote_session(
             binding=binding,
             request=request,
@@ -352,11 +387,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         failed_state_persisted = False
 
         try:
-            instructions = await self._instructions_for_request(
-                binding=binding,
-                request=request,
-                workspace_path=workspace_path,
-            )
+            if preparation_error is not None:
+                raise preparation_error
+            if instructions is None:
+                instructions = await self._instructions_for_request(
+                    binding=binding,
+                    request=request,
+                    workspace_path=workspace_path,
+                )
             turn_response = await self._coerce_turn_response(
                 self._send_turn(
                     SendCodexManagedSessionTurnRequest(
@@ -833,9 +871,14 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             {
                 "request": request.model_dump(by_alias=True, exclude_none=True),
                 "workspacePath": workspace_path,
+                "includePreparedRequestMetadata": True,
             }
         )
         if isinstance(prepared, Mapping):
+            _merge_durable_retrieval_metadata(
+                request,
+                prepared.get("durableRetrievalMetadata"),
+            )
             prepared = prepared.get("instructions")
         instructions = str(prepared or "").strip()
         if instructions:
