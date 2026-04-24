@@ -1324,7 +1324,7 @@ tr[data-proposal-id].proposal-consuming td {
   }
 
   56% {
-    background-position: 50% 0, 38% 0;
+    background-position: 50% 0, calc(50% + var(--mm-executing-sweep-layer-offset)) 0;
     background-size:
       calc(var(--mm-executing-sweep-band-width) * 10.25) 100%,
       calc(var(--mm-executing-sweep-band-width) * 9.7) 100%;
