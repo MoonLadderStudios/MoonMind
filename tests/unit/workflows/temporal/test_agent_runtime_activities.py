@@ -2804,3 +2804,60 @@ async def test_launch_session_claude_auth_diagnostics_do_not_alias_workspace_or_
     assert diagnostics["authMountTarget"] != workspace_path
     assert diagnostics["authMountTarget"] != artifact_spool_path
     assert diagnostics["volumeRef"] == "claude_auth_volume"
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_adds_retrieval_capability_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAG_ENABLED", "1")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
+
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-rag-1",
+                "idempotencyKey": "idem-rag-1",
+                "parameters": {
+                    "instructions": "Implement MM-506.",
+                    "publishMode": "none",
+                },
+            },
+        }
+    )
+
+    assert "MoonMind retrieval capability:" in result
+    assert "moonmind rag search" in result
+    assert "Managed Codex CLI note:" in result
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_turn_instructions_reports_disabled_retrieval_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAG_ENABLED", "0")
+
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_prepare_turn_instructions(
+        {
+            "request": {
+                "agentKind": "managed",
+                "agentId": "codex",
+                "correlationId": "corr-rag-2",
+                "idempotencyKey": "idem-rag-2",
+                "parameters": {
+                    "instructions": "Implement MM-506.",
+                    "publishMode": "none",
+                },
+            },
+        }
+    )
+
+    assert "MoonMind retrieval capability:" in result
+    assert "currently unavailable" in result
+    assert "rag_disabled" in result

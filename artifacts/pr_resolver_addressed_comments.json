@@ -20,28 +20,33 @@
     "rationale": "Top-level Codex review wrapper only; the actionable inline feedback was handled separately."
   },
   {
-    "id": 3135895313,
+    "id": 3136402860,
     "disposition": "addressed",
-    "rationale": "Added watchfiles to pyproject.toml and regenerated poetry.lock so the Docker build consumes it from locked requirements instead of a manual pip install."
+    "rationale": "Removed the redundant os.environ argument when computing the retrieval capability note state."
   },
   {
-    "id": 3135895320,
+    "id": 3136402866,
     "disposition": "addressed",
-    "rationale": "Removed pytest-related installs from runtime-base so production api-runtime and worker-runtime images no longer inherit test runners; test-runtime still installs requirements-tests.txt."
+    "rationale": "Dropped the redundant str() coercion and now normalize the instruction with `instruction or \"\"`."
   },
   {
-    "id": 3135895323,
-    "disposition": "addressed",
-    "rationale": "Replaced the editable Docker image install with a standard pip install --no-deps . after copying the source tree into /app."
-  },
-  {
-    "id": 4168395193,
+    "id": 4169026231,
     "disposition": "not-applicable",
-    "rationale": "This review body only summarized the three inline Gemini comments above, which were addressed individually."
+    "rationale": "This is the automated review summary, not an actionable code comment."
   },
   {
-    "id": 4168422983,
+    "id": 3136412472,
     "disposition": "addressed",
-    "rationale": "Restored the frontend:ci and contracts:check gates on the amd64 publish path before docker/build-push-action runs."
+    "rationale": "Managed Codex retrieval guidance now treats gateway transport as unavailable until there is a usable authenticated managed-session path, so the prompt no longer advertises a 401-only capability."
+  },
+  {
+    "id": 3136412479,
+    "disposition": "addressed",
+    "rationale": "The launcher now passes the run-scoped materialized environment into workspace preparation so the capability note reflects the actual launch environment rather than process-global defaults."
+  },
+  {
+    "id": 4169038612,
+    "disposition": "not-applicable",
+    "rationale": "This is the Codex review wrapper comment; the actionable suggestions were tracked in the individual review comments above."
   }
 ]

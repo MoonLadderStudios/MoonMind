@@ -22,6 +22,9 @@ from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.env_bool import env_to_bool
 from moonmind.utils.logging import scrub_github_tokens
+from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
+    append_managed_codex_runtime_note,
+)
 
 _MAX_ERROR_MESSAGE_CHARS = 1024
 _COMMAND_START_PREFIX = "[command] $ "
@@ -668,12 +671,13 @@ class CodexExecHandler:
         artifacts_dir: Path,
         log_path: Path,
     ) -> PromptContextResolution:
+        base_instruction = append_managed_codex_runtime_note(payload.instruction)
         if not self._rag_auto_context_enabled():
-            return PromptContextResolution(instruction=payload.instruction)
+            return PromptContextResolution(instruction=base_instruction)
 
         query = payload.instruction.strip()
         if not query:
-            return PromptContextResolution(instruction=payload.instruction)
+            return PromptContextResolution(instruction=base_instruction)
 
         retrieval_skip_reason: str | None = None
         try:
@@ -692,7 +696,7 @@ class CodexExecHandler:
                 log_path,
                 self._redact_text(f"[rag] retrieval skipped: {exc}"),
             )
-            return PromptContextResolution(instruction=payload.instruction)
+            return PromptContextResolution(instruction=base_instruction)
 
         if pack is None:
             if retrieval_skip_reason:
@@ -700,7 +704,7 @@ class CodexExecHandler:
                     log_path,
                     f"[rag] retrieval skipped: {retrieval_skip_reason}",
                 )
-            return PromptContextResolution(instruction=payload.instruction)
+            return PromptContextResolution(instruction=base_instruction)
 
         artifact = self._persist_context_pack(
             job_id=job_id,
@@ -715,13 +719,15 @@ class CodexExecHandler:
         )
         if items_count < 1:
             return PromptContextResolution(
-                instruction=payload.instruction,
+                instruction=base_instruction,
                 artifact=artifact,
             )
         return PromptContextResolution(
-            instruction=self._compose_instruction_with_context(
-                context_text=pack.context_text,
-                instruction=payload.instruction,
+            instruction=append_managed_codex_runtime_note(
+                self._compose_instruction_with_context(
+                    context_text=pack.context_text,
+                    instruction=payload.instruction,
+                )
             ),
             items_count=items_count,
             artifact=artifact,

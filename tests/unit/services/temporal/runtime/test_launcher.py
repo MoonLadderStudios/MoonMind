@@ -310,6 +310,9 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     monkeypatch,
 ):
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("RAG_ENABLED", "1")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
 
     store = ManagedRunStore(tmp_path)
@@ -369,10 +372,166 @@ async def test_launch_builds_codex_command_after_workspace_preparation(
     await process.wait()
 
     assert captured_args[:2] == ("codex", "exec")
-    assert any(
-        isinstance(arg, str) and "Managed Codex CLI note:" in arg
-        for arg in captured_args
+    prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
+    assert "MoonMind retrieval capability:" in prompt_arg
+    assert "moonmind rag search" in prompt_arg
+
+
+@pytest.mark.asyncio
+@patch("moonmind.rag.context_injection.ContextInjectionService")
+async def test_launch_uses_run_scoped_env_for_retrieval_capability_note(
+    mock_service_class,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("RAG_ENABLED", "1")
+    monkeypatch.setenv("GOOGLE_API_KEY", "process-key")
+    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    workspace = tmp_path / "workspace-run-env"
+    workspace.mkdir()
+
+    mock_service = mock_service_class.return_value
+    mock_service.inject_context = AsyncMock()
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
     )
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 890) -> None:
+            self.pid = pid
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_args: tuple[object, ...] = ()
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        command_template=["codex", "exec"],
+        default_model="qwen/qwen3.6-plus",
+        env_overrides={"RAG_ENABLED": "0"},
+    )
+    request = _make_request(instruction_ref="Do work")
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-codex-note-env",
+        request=request,
+        profile=profile,
+        workspace_path=workspace,
+    )
+    await process.wait()
+
+    prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
+    assert "MoonMind retrieval capability:" in prompt_arg
+    assert "currently unavailable" in prompt_arg
+    assert "rag_disabled" in prompt_arg
+    assert "moonmind rag search" not in prompt_arg
+
+
+@pytest.mark.asyncio
+@patch("moonmind.rag.context_injection.ContextInjectionService")
+async def test_launch_hides_retrieval_capability_when_gateway_auth_is_unavailable(
+    mock_service_class,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.delenv("RAG_ENABLED", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("MOONMIND_RETRIEVAL_URL", raising=False)
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    workspace = tmp_path / "workspace-gateway-env"
+    workspace.mkdir()
+
+    mock_service = mock_service_class.return_value
+    mock_service.inject_context = AsyncMock()
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 891) -> None:
+            self.pid = pid
+            self.returncode = 0
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_args: tuple[object, ...] = ()
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        nonlocal captured_args
+        captured_args = args
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        command_template=["codex", "exec"],
+        default_model="qwen/qwen3.6-plus",
+        env_overrides={
+            "RAG_ENABLED": "1",
+            "MOONMIND_RETRIEVAL_URL": "http://gateway:7777",
+        },
+    )
+    request = _make_request(instruction_ref="Do work")
+
+    _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
+        run_id="run-codex-note-gateway",
+        request=request,
+        profile=profile,
+        workspace_path=workspace,
+    )
+    await process.wait()
+
+    prompt_arg = next(arg for arg in captured_args if isinstance(arg, str) and "Managed Codex CLI note:" in arg)
+    assert "MoonMind retrieval capability:" in prompt_arg
+    assert "currently unavailable" in prompt_arg
+    assert "retrieval_gateway_auth_unavailable" in prompt_arg
+    assert "moonmind rag search" not in prompt_arg
 
 @pytest.mark.asyncio
 async def test_launch_resets_stale_live_log_spool(tmp_path, monkeypatch):

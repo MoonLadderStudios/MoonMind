@@ -7,11 +7,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.retrieval_gateway import (
+    RetrievalAuthContext,
     authorize_retrieval_request,
     get_retrieval_service,
     router,
 )
 from moonmind.rag.context_pack import ContextItem, build_context_pack
+
 
 class StubService:
     def __init__(self) -> None:
@@ -28,11 +30,21 @@ class StubService:
             max_chars=1200,
         )
 
+
 def _build_app() -> FastAPI:
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_retrieval_service] = StubService
     return app
+
+
+def _oidc_auth() -> RetrievalAuthContext:
+    return RetrievalAuthContext(
+        auth_source="oidc",
+        allowed_repositories=(),
+        capabilities=("rag",),
+    )
+
 
 def test_context_requires_authentication() -> None:
     app = _build_app()
@@ -41,6 +53,7 @@ def test_context_requires_authentication() -> None:
         response = client.post("/retrieval/context", json={"query": "q"})
 
     assert response.status_code == 401
+
 
 def test_context_rejects_out_of_scope_repo() -> None:
     """Worker-scoped requests should be rejected with 403 when repo is not permitted."""
@@ -57,6 +70,49 @@ def test_context_rejects_out_of_scope_repo() -> None:
 
     assert response.status_code == 401
 
+
+def test_context_returns_gateway_context_pack_for_authorized_request() -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "q",
+                "filters": {"repo": "moonmind"},
+                "top_k": 2,
+                "overlay_policy": "include",
+                "budgets": {"tokens": 32},
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["transport"] == "gateway"
+    assert body["filters"]["repo"] == "moonmind"
+    assert body["usage"]["latency_ms"] == 4
+    assert body["items"][0]["source"] == "src/a.py"
+
+
+def test_context_rejects_unsupported_budget_keys_for_authorized_request() -> None:
+    app = _build_app()
+    app.dependency_overrides[authorize_retrieval_request] = _oidc_auth
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/retrieval/context",
+            json={
+                "query": "q",
+                "budgets": {"tokens": 32, "mystery_budget": 4},
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "mystery_budget" in str(detail)
+
+
 # ---- authorize_retrieval_request unit tests ----
 
 @pytest.mark.asyncio
@@ -72,6 +128,7 @@ async def test_authorize_worker_token_rejected_after_queue_removal() -> None:
     assert excinfo.value.status_code == 401
     assert "temporarily unavailable" in excinfo.value.detail
 
+
 @pytest.mark.asyncio
 async def test_authorize_bearer_token_rejected_after_queue_removal() -> None:
     """Bearer tokens are also rejected (Phase 3.5 stub)."""
@@ -84,6 +141,7 @@ async def test_authorize_bearer_token_rejected_after_queue_removal() -> None:
 
     assert excinfo.value.status_code == 401
     assert "temporarily unavailable" in excinfo.value.detail
+
 
 @pytest.mark.asyncio
 async def test_authorize_with_valid_user() -> None:
@@ -98,6 +156,7 @@ async def test_authorize_with_valid_user() -> None:
     assert result.auth_source == "oidc"
     assert result.allowed_repositories == ()
     assert result.capabilities == ("rag",)
+
 
 @pytest.mark.asyncio
 async def test_authorize_unauthorized() -> None:
