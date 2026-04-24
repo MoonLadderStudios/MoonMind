@@ -354,8 +354,98 @@ def test_unrestricted_helper_request_reuses_unrestricted_arg_builder(
     args = DockerWorkloadLauncher(docker_binary="podman").build_helper_run_args(validated)
 
     assert args == ["podman", "images"]
+@pytest.mark.asyncio
+async def test_unrestricted_launcher_timeout_stops_and_kills_without_remove_on_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        created.append(list(args))
+        if args[1] == "ps":
+            return _Process(never_complete=True)
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    registry = _registry(tmp_path)
+    validated = registry.validate_request(
+        UnrestrictedDockerRequest.model_validate(
+            {
+                "toolName": "container.run_docker",
+                "taskRunId": "task-unrestricted",
+                "stepId": "docker-cli",
+                "attempt": 1,
+                "repoDir": "/work/agent_jobs/task-unrestricted/repo",
+                "artifactsDir": "/work/agent_jobs/task-unrestricted/artifacts/docker-cli",
+                "command": ["docker", "ps"],
+            }
+        ),
+        workflow_docker_mode="unrestricted",
+    )
+
+    result = await DockerWorkloadLauncher().run(validated, timeout_seconds=0.01)
+
+    assert result.status == "timed_out"
+    assert result.timeout_reason == "workload exceeded timeoutSeconds"
+    assert ["docker", "stop", "-t", "30", "mm-workload-task-unrestricted-docker-cli-1"] in created
+    assert ["docker", "kill", "mm-workload-task-unrestricted-docker-cli-1"] in created
+    assert ["docker", "rm", "-f", "mm-workload-task-unrestricted-docker-cli-1"] not in created
 
 
+@pytest.mark.asyncio
+async def test_unrestricted_launcher_cancel_stops_and_kills_without_remove_on_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[list[str]] = []
+    run_process: _Process | None = None
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        nonlocal run_process
+        created.append(list(args))
+        if args[1] == "ps":
+            run_process = _Process(never_complete=True)
+            return run_process
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    registry = _registry(tmp_path)
+    validated = registry.validate_request(
+        UnrestrictedDockerRequest.model_validate(
+            {
+                "toolName": "container.run_docker",
+                "taskRunId": "task-unrestricted",
+                "stepId": "docker-cli",
+                "attempt": 1,
+                "repoDir": "/work/agent_jobs/task-unrestricted/repo",
+                "artifactsDir": "/work/agent_jobs/task-unrestricted/artifacts/docker-cli",
+                "command": ["docker", "ps"],
+            }
+        ),
+        workflow_docker_mode="unrestricted",
+    )
+
+    task = asyncio.create_task(DockerWorkloadLauncher().run(validated))
+    await asyncio.sleep(0)
+
+    task.cancel()
+    done, pending = await asyncio.wait({task})
+
+    assert done == {task}
+    assert pending == set()
+    assert task.cancelled()
+    assert ["docker", "stop", "-t", "30", "mm-workload-task-unrestricted-docker-cli-1"] in created
+    assert ["docker", "kill", "mm-workload-task-unrestricted-docker-cli-1"] in created
+    assert ["docker", "rm", "-f", "mm-workload-task-unrestricted-docker-cli-1"] not in created
+    assert run_process is not None
+    assert run_process.terminated
 
 
 def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> None:
