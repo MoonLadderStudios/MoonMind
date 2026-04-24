@@ -1,6 +1,6 @@
 # Feature Specification: Publish Durable DooD Observability Outputs
 
-**Feature Branch**: `253-publish-dood-observability`
+**Feature Branch**: `254-publish-dood-observability`
 **Created**: 2026-04-24
 **Status**: Draft
 **Input**: User description: "Use the Jira preset brief for MM-504 as the canonical Moon Spec orchestration input.

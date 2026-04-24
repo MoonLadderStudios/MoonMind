@@ -1,6 +1,6 @@
 # Tasks: Publish Durable DooD Observability Outputs
 
-**Input**: Design documents from `specs/253-publish-dood-observability/`
+**Input**: Design documents from `specs/254-publish-dood-observability/`
 **Prerequisites**: `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/dood-observability-publication-contract.md`, `quickstart.md`
 
 **Tests**: Unit tests and hermetic integration verification are REQUIRED. For MM-504, the repository already contains most of the workload artifact publication and report/metadata behavior, so the story work is verification-first: preserve the canonical artifacts, add focused proof for durable outputs, report publication, audit metadata, and redaction behavior, and only touch production code if verification exposes real drift.
@@ -21,7 +21,7 @@
 
 **Purpose**: Confirm the MM-504 source brief, planning artifacts, and runtime surfaces before verification work begins.
 
-- [X] T001 Confirm `spec.md` (Input), `specs/253-publish-dood-observability/spec.md`, `specs/253-publish-dood-observability/plan.md`, `specs/253-publish-dood-observability/research.md`, `specs/253-publish-dood-observability/data-model.md`, `specs/253-publish-dood-observability/contracts/dood-observability-publication-contract.md`, and `specs/253-publish-dood-observability/quickstart.md` remain the canonical MM-504 artifact set for FR-007 and SC-007
+- [X] T001 Confirm `spec.md` (Input), `specs/254-publish-dood-observability/spec.md`, `specs/254-publish-dood-observability/plan.md`, `specs/254-publish-dood-observability/research.md`, `specs/254-publish-dood-observability/data-model.md`, `specs/254-publish-dood-observability/contracts/dood-observability-publication-contract.md`, and `specs/254-publish-dood-observability/quickstart.md` remain the canonical MM-504 artifact set for FR-007 and SC-007
 - [X] T002 Confirm the MM-504 runtime touchpoints in `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/tool_bridge.py`, `moonmind/workloads/registry.py`, `moonmind/workflows/temporal/artifacts.py`, `moonmind/workflows/temporal/report_artifacts.py`, `moonmind/workflows/temporal/activity_runtime.py`, `moonmind/workflows/temporal/workflows/run.py`, `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/unit/api/routers/test_task_runs.py`, and `tests/integration/temporal/test_profile_backed_workload_contract.py`
 
 ---
@@ -30,7 +30,7 @@
 
 **Purpose**: Lock the verification scope and prerequisites before story execution.
 
-- [X] T003 Confirm `specs/253-publish-dood-observability/` needs no migration or new persistent storage because MM-504 is a runtime publication and verification story bounded to existing artifact-backed outputs
+- [X] T003 Confirm `specs/254-publish-dood-observability/` needs no migration or new persistent storage because MM-504 is a runtime publication and verification story bounded to existing artifact-backed outputs
 - [X] T004 Confirm `tests/unit/workloads/test_docker_workload_launcher.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/unit/workflows/temporal/test_activity_runtime.py`, `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/unit/api/routers/test_task_runs.py`, `tests/integration/temporal/test_profile_backed_workload_contract.py`, `tests/integration/temporal/test_integration_ci_tool_contract.py`, and `tests/integration/temporal/test_temporal_artifact_lifecycle.py` are the correct validation surfaces for FR-001 through FR-006 and DESIGN-REQ-021/022
 
 **Checkpoint**: Foundation ready - story verification work can now begin.
@@ -80,7 +80,7 @@
 
 - [X] T016 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_activity_runtime.py tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/api/routers/test_task_runs.py` and confirm MM-504 unit evidence passes together
 - [X] T017 Run `./tools/test_integration.sh`, record any exact environment blocker, and confirm MM-504 artifact publication and inspection evidence is green or narrowed to a precise remaining gap
-- [X] T018 Review `specs/253-publish-dood-observability/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/dood-observability-publication-contract.md`, `quickstart.md`, and `spec.md` (Input) to confirm FR-007 and SC-007 preserve MM-504 and the original Jira preset brief across downstream artifacts
+- [X] T018 Review `specs/254-publish-dood-observability/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/dood-observability-publication-contract.md`, `quickstart.md`, and `spec.md` (Input) to confirm FR-007 and SC-007 preserve MM-504 and the original Jira preset brief across downstream artifacts
 
 **Checkpoint**: MM-504 is complete when Docker-backed workloads publish durable observability evidence, shared report semantics, and redacted audit metadata through existing runtime boundaries, the focused unit and hermetic integration evidence is green, and the canonical artifact set preserves the Jira source brief.
 
@@ -90,9 +90,9 @@
 
 **Purpose**: Final traceability, quickstart validation, and read-only verification for the completed story.
 
-- [ ] T019 [P] Align `specs/253-publish-dood-observability/plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/dood-observability-publication-contract.md` after MM-504 verification work so terminology, commands, and requirement-status notes stay coherent
-- [ ] T020 Run the quickstart validation from `specs/253-publish-dood-observability/quickstart.md` and record any environment blockers or deviations needed for MM-504
-- [ ] T021 Run `/moonspec-verify` for `specs/253-publish-dood-observability/` and produce a final evidence-backed verification report covering MM-504, FR-001 through FR-007, SC-001 through SC-007, and DESIGN-REQ-021 through DESIGN-REQ-022
+- [ ] T019 [P] Align `specs/254-publish-dood-observability/plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/dood-observability-publication-contract.md` after MM-504 verification work so terminology, commands, and requirement-status notes stay coherent
+- [ ] T020 Run the quickstart validation from `specs/254-publish-dood-observability/quickstart.md` and record any environment blockers or deviations needed for MM-504
+- [ ] T021 Run `/moonspec-verify` for `specs/254-publish-dood-observability/` and produce a final evidence-backed verification report covering MM-504, FR-001 through FR-007, SC-001 through SC-007, and DESIGN-REQ-021 through DESIGN-REQ-022
 
 ---
 

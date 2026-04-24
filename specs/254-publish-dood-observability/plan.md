@@ -1,7 +1,7 @@
 # Implementation Plan: Publish Durable DooD Observability Outputs
 
-**Branch**: `253-publish-dood-observability` | **Date**: 2026-04-24 | **Spec**: [spec.md](spec.md)
-**Input**: Single-story feature specification from `specs/253-publish-dood-observability/spec.md`
+**Branch**: `254-publish-dood-observability` | **Date**: 2026-04-24 | **Spec**: [spec.md](spec.md)
+**Input**: Single-story feature specification from `specs/254-publish-dood-observability/spec.md`
 
 ## Summary
 
@@ -17,7 +17,7 @@ MM-504 is a runtime verification-first planning story focused on proving and, if
 | FR-004 | partial | `moonmind/workloads/docker_launcher.py`, `moonmind/workloads/registry.py`, `moonmind/schemas/workload_models.py`, `tests/unit/workloads/test_workload_tool_bridge.py`, `tests/integration/temporal/test_integration_ci_tool_contract.py` | strengthen verification that workload mode, workload access, and unrestricted indicators are present and consistent across run and helper paths; add runtime metadata only if verification shows gaps | unit + integration |
 | FR-005 | partial | `moonmind/workloads/docker_launcher.py`, `moonmind/utils/logging.py`, existing launcher redaction calls, limited launcher-focused tests | add focused verification for docker-host normalization and secret-like value redaction in stdout, stderr, diagnostics, and metadata; harden publication only if leakage is exposed | unit + integration |
 | FR-006 | implemented_unverified | `moonmind/workflows/temporal/report_artifacts.py`, `moonmind/workflows/temporal/workflows/run.py`, `tests/unit/workflows/temporal/test_report_workflow_rollout.py`, `tests/unit/workloads/test_docker_workload_launcher.py` | verify supported Docker-backed launch types emit the expected artifact classes and publication semantics consistently; implement contingency only if class drift appears | unit + integration |
-| FR-007 | implemented_verified | `spec.md` (Input), `specs/253-publish-dood-observability/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/dood-observability-publication-contract.md`, `quickstart.md` | preserve MM-504 through tasks and final verification output | traceability review |
+| FR-007 | implemented_verified | `spec.md` (Input), `specs/254-publish-dood-observability/spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/dood-observability-publication-contract.md`, `quickstart.md` | preserve MM-504 through tasks and final verification output | traceability review |
 | DESIGN-REQ-021 | partial | `moonmind/workloads/docker_launcher.py`, `moonmind/workflows/temporal/artifacts.py`, `moonmind/workflows/temporal/report_artifacts.py`, `tests/unit/workloads/test_docker_workload_launcher.py` | verify durable artifact publication, report publication, and bounded observability records remain shared across Docker-backed workload paths | unit + integration |
 | DESIGN-REQ-022 | partial | `moonmind/workloads/docker_launcher.py`, `moonmind/utils/logging.py`, `docs/ManagedAgents/DockerOutOfDocker.md` §14.3 and §15.6 | verify explicit unrestricted markers plus normalized or redacted docker host and secret-like values in published outputs and metadata | unit + integration |
 
@@ -57,7 +57,7 @@ MM-504 is a runtime verification-first planning story focused on proving and, if
 ### Documentation (this feature)
 
 ```text
-specs/253-publish-dood-observability/
+specs/254-publish-dood-observability/
 ├── spec.md
 ├── plan.md
 ├── research.md

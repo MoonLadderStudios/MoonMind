@@ -3,7 +3,7 @@
 ## Story Classification
 
 Decision: Treat MM-504 as a single-story runtime feature request and a verification-first planning story.
-Evidence: `spec.md` (Input); `specs/253-publish-dood-observability/spec.md`.
+Evidence: `spec.md` (Input); `specs/254-publish-dood-observability/spec.md`.
 Rationale: The Jira brief defines one independently testable runtime outcome: durable artifact, report, and audit-metadata publication for Docker-backed workloads.
 Alternatives considered: Broad design breakdown was rejected because the preserved Jira preset brief already selects one story and does not require processing multiple specs.
 Test implications: Explicit unit and hermetic integration strategies are required, with verification-first escalation before production code changes.
@@ -59,7 +59,7 @@ Test implications: Focused unit verification plus hermetic integration escalatio
 ## FR-007 Traceability
 
 Decision: implemented_verified.
-Evidence: `specs/253-publish-dood-observability/spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/dood-observability-publication-contract.md` preserve MM-504 and the original Jira preset brief.
+Evidence: `specs/254-publish-dood-observability/spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, and `contracts/dood-observability-publication-contract.md` preserve MM-504 and the original Jira preset brief.
 Rationale: The feature-local planning artifacts now preserve the Jira key and canonical brief required for downstream verification.
 Alternatives considered: Treat as partial until tasks exist. Rejected because planning-stage traceability is fully satisfied by the current artifacts; later stages still need to preserve it, but planning is complete.
 Test implications: Traceability review in later tasks and final verification.
