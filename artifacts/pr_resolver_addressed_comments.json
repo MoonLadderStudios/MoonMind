@@ -1,5 +1,30 @@
 [
   {
+    "id": 3134339420,
+    "disposition": "addressed",
+    "rationale": "Removed the Ctrl/Cmd+V keydown interception so unsupported clipboard reads no longer block native paste delivery."
+  },
+  {
+    "id": 4166572410,
+    "disposition": "not-applicable",
+    "rationale": "Top-level automated review wrapper only; the actionable inline feedback is tracked and handled separately."
+  },
+  {
+    "id": 3134340059,
+    "disposition": "addressed",
+    "rationale": "Keyboard paste now relies on the browser paste event, keeping clipboard-read permissions only for the explicit toolbar action."
+  },
+  {
+    "id": 3134340064,
+    "disposition": "addressed",
+    "rationale": "Replaced the obsolete Ctrl+V test with a regression asserting the shortcut is left unhandled for the native paste event path."
+  },
+  {
+    "id": 4166573078,
+    "disposition": "not-applicable",
+    "rationale": "Summary review comment with no separate actionable request beyond the inline feedback already addressed."
+  },
+  {
     "id": 3134586258,
     "disposition": "addressed",
     "rationale": "Removed the superseded --mm-executing-sweep-duration and --mm-executing-sweep-delay variables so the stylesheet keeps only the active cycle-duration contract."
