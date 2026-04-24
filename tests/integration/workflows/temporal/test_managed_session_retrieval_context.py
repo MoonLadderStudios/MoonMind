@@ -133,6 +133,8 @@ async def test_claude_launcher_publishes_context_artifact_reference_for_runtime_
                 context_text="Retrieved context snippet",
                 retrieved_at="2026-04-24T00:00:00Z",
                 telemetry_id=f"tid-{transport}",
+                initiation_mode="automatic",
+                truncated=False,
             ),
             None,
         )
@@ -194,8 +196,13 @@ async def test_claude_launcher_publishes_context_artifact_reference_for_runtime_
     assert artifact_ref.startswith("artifacts/context/rag-context-")
     assert moonmind_meta["retrievedContextTransport"] == transport
     assert moonmind_meta["retrievedContextItemCount"] == 1
+    assert moonmind_meta["retrievalInitiationMode"] == "automatic"
+    assert moonmind_meta["retrievalContextTruncated"] is False
     assert artifact_path.exists()
-    assert f'"transport": "{transport}"' in artifact_path.read_text(encoding="utf-8")
+    artifact_text = artifact_path.read_text(encoding="utf-8")
+    assert f'"transport": "{transport}"' in artifact_text
+    assert '"initiation_mode": "automatic"' in artifact_text
+    assert '"truncated": false' in artifact_text
     assert "BEGIN_RETRIEVED_CONTEXT" in claude_md
     assert "Retrieved context artifact: artifacts/context/" in claude_md
     assert "Original instruction" in claude_md
@@ -230,6 +237,8 @@ async def test_claude_launcher_marks_local_fallback_as_degraded_retrieval(
             context_text="### Retrieved Context\n1. docs/spec.md\n    fallback text",
             retrieved_at="2026-04-24T00:00:00Z",
             telemetry_id="tid-local-fallback",
+            initiation_mode="automatic",
+            truncated=False,
         )
 
     monkeypatch.setattr(
@@ -291,6 +300,8 @@ async def test_claude_launcher_marks_local_fallback_as_degraded_retrieval(
     assert moonmind_meta["retrievedContextTransport"] == "local_fallback"
     assert moonmind_meta["retrievalMode"] == "degraded_local_fallback"
     assert moonmind_meta["retrievalDegradedReason"] == "collection_unavailable"
+    assert moonmind_meta["retrievalInitiationMode"] == "automatic"
+    assert moonmind_meta["retrievalContextTruncated"] is False
     assert "Retrieved context mode: degraded local fallback" in claude_md
     assert any(
         isinstance(arg, str) and "Retrieved context mode: degraded local fallback" in arg

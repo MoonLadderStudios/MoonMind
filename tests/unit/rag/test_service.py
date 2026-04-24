@@ -150,12 +150,15 @@ def test_retrieve_direct_flow_uses_embedding_and_qdrant_search() -> None:
         overlay_policy="skip",
         budgets={},
         transport="direct",
+        initiation_mode="session",
     )
 
     assert embedder.calls == ["How to integrate RAG?"]
     assert qdrant.ensured is True
     assert len(qdrant.calls) == 1
     assert pack.transport == "direct"
+    assert pack.initiation_mode == "session"
+    assert pack.truncated is False
     assert pack.items
     assert "Retrieved Context" in pack.context_text
 
@@ -184,6 +187,8 @@ def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monk
                 "context_text": "### Retrieved Context\n1. docs/spec.md",
                 "retrieved_at": "2026-04-24T00:00:00Z",
                 "telemetry_id": "tid",
+                "initiation_mode": "session",
+                "truncated": False,
             }
 
         def raise_for_status(self):
@@ -214,11 +219,45 @@ def test_retrieve_gateway_flow_skips_embedding_and_preserves_contract_shape(monk
         overlay_policy="skip",
         budgets={"tokens": 5000},
         transport="gateway",
+        initiation_mode="session",
     )
 
     assert pack.transport == "gateway"
+    assert pack.initiation_mode == "session"
+    assert pack.truncated is False
     assert pack.filters == {"repo": "moonmind"}
     assert pack.budgets == {"tokens": 10}
     assert pack.usage == {"tokens": 8, "latency_ms": 4}
     assert pack.items[0].source == "docs/spec.md"
     assert "Retrieved Context" in pack.context_text
+
+
+
+def test_retrieve_direct_flow_does_not_serialize_secret_env_values() -> None:
+    embedder = _StubEmbedder()
+    qdrant = _StubQdrant()
+    service = ContextRetrievalService(
+        settings=_settings(run_id="run-secret-safe"),
+        env={
+            "GOOGLE_API_KEY": "google-secret-key",
+            "OPENAI_API_KEY": "openai-secret-key",
+            "MOONMIND_WORKER_TOKEN": "worker-token-secret",
+        },
+        embedding_client=embedder,
+        qdrant_client=qdrant,
+    )
+
+    pack = service.retrieve(
+        query="How to integrate RAG?",
+        filters={"repo": "moonmind"},
+        top_k=3,
+        overlay_policy="skip",
+        budgets={},
+        transport="direct",
+        initiation_mode="automatic",
+    )
+
+    serialized = pack.to_json()
+    assert "google-secret-key" not in serialized
+    assert "openai-secret-key" not in serialized
+    assert "worker-token-secret" not in serialized

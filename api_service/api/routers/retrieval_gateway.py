@@ -125,6 +125,7 @@ async def retrieve_context_pack(
             overlay_policy=payload.overlay_policy,
             budgets=payload.budgets,
             transport="direct",
+            initiation_mode="session",
         )
         pack.transport = "gateway"
         return pack.to_dict()

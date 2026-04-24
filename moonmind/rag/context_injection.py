@@ -90,6 +90,11 @@ class ContextInjectionService:
     ) -> PromptContextResolution:
         """Retrieve RAG context and mutate the request's instruction_ref."""
         if not self._rag_auto_context_enabled():
+            self._record_disabled_context_metadata(
+                request=request,
+                reason="auto_context_disabled",
+                initiation_mode="automatic",
+            )
             return PromptContextResolution(instruction=request.instruction_ref or "")
 
         instruction_ref = (request.instruction_ref or "").strip()
@@ -114,6 +119,11 @@ class ContextInjectionService:
                 workspace_path=workspace_path,
             )
             if fallback_pack is None:
+                self._record_disabled_context_metadata(
+                    request=request,
+                    reason=retrieval_skip_reason or "local_fallback_unavailable",
+                    initiation_mode="automatic",
+                )
                 return PromptContextResolution(instruction=instruction_ref)
             pack = fallback_pack
             retrieval_skip_reason = "local_fallback_after_retrieval_error"
@@ -122,12 +132,22 @@ class ContextInjectionService:
             if retrieval_skip_reason:
                 logger.info("[rag] retrieval skipped: %s", retrieval_skip_reason)
             if not self._should_use_local_fallback(retrieval_skip_reason):
+                self._record_disabled_context_metadata(
+                    request=request,
+                    reason=retrieval_skip_reason or "retrieval_disabled",
+                    initiation_mode="automatic",
+                )
                 return PromptContextResolution(instruction=instruction_ref)
             fallback_pack = self._build_local_fallback_pack(
                 instruction=instruction_ref,
                 workspace_path=workspace_path,
             )
             if fallback_pack is None:
+                self._record_disabled_context_metadata(
+                    request=request,
+                    reason=retrieval_skip_reason or "local_fallback_unavailable",
+                    initiation_mode="automatic",
+                )
                 return PromptContextResolution(instruction=instruction_ref)
             pack = fallback_pack
 
@@ -147,6 +167,7 @@ class ContextInjectionService:
             transport=pack.transport,
             items_count=items_count,
             degraded_reason=retrieval_skip_reason,
+            pack=pack,
         )
         logger.info("[rag] retrieval completed via %s; items=%d", pack.transport, items_count)
 
@@ -204,6 +225,7 @@ class ContextInjectionService:
                 overlay_policy=self._resolve_rag_overlay_policy(),
                 budgets=self._resolve_rag_budgets(),
                 transport=transport,
+                initiation_mode="automatic",
             ),
             None,
         )
@@ -241,14 +263,9 @@ class ContextInjectionService:
         return artifact_path.relative_to(workspace_path).as_posix()
 
     @staticmethod
-    def _record_context_metadata(
-        *,
+    def _ensure_moonmind_metadata(
         request: AgentExecutionRequest,
-        artifact_ref: str,
-        transport: str,
-        items_count: int,
-        degraded_reason: str | None = None,
-    ) -> None:
+    ) -> dict[str, object]:
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         request.parameters = parameters
         metadata = parameters.setdefault("metadata", {})
@@ -259,13 +276,35 @@ class ContextInjectionService:
         if not isinstance(moonmind_meta, dict):
             moonmind_meta = {}
             metadata["moonmind"] = moonmind_meta
+        return moonmind_meta
+
+    @staticmethod
+    def _record_context_metadata(
+        *,
+        request: AgentExecutionRequest,
+        artifact_ref: str,
+        transport: str,
+        items_count: int,
+        degraded_reason: str | None = None,
+        pack: ContextPack | None = None,
+    ) -> None:
+        moonmind_meta = ContextInjectionService._ensure_moonmind_metadata(request)
+        normalized_transport = str(transport or "").strip()
+        initiation_mode = "automatic"
+        truncated = False
+        if pack is not None:
+            initiation_mode = str(pack.initiation_mode or "automatic").strip() or "automatic"
+            truncated = bool(pack.truncated)
         moonmind_meta["retrievedContextArtifactPath"] = artifact_ref
         moonmind_meta["latestContextPackRef"] = artifact_ref
-        moonmind_meta["retrievedContextTransport"] = str(transport or "")
+        moonmind_meta["retrievedContextTransport"] = normalized_transport
         moonmind_meta["retrievedContextItemCount"] = int(items_count)
         moonmind_meta["retrievalDurabilityAuthority"] = "artifact_ref"
         moonmind_meta["sessionContinuityCacheStatus"] = "advisory_only"
-        if str(transport or "").strip() == "local_fallback":
+        moonmind_meta["retrievalInitiationMode"] = initiation_mode
+        moonmind_meta["retrievalContextTruncated"] = truncated
+        moonmind_meta.pop("retrievalDisabledReason", None)
+        if normalized_transport == "local_fallback":
             moonmind_meta["retrievalMode"] = "degraded_local_fallback"
             normalized_reason = str(degraded_reason or "").strip()
             if normalized_reason:
@@ -275,6 +314,29 @@ class ContextInjectionService:
             return
         moonmind_meta["retrievalMode"] = "semantic"
         moonmind_meta.pop("retrievalDegradedReason", None)
+
+    @staticmethod
+    def _record_disabled_context_metadata(
+        *,
+        request: AgentExecutionRequest,
+        reason: str,
+        initiation_mode: str,
+    ) -> None:
+        moonmind_meta = ContextInjectionService._ensure_moonmind_metadata(request)
+        for key in (
+            "retrievedContextArtifactPath",
+            "latestContextPackRef",
+            "retrievedContextTransport",
+            "retrievedContextItemCount",
+            "retrievalDurabilityAuthority",
+            "sessionContinuityCacheStatus",
+            "retrievalDegradedReason",
+        ):
+            moonmind_meta.pop(key, None)
+        moonmind_meta["retrievalMode"] = "disabled"
+        moonmind_meta["retrievalDisabledReason"] = str(reason or "retrieval_disabled").strip() or "retrieval_disabled"
+        moonmind_meta["retrievalInitiationMode"] = str(initiation_mode or "automatic").strip() or "automatic"
+        moonmind_meta["retrievalContextTruncated"] = False
 
     @staticmethod
     def _repository_filter_value(repository: str) -> str:
@@ -446,6 +508,7 @@ class ContextInjectionService:
             transport="local_fallback",
             telemetry_id="local-fallback",
             max_chars=2400,
+            initiation_mode="automatic",
         )
 
     @staticmethod

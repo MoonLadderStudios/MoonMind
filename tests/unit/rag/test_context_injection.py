@@ -66,6 +66,10 @@ async def test_inject_context_disabled(mock_request: AgentExecutionRequest, tmp_
     assert result.items_count == 0
     assert result.artifact_path is None
     assert mock_request.instruction_ref == "Original instruction"
+    moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
+    assert moonmind_meta["retrievalMode"] == "disabled"
+    assert moonmind_meta["retrievalDisabledReason"] == "auto_context_disabled"
+    assert moonmind_meta["retrievalInitiationMode"] == "automatic"
 
 @pytest.mark.asyncio
 @patch("moonmind.rag.context_injection.ContextInjectionService._retrieve_context_pack")
@@ -243,6 +247,8 @@ def test_record_context_metadata_marks_durable_authority(
     assert moonmind_meta["retrievalDurabilityAuthority"] == "artifact_ref"
     assert moonmind_meta["sessionContinuityCacheStatus"] == "advisory_only"
     assert moonmind_meta["retrievalMode"] == "semantic"
+    assert moonmind_meta["retrievalInitiationMode"] == "automatic"
+    assert moonmind_meta["retrievalContextTruncated"] is False
 
 
 def test_record_context_metadata_marks_degraded_local_fallback_reason(
@@ -273,6 +279,8 @@ def test_persisted_context_artifact_uses_workspace_context_directory(mock_reques
         context_text="### Retrieved Context\n1. docs/spec.md (score: 0.900, trust: canonical)\n    retrieved text",
         retrieved_at="2026-04-24T00:00:00Z",
         telemetry_id="telemetry-1",
+        initiation_mode="automatic",
+        truncated=False,
     )
 
     artifact_path = service._persist_context_pack(
@@ -284,3 +292,19 @@ def test_persisted_context_artifact_uses_workspace_context_directory(mock_reques
     assert artifact_path.parent == tmp_path / "artifacts" / "context"
     assert artifact_path.read_text(encoding="utf-8").strip().startswith("{")
     assert '"transport": "direct"' in artifact_path.read_text(encoding="utf-8")
+
+
+
+def test_record_context_metadata_marks_disabled_retrieval_state(
+    mock_request: AgentExecutionRequest,
+) -> None:
+    ContextInjectionService._record_disabled_context_metadata(
+        request=mock_request,
+        reason="qdrant_disabled",
+        initiation_mode="automatic",
+    )
+
+    moonmind_meta = mock_request.parameters["metadata"]["moonmind"]
+    assert moonmind_meta["retrievalMode"] == "disabled"
+    assert moonmind_meta["retrievalDisabledReason"] == "qdrant_disabled"
+    assert moonmind_meta["retrievalInitiationMode"] == "automatic"
