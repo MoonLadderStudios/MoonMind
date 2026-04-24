@@ -17,17 +17,17 @@
 - SCN-001 through SCN-005: executing readability and bounds, non-executing isolation, layout stability, theme intent, and reduced-motion active fallback.
 - SC-001 through SC-007: measurable proof for readability, clipping, non-executing exclusion, layout stability, theme intent, reduced-motion fallback, and MM-491 traceability.
 - DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-011, DESIGN-REQ-014, DESIGN-REQ-016: host text/layout guardrails, isolation rules, reduced-motion behavior, state matrix, and non-goal preservation.
-- Requirement status summary from `plan.md`: 1 `missing`, 3 `partial`, 18 `implemented_unverified`, 0 `implemented_verified`.
+- Requirement status summary from `plan.md`: 24 `implemented_verified`.
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify MM-491 planning inputs and target frontend files in `specs/247-guard-shimmer-quality/spec.md`, `specs/247-guard-shimmer-quality/plan.md`, `specs/247-guard-shimmer-quality/research.md`, `specs/247-guard-shimmer-quality/quickstart.md`, `frontend/src/styles/mission-control.css`, `frontend/src/utils/executionStatusPillClasses.ts`, `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx`.
-- [ ] T002 Confirm the focused unit and integration validation commands in `specs/247-guard-shimmer-quality/quickstart.md` remain the active test path for MM-491 and require no new package or service setup.
+- [X] T001 Verify MM-491 planning inputs and target frontend files in `specs/247-guard-shimmer-quality/spec.md`, `specs/247-guard-shimmer-quality/plan.md`, `specs/247-guard-shimmer-quality/research.md`, `specs/247-guard-shimmer-quality/quickstart.md`, `frontend/src/styles/mission-control.css`, `frontend/src/utils/executionStatusPillClasses.ts`, `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx`.
+- [X] T002 Confirm the focused unit and integration validation commands in `specs/247-guard-shimmer-quality/quickstart.md` remain the active test path for MM-491 and require no new package or service setup.
 
 ## Phase 2: Foundational
 
-- [ ] T003 Reconcile the MM-491 quality-guardrail contract and data model in `specs/247-guard-shimmer-quality/contracts/status-pill-shimmer-quality.md` and `specs/247-guard-shimmer-quality/data-model.md` with the current shared Mission Control shimmer seams before story verification begins.
-- [ ] T004 Confirm MM-491 stays within the existing shared status-pill helper, Mission Control stylesheet, and list/detail render surfaces in `specs/247-guard-shimmer-quality/plan.md` and `specs/247-guard-shimmer-quality/research.md`, with no new component, route, or infrastructure.
+- [X] T003 Reconcile the MM-491 quality-guardrail contract and data model in `specs/247-guard-shimmer-quality/contracts/status-pill-shimmer-quality.md` and `specs/247-guard-shimmer-quality/data-model.md` with the current shared Mission Control shimmer seams before story verification begins.
+- [X] T004 Confirm MM-491 stays within the existing shared status-pill helper, Mission Control stylesheet, and list/detail render surfaces in `specs/247-guard-shimmer-quality/plan.md` and `specs/247-guard-shimmer-quality/research.md`, with no new component, route, or infrastructure.
 
 ## Phase 3: Story - Guard Shimmer Quality Regressions
 
@@ -49,35 +49,35 @@
 
 ### Tests First
 
-- [ ] T005 [P] Add failing CSS contract tests for executing readability guardrails, rounded-bound clipping, scrollbar isolation, theme-aware active treatment, reduced-motion fallback semantics, and non-goal preservation in `frontend/src/entrypoints/mission-control.test.tsx` covering FR-001, FR-004, FR-005, FR-006, SCN-001, SCN-004, SCN-005, SC-001, SC-002, SC-005, SC-006, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-011, and DESIGN-REQ-016.
-- [ ] T006 [P] Add failing helper tests for the full non-executing state matrix and MM-491 traceability preservation in `frontend/src/utils/executionStatusPillClasses.test.ts` covering FR-002, FR-007, SCN-002, SC-003, SC-007, DESIGN-REQ-014, and MM-491 traceability requirements.
-- [ ] T007 [P] Add failing task-list integration tests for executing readability, non-executing isolation, theme intent, reduced-motion active fallback, and layout stability in `frontend/src/entrypoints/tasks-list.test.tsx` covering FR-001, FR-002, FR-003, FR-004, FR-005, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-003, SC-004, SC-005, SC-006, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-011, and DESIGN-REQ-014.
-- [ ] T008 [P] Add failing task-detail integration tests for executing readability, non-executing isolation, theme intent, reduced-motion active fallback, and layout stability in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-001, FR-002, FR-003, FR-004, FR-005, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-003, SC-004, SC-005, SC-006, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-011, and DESIGN-REQ-014.
-- [ ] T009 Run the focused unit and integration validation commands from `specs/247-guard-shimmer-quality/quickstart.md` to confirm T005-T008 fail for the expected MM-491 gaps before production changes.
+- [X] T005 [P] Add failing CSS contract tests for executing readability guardrails, rounded-bound clipping, scrollbar isolation, theme-aware active treatment, reduced-motion fallback semantics, and non-goal preservation in `frontend/src/entrypoints/mission-control.test.tsx` covering FR-001, FR-004, FR-005, FR-006, SCN-001, SCN-004, SCN-005, SC-001, SC-002, SC-005, SC-006, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-011, and DESIGN-REQ-016.
+- [X] T006 [P] Add failing helper tests for the full non-executing state matrix and MM-491 traceability preservation in `frontend/src/utils/executionStatusPillClasses.test.ts` covering FR-002, FR-007, SCN-002, SC-003, SC-007, DESIGN-REQ-014, and MM-491 traceability requirements.
+- [X] T007 [P] Add failing task-list integration tests for executing readability, non-executing isolation, theme intent, reduced-motion active fallback, and layout stability in `frontend/src/entrypoints/tasks-list.test.tsx` covering FR-001, FR-002, FR-003, FR-004, FR-005, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-003, SC-004, SC-005, SC-006, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-011, and DESIGN-REQ-014.
+- [X] T008 [P] Add failing task-detail integration tests for executing readability, non-executing isolation, theme intent, reduced-motion active fallback, and layout stability in `frontend/src/entrypoints/task-detail.test.tsx` covering FR-001, FR-002, FR-003, FR-004, FR-005, SCN-001, SCN-002, SCN-003, SCN-004, SCN-005, SC-001, SC-003, SC-004, SC-005, SC-006, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-011, and DESIGN-REQ-014.
+- [X] T009 Run the focused unit and integration validation commands from `specs/247-guard-shimmer-quality/quickstart.md` to confirm T005-T008 fail for the expected MM-491 gaps before production changes.
 
 ### Conditional Fallback For Implemented-Unverified Rows
 
-- [ ] T010 If T005 or T009 shows the shared CSS contract does not preserve executing readability, bounds, scrollbar isolation, theme intent, reduced-motion fallback clarity, or non-goal constraints, update `frontend/src/styles/mission-control.css` for FR-001, FR-004, FR-005, FR-006, SCN-001, SCN-004, SCN-005, SC-001, SC-002, SC-005, SC-006, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-011, and DESIGN-REQ-016.
-- [ ] T011 If T007-T009 show supported list/detail surfaces do not preserve non-executing isolation, layout stability, or reduced-motion active comprehension, update `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css` for FR-002, FR-003, FR-005, SCN-002, SCN-003, SCN-005, SC-003, SC-004, SC-006, DESIGN-REQ-009, DESIGN-REQ-011, and DESIGN-REQ-014.
-- [ ] T012 If T005-T009 show the current shimmer verification surface cannot express the MM-491 non-goal contract cleanly, update `specs/247-guard-shimmer-quality/contracts/status-pill-shimmer-quality.md`, `frontend/src/entrypoints/mission-control.test.tsx`, and `specs/247-guard-shimmer-quality/plan.md` to keep the regression target explicit for FR-006 and DESIGN-REQ-016.
+- [X] T010 If T005 or T009 shows the shared CSS contract does not preserve executing readability, bounds, scrollbar isolation, theme intent, reduced-motion fallback clarity, or non-goal constraints, update `frontend/src/styles/mission-control.css` for FR-001, FR-004, FR-005, FR-006, SCN-001, SCN-004, SCN-005, SC-001, SC-002, SC-005, SC-006, DESIGN-REQ-004, DESIGN-REQ-009, DESIGN-REQ-011, and DESIGN-REQ-016.
+- [X] T011 If T007-T009 show supported list/detail surfaces do not preserve non-executing isolation, layout stability, or reduced-motion active comprehension, update `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css` for FR-002, FR-003, FR-005, SCN-002, SCN-003, SCN-005, SC-003, SC-004, SC-006, DESIGN-REQ-009, DESIGN-REQ-011, and DESIGN-REQ-014.
+- [X] T012 If T005-T009 show the current shimmer verification surface cannot express the MM-491 non-goal contract cleanly, update `specs/247-guard-shimmer-quality/contracts/status-pill-shimmer-quality.md`, `frontend/src/entrypoints/mission-control.test.tsx`, and `specs/247-guard-shimmer-quality/plan.md` to keep the regression target explicit for FR-006 and DESIGN-REQ-016.
 
 ### Implementation
 
-- [ ] T013 Add the missing MM-491 traceability surface in `frontend/src/utils/executionStatusPillClasses.ts` and `frontend/src/utils/executionStatusPillClasses.test.ts` for FR-007 and SC-007 while preserving adjacent MM-488/MM-489/MM-490 references.
-- [ ] T014 Re-run the focused unit validation command from `specs/247-guard-shimmer-quality/quickstart.md`, fix any failing MM-491 CSS/helper assertions in `frontend/src/styles/mission-control.css` and `frontend/src/utils/executionStatusPillClasses.ts`, and confirm the verification-first tasks now pass.
-- [ ] T015 Re-run the focused integration validation command from `specs/247-guard-shimmer-quality/quickstart.md`, fix any failing MM-491 render assertions in `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css`, and confirm the story passes end to end on supported surfaces.
+- [X] T013 Add the missing MM-491 traceability surface in `frontend/src/utils/executionStatusPillClasses.ts` and `frontend/src/utils/executionStatusPillClasses.test.ts` for FR-007 and SC-007 while preserving adjacent MM-488/MM-489/MM-490 references.
+- [X] T014 Re-run the focused unit validation command from `specs/247-guard-shimmer-quality/quickstart.md`, fix any failing MM-491 CSS/helper assertions in `frontend/src/styles/mission-control.css` and `frontend/src/utils/executionStatusPillClasses.ts`, and confirm the verification-first tasks now pass.
+- [X] T015 Re-run the focused integration validation command from `specs/247-guard-shimmer-quality/quickstart.md`, fix any failing MM-491 render assertions in `frontend/src/entrypoints/tasks-list.tsx`, `frontend/src/entrypoints/task-detail.tsx`, and `frontend/src/styles/mission-control.css`, and confirm the story passes end to end on supported surfaces.
 
 ### Story Validation
 
-- [ ] T016 Update MM-491 requirement-status evidence in `specs/247-guard-shimmer-quality/plan.md` after T014-T015 so `missing`, `partial`, and `implemented_unverified` rows reflect the final proof.
-- [ ] T017 Verify the independent story criteria in `specs/247-guard-shimmer-quality/quickstart.md` and record any remaining MM-491-specific gaps before polish work.
+- [X] T016 Update MM-491 requirement-status evidence in `specs/247-guard-shimmer-quality/plan.md` after T014-T015 so `missing`, `partial`, and `implemented_unverified` rows reflect the final proof.
+- [X] T017 Verify the independent story criteria in `specs/247-guard-shimmer-quality/quickstart.md` and record any remaining MM-491-specific gaps before polish work.
 
 ## Final Phase: Polish and Verification
 
-- [ ] T018 Expand edge-case coverage for full state-matrix isolation, sampled readability points, and layout-stability guardrails in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` as needed for SCN-001, SCN-002, SCN-003, SC-001, SC-003, SC-004, DESIGN-REQ-004, DESIGN-REQ-009, and DESIGN-REQ-014.
-- [ ] T019 Run the quickstart validation steps from `specs/247-guard-shimmer-quality/quickstart.md`.
-- [ ] T020 Run `./tools/test_unit.sh` for final unit-test verification.
-- [ ] T021 Run `/moonspec-verify` by creating `specs/247-guard-shimmer-quality/verification.md` with MM-491 traceability, DESIGN-REQ coverage, test evidence, and final verdict.
+- [X] T018 Expand edge-case coverage for full state-matrix isolation, sampled readability points, and layout-stability guardrails in `frontend/src/entrypoints/mission-control.test.tsx`, `frontend/src/entrypoints/tasks-list.test.tsx`, and `frontend/src/entrypoints/task-detail.test.tsx` as needed for SCN-001, SCN-002, SCN-003, SC-001, SC-003, SC-004, DESIGN-REQ-004, DESIGN-REQ-009, and DESIGN-REQ-014.
+- [X] T019 Run the quickstart validation steps from `specs/247-guard-shimmer-quality/quickstart.md`.
+- [X] T020 Run `./tools/test_unit.sh` for final unit-test verification.
+- [X] T021 Run `/moonspec-verify` by creating `specs/247-guard-shimmer-quality/verification.md` with MM-491 traceability, DESIGN-REQ coverage, test evidence, and final verdict.
 
 ## Dependencies and Execution Order
 

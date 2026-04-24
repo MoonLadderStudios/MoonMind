@@ -21,10 +21,22 @@ describe('executionStatusPillProps', () => {
     });
   });
 
-  it('keeps the existing class helper output for non-executing states', () => {
-    expect(executionStatusPillProps('completed').className).toBe('status status-completed');
-    expect(executionStatusPillProps('failed').className).toBe('status status-failed');
+  it('keeps the existing class helper output for non-executing states across the MM-491 state matrix', () => {
+    expect(executionStatusPillProps('completed')).toEqual({ className: 'status status-completed' });
+    expect(executionStatusPillProps('failed')).toEqual({ className: 'status status-failed' });
     expect(executionStatusPillProps('executing').className).toBe('status status-running is-executing');
+
+    expect(executionStatusPillProps('waiting_on_dependencies')).toEqual({
+      className: 'status status-waiting',
+    });
+    expect(executionStatusPillProps('awaiting_external')).toEqual({
+      className: 'status status-awaiting_action',
+    });
+    expect(executionStatusPillProps('finalizing')).toEqual({
+      className: 'status status-running',
+    });
+    expect(executionStatusPillProps('paused')).toEqual({ className: 'status status-neutral' });
+    expect(executionStatusPillProps('canceled')).toEqual({ className: 'status status-cancelled' });
   });
 
   it('preserves MM-488 traceability for downstream verification', () => {
@@ -40,8 +52,9 @@ describe('executionStatusPillProps', () => {
     ]);
   });
 
-  it('adds MM-489 and MM-490 traceability for adjacent shimmer refinement stories', () => {
+  it('adds MM-489, MM-490, and MM-491 traceability for adjacent shimmer refinement stories', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
+    expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
   });
 });

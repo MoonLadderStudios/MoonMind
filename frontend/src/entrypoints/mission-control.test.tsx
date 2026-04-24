@@ -410,10 +410,14 @@ describe('Mission Control shared entry', () => {
       '.status-running[data-state="executing"][data-effect="shimmer-sweep"], .status-running.is-executing',
     ).join('\n');
     expect(shimmerBlock).toContain('animation: mm-status-pill-shimmer');
+    expect(shimmerBlock).toContain('background-color: rgb(var(--mm-accent-2) / 0.14)');
     expect(shimmerBlock).toContain('background-image:');
     expect(shimmerBlock).toContain('overflow: hidden');
+    expect(shimmerBlock).toContain('isolation: isolate');
     expect(shimmerBlock).not.toContain('animation-delay:');
     expect(shimmerBlock).toContain('var(--mm-executing-sweep-cycle-duration)');
+    expect(shimmerBlock).toContain('rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity))');
+    expect(shimmerBlock).toContain('rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity))');
     expect(shimmerBlock).toMatch(
       /background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*100%,\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*100%/,
     );
@@ -425,6 +429,10 @@ describe('Mission Control shared entry', () => {
     expect(missionControlCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-state="executing"\]\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing[\s\S]*?animation: none;/,
     );
+    expect(missionControlCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?background-position:\s*50% 0,\s*54% 0;[\s\S]*?background-size:\s*160% 100%,\s*140% 100%;/,
+    );
+    expect(cssRuleBlockMatching(missionControlCss, (rule) => rule.selector.includes('status-running') && rule.selector.includes('shimmer-sweep') && (rule.selector.includes('::before') || rule.selector.includes('::after')))).toBe('');
   });
 
   it('enforces MM-430 additive shared styling modifiers', async () => {
