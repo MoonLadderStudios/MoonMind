@@ -23,5 +23,30 @@
     "id": 4168107533,
     "disposition": "not-applicable",
     "rationale": "This top-level review is only a summary of the inline feedback thread; the actionable CSS comment was addressed directly."
+  },
+  {
+    "id": 3135895313,
+    "disposition": "addressed",
+    "rationale": "Added watchfiles to pyproject.toml and regenerated poetry.lock so the Docker build consumes it from locked requirements instead of a manual pip install."
+  },
+  {
+    "id": 3135895320,
+    "disposition": "addressed",
+    "rationale": "Removed pytest-related installs from runtime-base so production api-runtime and worker-runtime images no longer inherit test runners; test-runtime still installs requirements-tests.txt."
+  },
+  {
+    "id": 3135895323,
+    "disposition": "addressed",
+    "rationale": "Replaced the editable Docker image install with a standard pip install --no-deps . after copying the source tree into /app."
+  },
+  {
+    "id": 4168395193,
+    "disposition": "not-applicable",
+    "rationale": "This review body only summarized the three inline Gemini comments above, which were addressed individually."
+  },
+  {
+    "id": 4168422983,
+    "disposition": "addressed",
+    "rationale": "Restored the frontend:ci and contracts:check gates on the amd64 publish path before docker/build-push-action runs."
   }
 ]

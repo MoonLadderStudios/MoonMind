@@ -105,6 +105,7 @@ jobs:
         with:
           context: .
           file: ./api_service/Dockerfile
+          target: api-runtime
           build-args: |
             INSTALL_CODEX_CLI=true
             INSTALL_GEMINI_CLI=true

@@ -1,6 +1,6 @@
 # DockerOutOfDocker: Docker-backed Specialized Workload Containers for MoonMind
 
-**Implementation tracking:** Open rollout notes live in [`docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`](../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md). Story-scoped implementation detail may also appear in MoonSpec artifacts (`specs/<feature>/`), gitignored handoffs (for example `artifacts/`), or other local-only files rather than as migration checklists in canonical `docs/`.
+**Implementation tracking:** Open rollout and backlog notes for this surface live in [`../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`](../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md). Other implementation handoffs may still live in MoonSpec artifacts (`specs/<feature>/`) or local-only files (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 **Status:** Desired state
 **Owners:** MoonMind Platform
 **Last updated:** 2026-04-23
