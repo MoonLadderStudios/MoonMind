@@ -57,12 +57,12 @@
 
 - [X] T005 [P] Add failing unit tests for FR-001, FR-005, SC-001, SC-004, DESIGN-REQ-021, and DESIGN-REQ-022 in `tests/unit/workloads/test_docker_workload_launcher.py` covering durable stdout/stderr/diagnostics publication, partial publication failure metadata, docker-host normalization, and redaction of secret-like values in published outputs
 - [X] T006 [P] Add failing unit tests for FR-002, FR-004, SC-002, SC-003, DESIGN-REQ-021, and DESIGN-REQ-022 in `tests/unit/workloads/test_workload_tool_bridge.py` covering declared primary report publication semantics, bounded workload access metadata, and explicit unrestricted markers for representative Docker-backed tools
-- [ ] T007 [P] Add failing unit tests for FR-003, FR-006, SC-005, SC-006, and DESIGN-REQ-021 in `tests/unit/api/routers/test_task_runs.py` and `tests/unit/workflows/temporal/test_report_workflow_rollout.py` covering operator-visible artifact inspection and artifact-class consistency across supported Docker-backed publication paths
+- [X] T007 [P] Add failing unit tests for FR-003, FR-006, SC-005, SC-006, and DESIGN-REQ-021 in `tests/unit/api/routers/test_task_runs.py` and `tests/unit/workflows/temporal/test_report_workflow_rollout.py` covering operator-visible artifact inspection and artifact-class consistency across supported Docker-backed publication paths
 - [ ] T008 Run `MOONMIND_FORCE_LOCAL_TESTS=1 ./tools/test_unit.sh tests/unit/workloads/test_docker_workload_launcher.py tests/unit/workloads/test_workload_tool_bridge.py tests/unit/workflows/temporal/test_report_workflow_rollout.py tests/unit/api/routers/test_task_runs.py` to confirm T005-T007 fail for the expected MM-504 reason before any production changes
 
 ### Integration Tests (write first) ⚠️
 
-- [ ] T009 Add a failing hermetic integration test for FR-001, FR-003, SC-001, SC-005, and DESIGN-REQ-021 in `tests/integration/temporal/test_profile_backed_workload_contract.py` covering durable workload artifact publication and operator-inspectable results for profile-backed Docker-backed execution
+- [X] T009 Add a failing hermetic integration test for FR-001, FR-003, SC-001, SC-005, and DESIGN-REQ-021 in `tests/integration/temporal/test_profile_backed_workload_contract.py` covering durable workload artifact publication and operator-inspectable results for profile-backed Docker-backed execution
 - [X] T010 Add a failing hermetic integration test for FR-002, FR-004, FR-005, FR-006, SC-002, SC-003, SC-004, SC-006, DESIGN-REQ-021, and DESIGN-REQ-022 in `tests/integration/temporal/test_integration_ci_tool_contract.py` and `tests/integration/temporal/test_temporal_artifact_lifecycle.py` covering shared report publication semantics, bounded workload metadata, redaction behavior, and artifact-class consistency through the trusted workload plane
 - [ ] T011 Run `./tools/test_integration.sh` and record the MM-504-specific failure surface from T009-T010 before any production changes
 
